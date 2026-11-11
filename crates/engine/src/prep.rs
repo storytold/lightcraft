@@ -431,8 +431,9 @@ impl Session {
     /// - a build is owed: the view has been the same for [`SETTLE_AFTER`]. `at` may be `None`: the
     ///   build then goes from the active photo, else from the view's first.
     ///
-    /// A running build is stopped when the view shown is no longer the one it was started for, or
-    /// when previews are switched off; neither counts as the user stopping it.
+    /// A running build is stopped when the view shown is no longer the one it was started for, when
+    /// the library it was started in is no longer the one open, or when previews are switched off;
+    /// none of these counts as the user stopping it.
     pub fn prep_tick(&mut self, mode: Mode, at: Option<PhotoId>, backward: bool) {
         let settings = self.prep.settings();
         let want = settings.mode(mode);
@@ -483,13 +484,19 @@ impl Session {
     }
 
     /// The build this preparation started, followed: re-aimed at the user while it runs, stopped
-    /// when it is no longer wanted or its view is no longer shown, and, once it is over, what its
-    /// end means for the view and for [`PrepState::unfinished`]. `true`: it is still running
-    /// (nothing else starts).
+    /// when it is no longer wanted, its view is no longer shown, or its library is no longer the
+    /// one open, and, once it is over, what its end means for the view and for
+    /// [`PrepState::unfinished`]. `true`: it is still running (nothing else starts).
     fn prep_follow_build(&mut self, wanted: bool, scope: Scope, at: Option<PhotoId>, backward: bool) -> bool {
         let Some(b) = self.prep.build.clone() else { return false };
         if b.running() {
-            if !wanted {
+            if self.prep.build_library != self.library_generation {
+                // a build left over from the library before: its photos are another library's,
+                // whatever view of this one is shown, and `opened_library` forgot `started_for`,
+                // so the view-change stop below cannot tell it apart; stopped, and the library
+                // now open is prepared in its place (not counted as stopped by the user)
+                b.cancel.store(true, Ordering::Relaxed);
+            } else if !wanted {
                 // switched off: stopped by the preparation itself, as for another view below, so
                 // `started_for` goes too. Left set, the stop would read as the user's once the
                 // build is over and previews are on again, and this view would not be prepared

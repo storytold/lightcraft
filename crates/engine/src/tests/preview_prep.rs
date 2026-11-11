@@ -934,3 +934,48 @@ fn an_unfinished_build_is_taken_up_when_its_library_opens_after_another() {
     std::fs::remove_dir_all(&root).unwrap();
     std::fs::remove_dir_all(&root2).unwrap();
 }
+
+/// CodeRabbit on #4093 (round 2): the round-1 reset forgets `started_for` when a library
+/// opens, so the view-change stop can no longer tell a build that is still running apart:
+/// a build left running by the library before would keep building that library's photos
+/// and hold up this one's preparation until it ran to its end. A build is stopped when the
+/// library it was started in is left, and the library now open is prepared in its place.
+#[test]
+fn a_running_build_is_stopped_when_its_library_is_left() {
+    let mode = crate::prep::Mode::Library;
+    // the second library, left by a session whose build did not run to its end
+    let (mut s2, root2, ids2) = library("prep-switch-running-second", 4);
+    let hold = crate::prep::TestHold::new();
+    for id in &ids2[..3] {
+        s2.prep_tick(mode, Some(*id), false);
+    }
+    let b2 = s2.preview_build.clone().expect("the second library's build started");
+    assert!(marked_unfinished(&root2), "its build is owed");
+    b2.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&b2), "a cancelled build stops");
+    drop(s2);
+    drop(hold);
+    // the first library, in the session that switches: its build is still running
+    let (mut s, root, ids) = library("prep-switch-running-first", 4);
+    let hold = crate::prep::TestHold::new();
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    let b = s.preview_build.clone().expect("the first library's view is prepared");
+    assert!(b.running(), "still running when its library is left");
+    // the switch, with the first library's build still running
+    s.open_library(root2.join("lib"), false).unwrap();
+    s.prep_tick(mode, None, false);
+    let stopped = b.cancel.load(Ordering::Relaxed);
+    drop(hold);
+    assert!(stopped, "the build of the library that was left is stopped");
+    assert!(wait_finished(&b), "a cancelled build stops");
+    let next = build_after(&mut s, &b).expect("the second library's owed build is taken up once the old build stops");
+    assert!(next.background);
+    assert_eq!(next.total, 4);
+    next.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&next), "a cancelled build stops");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&root2).unwrap();
+}
