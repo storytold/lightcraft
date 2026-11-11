@@ -152,8 +152,8 @@ fn zero_highlights_and_shadows_render_without_the_base() {
     controls::set(&mut s, "effects.clarity", 40.0);
     // no base plane is computed or read (the per-pixel stage sees log luminance): the render is
     // the one it always was
-    assert_eq!(local::plane_sigmas(&s, 1200.0, Quality::Full).base, None);
-    assert!(local::plane_sigmas(&with("light.shadows", 1.0), 1200.0, Quality::Full).base.is_some());
+    assert_eq!(local::plane_sigmas(&s, 1200.0, 1200.0, Quality::Full).base, None);
+    assert!(local::plane_sigmas(&with("light.shadows", 1.0), 1200.0, 1200.0, Quality::Full).base.is_some());
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn v1_keeps_the_base_it_always_had() {
     assert_eq!(ProcessVersion::legacy().process(), Process::V1);
     for ppl in [300.0, 1200.0, 5568.0, 1e6] {
         for q in [Quality::Full, Quality::Draft] {
-            let sig = local::plane_sigmas(&v1, ppl, q);
+            let sig = local::plane_sigmas(&v1, ppl, ppl, q);
             assert!(sig.base.is_some());
             assert_eq!(sig.base_detail, 0, "V1 at {ppl} px");
             assert_eq!(local::tone_base_detail(&v1, ppl), 0);
@@ -229,8 +229,8 @@ fn v1_keeps_the_base_it_always_had() {
     }
     // V2 takes the median wherever the image is big enough for one
     let v2 = with("light.highlights", -100.0);
-    assert_eq!(local::plane_sigmas(&v2, 5568.0, Quality::Full).base_detail, local::base_detail_radius(5568.0));
-    assert_eq!(local::plane_sigmas(&v2, 300.0, Quality::Full).base_detail, 0);
+    assert_eq!(local::plane_sigmas(&v2, 5568.0, 5568.0, Quality::Full).base_detail, local::base_detail_radius(5568.0));
+    assert_eq!(local::plane_sigmas(&v2, 300.0, 300.0, Quality::Full).base_detail, 0);
 }
 
 #[test]
@@ -259,8 +259,72 @@ fn the_base_plane_is_cached_per_process() {
         let warm = render_cached(&src, &info, s, &req, &cache).image;
         assert!(warm == render(&src, &info, s, &req).image, "process {:?}", s.process);
     }
-    let sig = local::plane_sigmas(&s2, W as f64, Quality::Full);
+    let sig = local::plane_sigmas(&s2, W as f64, W as f64, Quality::Full);
     let sg = sig.base.unwrap();
     assert_ne!(local::base_key(&s1, sg, 0), local::base_key(&s2, sg, 0), "the process is part of the key");
     assert_ne!(local::base_key(&s2, sg, 0), local::base_key(&s2, sg, sig.base_detail));
+}
+
+/// Issue #1632: past its last fitted knot (here 1.0 stop below the sensor's white, scene 1.0, at
+/// 8-bit 233, as on the CC0 ILCE-7CR file) a raw's camera tone curve closed on white exponentially
+/// in linear light, so Exposure +1 rendered the sensor's white at 255 and Exposure +2 left the top
+/// stop it recorded (scene 0.5..1.0) under one 8-bit code. The latest process rolls off in stops
+/// and keeps both apart; V1 to V4 keep their look.
+#[test]
+fn exposure_keeps_the_highlights_a_camera_curve_recorded() {
+    use lightcraft_color::transfer::linear_to_srgb;
+    let knots = std::array::from_fn(|i| {
+        let x = 0.003 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-3.3 * x).exp()]
+    });
+    let info = SourceInfo { raw: true, camera_tone: crate::tone::CameraTone::new(knots), ..SourceInfo::default() };
+    let at = |process: Process, ev: f32, y: f32| {
+        let o = crate::finish::base_tone(&on(process), &info, 1.0).apply(y * ev.exp2());
+        (linear_to_srgb(o.clamp(0.0, 1.0)) * 255.0).round()
+    };
+    for ev in [0.0, 1.0, 2.0] {
+        let (white, half) = (at(Process::LATEST, ev, 1.0), at(Process::LATEST, ev, 0.5));
+        assert!(white <= 254.0, "Exposure {ev:+}: the sensor's white renders at {white}");
+        assert!(white - half >= 1.5, "Exposure {ev:+}: the top stop spans {half}..{white}");
+    }
+    // the earlier processes are frozen: the sensor's white at 255 from Exposure +1
+    for p in [Process::V1, Process::V2, Process::V3, Process::V4] {
+        assert_eq!(at(p, 1.0, 1.0), 255.0, "{p:?}");
+    }
+    // up to the last knot every process renders the camera's curve
+    for y in [0.003, 0.02, 0.18, 0.4, 0.5] {
+        let (v2, v3) = (crate::finish::base_tone(&on(Process::V2), &info, 1.0), crate::finish::base_tone(&on(Process::LATEST), &info, 1.0));
+        assert!((v2.apply(y) - v3.apply(y)).abs() < 1e-6, "{y}");
+    }
+}
+
+/// Issue #1632: a raw without a camera curve takes the generic curve, which reached white about ¼
+/// stop past the sensor's white (scene 1.0) and clipped there, so Exposure +1 rendered the top stop
+/// the sensor recorded (scene 0.5..1.0) at 8-bit 255 from its upper half. The latest process rolls
+/// off in stops from half a stop below the white point; V1 to V4 keep their look.
+#[test]
+fn exposure_keeps_the_highlights_the_generic_curve_recorded() {
+    use lightcraft_color::transfer::linear_to_srgb;
+    let info = SourceInfo { raw: true, ..SourceInfo::default() };
+    let at = |process: Process, ev: f32, y: f32| {
+        let o = crate::finish::base_tone(&on(process), &info, 1.0).apply(y * ev.exp2());
+        (linear_to_srgb(o.clamp(0.0, 1.0)) * 255.0).round()
+    };
+    for ev in [0.0, 1.0, 2.0] {
+        let (white, half) = (at(Process::LATEST, ev, 1.0), at(Process::LATEST, ev, 0.5));
+        assert!(white <= 253.0, "Exposure {ev:+}: the sensor's white renders at {white}");
+        assert!(white - half >= 3.0, "Exposure {ev:+}: the top stop spans {half}..{white}");
+    }
+    // the curve still reaches white, 5 stops past the sensor's
+    assert_eq!(at(Process::LATEST, 5.0, 1.0), 255.0);
+    // the earlier processes are frozen: the sensor's white at 255 from Exposure +1
+    for p in [Process::V1, Process::V2, Process::V3, Process::V4] {
+        assert_eq!(at(p, 1.0, 1.0), 255.0, "{p:?}");
+    }
+    assert_eq!(at(Process::V2, 0.0, 1.0), at(Process::V1, 0.0, 1.0));
+    // below the knee every process renders the same curve
+    let (v2, v3) = (crate::finish::base_tone(&on(Process::V2), &info, 1.0), crate::finish::base_tone(&on(Process::LATEST), &info, 1.0));
+    for y in [0.003, 0.02, 0.18, 0.4, 0.6] {
+        assert_eq!(v2.apply(y), v3.apply(y), "{y}");
+    }
 }
