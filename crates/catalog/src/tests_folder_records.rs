@@ -107,7 +107,7 @@ fn a_path_that_names_no_folder_is_refused() {
     let mut c = library();
     let before = c.to_snapshot();
     for bad in ["", "relative/trip", ".", "a/.."] {
-        let op = Op::SetFolderRecord { folder: bad.into(), record: Some(FolderRecord { label: Some(ColorLabel::Red) }) };
+        let op = Op::SetFolderRecord { folder: bad.into(), record: Some(FolderRecord { label: Some(ColorLabel::Red), made: None }) };
         assert!(c.apply(op).is_err(), "{bad:?} names no folder");
     }
     assert_eq!(c.to_snapshot(), before);
@@ -253,4 +253,134 @@ fn a_library_saved_before_folder_records_opens_without_any() {
     assert!(!old.contains("folder_records"));
     let reopened = Catalog::from_snapshot(&old).unwrap();
     assert_eq!(reopened.folder_record("/pics/trip"), None);
+}
+
+/// The rows of the tree as `(path, count, own)`, depth first.
+fn tree_rows(c: &Catalog) -> Vec<(String, usize, usize)> {
+    fn walk(n: &FolderNode, out: &mut Vec<(String, usize, usize)>) {
+        out.push((n.path.clone(), n.count, n.own));
+        n.children.iter().for_each(|c| walk(c, out));
+    }
+    let mut out = Vec::new();
+    c.folder_tree().iter().for_each(|n| walk(n, &mut out));
+    out
+}
+
+#[test]
+fn a_made_folder_is_a_row_with_no_photos_that_undo_takes_away() {
+    let mut c = library();
+    let before = c.to_snapshot();
+    let op = c.folder_made_op("/pics/new");
+    let undo = c.apply(op).unwrap();
+    assert!(c.holds_made_folder("/pics//new/"), "however it is spelled");
+    assert!(tree_rows(&c).contains(&("/pics/new".to_string(), 0, 0)));
+    c.apply(undo).unwrap();
+    assert_eq!(c.to_snapshot(), before, "undo leaves nothing behind");
+    assert!(!tree_rows(&c).iter().any(|r| r.0 == "/pics/new"));
+}
+
+#[test]
+fn a_made_folder_is_one_row_before_and_after_it_gains_photos() {
+    let mut c = library();
+    let op = c.folder_made_op("/pics/new");
+    c.apply(op).unwrap();
+    add(&mut c, "/pics//new/x.jpg");
+    let rows: Vec<_> = tree_rows(&c).into_iter().filter(|r| r.0.ends_with("/new")).collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].1, rows[0].2), (1, 1));
+}
+
+#[test]
+fn a_made_folder_in_a_folder_with_no_photos_of_its_own_nests_there_and_adds_nothing_to_the_counts() {
+    let mut c = library();
+    let op = c.folder_made_op("/pics/trip/day9");
+    c.apply(op).unwrap();
+    let rows = tree_rows(&c);
+    let at = |p: &str| rows.iter().position(|r| r.0 == p).unwrap_or_else(|| panic!("{p}: {rows:?}"));
+    assert!(at("/pics/trip") < at("/pics/trip/day9"), "below its parent");
+    assert_eq!(rows[at("/pics/trip")].1, 2, "the parent counts photos only");
+    assert_eq!(rows[at("/pics/trip/day9")].1, 0);
+}
+
+#[test]
+fn a_made_folder_on_a_disk_the_library_has_no_photo_on_is_listed_under_that_disk() {
+    let mut c = library();
+    let op = c.folder_made_op("/Volumes/spare/new");
+    c.apply(op).unwrap();
+    let rows = tree_rows(&c);
+    assert!(rows.contains(&("/Volumes/spare".to_string(), 0, 0)) && rows.contains(&("/Volumes/spare/new".to_string(), 0, 0)), "{rows:?}");
+}
+
+#[test]
+fn the_made_flag_follows_a_moved_folder_and_keeps_the_label_it_has() {
+    let mut c = library();
+    let op = c.folder_made_op("/pics/new");
+    c.apply(op).unwrap();
+    label(&mut c, "/pics/new", Some(ColorLabel::Red));
+    label(&mut c, "/pics/new", None);
+    assert!(c.holds_made_folder("/pics/new"), "taking the label off keeps the folder's record");
+    let ops = c.folder_records_follow("/pics/new", "/archive/new");
+    c.apply(Op::Batch { ops }).unwrap();
+    assert!(!c.holds_made_folder("/pics/new") && c.holds_made_folder("/archive/new"));
+    let spelled = c.folder_record("/archive/new").and_then(|r| r.made.clone());
+    assert_eq!(spelled.as_deref(), Some("/archive/new"), "the row is spelled where the folder now is");
+}
+
+#[test]
+fn a_made_folders_spelling_follows_a_rename_that_keeps_its_identity() {
+    // (on Windows `new` → `New` is one folder: keys are lower case; here a spelling that reads the same)
+    let mut c = library();
+    let op = c.folder_made_op("/pics/new");
+    c.apply(op).unwrap();
+    let ops = c.folder_records_follow("/pics/new", "/pics/./new");
+    assert!(!ops.is_empty());
+    c.apply(Op::Batch { ops }).unwrap();
+    assert_eq!(c.folder_record("/pics/new").and_then(|r| r.made.clone()).as_deref(), Some("/pics/./new"));
+    assert!(c.folder_records_follow("/pics/./new", "/pics/./new").is_empty(), "the same path again changes nothing");
+}
+
+#[test]
+fn a_folder_above_disks_holds_none_of_their_made_folders() {
+    let mut c = library();
+    let op = c.folder_made_op("/Volumes/spare/new");
+    c.apply(op).unwrap();
+    assert!(c.holds_made_folder("/Volumes/spare") && c.holds_made_folder("/Volumes/spare/new"));
+    assert!(!c.holds_made_folder("/Volumes"), "what covers other disks is not offered for choosing or scanning");
+    assert!(c.folders_unmade_ops("/Volumes", false).is_empty());
+    assert_eq!(c.folders_unmade_ops("/Volumes", true).len(), 1, "removing a whole folder of disks forgets theirs too");
+}
+
+#[test]
+fn a_made_folder_survives_closing_and_reopening_and_an_older_record_reads_as_not_made() {
+    let mut c = library();
+    let op = c.folder_made_op("/pics/new");
+    c.apply(op).unwrap();
+    let reopened = Catalog::from_snapshot(&c.to_snapshot()).unwrap();
+    assert!(reopened.holds_made_folder("/pics/new"));
+    assert!(tree_rows(&reopened).contains(&("/pics/new".to_string(), 0, 0)));
+    // a record saved by a build that knew only the label has no `made`, and an unmade one is
+    // saved just so
+    let json = serde_json::to_string(&FolderRecord { label: Some(ColorLabel::Red), made: None }).unwrap();
+    assert!(!json.contains("made"), "{json}");
+    let old: FolderRecord = serde_json::from_str(&json).unwrap();
+    assert!(old.made.is_none() && !old.is_empty());
+}
+
+#[test]
+fn forgetting_made_folders_keeps_a_label_and_undo_restores_the_record() {
+    let mut c = library();
+    for p in ["/pics/new", "/pics/new/inner", "/pics/newer"] {
+        let op = c.folder_made_op(p);
+        c.apply(op).unwrap();
+    }
+    label(&mut c, "/pics/new", Some(ColorLabel::Blue));
+    let before = c.to_snapshot();
+    let ops = c.folders_unmade_ops("/pics/new", false);
+    let undo = c.apply(Op::Batch { ops }).unwrap();
+    assert!(!c.holds_made_folder("/pics/new") && !c.holds_made_folder("/pics/new/inner"));
+    assert!(c.holds_made_folder("/pics/newer"), "a neighbor whose name starts the same stays");
+    assert_eq!(c.folder_color_label("/pics/new"), Some(ColorLabel::Blue));
+    assert!(c.folders_unmade_ops("/pics/trip", false).is_empty());
+    c.apply(undo).unwrap();
+    assert_eq!(c.to_snapshot(), before);
 }
