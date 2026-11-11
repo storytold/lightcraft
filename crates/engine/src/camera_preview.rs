@@ -37,7 +37,7 @@ pub(crate) use look_fit::fit_preview;
 #[cfg(test)]
 use look_fit::{
     FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, clips_more, correct_vignetting, fit_look, fit_look_with, sony_dro_off_tone, with_dro_off_tone,
-    without_clipped,
+    with_pooled_tone, with_profile_colour, without_clipped,
 };
 #[cfg(test)]
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
@@ -50,9 +50,10 @@ use pairs::{
 pub(crate) use proxy::LensGeometry;
 #[cfg(test)]
 use proxy::{
-    Cr3Framing, MIN_PREVIEW_FRACTION, alignment, estimate_cr3_framing, into_lens_geometry, proxies, reference_at, sensor_proxy, structure_agrees,
+    Cr3Framing, MIN_PREVIEW_FRACTION, THIN_TOLERANCE, alignment, estimate_cr3_framing, extend_tone, into_lens_geometry, proxies, reference_at,
+    samples_from_proxies, sensor_proxy, structure_agrees,
 };
-pub(crate) use proxy::{fit_profile, lens_geometry, profile_pairs};
+pub(crate) use proxy::{fit_profile, fit_profile_tone, lens_geometry, profile_samples};
 #[cfg(test)]
 use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 
@@ -84,7 +85,12 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
 /// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
-pub const LOOK_VERSION: u32 = 13;
+/// 14: a photo no look fits keeps its camera profile's colour instead of the neutral fallback.
+/// 15: a camera profile's pooled tone curve continues a photo's own past what its JPEG showed.
+/// 16: only a look with the profile's colour continues along its pooled tone curve.
+/// 17: continuing a photo's curve keeps it as it was where its JPEG taught it (`thinned_knots`).
+/// 18: the bundled NIKON D780, D750 and D90 profiles.
+pub const LOOK_VERSION: u32 = 18;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
