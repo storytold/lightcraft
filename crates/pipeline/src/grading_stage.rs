@@ -157,8 +157,14 @@ impl GradingStage {
                 continue;
             }
             let diff = (hue - w.tint[1].atan2(w.tint[0]) + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
-            let bin = ((diff.abs().to_degrees() / 30.0) as usize).min(5);
-            let level = |k: usize| w.damping.get(k).and_then(|r| r.get(bin)).copied().unwrap_or(1.0);
+            // each angle bin is the mean over 30°: linear between the bins' centres (15°, 45° … 165°), so the
+            // damping has no step along a hue gradient
+            let pos = (diff.abs().to_degrees() / 30.0 - 0.5).clamp(0.0, 5.0);
+            let j = (pos as usize).min(4);
+            let fa = pos - j as f32;
+            let level = |k: usize| {
+                w.damping.get(k).map_or(1.0, |r| r[j] * (1.0 - fa) + r[j + 1] * fa)
+            };
             let damp = if c <= t::CHROMA[0] {
                 1.0 + (level(0) - 1.0) * c / t::CHROMA[0]
             } else {
@@ -230,6 +236,29 @@ mod tests {
         let same = st.apply([0.6, along[0], along[1]]);
         let gain = ((same[1] - along[0]) * t[0] + (same[2] - along[1]) * t[1]) / (n * n);
         assert!(gain < 0.95 && gain > 0.3, "{gain}");
+    }
+
+    #[test]
+    fn the_damping_has_no_step_along_a_hue_gradient() {
+        // shadows at chroma 0.12: the measured bins 0° to 30° and 30° to 60° are 0.62 and 0.78
+        let st = stage(|g| {
+            g.shadows.hue = 30.0;
+            g.shadows.sat = 100.0;
+        });
+        let grey = st.apply([0.3, 0.0, 0.0]);
+        let tint = grey[2].atan2(grey[1]);
+        let added = |deg: f32| {
+            let h = tint + deg.to_radians();
+            let lab = [0.3, 0.12 * h.cos(), 0.12 * h.sin()];
+            let out = st.apply(lab);
+            (out[1] - lab[1]).hypot(out[2] - lab[2])
+        };
+        let mut prev = added(0.0);
+        for i in 1..=360 {
+            let now = added(i as f32 * 0.5);
+            assert!((now - prev).abs() < 0.02 * prev, "{}°: {prev} → {now}", i as f32 * 0.5);
+            prev = now;
+        }
     }
 
     #[test]
