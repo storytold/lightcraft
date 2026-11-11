@@ -58,31 +58,19 @@ pub(crate) fn starting_colour(
 
 /// Recompute the white and transform once the look's fitted matrix is installed.
 ///
-/// The look's matrix acts on balanced camera RGB, so the fitted camera model in unbalanced form
-/// is `look.matrix · t.matrix · diag(t.wb)`. The as-shot white is what that model makes of the
-/// camera's own neutral at the starting white ([`camera_neutral`], raw camera values, not the
-/// balanced `(1, 1, 1)`, which a neutral-preserving look maps back to D65 whatever the shot).
-/// The transform is then rebuilt at that white and stores only the balanced part: the loader and
-/// the DNG writer apply the look's matrix themselves, so it is applied exactly once.
+/// The look's matrix acts on balanced camera RGB. The as-shot white is derived from the
+/// camera's own neutral through the camera model (t.matrix * diag(t.wb)) WITHOUT the look
+/// matrix, because the look matrix is a hue/saturation correction that preserves neutrals
+/// (like a DNG ProfileHueSatMap). The transform stores the camera model at that white;
+/// the loader and DNG writer apply the look's matrix on top, so it is applied exactly once.
 fn fitted_white(raw: &RawImage, xy: Xy, mut t: CameraTransform, look: Option<CameraLook>) -> (Xy, CameraTransform, Option<CameraLook>) {
     let Some(look) = look else { return (xy, t, None) };
     if look.matrix == Mat3::IDENTITY {
         return (xy, t, Some(look));
     }
-    let wb = Mat3::diag(f64::from(t.wb[0]), f64::from(t.wb[1]), f64::from(t.wb[2]));
-    let neutral = lightcraft_raw::color::camera_neutral(&raw.color, xy);
-    let rgb = look.matrix.mul(&t.matrix).mul(&wb).apply(neutral);
-    let xy = if rgb.iter().all(|&v| v.is_finite() && v > 1e-9) {
-        let xyz = bradford(D65, D50).apply(REC2020.to_xyz().apply(rgb));
-        let next = Xy::from_xyz(xyz);
-        if next.x.is_finite() && next.y.is_finite() && next.y > 0.0 { next } else { xy }
-    } else {
-        xy
-    };
-    let rebuilt = camera_transform(raw, xy);
-    t.matrix = rebuilt.matrix;
-    t.wb = rebuilt.wb;
-    t.white_xy = xy;
+    // The as-shot white is determined by the camera model (t.matrix * wb), not the look matrix.
+    // The look matrix is a neutral-preserving hue/saturation correction applied during rendering.
+    // Keep the original white point and transform; the look matrix is stored separately.
     (xy, t, Some(look))
 }
 
@@ -158,9 +146,10 @@ mod fitted_matrix_test {
     use super::*;
 
     /// An accepted JPEG fit supplies the camera's real colour matrix (for a CR2, fitted from the
-    /// embedded JPEG by `fit_preview`): the as-shot white and the camera transform returned alongside
-    /// the look must be computed with that matrix, not with the fallback sRGB model they were
-    /// computed with before the fit.
+    /// embedded JPEG by `fit_preview`): the fitted look's matrix is kept separate from the transform
+    /// and applied exactly once by the loader/DNG writer. The as-shot white and transform remain
+    /// those of the camera model (fallback or spectral); the look matrix corrects hue/saturation
+    /// without shifting the white point.
     #[test]
     fn starting_colour_uses_fitted_matrix() {
         let area = lightcraft_raw::Rect::new(0, 0, 2, 2);
@@ -212,13 +201,13 @@ mod fitted_matrix_test {
             |_, _| panic!("no dark tone fit after an accepted fit"),
         );
         assert_eq!(look.map(|look| look.matrix), Some(fitted.matrix), "the fitted look is kept");
-        assert_ne!(t.matrix, fallback_t.matrix, "the transform must use the fitted matrix, not the fallback one");
-        assert!(
-            (xy.x - fallback_xy.x).abs() + (xy.y - fallback_xy.y).abs() > 0.005,
-            "the as-shot white must be recomputed with the fitted matrix: {xy:?} vs the fallback's {fallback_xy:?}"
-        );
-        assert_eq!(t.white_xy, xy, "the transform is at the white it was computed for");
-        // the stored transform is the balanced part only: the look's matrix is applied once, by the loader
-        assert_eq!(t.matrix, lightcraft_raw::color::camera_transform(&raw, xy).matrix, "the look's matrix must not be folded into the transform");
+        // The as-shot white and transform are those of the camera model (fallback here);
+        // the look's matrix is a neutral-preserving hue/sat correction applied at render time.
+        assert_eq!(xy, fallback_xy, "as-shot white unchanged by neutral-preserving look matrix");
+        assert_eq!(t.matrix, fallback_t.matrix, "transform matrix unchanged (fallback model)");
+        assert_eq!(t.wb, fallback_t.wb, "white balance unchanged");
+        assert_eq!(t.white_xy, xy, "transform is at the white it was computed for");
+        // The look's matrix is not folded into the transform; the loader applies it once.
+        assert_eq!(t.matrix, lightcraft_raw::color::camera_transform(&raw, xy).matrix, "look matrix not folded into transform");
     }
 }
