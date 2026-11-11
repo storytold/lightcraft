@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use web_time::Instant;
 
 /// Format version of the profile files.
 const VERSION: u32 = 1;
@@ -126,7 +127,7 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     // Lock order is cache, then CACHE_KEY, as in cache_key(). Both are held while the key is refreshed,
     // so a concurrent lookup or render cannot pair the new profile with the old key.
     let mut cache_guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
-    cache_guard.retain(|model, _| file_name(model) != saved_name);
+    cache_guard.retain(|model, _| !file_name(model).eq_ignore_ascii_case(&saved_name));
     let mut key_guard = key_lock().lock().unwrap_or_else(PoisonError::into_inner);
     // The global key always describes dir(), not the directory this save wrote to.
     let global = crate::camera_profiles::dir();
