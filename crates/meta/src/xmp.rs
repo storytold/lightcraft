@@ -355,14 +355,21 @@ fn xml_safe(s: &str) -> String {
     s.chars().filter(|&c| is_xml_char(c)).collect()
 }
 
-/// Unescape attribute values (predefined + numeric references; unknown references kept verbatim).
+/// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
+/// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
+/// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
+fn entity_end(rest: &str) -> Option<usize> {
+    let n = rest.bytes().skip(1).take_while(|b| b.is_ascii_alphanumeric() || *b == b'#').count();
+    (rest.as_bytes().get(n + 1) == Some(&b';')).then_some(n + 1)
+}
+
 pub(crate) fn unescape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         rest = &rest[i..];
-        match rest.find(';').and_then(|j| entity(&rest[1..j]).map(|c| (c, j))) {
+        match entity_end(rest).and_then(|j| entity(&rest[1..j]).map(|c| (c, j))) {
             Some((c, j)) => {
                 out.push(c);
                 rest = &rest[j + 1..];
@@ -468,8 +475,17 @@ fn is_rdf_meta_attr(k: &str) -> bool {
 
 fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, dropped: &mut bool) {
     for (k, v) in &d.attrs {
-        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget, dropped) {
-            props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
+        if is_rdf_meta_attr(k) {
+            continue;
+        }
+        // the budget is checked before the path is built, not after
+        if *budget < prefix.len().saturating_add(k.len()) {
+            *dropped = true;
+            continue;
+        }
+        let key = format!("{prefix}{k}");
+        if take_key_bytes(&key, budget, dropped) {
+            props.entry(key).or_default().push(v.clone());
         }
     }
     for c in &d.children {
@@ -490,6 +506,12 @@ fn take_key_bytes(key: &str, budget: &mut usize, dropped: &mut bool) -> bool {
 }
 
 fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, dropped: &mut bool) {
+    // a path that can't fit the budget isn't built (a long ancestor path shared by many children
+    // would otherwise be copied for each of them after the budget is spent)
+    if *budget < prefix.len().saturating_add(p.name.len()) {
+        *dropped = true;
+        return;
+    }
     let key = format!("{prefix}{}", p.name);
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
@@ -509,6 +531,12 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         return;
     }
     let struct_prefix = format!("{key}/");
+    // a struct's path is charged like a key before its fields copy it: that work too is bounded
+    // by the budget, kept fields or not
+    let is_struct = p.attr("rdf:parseType") == Some("Resource") || p.children.iter().any(|c| c.name == "rdf:Description");
+    if is_struct && !take_key_bytes(&key, budget, dropped) {
+        return;
+    }
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
             collect_property(c, &struct_prefix, props, budget, dropped);
