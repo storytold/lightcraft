@@ -101,6 +101,12 @@ impl Prepared {
         Self { scanned: 1, items: vec![PreparedItem::OriginalUnavailable(path, error)] }
     }
 
+    /// Preserve failures from a catalog import's first metadata pass without probing those paths again.
+    pub(crate) fn add_original_errors(&mut self, errors: Vec<(String, std::io::Error)>) {
+        self.scanned = self.scanned.saturating_add(errors.len());
+        self.items.extend(errors.into_iter().map(|(path, error)| PreparedItem::OriginalUnavailable(path, error)));
+    }
+
     /// Let catalog import classify guarded failures against the current owner catalog, not a stale snapshot.
     pub(crate) fn retain_original_errors(&mut self, mut retain: impl FnMut(&str, &std::io::Error) -> bool) {
         self.items.retain(|item| match item {

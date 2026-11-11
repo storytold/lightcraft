@@ -65,7 +65,9 @@ is also available through `library.importLightroom {"status":true}` during that 
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
 hierarchical keywords, regular collections/collection sets, virtual copies and mapped develop
 settings are imported. Missing originals remain catalogued for relinking, count as added records and are reported
-separately from failures reading files that are present. Known-missing originals are not probed
+separately from access failures. Permission and transport errors from the first metadata lookup or a
+later guarded read are retained in the failed-file report, not labelled as missing. Refused network
+redirects are not imported. Known-missing originals are not probed
 again. Previously browsed Local records join All Photos even when their originals are offline;
 their promotion is counted once and undone together with the catalog import.
 An image whose file, folder or root folder record is gone from the catalog, or whose original path
