@@ -10,6 +10,18 @@
   (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
   See [film grain](grain.md).
 
+### Lightroom edits from XMP sidecars look closer to Lightroom
+- A portrait raw's crop and masks land where Lightroom put them (issue #2239). Lightroom places them on the photo as
+  the camera stored it, before turning it upright; they were taken as if on the upright photo, so the crop cut the
+  wrong side and a gradient or radial mask was drawn a quarter turn away (a haze mask meant for the sky fogged one
+  side of the photo). A straightened crop turns the way Lightroom turned it, as a Lightroom catalog's already did
+  (issue #2687). Read Metadata from File puts photos imported before in place.
+- A photo developed in one of Lightroom's basic profiles gets ours: Adobe Monochrome renders it in black and white,
+  Adobe Landscape and the others as they do for presets. Creative profiles such as Vintage 07 are still named in the
+  import report: their colour table only exists in Lightroom.
+- On 59 Lightroom exports of real edits (Canon raws, 32 of them portrait), LightCraft's renders of the same sidecars
+  moved from a mean ΔE of 14.9 to 9.5 (12 of them stayed above 12, from 38).
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

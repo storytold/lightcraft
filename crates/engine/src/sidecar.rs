@@ -165,6 +165,12 @@ pub struct SidecarData {
     /// [`merge_into`] puts boxes drawn on the photo as stored where the upright photo has them (#2674).
     pub regions_drawn_on: Option<(f64, f64)>,
     pub orientation: Option<lightcraft_meta::Orientation>,
+    /// How the photo file's stored pixels turn upright (its own orientation), for a `crs:` develop patch's crop and
+    /// masks: Lightroom writes their positions on the stored image, before that orientation, while LightCraft's are
+    /// on the photo as shown. Set by the import and by re-reads ([`SidecarData::with_file_orientation`]), which know
+    /// the file; with `None`, [`merge_into`] takes the positions as written (the Lightroom catalog import turns them
+    /// itself).
+    pub develop_frame: Option<lightcraft_meta::Orientation>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
@@ -237,7 +243,19 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
     out.develop = match full {
         Some(s) => Some(DevelopPatch::Full(Box::new(s))),
         None if crate::crs::has_adjustments(&d.properties) => {
-            let (partial, unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), target, crate::crs_masks::DEFAULT_ASPECT);
+            let (mut partial, mut unmapped) = crate::crs::to_partial_report(&d.properties, Some(&d.values), target, crate::crs_masks::DEFAULT_ASPECT);
+            // the profile the photo was developed with (`crs:Look`): Lightroom's basic ones have ours standing in for
+            // them, as for presets (Adobe Monochrome is a black-and-white rendering, Adobe Landscape a vivid one);
+            // any other stays reported
+            if let Some(look) = crate::profile_refs::look_ref(&d.properties)
+                && let crate::profile_refs::Resolved::BuiltIn(id) = crate::profile_refs::resolve(&look, &[])
+            {
+                let amount = look.get("amount").cloned().unwrap_or(serde_json::json!(100.0));
+                if let Some(o) = partial.as_object_mut() {
+                    o.insert("profile".into(), serde_json::json!({"id": id, "amount": amount}));
+                }
+                unmapped.retain(|name| name != "Look");
+            }
             // Lightroom's default profiles are named by nearly every sidecar; our own starting look stands
             // in for them, so only another profile is worth a warning
             let profile = crate::crs::camera_profile_name(&d.properties)
@@ -355,7 +373,19 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
         Some(DevelopPatch::Partial(v)) => {
             let mut v = v.clone();
             if p.width > 0 && p.height > 0 {
-                crate::crs_masks::refit_radials(&mut v, crate::crs_masks::DEFAULT_ASPECT, p.width as f64 / p.height as f64);
+                let shown = p.width as f64 / p.height as f64;
+                match sc.develop_frame {
+                    Some(file) => {
+                        // Lightroom's crop and mask positions are on the stored image (issue #2239): turn them
+                        // into the frame the photo is shown in, its own Rotate / Flip included
+                        let stored = if file.swaps_axes() { 1.0 / shown } else { shown };
+                        let frame = crate::lightroom_catalog::in_photo_frame(file, p.develop.orientation);
+                        crate::crs_masks::refit_radials(&mut v, crate::crs_masks::DEFAULT_ASPECT, stored);
+                        crate::lightroom_catalog::catalog_masks(&mut v, frame);
+                        crate::lightroom_catalog::catalog_crop(&mut v, frame, stored);
+                    }
+                    None => crate::crs_masks::refit_radials(&mut v, crate::crs_masks::DEFAULT_ASPECT, shown),
+                }
             }
             lightcraft_develop::apply_partial(&p.develop, &v, 1.0)
         }
@@ -380,14 +410,39 @@ impl SidecarData {
     }
 
     /// Take the orientation of the photo file at `original` (LightCraft shows the photo turned by it, and the packet
-    /// may not repeat it) when the regions need it: they were drawn on a stated size ([`SidecarData::regions_drawn_on`]).
-    /// Only then is the file read ([`file_orientation`]).
-    pub fn with_file_orientation(self, original: &str) -> Self {
-        if self.regions_drawn_on.is_none() {
-            return self;
+    /// may not repeat it) when the regions need it: they were drawn on a stated size ([`SidecarData::regions_drawn_on`]);
+    /// and as [`SidecarData::develop_frame`] when a `crs:` patch places a crop or masks
+    /// ([`SidecarData::has_positioned_develop`]). Only then is the file read ([`file_orientation`]); a file that
+    /// states no orientation is upright. A crop or masks on a file that can't be opened is an error: taking it as
+    /// upright would save them turned the wrong way on a rotated photo.
+    pub fn with_file_orientation(self, original: &str) -> std::io::Result<Self> {
+        let develop = self.has_positioned_develop();
+        if self.regions_drawn_on.is_none() && !develop {
+            return Ok(self);
         }
-        SidecarData { orientation: file_orientation(original).or(self.orientation), ..self }
+        let file = file_orientation(original);
+        if develop && file.is_none() {
+            std::fs::File::open(original)?;
+        }
+        let orientation = if self.regions_drawn_on.is_some() { file.or(self.orientation) } else { self.orientation };
+        let develop_frame = if develop { file.or(Some(lightcraft_meta::Orientation::Normal)) } else { self.develop_frame };
+        Ok(SidecarData { orientation, develop_frame, ..self })
     }
+
+    /// Whether a `crs:` develop patch places anything on the image (a crop, masks): what [`SidecarData::develop_frame`]
+    /// turns. The whole photo, unrotated, is no placement: Lightroom writes `crs:HasCrop="False"` on every uncropped
+    /// photo, which reads as that crop, and turning it changes nothing, so it needn't read the photo file.
+    pub fn has_positioned_develop(&self) -> bool {
+        let Some(DevelopPatch::Partial(v)) = &self.develop else { return false };
+        v.get("masks").is_some() || v.pointer("/crop/geometry").is_some_and(|g| !whole_photo(g))
+    }
+}
+
+/// Whether a crop geometry (`{"rect": {x0, y0, x1, y1}, "angle"}`) is the whole photo, unrotated.
+fn whole_photo(g: &serde_json::Value) -> bool {
+    let at = |p: &str| g.pointer(p).and_then(serde_json::Value::as_f64);
+    let rect = [at("/rect/x0"), at("/rect/y0"), at("/rect/x1"), at("/rect/y1")];
+    rect == [Some(0.0), Some(0.0), Some(1.0), Some(1.0)] && at("/angle").unwrap_or(0.0) == 0.0
 }
 
 /// The orientation the photo file at `path` states, matching what the import stores on [`crate::media::ProbeInfo`]:
@@ -1171,7 +1226,7 @@ impl Session {
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
-        let sc = sc.with_file_orientation(orig);
+        let sc = sc.with_file_orientation(orig).map_err(|e| EngineError::Other(format!("{orig}: {e}")))?;
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
             warning.path = orig.to_string();
@@ -1704,6 +1759,154 @@ mod tests {
             &mut v,
         );
         assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
+    }
+
+    /// A Lightroom sidecar of a portrait raw (stored landscape, Exif orientation 8): a crop and a horizontal
+    /// gradient on the stored image, as Lightroom writes them.
+    const PORTRAIT_RAW_SIDECAR: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:HasCrop="True"
+         crs:CropTop="0.05" crs:CropLeft="0" crs:CropBottom="1" crs:CropRight="0.95" crs:CropAngle="0">
+         <crs:MaskGroupBasedCorrections><rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1"
+          crs:CorrectionActive="true" crs:CorrectionName="Mask 4" crs:LocalExposure2012="-0.38">
+          <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:MaskActive="true" crs:MaskBlendMode="0"
+           crs:MaskInverted="false" crs:MaskValue="1" crs:ZeroX="0.45" crs:ZeroY="0.48" crs:FullX="-0.45" crs:FullY="0.48"/>
+          </rdf:Seq></crs:CorrectionMasks></rdf:Description></rdf:li></rdf:Seq></crs:MaskGroupBasedCorrections>
+        </rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+    fn portrait_raw() -> Photo {
+        // the catalog keeps the upright size
+        Photo::new(PhotoId(9), Source::File { path: "/x/R6__0235.CR3".into() }, "R6__0235.CR3", "CR3", 3648, 5472, "2026-01-01T00:00:00")
+    }
+
+    fn linear(p: &Photo) -> (lightcraft_geom::Point, lightcraft_geom::Point) {
+        match p.develop.masks.first().and_then(|m| m.components.first()).map(|c| &c.shape) {
+            Some(lightcraft_develop::MaskShape::Linear { start, end }) => (*start, *end),
+            other => panic!("expected a linear gradient, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn sidecar_crop_and_masks_turn_with_the_file_orientation() {
+        // (issue #2239) Lightroom cut this photo's displayed left and top edges; LightCraft cut its right and top,
+        // and drew the gradient across the photo instead of up from its bottom
+        let mut sc = parse_sidecar(PORTRAIT_RAW_SIDECAR, crate::crs::Target::RawAbsolute).unwrap();
+        assert!(sc.has_positioned_develop());
+        sc.develop_frame = Some(lightcraft_meta::Orientation::from_exif(8));
+        let mut p = portrait_raw();
+        assert!(merge_into(&mut p, &sc, "now"));
+        let r = p.develop.crop.geometry.rect;
+        for (got, want) in [(r.x0, 0.05), (r.y0, 0.05), (r.x1, 1.0), (r.y1, 1.0)] {
+            assert!((got - want).abs() < 1e-9, "crop {r:?}");
+        }
+        assert_eq!(p.develop.crop.geometry.angle, 0.0);
+        let (start, end) = linear(&p);
+        for (got, want) in [(start.x, 0.48), (start.y, 1.45), (end.x, 0.48), (end.y, 0.55)] {
+            assert!((got - want).abs() < 1e-9, "gradient {start:?} → {end:?}");
+        }
+    }
+
+    #[test]
+    fn sidecar_positions_stay_as_written_without_a_file_orientation() {
+        // the Lightroom catalog import turns the packet's masks itself and leaves `develop_frame` unset
+        let sc = parse_sidecar(PORTRAIT_RAW_SIDECAR, crate::crs::Target::RawAbsolute).unwrap();
+        assert_eq!(sc.develop_frame, None);
+        let mut p = portrait_raw();
+        assert!(merge_into(&mut p, &sc, "now"));
+        let r = p.develop.crop.geometry.rect;
+        assert_eq!((r.x0, r.y0, r.x1, r.y1), (0.0, 0.05, 0.95, 1.0));
+        let (start, end) = linear(&p);
+        assert_eq!((start.x, start.y, end.x, end.y), (-0.45, 0.48, 0.45, 0.48));
+    }
+
+    #[test]
+    fn upright_file_keeps_sidecar_positions() {
+        let mut sc = parse_sidecar(PORTRAIT_RAW_SIDECAR, crate::crs::Target::RawAbsolute).unwrap();
+        sc.develop_frame = Some(lightcraft_meta::Orientation::Normal);
+        let mut p = Photo::new(PhotoId(9), Source::File { path: "/x/a.CR3".into() }, "a.CR3", "CR3", 5472, 3648, "t");
+        assert!(merge_into(&mut p, &sc, "now"));
+        let r = p.develop.crop.geometry.rect;
+        assert_eq!((r.x0, r.y0, r.x1, r.y1), (0.0, 0.05, 0.95, 1.0));
+        let (start, end) = linear(&p);
+        assert_eq!((start.x, start.y, end.x, end.y), (-0.45, 0.48, 0.45, 0.48));
+    }
+
+    #[test]
+    fn a_crop_on_a_file_that_cannot_be_opened_is_an_error() {
+        // read as upright, the crop and gradient would be saved turned the wrong way on a rotated photo
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-unreadable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let missing = dir.join("gone.CR3").to_string_lossy().to_string();
+        let sc = parse_sidecar(PORTRAIT_RAW_SIDECAR, crate::crs::Target::RawAbsolute).unwrap();
+        assert!(sc.with_file_orientation(&missing).is_err());
+        // without a crop or masks, nothing needs the file
+        let plain = SidecarData { rating: Some(3), ..SidecarData::default() };
+        assert_eq!(plain.clone().with_file_orientation(&missing).unwrap(), plain);
+        // an existing file stating no orientation is upright
+        let there = dir.join("a.jpg");
+        std::fs::write(&there, b"not much of a photo").unwrap();
+        let sc = parse_sidecar(PORTRAIT_RAW_SIDECAR, crate::crs::Target::RawAbsolute).unwrap();
+        let sc = sc.with_file_orientation(&there.to_string_lossy()).unwrap();
+        assert_eq!(sc.develop_frame, Some(lightcraft_meta::Orientation::Normal));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_uncropped_sidecar_does_not_read_the_photo_file() {
+        // Lightroom writes HasCrop="False" on every uncropped photo: the whole photo, which turning leaves as it is
+        let packet = |crop: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+                <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+0.50" {crop}/>
+                </rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        let missing = std::env::temp_dir().join(format!("lightcraft-uncropped-{}", std::process::id())).join("gone.CR3");
+        let missing = missing.to_string_lossy();
+        for crop in [r#"crs:HasCrop="False""#, r#"crs:HasCrop="True" crs:CropLeft="0" crs:CropTop="0" crs:CropRight="1" crs:CropBottom="1""#] {
+            let sc = parse_sidecar(&packet(crop), crate::crs::Target::RawAbsolute).unwrap();
+            assert!(!sc.has_positioned_develop(), "{crop}");
+            // nothing to turn: the missing original is never opened, and no frame is set
+            let sc = sc.with_file_orientation(&missing).unwrap();
+            assert_eq!(sc.develop_frame, None, "{crop}");
+        }
+        // a real crop, or a straightened whole photo, still needs the file
+        for crop in [
+            r#"crs:HasCrop="True" crs:CropLeft="0.1" crs:CropTop="0" crs:CropRight="1" crs:CropBottom="1""#,
+            r#"crs:HasCrop="True" crs:CropAngle="2""#,
+        ] {
+            let sc = parse_sidecar(&packet(crop), crate::crs::Target::RawAbsolute).unwrap();
+            assert!(sc.has_positioned_develop(), "{crop}");
+            assert!(sc.with_file_orientation(&missing).is_err(), "{crop}");
+        }
+    }
+
+    fn look_packet(name: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+0.50">
+             <crs:Look><rdf:Description crs:Name="{name}" crs:Amount="1"><crs:Parameters><rdf:Description
+              crs:ConvertToGrayscale="True"/></crs:Parameters></rdf:Description></crs:Look>
+            </rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    #[test]
+    fn a_photos_basic_lightroom_profile_maps_to_ours() {
+        // a photo developed in Adobe Monochrome rendered in colour
+        let sc = parse_sidecar(&look_packet("Adobe Monochrome"), crate::crs::Target::RawAbsolute).unwrap();
+        let mut p = portrait_raw();
+        assert!(merge_into(&mut p, &sc, "now"));
+        assert_eq!((p.develop.profile.id.as_str(), p.develop.profile.amount), ("lc.mono", 100.0));
+        assert!(!sc.warnings.iter().any(|w| w.fields.iter().any(|f| f == "Look")), "{:?}", sc.warnings);
+    }
+
+    #[test]
+    fn a_photos_creative_lightroom_profile_is_still_reported() {
+        let sc = parse_sidecar(&look_packet("Vintage 07"), crate::crs::Target::RawAbsolute).unwrap();
+        let mut p = portrait_raw();
+        merge_into(&mut p, &sc, "now");
+        assert_eq!(p.develop.profile.id, "lc.color", "the photo keeps its profile");
+        assert!(sc.warnings.iter().any(|w| w.fields.iter().any(|f| f == "Look")), "{:?}", sc.warnings);
     }
 }
 
