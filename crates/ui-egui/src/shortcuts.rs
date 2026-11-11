@@ -396,11 +396,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // mask pins (the View ▸ Show Mask Pins switch) instead of opening Remove; the full-screen
     // preview shows no panels and a minimized window hides the panel, so there H keeps its own
     // binding
-    if h_press
-        && app.ui.right == crate::state::RightPanel::Masking
-        && !app.ui.fullscreen
-        && crate::docking::exposed(app, crate::docking::Panel::Tools)
-    {
+    if h_press && tool_panel(app) == crate::state::RightPanel::Masking {
         let _ = app.run("view.maskPins", json!({}));
         fire.retain(|f| f != "panel.remove");
     }
@@ -681,7 +677,7 @@ fn fire_flag_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool 
             flag_toast(app, ctx, flag);
         }
         true
-    } else if matches!(f, "photo.pick" | "photo.reject" | "photo.unflag") && app.ui.right != crate::state::RightPanel::Crop {
+    } else if matches!(f, "photo.pick" | "photo.reject" | "photo.unflag") && tool_panel(app) != crate::state::RightPanel::Crop {
         cull(app, f, json!({}), false);
         let flag = match f {
             "photo.pick" => lightcraft_catalog::Flag::Pick,
@@ -695,11 +691,24 @@ fn fire_flag_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool 
     }
 }
 
+/// The right panel whose tool is on screen and so owns the keys it shares with the library: `ui.right` itself
+/// outlives its view (it is saved, and stays while the grid, a comparison or the full-screen preview is
+/// shown, where no tool can act), so everywhere but the single-photo view with the Tools panel in front there
+/// is none.
+fn tool_panel(app: &LightcraftApp) -> crate::state::RightPanel {
+    if app.ui.view == crate::state::ViewMode::Detail && !app.ui.fullscreen && crate::docking::exposed(app, crate::docking::Panel::Tools) {
+        app.ui.right
+    } else {
+        crate::state::RightPanel::None
+    }
+}
+
 /// Delete acts on what's being edited: the active mask in the Masking panel; never the photo while retouching (spots
-/// are removed from their own panel). Whether the key was used up.
+/// are removed from their own panel). Whether the key was used up. Only a tool that is on screen ([`tool_panel`])
+/// takes it: otherwise Delete is the photo's, in the grids and the full-screen preview too.
 fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     use crate::state::RightPanel as R;
-    match app.ui.right {
+    match tool_panel(app) {
         R::Masking => {
             if app.session.active_mask.is_some() {
                 let _ = app.run("mask.delete", json!({}));
@@ -764,7 +773,7 @@ fn brush_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
 /// here, so nothing else runs for it.
 fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> bool {
     use crate::state::RightPanel as R;
-    let right = app.ui.right;
+    let right = tool_panel(app);
     match f {
         // X is both reject (library) and swap crop aspect (crop tool). When both bindings fire,
         // swap once: twice would put the crop straight back (issue #1866).
