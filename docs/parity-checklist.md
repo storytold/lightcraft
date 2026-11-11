@@ -43,7 +43,7 @@ cited here still exists. Formerly docs/parity.md.
 | O. Merge (MERGE) | 3 | 1 | 0 | 0 | — | — |
 | P. Enhance (ENH) | 0 | 0 | 2 | 0 | — | — |
 | Q. HDR (HDR) | 2 | 3 | 0 | 0 | — | — |
-| R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
+| R. Video (VID) | 0 | 1 | 4 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 14 | 5 | 0 | 0 | 7/7 (100%) | 6/7 (86%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 419 | 72 | 55 | 35 | 193/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.3%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.5% of 163 · P2 57.0% of 179.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -380,7 +380,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-VID-PLAY | Video playback | P1 | ⬜ | `crates/catalog/src/model.rs` | videos can be catalogued (kind, duration); no player |
+| LR-VID-PLAY | Video playback | P1 | 🟡 | `crates/catalog/src/model.rs`, `crates/meta/src/video.rs`, `crates/engine/src/import.rs`, `crates/ui-egui/src/panels/grid.rs` | videos can be imported and catalogued (kind, duration, dimensions, capture date, camera/GPS), including legacy clips in filters and smart albums; the 🟡 is import and cataloguing, not playback: format/duration badges, loupe and culling cards, screen-reader video labels even without duration, per-file warnings for rendered exports/print/contact sheets; native Original copies stream and browser videos use Blobs without a clip-size cap; failed browser loads wait for selection change/retry; Remove Location permits verified location-free clips, not embedded GPS, recognized place names or unverifiable metadata, including QuickTime metadata layouts; no player yet |
 | LR-VID-TRIM | Trim | P1 | ⬜ | | |
 | LR-VID-EDIT | Edits on video | P2 | ⬜ | | |
 | LR-VID-COVER | Cover frame | P2 | ⬜ | | |
@@ -822,6 +822,12 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-25 | minor | KEYC-METADATA, LRC-LIB-KEYWORDS: ⌘⌥⇧K / Ctrl+Alt+Shift+K (`dialog.keywordShortcut`, Set Keyword Shortcut) and ⇧K (`keyword.toggleShortcut`) add and remove the keyword shortcut's keywords; Keyword Shortcut leaves LRC-LIB-KEYWORDS' Not yet list; status counts unchanged (KEYC-METADATA stays 🟡) |
 | 2026-10-27 | patch | LR-VIEW-HISTOGRAM: an edit with HDR switched off no longer shows the last HDR drag's histogram while it is dragged (#2819); status unchanged |
 | 2026-10-29 | patch | LR-VIEW-HISTOGRAM: the clipping buttons' tile and chevron come from the theme's tokens instead of a fixed dark gray, so the chevron stands 3:1 on its tile in all four themes; status counts unchanged |
+| 2026-11-01 | patch | LR-VID-PLAY review: Remove Location checks the QuickTime metadata under `trak`/`mdia` `udta` that the catalog reads, treats cleared `©xyz`/`loci`/mdta location atoms as no location, and refuses an XMP property inventory a size limit cut short instead of reading the omission as absence; `mvhd` no longer hides a named capture time. Status counts unchanged |
+| 2026-10-27 | patch | LR-VID-PLAY privacy follow-up: unchanged Original video exports with Remove Location reject recognized embedded XMP place names even without GPS, consistently in browser, filesystem and buffered paths. Empty fields remain allowed; status counts unchanged |
+| 2026-10-27 | patch | LR-VID-PLAY follow-up: Compare/Reference/Survey use video cards, grids announce clips without duration, legacy import candidates schedule no frame job, and QuickTime extraction/location verification share layout handling. Browser failures wait for retry; fragmented scans remain bounded. Status counts unchanged |
+| 2026-10-27 | patch | Cache budgets control retention/concurrency, not original file admission; physical/platform capacity and fallible allocation guard buffers. Browser cache ownership avoids another whole-file copy. Status counts unchanged |
+| 2026-10-27 | patch | Video review audit: content-based bounded probing, truthful CLI no-output errors and configurable buffering budgets without a fixed file-size restriction; status counts unchanged |
+| 2026-10-27 | patch | Video review: streamed Original copies, Blob-backed browser video import/export, location verification, explicit render error, direct metadata-buffer reads and legacy kind filters; status counts unchanged |
 | 2026-10-24 | minor | LR-EDIT-DETAIL-DENOISE: the built-in denoiser measures noise by colour channel and ignores texture, and its strength follows the measured noise; status and counts unchanged |
 | 2026-10-24 | minor | LR-EDIT-DETAIL-DENOISE: the built-in denoiser filters with block-matching collaborative filtering instead of non-local means, and runs that filter on the graphics card where there is one; status and counts unchanged |
 | 2026-10-23 | minor | LR-EDIT-DETAIL-DENOISE: built-in denoiser, no model needed |
@@ -836,6 +842,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-25 | patch | LR-IMP-FORMATS: JPEG ICC APP2 chunk sequences are validated before colour conversion; valid reordered chunks remain supported and malformed profiles use the existing sRGB fallback; status unchanged (🟡) |
 | 2026-10-13 | minor | LR-IMP-FORMATS / LR-IMP-CAMERA-COVERAGE: Canon CRW decodes (clean-room; 6 bodies pixel-exact, G5 preview-only) |
 | 2026-10-26 | minor | LR-IMP-FORMATS: the Canon CRW decoder moved to craft-libs as `craft-crw` (path dependency until that branch merges); `crates/raw/src/vendor/crw.rs` is the adapter, the clean-room record lives in craft-libs (crates/crw/clean-room there) |
+| 2026-10-24 | minor | LR-VID-PLAY ⬜ → 🟡: MP4/MOV/M4V are imported and catalogued (kind, duration, dimensions, capture date, camera/GPS), presented with format/duration badges and a loupe card, and left out of a rendered export, print or contact sheet with a per-file warning; playback, trim, edits and export remain |
 | 2026-10-24 | minor | KEYC-METADATA, LRC-LIB-KEYWORDS: ⌥0 / ⌥⇧0 (`keyword.nextSet`, `keyword.previousSet`) go to the next / previous keyword set; status counts unchanged (KEYC-METADATA stays 🟡) |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘K / Ctrl+K (`panel.addKeywords`, Add Keywords) shows the Keywords panel, opens Keywording and puts the cursor in the Add keyword box; status counts unchanged (KEYC-METADATA stays 🟡) |
 | 2026-10-24 | patch | LR-META-LOCATION: Info GPS text validates the complete decimal/DMS expression, axis markers and component ranges before metadata changes; readiness and feature counts unchanged |

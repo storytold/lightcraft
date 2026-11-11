@@ -30,7 +30,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | HDR gain map JPEG (ISO 21496-1) | ✅ | ✅ | ✅ (gain map read) | ✅ | `crates/codecs/src/gainmap.rs` |
 | PQ / HLG HDR | ✅ | ✅ AVIF, JXL, TIFF | — | 🟡 PQ AVIF, PQ JPEG XL, float TIFF; no HLG | |
 | Contact sheet / print PDF | — | ✅ (Print module: PDF / JPEG / printer) | — | 🟡 paginated contact-sheet PDF (A4 / Letter, 150 dpi, sRGB) | `crates/engine/src/contact_sheet.rs` |
-| Video (MP4, MOV, AVCHD…) | ✅ playback, trim, edit | ✅ export | 🟡 catalogued (kind, duration) | ⬜ | see video gap |
+| Video (MP4, MOV, AVCHD…) | ✅ playback, trim, edit | ✅ export | 🟡 imported and catalogued (kind, duration, size, dimensions, capture date, camera/GPS); no playback, trim or edits | ⬜ | `crates/meta/src/video.rs`, `crates/engine/src/import.rs` |
 
 ## Colour spaces and profiles
 
@@ -75,6 +75,7 @@ Remaining: **26–47 h** (AVIF decode 8–15 h if a permissive decoder is writte
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | minor | Video containers: MP4/MOV/M4V sniffed, imported and catalogued (kind, duration, dimensions, capture date, camera/GPS); the grid and loupe present clips, but playback, trim, edits and export remain |
 | 2026-10-12 | minor | LR-PROF-IMPORT: the user's own DNG camera profiles (`.dcp`) import as camera profiles; none ship |
 | 2026-10-10 | major | Created from the code and the installed Lightroom's document types |
 | 2026-10-10 | minor | JPEG XL export (#247): JXL write ✅ (native only), PQ JPEG XL HDR |

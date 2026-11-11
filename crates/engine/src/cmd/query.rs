@@ -14,7 +14,7 @@ pub fn photo_summary(p: &Photo) -> Value {
         "id": p.id.0,
         "fileName": p.file_name,
         "format": p.format,
-        "kind": p.kind,
+        "kind": p.effective_kind(),
         "width": p.width,
         "height": p.height,
         "captured": p.captured,
@@ -69,6 +69,89 @@ fn photo_arg(s: &Session, p: &Value, c: &str) -> crate::Result<PhotoId> {
         Some(id) => Err(bad(c, format!("no such photo {}", id.0))),
         None => s.active().ok_or_else(|| bad(c, "no photo")),
     }
+}
+
+/// The All Metadata rows of a video whose file can't be read: what its catalog record holds.
+fn recorded_video_rows(ph: &lightcraft_catalog::Photo) -> Vec<Value> {
+    let mut rows: Vec<(&str, &str, String)> = Vec::new();
+    if let Some(d) = ph.duration.filter(|d| d.is_finite()) {
+        rows.push(("Video", "Duration", format!("{d:.2} s")));
+    }
+    // A record without dimensions (a clip imported from a container that named none) has no
+    // Width or Height row: 0 is not a size.
+    if ph.width > 0 {
+        rows.push(("Video", "Width", ph.width.to_string()));
+    }
+    if ph.height > 0 {
+        rows.push(("Video", "Height", ph.height.to_string()));
+    }
+    if let Some(c) = &ph.captured {
+        rows.push(("Video", "Created", c.clone()));
+    }
+    if !ph.meta.camera.is_empty() {
+        rows.push(("Video", "Camera", ph.meta.camera.clone()));
+    }
+    // What import read from the clip's XMP: the place it names and its coordinates, a fixed
+    // handful of rows, never the whole packet.
+    if let Some((lat, lon)) = ph.meta.gps {
+        rows.push(("GPS", "Latitude", format!("{lat:.6}")));
+        rows.push(("GPS", "Longitude", format!("{lon:.6}")));
+    }
+    for (name, value) in [("Location", &ph.meta.location), ("City", &ph.meta.city), ("State", &ph.meta.state), ("Country", &ph.meta.country)] {
+        if !value.is_empty() {
+            rows.push(("Location", name, value.clone()));
+        }
+    }
+    rows.into_iter().map(|(group, name, value)| json!({"group": group, "tag": 0, "name": name, "value": value})).collect()
+}
+
+/// The All Metadata rows of a video, from its metadata boxes ([`crate::files::read_video_metadata_file`]):
+/// the movie header, then what its QuickTime / mdta atoms and embedded XMP say about the camera and place.
+fn video_metadata_rows(boxes: &[u8]) -> Vec<Value> {
+    let mut md = lightcraft_meta::extract(boxes);
+    let video = lightcraft_meta::probe_video(boxes);
+    if let Some(v) = &video {
+        md.fill_missing(&v.metadata);
+    }
+    let mut rows: Vec<(&str, &str, String)> = Vec::new();
+    if let Some(v) = &video {
+        if let Some(d) = v.duration {
+            rows.push(("Video", "Duration", format!("{d:.2} s")));
+        }
+        if v.width > 0 {
+            rows.push(("Video", "Width", v.width.to_string()));
+        }
+        if v.height > 0 {
+            rows.push(("Video", "Height", v.height.to_string()));
+        }
+        if let Some(o) = v.orientation {
+            let label = match o {
+                lightcraft_meta::Orientation::Normal => "Horizontal (normal)".to_string(),
+                lightcraft_meta::Orientation::Rotate90 => "Rotated 90° CW".to_string(),
+                lightcraft_meta::Orientation::Rotate180 => "Rotated 180°".to_string(),
+                lightcraft_meta::Orientation::Rotate270 => "Rotated 90° CCW".to_string(),
+                other => format!("{other:?}"),
+            };
+            rows.push(("Video", "Orientation", label));
+        }
+    }
+    let captured = md.capture_time.as_ref().map(lightcraft_meta::DateTime::to_iso).or_else(|| video.as_ref().and_then(|v| v.captured.clone()));
+    if let Some(c) = captured {
+        rows.push(("Video", "Created", c));
+    }
+    for (name, value) in [("Make", &md.make), ("Model", &md.model), ("Software", &md.software)] {
+        if let Some(v) = value {
+            rows.push(("Camera", name, v.clone()));
+        }
+    }
+    if let Some(g) = &md.gps {
+        rows.push(("GPS", "Latitude", format!("{:.6}", g.latitude)));
+        rows.push(("GPS", "Longitude", format!("{:.6}", g.longitude)));
+        if let Some(a) = g.altitude {
+            rows.push(("GPS", "Altitude", format!("{a:.1} m")));
+        }
+    }
+    rows.into_iter().map(|(group, name, value)| json!({"group": group, "tag": 0, "name": name, "value": value})).collect()
 }
 
 // Catalog queries also run in the 32-bit web build. A narrowing cast wraps
@@ -132,15 +215,27 @@ pub fn specs() -> Vec<CommandSpec> {
             let lightcraft_catalog::Source::File { path } = &ph.source else {
                 return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
             };
-            let bytes = match &s.media.file_bytes {
-                Some(r) => r(path),
-                None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
-            }
-            .map_err(|e| super::bad("photo.allMetadata", e))?;
-            let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)
-                .into_iter()
-                .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
-                .collect();
+            // a clip can be gigabytes: only its metadata boxes are read, as the import probe does
+            let (bytes, exif) = if ph.is_video() && !std::path::Path::new(path).exists() {
+                // A host without a filesystem (the browser) keeps a clip as a Blob under a made-up
+                // path: show what the library recorded instead of failing on a read that can't work.
+                return Ok(json!({"exif": recorded_video_rows(&ph), "xmp": [], "note": "the clip's file isn't readable here; showing what the library recorded"}));
+            } else if ph.is_video() {
+                let boxes = crate::files::read_video_metadata_file(path).map_err(|e| super::bad("photo.allMetadata", e))?;
+                let rows = video_metadata_rows(&boxes);
+                (boxes, rows)
+            } else {
+                let bytes = match &s.media.file_bytes {
+                    Some(r) => r(path),
+                    None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
+                }
+                .map_err(|e| super::bad("photo.allMetadata", e))?;
+                let rows = lightcraft_meta::file_tag_rows(&bytes)
+                    .into_iter()
+                    .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
+                    .collect();
+                (bytes, rows)
+            };
             // Keep sidecar precedence; reuse the loaded bytes for embedded XMP.
             let packet = match s.sidecar_lookup(ph.id).find(path) {
                 Some(sc) => std::fs::read_to_string(sc).ok(),

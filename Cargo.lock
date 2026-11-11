@@ -4082,6 +4082,7 @@ dependencies = [
  "lightcraft-codecs",
  "lightcraft-color",
  "lightcraft-engine",
+ "lightcraft-meta",
  "lightcraft-preview",
  "lightcraft-raster",
  "lightcraft-raw",

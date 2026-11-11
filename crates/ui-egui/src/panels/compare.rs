@@ -3,7 +3,7 @@
 //! photo only here, and with Auto Advance on they move to the next candidate / photo.
 
 use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
-use lightcraft_catalog::{Flag, PhotoId};
+use lightcraft_catalog::{Flag, Photo, PhotoId};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -226,6 +226,41 @@ fn frame_of(photo: &lightcraft_catalog::Photo) -> lightcraft_pipeline::geometry:
     )
 }
 
+/// Compare and Reference are where sharpness is judged: as in the loupe, say when what is on
+/// screen isn't the render on its way (a thumbnail, the last render after an edit, a magnified
+/// frame under its window), or when that render failed
+fn show_tile_status(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: &Photo, slot: Slot, display: Rect, img_area: Rect, has_window: bool) {
+    if !matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) {
+        return;
+    }
+    let id = photo.id;
+    let i = slot_index(slot);
+    let r = &app.renderer;
+    let mine = |s: Slot| r.textures.get(&s).filter(|t| t.photo == id).map(|t| t.key);
+    let waits = |s: Slot| r.is_pending(s) && !r.retrying(s);
+    // a slider drag on this photo: Compare has no drafts, so its render can't keep up until the drag ends
+    let dragging = app.session.interaction.is_some() && app.session.selection.active == Some(id);
+    let coming = (waits(slot) && !dragging) || (has_window && waits(Slot::CompareRegion(i)));
+    let keys = [mine(slot), mine(Slot::CompareRegion(i)), None, None];
+    let now = ui.input(|i| i.time);
+    // (the wait belongs to the photo in the pane: one moved in starts its own)
+    let rendering = ui.ctx().data_mut(|d| {
+        let (p, wait) = d.get_temp_mut_or(egui::Id::unique(("compare-rendering", i)), (id, None));
+        if *p != id {
+            (*p, *wait) = (id, None);
+        }
+        super::detail::rendering_overdue(wait, keys, coming, now)
+    });
+    let failed = (!rendering && mine(slot).is_none() && (!r.is_pending(slot) || r.retrying(slot))).then(|| r.failure_of(slot, id)).flatten();
+    let over = display.intersect(img_area);
+    let over = if over.is_positive() { over } else { img_area };
+    if let Some(e) = failed {
+        super::detail::failed_pill(ui, app, photo, img_area, over, None, &format!("compare:renderFailed:{i}"), e);
+    } else if rendering {
+        super::detail::loupe_pill(ui, img_area, over, None, &format!("compare:rendering:{i}"), crate::i18n::tr("Rendering…"), false);
+    }
+}
+
 /// Draw one photo fitted into `area` (rendered at its display size into `slot`), with its caption
 /// strip below. Returns the image rect and the click/drag response.
 fn photo_tile(
@@ -311,6 +346,8 @@ fn photo_tile(
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.id(), display, uv, Color32::WHITE);
+    } else if photo.is_video() {
+        super::detail::video_card(ui, &p, &t, &photo, img_area, &format!("cull:{}:videoCard", id.0));
     } else {
         p.rect_filled(img.intersect(img_area), 0.0, t.skeleton);
     }
@@ -324,36 +361,7 @@ fn photo_tile(
     if active {
         super::grid::selection_ring(&p, &t, display.intersect(img_area.shrink(3.0)), lightcraft_engine::SelectionState::Active);
     }
-    // Compare and Reference are where sharpness is judged: as in the loupe, say when what is on
-    // screen isn't the render on its way (a thumbnail, the last render after an edit, a magnified
-    // frame under its window), or when that render failed
-    if matches!(app.ui.view, ViewMode::Compare | ViewMode::Reference) {
-        let i = slot_index(slot);
-        let r = &app.renderer;
-        let mine = |s: Slot| r.textures.get(&s).filter(|t| t.photo == id).map(|t| t.key);
-        let waits = |s: Slot| r.is_pending(s) && !r.retrying(s);
-        // a slider drag on this photo: Compare has no drafts, so its render can't keep up until the drag ends
-        let dragging = app.session.interaction.is_some() && app.session.selection.active == Some(id);
-        let coming = (waits(slot) && !dragging) || (window.is_some() && waits(Slot::CompareRegion(i)));
-        let keys = [mine(slot), mine(Slot::CompareRegion(i)), None, None];
-        let now = ui.input(|i| i.time);
-        // (the wait belongs to the photo in the pane: one moved in starts its own)
-        let rendering = ui.ctx().data_mut(|d| {
-            let (photo, wait) = d.get_temp_mut_or(egui::Id::unique(("compare-rendering", i)), (id, None));
-            if *photo != id {
-                (*photo, *wait) = (id, None);
-            }
-            super::detail::rendering_overdue(wait, keys, coming, now)
-        });
-        let failed = (!rendering && mine(slot).is_none() && (!r.is_pending(slot) || r.retrying(slot))).then(|| r.failure_of(slot, id)).flatten();
-        let over = display.intersect(img_area);
-        let over = if over.is_positive() { over } else { img_area };
-        if let Some(e) = failed {
-            super::detail::failed_pill(ui, app, &photo, img_area, over, None, &format!("compare:renderFailed:{i}"), e);
-        } else if rendering {
-            super::detail::loupe_pill(ui, img_area, over, None, &format!("compare:rendering:{i}"), crate::i18n::tr("Rendering…"), false);
-        }
-    }
+    show_tile_status(app, ui, &photo, slot, display, img_area, window.is_some());
     // caption: label · file name · stars · flag · colour label
     // caption right under the image (at the bottom when zoomed in)
     let cap_top = (display.bottom() + 2.0).min(img_area.bottom());
@@ -633,7 +641,7 @@ pub fn show_reference(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let canvas = area_and_filmstrip(app, ui);
     let reference = app.ui.reference.map(PhotoId).filter(|r| live(app, *r));
     let (Some(r), Some(active)) = (reference, app.session.active()) else {
-        super::empty_message(ui, canvas, "No reference photo", "Right-click a photo ▸ Set as Reference Photo, then View → Reference View (Shift+R)");
+        super::empty_message(ui, canvas, "No reference photo", "Right-click a photo → Set as Reference Photo, then View → Reference View (Shift+R)");
         return;
     };
     let area = canvas.shrink(18.0);

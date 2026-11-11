@@ -64,6 +64,8 @@ struct Layout {
 pub struct Prepared {
     options: Options,
     items: Vec<(String, RenderJob)>,
+    /// Photos left off the sheet (a video has no frame yet): file name and reason.
+    skipped: Vec<(String, String)>,
 }
 
 pub struct Document {
@@ -72,6 +74,8 @@ pub struct Document {
     pub photos: usize,
 }
 
+/// Sets up the PDF for `photos`: videos are left off the sheet with a warning (their cells
+/// reflow), and the returned [`Prepared`] holds one render job per remaining photo.
 pub fn prepare(session: &mut Session, p: &Value) -> Result<Prepared, String> {
     let options = Options::parse(p)?;
     if let Some(ids) = p.get("ids") {
@@ -88,16 +92,31 @@ pub fn prepare(session: &mut Session, p: &Value) -> Result<Prepared, String> {
         return Err("select between 1 and 1000 photos".into());
     }
     let l = options.layout()?;
-    if ids.len().div_ceil(options.columns * options.rows) > 100 {
+    // A video has no frame yet: leave it off the sheet (the grid reflows around it) and report
+    // it, rather than failing the whole sheet with "no such photo".
+    let mut skipped = Vec::new();
+    let mut printable = Vec::with_capacity(ids.len());
+    for id in ids {
+        let photo = session.catalog.photo(id).ok_or("no such photo")?;
+        if photo.is_video() {
+            skipped.push((photo.file_name.clone(), "a video: not on a contact sheet (no frame yet)".to_string()));
+        } else {
+            printable.push(id);
+        }
+    }
+    if printable.is_empty() {
+        return Err("none of the selected photos can be on a contact sheet: they are videos".into());
+    }
+    if printable.len().div_ceil(options.columns * options.rows) > 100 {
         return Err("contact sheets are limited to 100 pages; increase the grid size or select fewer photos".into());
     }
-    let mut items = Vec::with_capacity(ids.len());
-    for id in ids {
+    let mut items = Vec::with_capacity(printable.len());
+    for id in printable {
         let name = session.catalog.photo(id).ok_or("no such photo")?.file_name.clone();
         let job = session.export_job(id, l.cell_w - 16, l.cell_h - 48, OutputSpace::Srgb, OutputDepth::U8)?;
         items.push((name, job));
     }
-    Ok(Prepared { options, items })
+    Ok(Prepared { options, items, skipped })
 }
 
 impl Prepared {
@@ -105,8 +124,14 @@ impl Prepared {
         self.items.len()
     }
 
+    /// Whether no photo remains for the sheet (all were videos).
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+
+    /// Photos the sheet leaves out, with the reason for each ([`Self::len`] counts the rest).
+    pub fn skipped(&self) -> &[(String, String)] {
+        &self.skipped
     }
 
     /// Cancellation produces no partial document; callers write only after this succeeds.
@@ -202,6 +227,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Out-of-range settings, bad ids and too many pages are refused.
     #[test]
     fn validates_settings_and_selection() {
         let mut s = Session::with_demo();
@@ -223,6 +249,26 @@ mod tests {
         assert!(prepare(&mut s, &json!({"ids": [id, u64::MAX]})).is_err());
         assert!(prepare(&mut s, &json!({"ids": vec![id; 1001]})).is_err());
         assert!(prepare(&mut s, &json!({"ids": vec![id; 101], "columns": 1, "rows": 1})).is_err());
+    }
+
+    /// A video is left off the sheet with a warning; only clips is a clear error.
+    #[test]
+    fn a_video_is_left_off_the_sheet_with_a_warning() {
+        use lightcraft_catalog::{MediaKind, Op, Photo, Source};
+        let mut s = Session::with_demo();
+        let still = s.catalog.photos().next().expect("a demo photo").id.0;
+        let video = s.catalog.alloc_photo_id();
+        let mut p =
+            Photo::new(video, Source::File { path: "/lightcraft-sheet-video/clip.mp4".into() }, "clip.mp4", "MP4", 1920, 1080, "2026-05-04T10:00:00");
+        p.kind = MediaKind::Video;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let prepared = prepare(&mut s, &json!({"ids": [still, video.0]})).unwrap();
+        assert_eq!(prepared.len(), 1, "the still is on the sheet");
+        assert_eq!(prepared.skipped()[0].0, "clip.mp4");
+        assert!(prepared.skipped()[0].1.contains("not on a contact sheet"));
+        // only clips: a clear error, not an empty sheet
+        let err = prepare(&mut s, &json!({"ids": [video.0]})).err().expect("only a video");
+        assert!(err.contains("videos"), "{err}");
     }
 
     #[test]
