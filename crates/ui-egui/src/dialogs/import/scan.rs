@@ -245,6 +245,7 @@ pub fn browse(app: &mut LightcraftApp, path: &str, subfolders: Option<bool>) -> 
             truncated: false,
             unreadable: 0,
             unsupported: 0,
+            destination_missing: None,
         }));
     };
     #[cfg(not(target_arch = "wasm32"))]
@@ -377,6 +378,7 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     app.renderer.forget_imports();
+    let destination_missing = out.destination_missing;
     let mut d = ImportDialog::new(out.candidates);
     (d.scan_limited, d.unreadable, d.unsupported) = (out.truncated, out.unreadable, out.unsupported);
     let trashed = d
@@ -388,6 +390,13 @@ pub fn poll_scan(app: &mut LightcraftApp, ctx: &egui::Context) {
         })
         .collect();
     d.set_trashed(trashed);
+    d.recall_copy_choices(&app.session.import_defaults);
+    // a remembered folder that isn't there now (a drive not connected): copies go to Originals, and the review
+    // says so rather than failing the import (issue #3951)
+    if let Some(folder) = destination_missing.filter(|f| *f == d.destination) {
+        d.destination.clear();
+        app.toast(ctx, crate::i18n::tr_format!("{folder} isn't available: copies go to the library's Originals", folder = folder));
+    }
     d.copy = task.copy;
     // only an album the review offers (it may have been deleted while the scan ran)
     d.album = task.album.filter(|id| app.session.catalog.album(lightcraft_catalog::AlbumId(*id)).is_some_and(|a| !a.folder && !a.is_smart()));

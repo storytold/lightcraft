@@ -255,6 +255,12 @@ pub fn start(app: &mut LightcraftApp, d: &ImportDialog) -> Result<Value, String>
             params["dng"] = json!(true);
         }
     }
+    // the next review opens with these copy choices (issue #3951); a library that can't save them still imports
+    if let Some(change) = d.remembered(&app.session.import_defaults)
+        && let Err(e) = app.session.execute("library.preferences", &json!({"import": change}))
+    {
+        log::warn!("import: couldn't remember the copy choices: {e}");
+    }
     let total = queue.len();
     app.import = Some(ImportTask::new(queue, params, undo0, false));
     app.renderer.forget_imports();

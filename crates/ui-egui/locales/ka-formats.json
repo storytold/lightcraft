@@ -328,5 +328,6 @@
   "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
   "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
   "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}",
+  "{folder} isn't available: copies go to the library's Originals": "{folder} მიუწვდომელია: ასლები ბიბლიოთეკის ორიგინალებში მოხვდება"
 }

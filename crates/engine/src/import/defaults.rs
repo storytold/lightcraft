@@ -41,6 +41,15 @@ pub struct ImportDefaults {
     pub auto_album: Option<String>,
     /// Open the import review when a camera or memory card is connected.
     pub show_on_card: bool,
+    /// Where the last import that copied (or moved) put its copies, so the next import review opens with it
+    /// (issue #3951): the destination folder ("" = the library's Originals)…
+    pub copy_destination: String,
+    /// …its folder structure (`library.import`'s `organize`: "" = by day, `month`, `flat`, or `custom`)…
+    pub copy_organize: String,
+    /// …the folder template when that is `custom` (e.g. `{date:%Y}/{date:%m-%d}`)…
+    pub copy_folder_template: String,
+    /// …and the file-name template for the copies ("" = keep the names).
+    pub copy_rename: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

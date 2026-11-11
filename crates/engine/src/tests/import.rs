@@ -1005,6 +1005,16 @@ fn copy_with_a_folder_template() {
         .unwrap();
     assert_eq!(ids(&r, "imported"), 1, "{r}");
     assert!(dest.join("2026").join("20260114").join("a.png").is_file());
+    // year, then month-day (issue #3951's template): 2026/01-14
+    write_png(&src.join("b.png"), 2);
+    let r = s
+        .execute(
+            "library.import",
+            &json!({"paths": [src.join("b.png").to_string_lossy()], "mode": "copy", "destination": dest.to_string_lossy(), "organize": "{date:%Y}/{date:%m-%d}"}),
+        )
+        .unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    assert!(dest.join("2026").join("01-14").join("b.png").is_file());
     for d in [&src, &dest] {
         let _ = std::fs::remove_dir_all(d);
     }
@@ -3550,4 +3560,30 @@ fn a_broken_link_before_dotdot_is_an_error() {
     // without reading the disk the spelling is still the folder by name
     assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A remembered copy destination that isn't a folder now (a drive not connected) is reported by the scan, which
+/// runs off the window's thread, so the review can fall back to Originals (issue #3951).
+#[test]
+fn scan_reports_a_remembered_destination_that_is_gone() {
+    let src = temp_dir("gonesrc");
+    let dest = temp_dir("gonedest");
+    write_png(&src.join("a.png"), 1);
+    let mut s = Session::new().with_fs();
+    let paths = [src.to_string_lossy().to_string()];
+    assert_eq!(crate::import::scan_report(&mut s, &paths).destination_missing, None, "nothing remembered");
+    s.import_defaults.copy_destination = dest.to_string_lossy().to_string();
+    assert_eq!(crate::import::scan_report(&mut s, &paths).destination_missing, None, "the folder is there");
+    let gone = dest.join("unplugged");
+    s.import_defaults.copy_destination = gone.to_string_lossy().to_string();
+    let out = crate::import::scan_report(&mut s, &paths);
+    assert_eq!(out.destination_missing.as_deref(), Some(gone.to_string_lossy().as_ref()));
+    assert_eq!(out.candidates.len(), 1, "the scan itself is not affected");
+    // a session without file access has no folders to check
+    let mut demo = Session::new();
+    demo.import_defaults.copy_destination = gone.to_string_lossy().to_string();
+    assert_eq!(crate::import::scan_report(&mut demo, &[]).destination_missing, None);
+    for d in [&src, &dest] {
+        let _ = std::fs::remove_dir_all(d);
+    }
 }

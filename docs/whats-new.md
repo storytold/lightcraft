@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Import remembers where your copies go
+- The import review opens with the destination folder, folder structure (by day, by month, one folder or your custom
+  template, such as `{date:%Y}/{date:%m-%d}`) and file-name template of your last import that copied or moved photos,
+  so they no longer have to be set again each time. They are kept with the library. If the remembered folder isn't
+  there (a drive not connected), copies go to the library's Originals and the review says so (issue #3951).
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
