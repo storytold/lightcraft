@@ -98,12 +98,34 @@ pub fn apply(s: &mut Session, results: Vec<(Stale, std::result::Result<ProbeInfo
         }
     }
     if !ops.is_empty() {
+        let before = raw_decodes(&s.catalog, &out.updated);
         s.apply_system(Op::Batch { ops })?;
+        // a RAW+JPEG pair whose raw decodes now (or no longer) shows the right photo on top
+        let retop = retop_ops(&s.catalog, &before);
+        if !retop.is_empty() {
+            s.apply_system(Op::Batch { ops: retop })?;
+            super::organize::fix_selection(s);
+        }
     }
     for id in &out.updated {
         s.media.forget(*id);
     }
     Ok(out)
+}
+
+/// Whether each photo develops from its raw data, taken before a recheck or reload changes them,
+/// for [`retop_ops`].
+pub(crate) fn raw_decodes(cat: &Catalog, ids: &[PhotoId]) -> Vec<(PhotoId, bool)> {
+    ids.iter().filter_map(|id| cat.photo(*id).map(|p| (*id, p.develops_raw()))).collect()
+}
+
+/// Ops that put the right photo on top of the RAW+JPEG pairs whose raw started or stopped
+/// decoding since `before` ([`raw_decodes`]). A pair whose raw only changed its content or
+/// metadata keeps its order, so a top the user chose with Set as Top of Stack stays.
+pub(crate) fn retop_ops(cat: &Catalog, before: &[(PhotoId, bool)]) -> Vec<Op> {
+    let changed: Vec<PhotoId> =
+        before.iter().filter(|(id, was)| cat.photo(*id).is_some_and(|p| p.develops_raw() != *was)).map(|(id, _)| *id).collect();
+    cat.raw_jpeg_retop_ops(&changed)
 }
 
 fn recheck(s: &mut Session, p: &Value) -> Result<Value> {

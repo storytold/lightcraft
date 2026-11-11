@@ -50,6 +50,31 @@ fn fix_active(s: &mut Session) {
     }
 }
 
+/// After stacking RAW+JPEG pairs or putting another photo on top of one: each selected photo now
+/// hidden in a collapsed stack is replaced by the stack's visible photo (once), the active one
+/// too, so an edit (or Auto Sync) never reaches a photo the grid doesn't show. A photo hidden for
+/// another reason (a filter) is left as it is.
+pub(crate) fn fix_selection(s: &mut Session) {
+    let vis: std::collections::HashSet<PhotoId> = s.visible_cloned().into_iter().collect();
+    let shown = |s: &Session, id: PhotoId| -> PhotoId {
+        if vis.contains(&id) {
+            return id;
+        }
+        s.catalog.stack_of(id).and_then(|st| st.photos.iter().copied().find(|p| vis.contains(p))).unwrap_or(id)
+    };
+    let mut ids: Vec<PhotoId> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for id in s.selection.ids.clone() {
+        let id = shown(s, id);
+        if seen.insert(id) {
+            ids.push(id);
+        }
+    }
+    let active = s.selection.active.map(|a| shown(s, a));
+    s.selection.ids = ids;
+    s.selection.active = active;
+}
+
 fn set_collapsed(s: &mut Session, stacks: Vec<StackId>, collapsed: bool, label: &str) -> Result<Value> {
     let ops = s.catalog.set_collapsed_ops(&stacks, collapsed);
     let n = commit_ops(s, label, ops)?;
@@ -279,6 +304,32 @@ pub fn specs() -> Vec<CommandSpec> {
                 commit_ops(s, "Auto-Stack", ops)?;
                 fix_active(s);
                 Ok(json!({"stacks": groups.len(), "photos": photos}))
+            }
+        ),
+        cmd!(
+            "stack.rawJpegPairs",
+            "Stack RAW+JPEG Pairs",
+            ["Photo", "Stack"],
+            None,
+            "{ids?, all?: bool (every photo in the library), preview?: bool} → {stacks, photos} — a JPEG or HEIF next to a raw of the same name (same folder, name without the extension, letter case ignored; exactly one raw and one JPEG/HEIF with that name) is stacked with it, collapsed, so the pair shows as one photo: the raw on top, or the JPEG when the raw can only be shown from its embedded preview. Photos already in a stack, in Recently Deleted and virtual copies are left alone. Default: the selection if several photos, else the current view. One undo step; Unstack takes a pair apart. library.import's pairRawJpeg does the same on import",
+            always,
+            |s, p| {
+                let pool: Vec<PhotoId> = if bool_or(p, "all", false) {
+                    s.catalog.photos().filter(|ph| !ph.local).map(|ph| ph.id).collect()
+                } else if p.get("ids").is_some() || s.selection.ids.len() > 1 {
+                    s.targets(p)?
+                } else {
+                    s.visible_cloned()
+                };
+                let pairs = s.catalog.raw_jpeg_pairs(&pool);
+                let out = json!({"stacks": pairs.len(), "photos": pairs.len() * 2});
+                if bool_or(p, "preview", false) {
+                    return Ok(out);
+                }
+                let ops = s.catalog.raw_jpeg_stack_ops(&pairs);
+                commit_ops(s, crate::import::RAW_JPEG_UNDO, ops)?;
+                fix_selection(s);
+                Ok(out)
             }
         ),
     ]

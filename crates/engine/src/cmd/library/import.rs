@@ -83,6 +83,8 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         convert_dng: bool_or(p, "dng", false),
         local: bool_or(p, "local", false),
         recipe: crate::cmd::recipe_param(p, "library.import")?,
+        // (browsing a folder only looks: it never groups the files it lists)
+        pair_raw_jpeg: !bool_or(p, "local", false) && bool_or(p, "pairRawJpeg", s.import_defaults.pair_raw_jpeg),
     };
     let album_name = str_param(p, "albumName").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
     Ok(ImportRequest { paths, opts, album, album_name })

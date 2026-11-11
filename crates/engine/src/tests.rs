@@ -47,6 +47,7 @@ mod presets_scale;
 mod preview_prep;
 mod print;
 mod process;
+mod raw_jpeg;
 mod recheck;
 mod segment;
 mod settings_files;

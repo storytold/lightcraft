@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### A raw and its JPEG can show as one photo
+- A camera set to RAW+JPEG writes `DSC_0001.NEF` and `DSC_0001.JPG`, and the library showed every picture twice.
+  Turn on Settings ▸ Import ▸ Stack JPEG files with the raw file of the same name, and an import stacks each such pair
+  (same folder, same name, letter case ignored, exactly one raw and one JPEG with that name; also a HEIF next to a raw)
+  collapsed, with the raw on top, so the grid shows one photo (issues #332, #3439). Ratings, flags and deletes still
+  apply to each file on its own. When the raw opens only as Preview only, such as a Nikon High Efficiency NEF,
+  the JPEG goes on top. Photo ▸ Stack ▸ Stack RAW+JPEG Pairs does the same for photos you imported before, as one undo
+  step. The option is off until you turn it on, so nothing changes for a library by itself.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth

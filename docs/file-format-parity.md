@@ -19,7 +19,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | TIFF | ✅ 8/16/32-bit | ✅ 8/16-bit, LZW/ZIP | ✅ 1–64-bit integer, 16–64-bit float, bilevel, CCITT fax, WhiteIsZero | ✅ 8/16-bit, 32-bit float linear, none / LZW / ZIP | `crates/tiff`, `crates/codecs/src/tiff_codec.rs` |
 | PNG | ✅ | ✅ | ✅ | ✅ | |
 | PSD / PSB | ✅ (maximized-compatibility composite) | ✅ (Classic: PSD export, edit-in round trip) | ✅ merged composite | ⬜ (external-editor round trip writes 16-bit TIFF) | `crates/codecs/src/psd.rs` |
-| HEIC / HEIF | ✅ | ⬜ (Classic) / HDR only | ✅ in every release build (`crates/heif`, heic-rs) | ⬜ | `heif` feature on by packaging scripts |
+| HEIC / HEIF (`.heic`, `.heif`, `.hif`) | ✅ | ⬜ (Classic) / HDR only | 🟡 4:2:0 and monochrome, in every release build (`crates/heif`, heic-rs); 4:2:2/4:4:4 files, such as Canon/Sony HIF, are refused | ⬜ | `heif` feature on by packaging scripts; `.hif` is the HEIF Nikon and Canon write next to a raw (see LR-IMP-FORMATS in `docs/parity-checklist.md`) |
 | AVIF | ✅ | ✅ (HDR) | ⬜ recognised, not decoded (no permissive pure-Rust AV1 decoder) | ✅ 8/10-bit, PQ HDR | |
 | JPEG XL | ✅ | ✅ | ✅ (`jxl-oxide`) incl. DNG 1.7 JXL tiles | ✅ lossy / lossless, 8/16-bit, PQ HDR (`jixel`, native only; ⬜ web) | `crates/engine/src/tests/export.rs` |
 | WebP | not in its document types | ⬜ | ✅ | ✅ | beyond target |

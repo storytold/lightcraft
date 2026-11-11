@@ -77,6 +77,10 @@ pub struct ImportOptions {
     /// one skipped as a duplicate, restored from Recently Deleted, or joined from a browsed
     /// folder (Local) is never touched, as the preset and keywords never are.
     pub recipe: Vec<(String, f64)>,
+    /// Treat a JPEG (or HEIF) next to a raw of the same name as one photo: each RAW+JPEG pair this
+    /// import adds is put in a collapsed stack of the two, the raw on top
+    /// ([`lightcraft_catalog::raw_jpeg`]). Off = both files are separate photos, as before.
+    pub pair_raw_jpeg: bool,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
@@ -196,6 +200,13 @@ pub struct ImportReport {
     /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ImportWarning>,
+    /// [`ImportOptions::pair_raw_jpeg`]: the RAW+JPEG pairs stacked as one photo.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub paired: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// A structured diagnostic from foreign XMP develop settings.

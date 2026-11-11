@@ -334,7 +334,39 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    if opts.pair_raw_jpeg && !opts.local {
+        report.paired = stack_raw_jpeg_pairs(s, &report);
+    }
     Ok(report)
+}
+
+/// The undo step of stacking RAW+JPEG pairs (on import and by `stack.rawJpegPairs`).
+pub const RAW_JPEG_UNDO: &str = "Stack RAW+JPEG Pairs";
+
+/// [`ImportOptions::pair_raw_jpeg`]: stack the RAW+JPEG pairs among the photos this batch added or
+/// restored, each with its partner wherever it is in the library (an earlier batch of the same
+/// import, or a raw imported before its JPEG). Its own undo step, which the import merges into its
+/// one. The photos are already safely catalogued, so a failure here only leaves them unpaired (a
+/// warning in the log; Stack RAW+JPEG Pairs can do it later). The number of pairs stacked.
+fn stack_raw_jpeg_pairs(s: &mut Session, report: &ImportReport) -> usize {
+    let ids: Vec<PhotoId> = report.imported.iter().chain(&report.restored).map(|id| PhotoId(*id)).collect();
+    let pairs = s.catalog.raw_jpeg_pairs(&ids);
+    let ops = s.catalog.raw_jpeg_stack_ops(&pairs);
+    let n = ops.len();
+    if n == 0 {
+        return 0;
+    }
+    match s.commit(RAW_JPEG_UNDO, Op::Batch { ops }) {
+        Ok(_) => {
+            // a selected JPEG now under its raw (Synchronize Folder, auto-import) gives way to the raw
+            crate::cmd::fix_selection(s);
+            n
+        }
+        Err(e) => {
+            log::warn!("import: stacking {n} RAW+JPEG pairs: {e}");
+            0
+        }
+    }
 }
 
 /// Move, after the commit: save the library, then remove each source whose destination is

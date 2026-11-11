@@ -164,11 +164,18 @@ impl Default for SyncChoice {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct SyncReport {
     pub imported: usize,
+    /// RAW+JPEG pairs among the new files stacked as one photo (the library's `import.pairRawJpeg`).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub paired: usize,
     pub relinked: usize,
     pub removed: usize,
     pub read: usize,
     /// (path or photo, why) for what couldn't be done.
     pub failed: Vec<(String, String)>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 fn invalid(msg: impl Into<String>) -> EngineError {
@@ -694,7 +701,8 @@ impl SyncJob {
             return Err(not_there(&changes.path));
         }
         let FolderChanges { new, missing, metadata, moved, probes, .. } = changes;
-        let opts = ImportOptions { mode: ImportMode::Add, ..Default::default() };
+        // new files follow the library's RAW+JPEG preference, as an import does
+        let opts = ImportOptions { mode: ImportMode::Add, pair_raw_jpeg: s.import_defaults.pair_raw_jpeg, ..Default::default() };
         let import = if choice.import_new && !new.is_empty() {
             s.import_probes = probes;
             let job = crate::import::ImportJob::new(s, opts.clone())?;
@@ -831,6 +839,7 @@ impl SyncCommit {
             SyncStep::Import(prepared) => match crate::import::commit_prepared(s, &self.opts, &self.now, prepared) {
                 Ok(r) => {
                     report.imported += r.imported.len();
+                    report.paired += r.paired;
                     report.failed.extend(r.failed);
                 }
                 Err(e) => report.failed.push((String::new(), e.to_string())),

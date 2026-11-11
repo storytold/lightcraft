@@ -117,6 +117,16 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
+    heading(ui, t, crate::i18n::tr("Raw + JPEG"));
+    let mut pair = d.pair_raw_jpeg;
+    if check(ui, "settings.importPairRawJpeg", &mut pair, "Stack JPEG files with the raw file of the same name") {
+        let _ = app.run("library.preferences", json!({"import": {"pairRawJpeg": pair}}));
+    }
+    hint(
+        ui,
+        t,
+        "On import, a JPEG or HEIF with the same name as a raw in the same folder goes into a collapsed stack with the raw. The raw is on top, or the JPEG/HEIF when the raw shows only its embedded preview. Ratings, flags and deletes still apply to each file on its own. Photo › Stack › Stack RAW+JPEG Pairs does the same for photos already in the library.",
+    );
     heading(ui, t, crate::i18n::tr("XMP sidecars"));
     let mut xmp = app.session.xmp;
     if check(ui, "settings.autoWriteXmp", &mut xmp.auto_write, "Automatically write changes into XMP sidecars") {
