@@ -456,3 +456,30 @@ fn cropped_lens_corrections_correct_the_crop_like_the_whole() {
     assert!(warps[0].cropped(w, h, crate::Rect::new(30, 0, 70, 50)).is_none());
     assert!(warps[0].cropped(w, h, crate::Rect::new(usize::MAX, 0, 70, 50)).is_none());
 }
+
+/// Ten thousand full-image polynomials (a few hundred KB of opcode data): the list is held to
+/// `MAX_LIST_PASSES` passes of work, the first ones applied and the rest left out.
+#[test]
+fn a_list_repeating_full_image_work_stops_at_its_budget() {
+    let (w, h) = (64usize, 48usize);
+    let a = Area { top: 0, left: 0, bottom: h as u32, right: w as u32, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
+    // v + 0.001 each, two coefficients: each costs two passes
+    let list = vec![Opcode::MapPolynomial { area: a, coefficients: vec![0.001, 1.0] }; 10_000];
+    let mut buf = vec![0.0f32; w * h];
+    apply_list(&list, &mut buf, w, h, 1, None, 1.0);
+    let applied = (buf[0] / 0.001).round() as usize;
+    assert_eq!(applied, MAX_LIST_PASSES / 2, "{}", buf[0]);
+    assert!(buf.iter().all(|v| *v == buf[0]));
+}
+
+/// Opcodes `apply_list` does nothing for spend none of the budget: a later real one still runs.
+#[test]
+fn ops_that_apply_nothing_cost_no_budget() {
+    let (w, h) = (8usize, 8usize);
+    let a = Area { top: 0, left: 0, bottom: h as u32, right: w as u32, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
+    let mut list = vec![Opcode::Unknown { id: 9999, flags: 0, params: Vec::new() }; 4 * MAX_LIST_PASSES];
+    list.push(Opcode::MapPolynomial { area: a, coefficients: vec![0.5, 1.0] });
+    let mut buf = vec![0.0f32; w * h];
+    apply_list(&list, &mut buf, w, h, 1, None, 1.0);
+    assert_eq!(buf[0], 0.5);
+}

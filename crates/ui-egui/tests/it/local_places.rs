@@ -35,6 +35,7 @@ impl Drop for Scratch {
 fn harness(places: Vec<(String, String)>, kept: Vec<String>) -> Harness<'static, LightcraftApp> {
     let services = Services { local_places: Some(places), pick_folder: Some(Box::new(|| None)), ..Default::default() };
     let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), services);
+    app.headless_host = true;
     app.ui.left_panel = true;
     app.ui.local_roots = kept;
     let mut h = Harness::builder().with_size(vec2(1000.0, 800.0)).build_ui_state(

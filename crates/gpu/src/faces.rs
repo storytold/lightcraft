@@ -107,20 +107,7 @@ fn make_device(backends: wgpu::Backends) -> Result<Dev, String> {
     desc.backend_options = crate::backend::backend_options();
     desc.flags = crate::backend::instance_flags_from_env(desc.flags);
     let instance = wgpu::Instance::new(desc);
-    let wanted = std::env::var("LIGHTCRAFT_GPU_ADAPTER").ok().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty());
-    let adapter = match &wanted {
-        Some(w) => pollster::block_on(instance.enumerate_adapters(backends))
-            .into_iter()
-            .find(|a| {
-                let i = a.get_info();
-                i.device_type != wgpu::DeviceType::Cpu && i.name.to_lowercase().contains(w.as_str())
-            })
-            .ok_or_else(|| format!("no GPU adapter named like `{w}`"))?,
-        None => pollster::block_on(
-            instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }),
-        )
-        .map_err(|e| format!("no GPU adapter among {backends:?} ({e})"))?,
-    };
+    let adapter = crate::backend::pick_adapter(&instance, backends)?;
     let info = adapter.get_info();
     if info.device_type == wgpu::DeviceType::Cpu {
         return Err(format!("software adapter ({}) skipped: the CPU is faster", info.name));
