@@ -225,7 +225,7 @@ fn sharpened_pixels_are_pinned() {
         let samples = src.data.iter().flat_map(|p| [p[0], p[1], p[2]].map(|v| u16::from(v) * 257)).collect();
         let mut deep = DeepImage { width: src.width, height: src.height, samples: DeepSamples::U16(samples), space: OutputSpace::Srgb };
         output_sharpen_deep(&mut deep, target, SharpenAmount::Standard);
-        let DeepSamples::U16(v) = &deep.samples else { unreachable!() };
+        let DeepSamples::U16(v) = &deep.samples else { panic!("expected U16 samples") };
         got.push(fnv(&v.iter().flat_map(|s| s.to_le_bytes()).collect::<Vec<u8>>()));
     }
     assert_eq!(got, SHARPENED, "{got:#x?}");
@@ -912,6 +912,8 @@ fn ramp(depth: OutputDepth, space: OutputSpace) -> lightcraft_pipeline::Rendered
 fn distinct_levels(bytes: &[u8]) -> (usize, lightcraft_codecs::Decoded) {
     let d = lightcraft_codecs::decode(bytes, Default::default()).expect("decodes");
     let mut v: Vec<u32> = (0..d.image.width).map(|x| d.image.get(x, 1)[1].to_bits()).collect();
+    // sorted first: 8-bit output is dithered, so equal levels aren't all side by side
+    v.sort_unstable();
     v.dedup();
     (v.len(), d)
 }

@@ -80,6 +80,7 @@ fn number_value(ui: &mut egui::Ui, v: &mut Value, field: &str) {
         "rating" => (0.0, 5.0, 0.05),
         "iso" => (0.0, 409_600.0, 10.0),
         "aperture" => (0.0, 64.0, 0.05),
+        "exposureBias" => (-20.0, 20.0, 0.05),
         "keywordCount" | "personCount" => (0.0, 1000.0, 0.05),
         "longEdge" | "shortEdge" => (0.0, 100_000.0, 10.0),
         _ => (0.0, 100_000.0, 0.5),

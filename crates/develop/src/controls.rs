@@ -28,6 +28,7 @@ pub enum Section {
     Calibration,
     PointColor,
     RedEye,
+    LensBlur,
 }
 
 impl Section {
@@ -49,6 +50,7 @@ impl Section {
             Section::Calibration => "Calibration",
             Section::PointColor => "Point Color",
             Section::RedEye => "Red Eye",
+            Section::LensBlur => "Lens Blur",
         }
     }
 }
@@ -286,6 +288,9 @@ controls! {
     "geometry.scale" => geometry.scale, "Scale", Geometry, 50, 150, 100, 1, 0, Plain;
     "geometry.offsetX" => geometry.offset_x, "Offset X", Geometry, -100, 100, 0, 0.1, 1, Centered;
     "geometry.offsetY" => geometry.offset_y, "Offset Y", Geometry, -100, 100, 0, 0.1, 1, Centered;
+    "lensBlur.amount" => lens_blur.amount, "Blur Amount", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "lensBlur.boost" => lens_blur.boost, "Boost", LensBlur, 0, 100, 0, 1, 0, Plain;
+    "lensBlur.transition" => lens_blur.transition, "Transition", LensBlur, 0, 100, 50, 1, 0, Plain;
     "calibration.shadowsTint" => calibration.shadows_tint, "Shadows Tint", Calibration, -100, 100, 0, 1, 0, Tint;
     "calibration.redHue" => calibration.red_hue, "Red Hue", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#e0306a", to: "#e08a30" };
     "calibration.redSat" => calibration.red_sat, "Red Saturation", Calibration, -100, 100, 0, 1, 0, Gradient { from: "#7a7a7a", to: "#e03a3a" };
