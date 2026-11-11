@@ -798,6 +798,43 @@ fn remove_location_refuses_original_with_embedded_place_names() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A place only an IPTC Extension LocationShown holds, which the catalog doesn't model, still
+/// refuses an Original copy with Remove Location on, for JPEG and PSD alike.
+#[test]
+fn remove_location_refuses_original_with_iptc_extension_location_xmp() {
+    let dir = temp_dir("export-noloc-iptc-extension");
+    let packet = concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" "#,
+        r#"xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/">"#,
+        r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationShown></rdf:Description></rdf:RDF>"#
+    );
+    let pixels = [96u8; 12];
+    let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { xmp: Some(packet), ..Default::default() };
+    let jpeg = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
+    let psd = lightcraft_codecs::encode_psd(&image, &encoded).unwrap();
+    let cases = [("Location.jpg", jpeg), ("Location.psd", psd)];
+    let mut paths = Vec::new();
+    for (name, bytes) in &cases {
+        let path = dir.join(name);
+        let metadata = lightcraft_meta::try_extract(bytes).unwrap();
+        assert!(metadata.gps.is_none() && metadata.city.is_none(), "the catalog metadata does not expose this IPTC field");
+        std::fs::write(&path, bytes).unwrap();
+        paths.push(path.to_string_lossy().to_string());
+    }
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
+    for (name, _) in cases {
+        let id = session.catalog.photos().find(|photo| photo.file_name == name).unwrap().id;
+        let error = export_photo(&mut session, id, &options, 1).err().expect("IPTC Extension location must refuse Original export");
+        assert!(error.contains("other XMP location metadata"), "{name}: {error}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn remove_location_refuses_original_with_unreadable_non_psd_xmp() {
     let dir = temp_dir("export-noloc-malformed-xmp");
@@ -818,6 +855,111 @@ fn remove_location_refuses_original_with_unreadable_non_psd_xmp() {
     let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
     let error = export_photo(&mut session, id, &options, 1).err().expect("unreadable XMP must not pass location removal");
     assert!(error.contains("can't verify location metadata") && error.contains("malformed embedded XMP"), "{error}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// JPEG Extended XMP is checked too: GPS in it, an announced extension that is missing, or one
+/// under another GUID each refuse an Original copy with Remove Location on.
+#[test]
+fn remove_location_checks_jpeg_extended_xmp_before_an_original_copy() {
+    let dir = temp_dir("export-noloc-extended-xmp");
+    let rdf = |body: &str| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmpNote="http://ns.adobe.com/xmp/note/" xmlns:exif="http://ns.adobe.com/exif/1.0/">{body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    let main = rdf("<xmpNote:HasExtendedXMP>0123456789ABCDEF0123456789ABCDEF</xmpNote:HasExtendedXMP>");
+    let pixels = [96u8; 12];
+    let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { xmp: Some(&main), ..Default::default() };
+    let announced_only = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
+    // An APP1 Extended XMP segment: signature, GUID, full length and offset, then the data.
+    let with_extension = |guid: &[u8], body: &str| {
+        let extended = rdf(body);
+        let mut payload = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
+        payload.extend_from_slice(guid);
+        payload.extend_from_slice(&u32::try_from(extended.len()).unwrap().to_be_bytes());
+        payload.extend_from_slice(&0u32.to_be_bytes());
+        payload.extend_from_slice(extended.as_bytes());
+        let mut jpeg = announced_only[..2].to_vec();
+        jpeg.extend_from_slice(&[0xff, 0xe1]);
+        jpeg.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+        jpeg.extend_from_slice(&payload);
+        jpeg.extend_from_slice(&announced_only[2..]);
+        jpeg
+    };
+    let with_gps = with_extension(b"0123456789ABCDEF0123456789ABCDEF", "<exif:GPSLatitude>37,46.494N</exif:GPSLatitude>");
+    let other_guid = with_extension(b"FEDCBA9876543210FEDCBA9876543210", "");
+    assert!(lightcraft_meta::try_extract(&with_gps).unwrap().gps.is_none(), "the catalog doesn't read Extended XMP");
+
+    let cases = [
+        ("Extended.jpg", with_gps, "other XMP location metadata"),
+        ("Announced.jpg", announced_only.clone(), "announces Extended XMP"),
+        ("OtherGuid.jpg", other_guid, "under the same GUID"),
+    ];
+    let mut paths = Vec::new();
+    for (name, bytes, _) in &cases {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        paths.push(path.to_string_lossy().to_string());
+    }
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
+    for (name, _, expected) in cases {
+        let id = session.catalog.photos().find(|photo| photo.file_name == name).unwrap().id;
+        let error = export_photo(&mut session, id, &options, 1).err().expect("Extended XMP must be verified");
+        assert!(error.contains(expected), "{name}: {error}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An XMP packet whose flattened inventory hit the key budget can't prove GPS is absent, so an
+/// Original copy with Remove Location on is refused.
+#[test]
+fn remove_location_refuses_original_image_with_truncated_xmp_inventory() {
+    let dir = temp_dir("export-noloc-truncated-xmp");
+    // Flattened keys repeat their whole ancestor path, so a small packet can still exhaust the
+    // key budget: 2200 leaves under four 200-byte names spend it long before the GPS elements.
+    let level = "n".repeat(200);
+    let mut packet = String::from(concat!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" "#,
+        r#"xmlns:lc="https://lightcraft.example/lc/" xmlns:exif="http://ns.adobe.com/exif/1.0/"><rdf:RDF><rdf:Description><lc:root rdf:parseType="Resource">"#
+    ));
+    for _ in 0..4 {
+        packet.push_str(&format!("<lc:{level} rdf:parseType=\"Resource\">"));
+    }
+    for i in 0..2200 {
+        packet.push_str(&format!("<lc:leaf{i} lc:att=\"v\"/>"));
+    }
+    packet.push_str("</lc:root>");
+    for _ in 0..4 {
+        packet.push_str(&format!("</lc:{level}>"));
+    }
+    // Whatever the deep block left unspent is below one leaf key: powers of two drain it without
+    // overshooting the budget (a key larger than what remains is skipped, not charged).
+    for n in [512usize, 256, 128, 64, 32, 16, 8, 4, 2, 1] {
+        packet.push_str(&format!("<{}/>", "z".repeat(n)));
+    }
+    packet.push_str(r#"<exif:GPSLatitude>37,46.494N</exif:GPSLatitude><exif:GPSLongitude>122,15.120W</exif:GPSLongitude></rdf:Description></rdf:RDF></x:xmpmeta>"#);
+    let parsed = lightcraft_meta::parse_xmp(&packet).unwrap();
+    assert!(parsed.properties_truncated, "the fixture really exhausts the key budget");
+    assert!(parsed.metadata.gps.is_none(), "the budget hides the coordinates");
+
+    let path = dir.join("Buried.jpg");
+    let pixels = [96u8; 12];
+    let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { xmp: Some(&packet), ..Default::default() };
+    let bytes = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
+    assert!(lightcraft_meta::try_extract(&bytes).unwrap().gps.is_none(), "the catalog cannot see it either");
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
+    let error = export_photo(&mut session, id, &options, 1).err().expect("an incomplete inventory must not pass");
+    assert!(error.contains("XMP property inventory exceeds the size limit"), "{error}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
