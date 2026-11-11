@@ -289,6 +289,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "photo.delete",
             "photo.restore",
             "photo.deletePermanently",
+            "photo.deleteFromDisk",
         ],
     ),
     (
@@ -367,6 +368,7 @@ fn host_supports(app: &LightcraftApp, id: &str) -> bool {
         "file.restoreLibrary" => app.services.restore_library.is_some(),
         "photo.restore" | "photo.deletePermanently" => selection_deleted(app),
         "photo.delete" => !selection_deleted(app),
+        "photo.deleteFromDisk" => !cfg!(target_arch = "wasm32"),
         // only in an album that holds its photos (not a smart one)
         "album.removePhotos" => in_normal_album(app) && !selection_deleted(app),
         // only where the trash is on screen

@@ -12,6 +12,7 @@ mod files;
 mod run;
 mod ui_commands;
 
+pub(crate) use files::delete_from_disk;
 pub use files::{confirm_delete, delete_in_album, reveal_label, show_in_folders_enabled};
 pub use run::{parse_rgb, run_ui_command};
 pub use ui_commands::{LANGUAGE_COMMANDS, UI_COMMANDS, language_from_command, ui_commands};
@@ -30,6 +31,17 @@ fn thumb_size_view(app: &LightcraftApp) -> bool {
 pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "library.selectOnlyActive" => app.session.active().is_some(),
+        "photo.deleteFromDisk" => {
+            // A mixed selection may contain generated demo scenes with no original file.
+            // Offer disk deletion whenever at least one real file is selected; the
+            // confirmation includes only file-backed photos.
+            !cfg!(target_arch = "wasm32")
+                && app
+                    .session
+                    .selected()
+                    .iter()
+                    .any(|id| app.session.catalog.photo(*id).is_some_and(|p| matches!(&p.source, lightcraft_catalog::Source::File { .. })))
+        }
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
         "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {
             !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none()

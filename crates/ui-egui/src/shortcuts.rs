@@ -592,7 +592,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
     }
     // an export that can't start (e.g. no folder) says why instead of doing nothing
     if let Err(e) = app.run(f, json!({}))
-        && matches!(f, "app.export" | "app.exportPrevious")
+        && matches!(f, "app.export" | "app.exportPrevious" | "photo.deleteFromDisk")
     {
         app.toast(ctx, e);
     }
