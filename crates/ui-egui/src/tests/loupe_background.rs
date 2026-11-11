@@ -206,7 +206,30 @@ fn labels_on_the_canvas_stay_readable_on_white() {
     h.snapshot(SETTLE);
     let on_white = color(&h, "Before");
     assert!(on_white.r() < 0x80, "dark on white: {on_white:?}");
+    set(&mut h, json!({"color": "mediumGray"}));
+    h.snapshot(SETTLE);
+    assert!(color(&h, "Before").r() < 0x30, "dark enough on medium gray (L* 50)");
     set(&mut h, json!({"color": "black"}));
     h.snapshot(SETTLE);
     assert!(color(&h, "After").r() > 0x80, "light on black");
+}
+
+#[test]
+fn full_screen_text_follows_the_colour_even_while_soft_proofing() {
+    let mut h = loupe();
+    h.app.ui.soft_proof = true;
+    set(&mut h, json!({"color": "white"}));
+    let r = h.request("engine.execute", json!({"command": "view.fullScreenPreview", "params": {}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    side_by_side(&mut h);
+    let label = h.view.painted_shapes().iter().find_map(|s| find_color(s, "Before")).expect("the Before label in full screen");
+    assert!(label.r() < 0x80, "dark on the white full-screen background: {label:?}");
+}
+
+fn find_color(shape: &egui::epaint::Shape, text: &str) -> Option<egui::Color32> {
+    match shape {
+        egui::epaint::Shape::Text(t) if t.galley.job.text == text => t.galley.job.sections.first().map(|s| s.format.color),
+        egui::epaint::Shape::Vec(v) => v.iter().find_map(|s| find_color(s, text)),
+        _ => None,
+    }
 }

@@ -426,12 +426,14 @@ fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoI
 }
 
 /// Text painted straight on the canvas (render messages, Before / After labels) in colours that read
-/// on the chosen Loupe Background: dark on the light greys and white, light on the dark ones. The
-/// theme colour, and soft proofing's paper-white surround, keep the theme's text.
+/// on the chosen Loupe Background: dark from Medium Gray up (light text on `#777777` stays near
+/// 2:1), light on Dark Gray and Black. The theme colour keeps the theme's text, and so does soft
+/// proofing's paper-white surround, except in full screen, which shows the chosen colour instead.
 fn canvas_text(app: &LightcraftApp, t: &Tokens) -> Tokens {
-    let Some(bg) = app.ui.settings.loupe_background.color().filter(|_| !app.ui.soft_proof) else { return *t };
-    let light = u16::from(bg.r()) + u16::from(bg.g()) + u16::from(bg.b()) > 3 * 128;
-    let (text, dim) = if light { (0x1c, 0x4a) } else { (0xee, 0xb4) };
+    let surround = app.ui.soft_proof && !app.ui.fullscreen;
+    let Some(bg) = app.ui.settings.loupe_background.color().filter(|_| !surround) else { return *t };
+    let light = u16::from(bg.r()) + u16::from(bg.g()) + u16::from(bg.b()) > 3 * 0x60;
+    let (text, dim) = if light { (0x0c, 0x26) } else { (0xee, 0xb4) };
     Tokens { text: Color32::from_gray(text), text_dim: Color32::from_gray(dim), ..*t }
 }
 
