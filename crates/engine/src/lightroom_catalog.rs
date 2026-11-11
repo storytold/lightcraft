@@ -20,8 +20,8 @@ const COMMAND: &str = "library.importLightroom";
 const MAX_FILE: u64 = 1 << 32;
 /// Expanded XMP packets kept from one catalog, all rows together (each is bounded on its own).
 const MAX_XMP_TOTAL: usize = 1 << 30;
-/// Keyword paths kept for the photos of one catalog, all together.
-const MAX_KEYWORD_BYTES: usize = 256 << 20;
+/// Keyword paths kept for the photos of one catalog, all together (a million photos at ~1 KB of paths each still fit).
+const MAX_KEYWORD_BYTES: usize = 1 << 30;
 
 fn error(why: impl Into<String>) -> crate::EngineError {
     crate::EngineError::BadParams { cmd: COMMAND.into(), msg: why.into() }
@@ -630,7 +630,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         if let Some(p) = path {
             keyword_bytes = keyword_bytes.saturating_add(p.len());
             if keyword_bytes > MAX_KEYWORD_BYTES {
-                return Err("the catalog's keyword assignments together exceed 256 MB".into());
+                return Err("the catalog's keyword assignments together exceed 1 GiB".into());
             }
             keywords.entry(number(&r, "image")).or_default().push(p);
         }
