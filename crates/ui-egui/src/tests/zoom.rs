@@ -278,7 +278,8 @@ fn click_photo(h: &mut Headless, double: bool) {
 }
 
 /// View ▸ Double-Click Returns to Grid: a double-click on the photo goes back to the grid as Esc
-/// does, and the zoom its first click toggled is put back; a single click still click-zooms.
+/// does without zooming in first; a single click still click-zooms, once the double-click time has
+/// passed.
 #[test]
 fn a_double_click_returns_to_the_grid_when_the_setting_is_on() {
     use crate::state::{ViewMode, Zoom};
@@ -289,14 +290,40 @@ fn a_double_click_returns_to_the_grid_when_the_setting_is_on() {
     assert_eq!(h.app.ui.zoom, Zoom::Fit);
 
     click_photo(&mut h, false);
+    assert_eq!(h.app.ui.zoom, Zoom::Fit, "a single click waits out the double-click time");
+    for _ in 0..30 {
+        h.step();
+    }
     assert_eq!(h.app.ui.view, ViewMode::Detail, "a single click stays in the loupe");
-    assert!(matches!(h.app.ui.zoom, Zoom::Percent(_)), "a single click still zooms: {:?}", h.app.ui.zoom);
+    assert!(matches!(h.app.ui.zoom, Zoom::Percent(_)), "then it zooms: {:?}", h.app.ui.zoom);
     h.request("engine.execute", json!({"command": "view.zoomFit"}), T);
     h.settle(SETTLE);
 
     click_photo(&mut h, true);
     assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "the double-click went back to the grid");
-    assert_eq!(h.app.ui.zoom, Zoom::Fit, "the first click's zoom was put back");
+    assert_eq!(h.app.ui.zoom, Zoom::Fit, "and never zoomed in on the way");
+    assert_eq!(h.app.ui.pending_click, None);
+}
+
+/// A mouse's double-click: the two clicks arrive a few frames apart, inside the double-click time.
+/// The first click has not zoomed by then, and the second goes back to the grid.
+#[test]
+fn a_double_click_over_several_frames_returns_to_the_grid_without_zooming() {
+    use crate::state::{ViewMode, Zoom};
+    let mut h = detail();
+    h.app.ui.settings.zoom_to_focus = false;
+    h.app.ui.settings.loupe_double_click_grid = true;
+
+    click_photo(&mut h, false);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert_eq!(h.app.ui.zoom, Zoom::Fit, "the first click is still waiting");
+    assert!(h.app.ui.pending_click.is_some());
+    click_photo(&mut h, false);
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "the second click made it a double-click");
+    assert_eq!(h.app.ui.zoom, Zoom::Fit);
+    assert_eq!(h.app.ui.pending_click, None);
 }
 
 /// Off (the default), a double-click on the photo toggles the zoom and stays in the loupe.

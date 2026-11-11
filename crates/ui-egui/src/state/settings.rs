@@ -198,7 +198,7 @@ pub struct AppSettings {
     pub zoom_to_focus: bool,
     /// View ▸ Double-Click Returns to Grid: a double-click on the photo in the loupe goes back to
     /// the grid (or the person's page it came from), as Esc does, instead of toggling the zoom
-    /// (`view.doubleClickToGrid`; off by default).
+    /// (`view.doubleClickToGrid`; off by default). A single click then zooms after the double-click time.
     pub loupe_double_click_grid: bool,
     /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
     #[serde(deserialize_with = "lenient")]

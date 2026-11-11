@@ -1274,18 +1274,72 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         }
         return;
     }
-    if resp.double_clicked() && app.ui.settings.loupe_double_click_grid && app.ui.view == crate::state::ViewMode::Detail {
-        // the double-click's first click already toggled the zoom: put it back, then leave
-        if let Some((zoom, pan)) = app.ui.zoom_before_click.take() {
-            app.ui.zoom = zoom;
-            app.ui.pan = pan;
-            app.ui.zoom_anim = false;
-        }
+    if app.ui.settings.loupe_double_click_grid && app.ui.view == crate::state::ViewMode::Detail {
+        double_click_to_grid(app, ui, resp, img, canvas);
+    } else {
+        app.ui.pending_click = None;
+        click_zoom_and_pan(app, resp, img, canvas);
+    }
+    let _ = (native, aspect);
+}
+
+/// The loupe's click and drag with Double-Click Returns to Grid on: a double-click goes back to the
+/// grid as Esc does, and a single click zooms only once the double-click time has passed with no
+/// second click, so a double-click never shows the photo zooming in first. A drag pans as always.
+fn double_click_to_grid(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: Rect, canvas: Rect) {
+    let photo = app.session.active().map(|p| p.0);
+    let (now, delay) = (ui.input(|i| i.time), ui.ctx().options(|o| o.input_options.max_double_click_delay));
+    if resp.double_clicked() {
+        app.ui.pending_click = None;
         crate::menus::leave_detail(app);
         return;
     }
-    click_zoom_and_pan(app, resp, img, canvas);
-    let _ = (native, aspect);
+    let zoomed = zoomed(img, canvas);
+    if resp.clicked() {
+        let at = resp
+            .interact_pointer_pos()
+            .map(|q| (((q.x - img.left()) / img.width()).clamp(0.0, 1.0), ((q.y - img.top()) / img.height()).clamp(0.0, 1.0)));
+        app.ui.pending_click = Some(PendingClick { at, time: now, photo });
+    } else if resp.dragged() {
+        app.ui.pending_click = None;
+    }
+    if let Some(click) = app.ui.pending_click {
+        let waited = now - click.time;
+        if click.photo != photo {
+            app.ui.pending_click = None;
+        } else if waited >= delay {
+            app.ui.pending_click = None;
+            apply_click_zoom(app, click.at, zoomed);
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((delay - waited).max(0.0)));
+        }
+    }
+    if zoomed && resp.dragged() {
+        pan_image(app, canvas, img, resp.drag_delta());
+    }
+}
+
+/// A single click on the loupe's photo, held back by [`double_click_to_grid`] until it is not the
+/// first of a double-click: where it landed (normalized image coordinates), when, and on which photo.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PendingClick {
+    pub at: Option<(f32, f32)>,
+    pub time: f64,
+    pub photo: Option<u64>,
+}
+
+/// A click's zoom: from Fit to the click-zoom ratio centred on `at`, and from a zoomed view
+/// back to Fit.
+fn apply_click_zoom(app: &mut LightcraftApp, at: Option<(f32, f32)>, zoomed: bool) {
+    if zoomed {
+        app.ui.zoom = Zoom::Fit;
+    } else {
+        if let Some(at) = at {
+            app.ui.pan = at;
+        }
+        app.ui.zoom = if matches!(app.ui.zoom, Zoom::Fit) { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
+    }
+    app.ui.zoom_anim = true;
 }
 
 /// The photo `img` reaches past its pane `canvas`: a drag pans it.
@@ -1297,9 +1351,6 @@ pub(crate) fn zoomed(img: Rect, canvas: Rect) -> bool {
 /// Fit ↔ the chosen click-zoom ratio at the clicked point, a drag pans when zoomed.
 pub(crate) fn click_zoom_and_pan(app: &mut LightcraftApp, resp: &egui::Response, img: Rect, canvas: Rect) {
     let zoomed = zoomed(img, canvas);
-    if resp.clicked() && !resp.double_clicked() {
-        app.ui.zoom_before_click = Some((app.ui.zoom, app.ui.pan));
-    }
     if resp.double_clicked() || (resp.clicked() && !zoomed) {
         if let Some(q) = resp.interact_pointer_pos() {
             let u = ((q.x - img.left()) / img.width()).clamp(0.0, 1.0);
