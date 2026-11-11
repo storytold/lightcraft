@@ -190,9 +190,11 @@ fn load_bytes_now(
         let hue_sat = camera_look.as_ref().and_then(|p| p.hue_sat.as_ref()).and_then(crate::camera_preview::HueSat::new);
         // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6.
         let tables = lightcraft_raw::profile::ProfileTables::new(&raw.color.profile, lightcraft_raw::color::illuminant_weight(&raw.color, xy));
+        // The fitted matrix (if any) is already folded into t.matrix by fitted_white.
+        // camera_look.matrix is now IDENTITY, so we use t.matrix directly.
         let colour = CameraColourModel {
             wb: t.wb,
-            matrix: camera_look.as_ref().map(|p| p.matrix.mul(&t.matrix)).unwrap_or(t.matrix),
+            matrix: t.matrix,
             gain: 2f32.powf(t.baseline_exposure as f32),
             tables: tables.as_ref(),
             hue_sat: hue_sat.as_ref(),

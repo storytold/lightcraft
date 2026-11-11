@@ -780,11 +780,17 @@ fn an_accepted_jpeg_fit_comes_before_the_spectral_matrices() {
             |_, _| panic!("no black-and-white JPEG fit after an accepted fit"),
             |_, _| panic!("no dark tone fit after an accepted fit"),
         );
-        assert_eq!(look.map(|l| l.matrix), Some(fitted.matrix), "{model}");
+        // The fitted matrix is folded into t.matrix; look.matrix becomes IDENTITY.
+        assert_eq!(look.as_ref().map(|l| l.matrix), Some(Mat3::IDENTITY), "{model}: look matrix cleared to identity");
+        // The transform matrix is the fitted matrix multiplied by the fallback matrix.
+        let fallback_t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        let expected_matrix = fitted.matrix.mul(&fallback_t.matrix);
+        assert_eq!(t.matrix, expected_matrix, "{model}: transform matrix is fitted * fallback");
         assert_eq!(raw.color, lightcraft_raw::ColorData::default(), "{model}: spectral matrices left out");
         assert!(t.matrix_is_fallback, "{model}");
         assert_eq!(t.white_xy, xy, "{model}: the transform is at the white it was computed for");
-        assert_ne!(xy, lightcraft_raw::color::as_shot_white_xy(&raw), "{model}: the fitted matrix moves the as-shot white");
+        // The as-shot white is unchanged because the look matrix is neutral-preserving.
+        assert_eq!(xy, lightcraft_raw::color::as_shot_white_xy(&raw), "{model}: as-shot white unchanged by neutral-preserving look matrix");
     }
 }
 

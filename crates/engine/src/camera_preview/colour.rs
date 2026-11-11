@@ -108,7 +108,7 @@ pub(super) fn starting_colour_with(
     }
     let (look, black_and_white) = fit(raw, &t);
     if let Some(look) = look {
-        return (xy, t, Some(look));
+        return fitted_white(raw, xy, t, Some(look));
     }
     let (xy, t) = match raw.metadata.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), model)) {
         Some(camera) => {
@@ -122,7 +122,7 @@ pub(super) fn starting_colour_with(
     };
     // A black-and-white JPEG first tries its existing tone fit on the chosen colour.
     let look = if black_and_white { monochrome(raw, &t) } else { None };
-    (xy, t, look.or_else(|| dark(raw, &t)))
+    fitted_white(raw, xy, t, look.or_else(|| dark(raw, &t)))
 }
 
 /// The colour a raw starts from ([`starting_colour`]) as DNG colour tags, for a DNG of the raw's camera RGB (Photo
