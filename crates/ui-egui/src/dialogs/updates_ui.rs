@@ -21,6 +21,7 @@ pub(crate) struct Runtime {
     #[cfg(not(target_arch = "wasm32"))]
     repaint: Option<egui::Context>,
     /// A requested check's result dialog is showing.
+    #[cfg(target_arch = "wasm32")]
     pub(crate) manual_window_open: bool,
     #[cfg(target_arch = "wasm32")]
     pub(crate) status_message: Option<String>,
@@ -37,6 +38,7 @@ impl Default for Runtime {
             check_requested: false,
             #[cfg(not(target_arch = "wasm32"))]
             repaint: None,
+            #[cfg(target_arch = "wasm32")]
             manual_window_open: false,
             #[cfg(target_arch = "wasm32")]
             status_message: None,
@@ -49,6 +51,13 @@ impl LightcraftApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_startup_update_check(&mut self, on: bool) {
         self.updates_rt.startup_check = on;
+    }
+
+    /// Starts the helper of a ready update, which installs it once the process has exited. Call it
+    /// in `on_exit` when the process ends there without dropping the app.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_pending_update(&mut self) {
+        self.updates_rt.updater.start_pending_update();
     }
 }
 
@@ -89,7 +98,6 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
         rt.repaint = Some(ctx.clone());
         if std::mem::take(&mut rt.check_requested) {
             rt.updater.check_now(ctx);
-            rt.manual_window_open = true;
         } else if rt.startup_check {
             rt.updater.check_at_start(ctx);
         }
@@ -99,10 +107,18 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     let _ = (app, ctx);
 }
 
+/// Whether the result dialog shows: for every status but idle (a requested check, and the first
+/// start after an update, which reports that it installed or why it failed), and never over the
+/// startup prompt.
+#[cfg(not(target_arch = "wasm32"))]
+fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
+    !prompt_open && !matches!(status, Status::Idle)
+}
+
 pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+        // The close for a ready update waits until nothing is unsaved.
         let clean = app.session.unsaved().is_none();
         match app.updates_rt.updater.show_if(ctx, clean) {
             Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
@@ -111,20 +127,16 @@ pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         // A found update opens the startup prompt and leaves the status idle, which ends the result dialog.
         let rt = &mut app.updates_rt;
-        if rt.manual_window_open {
+        if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
             let dialog = CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION"));
             match dialog.show(ctx, rt.updater.status()) {
                 CheckResultResponse::None => {}
-                CheckResultResponse::Close => rt.manual_window_open = false,
+                // Closing the dialog dismisses the outcome it showed.
+                CheckResultResponse::Close => rt.updater.dismiss_status(),
                 CheckResultResponse::CheckAgain => rt.check_requested = true,
+                // The next `show_if` asks the window to close once nothing is unsaved.
+                CheckResultResponse::RestartToUpdate => rt.updater.restart_to_update(),
             }
-            if matches!(rt.updater.status(), Status::Idle) {
-                rt.manual_window_open = false;
-            }
-        }
-        // Closing the dialog dismisses the outcome it showed.
-        if !rt.manual_window_open {
-            rt.updater.dismiss_status();
         }
     }
 
@@ -163,6 +175,7 @@ mod tests {
     #[test]
     fn default_runtime_is_idle() {
         let rt = Runtime::default();
+        #[cfg(target_arch = "wasm32")]
         assert!(!rt.manual_window_open);
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -191,5 +204,25 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(app.updates_rt.updater.prompt_open());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn result_window_shows_every_status_but_idle() {
+        let shown = [
+            Status::Checking,
+            Status::UpToDate,
+            Status::Failed("no network".into()),
+            Status::Installing,
+            Status::Ready,
+            Status::Managed,
+            Status::Updated("0.2.0".into()),
+            Status::InstallFailed("disk full".into()),
+        ];
+        for status in &shown {
+            assert!(result_window_shows(status, false), "{status:?}");
+            assert!(!result_window_shows(status, true), "{status:?} over the prompt");
+        }
+        assert!(!result_window_shows(&Status::Idle, false));
     }
 }
