@@ -55,7 +55,10 @@ fn box_row<T: Pixel>(row: &mut [T], tmp: &mut Vec<T>, r: usize) {
     for v in &s[..=r.min(last)] {
         acc = acc.madd(*v, 1.0);
     }
-    acc = acc.madd(s[last], r.saturating_sub(last) as f32);
+    // only when the window reaches past the last pixel: a NaN there must not poison a row it isn't in
+    if r > last {
+        acc = acc.madd(s[last], (r - last) as f32);
+    }
     for x in 0..w {
         row[x] = T::zero().madd(acc, inv);
         acc = acc.madd(s[(x + r + 1).min(last)], 1.0).madd(s[x.saturating_sub(r)], -1.0);
@@ -132,6 +135,14 @@ pub fn gaussian<T: Pixel>(img: &Image<T>, sigma: f32) -> Image<T> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_non_finite_last_pixel_stays_out_of_windows_that_do_not_reach_it() {
+        let mut row = [1.0f32; 8];
+        row[7] = f32::NAN;
+        box_row(&mut row, &mut Vec::new(), 2);
+        assert!(row[..5].iter().all(|v| v.is_finite()), "{row:?}");
+    }
+
     /// The box radii of the formula as it was, for the check below.
     fn box_radii_before(sigma: f32) -> [usize; 3] {
         let n = 3.0f32;
