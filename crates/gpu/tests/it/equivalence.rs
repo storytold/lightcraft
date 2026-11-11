@@ -936,6 +936,28 @@ fn default_tone_matches() {
     check("V9 default curve, HDR", &src, &plain, &h, &req);
 }
 
+/// Process V9's Highlights relative to the frame's tonal range (`hs_range`): the GPU uses the plan's range as the CPU
+/// does, darkening and brightening, with Shadows, with Exposure, and in a window of a larger frame.
+#[test]
+fn hs_range_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let v9 = || DevelopSettings { process: Process::V9.version(), ..Default::default() };
+    let mut s = v9();
+    s.light.highlights = -100.0;
+    check("V9 Highlights -100", &src, &raw, &s, &req);
+    s.light.highlights = 60.0;
+    s.light.shadows = 40.0;
+    s.light.exposure = -0.5;
+    check("V9 Highlights +60, Shadows, Exposure", &src, &raw, &s, &req);
+    let win = RenderRequest { window: Some(lightcraft_pipeline::PixelWindow { x: 200, y: 120, w: 320, h: 240 }), ..req };
+    check("V9 Highlights in a window", &src, &raw, &s, &win);
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2 to V7: of its fine median, V8 on: of its detail-free plane, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.

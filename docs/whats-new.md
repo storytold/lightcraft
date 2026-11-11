@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Highlights behaves as in Lightroom (process V9)
+- Highlights now adapts to the photo, as Lightroom's does: on a photo with a wide range from its darkest to its
+  brightest tones it recovers more and reaches further into the upper midtones, and on a flat photo it acts more
+  gently. A zoomed-in view, a preview and an export of the same photo get the same result. Shadows is unchanged.
+  This is part of rendering process 9: photos you already edited keep their look until you choose Photo ▸ Update to
+  Current Process. See [Highlights relative to the frame's range](hs-range.md).
+
 ### Adobe Standard profiles look as in Lightroom (process V9)
 - A raw developed with an imported camera profile that has no tone curve of its own, such as Adobe Standard, now gets
   Lightroom's base tone curve, applied the way Lightroom applies it, instead of the tone of the camera's JPEG. An

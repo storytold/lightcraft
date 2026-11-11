@@ -43,6 +43,7 @@ pub mod geometry;
 pub mod grading_stage;
 #[rustfmt::skip]
 mod grading_stage_tables;
+pub mod hs_range;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
 #[rustfmt::skip]
@@ -278,6 +279,8 @@ pub(crate) struct Prepared {
     pub chroma_blur: Option<Arc<Rgb32f>>,
     /// Airlight of `dark` (before exposure).
     pub air: f32,
+    /// The whole frame's tonal range for process V9's Highlights (before exposure; [`Plan::hs_range`]).
+    pub hs_range: Option<hs_range::FrameRange>,
     pub masks: Vec<masks::Evaluated>,
     /// Output pixels per unit of the source long edge.
     pub px_per_long: f64,
@@ -456,6 +459,9 @@ pub struct Plan<'a> {
     pub eyes: Vec<redeye::EyeK>,
     /// The whole frame's dehaze airlight, for a windowed render (which can't see the whole frame).
     pub fixed_air: Option<f32>,
+    /// Process V9 with Highlights: the whole frame's tonal range ([`hs_range`]), from a small render of it so that
+    /// every render of the photo (a window, a preview, an export) shares it.
+    pub hs_range: Option<hs_range::FrameRange>,
     /// A windowed render works on a larger window when spots reach into it (see
     /// [`spots::window_for_reads`]); this is the requested window inside the rendered one, which
     /// the result is cut to.
@@ -496,6 +502,12 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let mut fixed_air = None;
     let mut keep = None;
+    let hs_range = hs_range::wanted(s).then(|| {
+        let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
+        let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
+        local::frame_range(src, info, s, &frame, pw, ph)
+    });
+    let hs_range = hs_range.flatten();
     let full = (frame.clone(), full_w, full_h);
     let (frame, w, h) = match req.window {
         Some(win) => {
@@ -564,6 +576,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         noise_key,
         eyes,
         fixed_air,
+        hs_range,
         keep,
         mattes: info.mattes.clone(),
         full,
@@ -601,6 +614,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 h: t.h,
                 eyes: Vec::new(),
                 fixed_air: None,
+                hs_range: None,
                 keep: None,
                 mattes: None,
                 full: p.full.clone(),
@@ -757,6 +771,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
+    prep.hs_range = plan.hs_range;
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes });

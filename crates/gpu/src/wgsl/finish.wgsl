@@ -93,6 +93,17 @@ fn light_channel(k: u32, x: f32) -> f32 {
     return light_eval(k, encode_srgb(x));
 }
 
+// `FrameRange::highlights` (process V9): Highlights scaled by the frame's tonal range HS_RANGE_LO..HS_RANGE_HI.
+fn hs_range_highlights(hh: f32, base: f32) -> f32 {
+    if (hh == 0.0) {
+        return 0.0;
+    }
+    let span = max(pf(F_HS_RANGE_HI) - pf(F_HS_RANGE_LO), 0.1);
+    let amp = clamp(HS_H_AMP * pow(span / HS_H_SPAN, HS_H_POW), HS_H_AMP_MIN, HS_H_AMP_MAX);
+    let low = -1.0 - HS_H_REACH * max(span - HS_H_SPAN, 0.0);
+    return hh * amp * sstep(low, 2.8, base);
+}
+
 // `default_tone::rgb_tone`: the base tone on the largest and smallest linear ProPhoto channel, the middle
 // channel keeping its place between them (process V9 with Lightroom's default curve).
 fn rgb_tone(c: vec3<f32>) -> vec3<f32> {
@@ -776,8 +787,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ss = pf(F_SH) + lt[5];
     if (hh != 0.0 || ss != 0.0) {
         let ws = 1.0 - sstep(-4.8, 0.3, base);
-        let wh = sstep(-1.0, 2.8, base);
-        delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        delta += ss * 1.7 * ws * sqrt(ws);
+        if (pu(F_HS_RANGE) != 0u) {
+            delta += hs_range_highlights(hh, base);
+        } else {
+            delta += hh * 1.7 * sstep(-1.0, 2.8, base);
+        }
     }
     if (lt[6] != 0.0) {
         delta += lt[6] * 0.8 * sstep(0.5, 3.0, l1);

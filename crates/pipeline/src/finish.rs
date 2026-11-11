@@ -267,6 +267,8 @@ pub struct FinishParams {
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
+    /// Process V9: Highlights acts relative to the frame's tonal range, exposure included ([`crate::hs_range`]).
+    pub hs_range: Option<crate::hs_range::FrameRange>,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
@@ -306,6 +308,8 @@ pub struct FinishParamsInput<'a> {
     pub image_size: (usize, usize),
     pub px_per_long: f64,
     pub air_pre: f32,
+    /// The whole frame's tonal range before exposure ([`crate::Plan::hs_range`]).
+    pub hs_range: Option<crate::hs_range::FrameRange>,
     pub space: OutputSpace,
     /// A draft render (a drag, [`crate::Quality::Draft`]): see [`GrainModel::new`].
     pub draft: bool,
@@ -314,7 +318,7 @@ pub struct FinishParamsInput<'a> {
 impl FinishParams {
     /// Parameters for a `w × h` render into `space`; `ev`/`air_pre` as in [`crate::Prepared`].
     pub fn new(input: FinishParamsInput<'_>) -> FinishParams {
-        let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, space, draft } = input;
+        let FinishParamsInput { settings: s, frame, info, image_size: (w, h), px_per_long, air_pre, hs_range, space, draft } = input;
         let effects = s.section_enabled("effects");
         let (clar, tex, dehaze) = if effects {
             ((s.effects.clarity / 100.0) as f32, (s.effects.texture / 100.0) as f32, (s.effects.dehaze / 100.0) as f32)
@@ -353,6 +357,7 @@ impl FinishParams {
             out_trc: space.trc(),
             proof: None,
             hl: (s.light.highlights / 100.0) as f32,
+            hs_range: hs_range.filter(|_| crate::hs_range::wanted(s)).map(|r| r.shifted(ev)),
             sh: (s.light.shadows / 100.0) as f32,
             clar,
             tex,
@@ -458,6 +463,7 @@ pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &So
         image_size: (w, h),
         px_per_long: p.px_per_long,
         air_pre: p.air,
+        hs_range: p.hs_range,
         space,
         draft,
     });
@@ -492,6 +498,7 @@ pub(crate) fn finish_deep(p: &Prepared, s: &DevelopSettings, frame: &Frame, info
         image_size: (w, h),
         px_per_long: p.px_per_long,
         air_pre: p.air,
+        hs_range: p.hs_range,
         space,
         draft,
     });
@@ -561,7 +568,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- local tone in log luminance
             let shift = l1 - l0;
             let base = p.base.data[i] + fp.ev + shift;
-            let delta = local_tone_delta(p, fp, i, base, l1, &local);
+            let delta = local_tone_delta(p, fp, i, base, l1, &local, fp.hs_range.as_ref());
             if delta != 0.0 {
                 let g = delta.exp2();
                 c = c.map(|v| v * g);
@@ -828,14 +835,26 @@ fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 
     (color, log_luminance)
 }
 
-fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
+fn local_tone_delta(
+    p: &Prepared,
+    fp: &FinishParams,
+    index: usize,
+    base: f32,
+    l1: f32,
+    local: &PixelLocalTerms,
+    range: Option<&crate::hs_range::FrameRange>,
+) -> f32 {
     let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {
         let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
         let highlight_weight = smooth(-1.0, 2.8, base);
-        delta += shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight;
+        delta += shadows * 1.7 * shadow_weight * shadow_weight.sqrt();
+        delta += match range {
+            Some(r) => r.highlights(highlights, base),
+            None => highlights * 1.7 * highlight_weight,
+        };
     }
     if l_wh != 0.0 {
         delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
