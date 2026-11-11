@@ -6,7 +6,7 @@ use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{ControlSpec, DevelopSettings, Section, Track, WbMode, controls};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::{PARAM_AMOUNTS, ParametricCurve};
+use lightcraft_pipeline::{PARAM_AMOUNTS, ParametricGraph};
 use lightcraft_raster::Histogram;
 use serde_json::{Value, json};
 

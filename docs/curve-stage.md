@@ -42,6 +42,14 @@ The tone map no longer applies Whites under V9 (`finish::base_tone`), and the V8
 (`FinishParams::curves` is `None`). With Whites, the parametric curve and the point curves all neutral, the curve
 stage does not run.
 
+## The Edit panel's graph
+
+The parametric graph draws the curve the photo renders, from `curve_stage::ParametricGraph`: the measured regions
+under V9 at the default splits, else the analytic model. Dragging the line moves the region under the pointer by
+the amount that puts the drawn curve where the pointer is. The measured tables are not linear in the amount, so the
+amount is searched for, on the side of the starting value the drag moves to. A level out of the region's reach
+saturates at ±100. Whites is not part of the graph, as in Lightroom.
+
 ## How it was measured
 
 `tools/lr_tone_charts.py charts OUT_DIR` writes linear DNG charts: 48 grey steps from 0.002 to 1 and OkLCh colour
@@ -60,8 +68,6 @@ predicted from the grey-step curves under the hue-preserving rule in step 3. The
 ## Limits
 
 - The tables are measured with Lightroom's default splits. Moved splits use the earlier analytic model.
-- The Edit panel's curve graph still draws the analytic parametric curve and drags against it. Under V9 at the
-  default splits the photo renders the measured regions, so the graph's shape can differ from the render's.
 - The point curves' shape between the points is LightCraft's spline, not measured. What is measured for them is how
   they apply: hue preserving, then the red, green and blue curves per channel.
 - Local (mask) Whites keeps the earlier processes' operator.
@@ -72,3 +78,4 @@ predicted from the grey-step curves under the hue-preserving rule in step 3. The
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-10 | minor | Process V9: measured Whites and parametric curve, hue-preserving master curve |
+| 2026-11-11 | minor | The Edit panel's parametric graph draws and drags the measured regions under V9 |

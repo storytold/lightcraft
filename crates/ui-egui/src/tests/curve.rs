@@ -6,7 +6,7 @@ use serde_json::json;
 
 use crate::headless::Headless;
 use crate::{LightcraftApp, Services};
-use lightcraft_pipeline::ParametricCurve;
+use lightcraft_pipeline::{ParametricCurve, ParametricGraph};
 
 const T: Duration = Duration::from_secs(20);
 
@@ -34,6 +34,11 @@ fn exec(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_jso
     let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
     assert_eq!(r["ok"], true, "{command}: {r}");
     r["result"].clone()
+}
+
+/// The parametric graph the panel draws for the selected photo's settings (its process decides measured or analytic).
+fn graph(h: &Headless) -> ParametricGraph {
+    ParametricGraph::new(&develop(h))
 }
 
 fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
@@ -272,9 +277,10 @@ fn the_parametric_graph_paints_the_model_the_renderer_uses() {
     h.step();
     let settings = develop(&h).curve;
     assert_eq!(settings, c, "the sliders hold the folded shape");
-    let graph = curve_graph_rect(&mut h);
-    let painted = painted_param_curve(&h, graph);
-    let model = ParametricCurve::new(&c);
+    let model = graph(&h);
+    let rect = curve_graph_rect(&mut h);
+    let painted = painted_param_curve(&h, rect);
+    assert!(model.is_measured(), "the demo photo is on the latest process, which renders the measured regions");
     let mut checked = 0;
     for i in 0..=24 {
         let x = i as f64 / 24.0;
@@ -397,8 +403,8 @@ fn one_graph_drag_that_moves_several_regions_is_one_undo_step() {
 }
 
 /// The screen point where a drag should grab the curve: graph fraction `fx`, on the line itself.
-fn on_curve(r: [f32; 4], c: &lightcraft_develop::ToneCurve, fx: f32) -> [f32; 2] {
-    let y = ParametricCurve::new(c).at(fx as f64);
+fn on_curve(r: [f32; 4], g: &ParametricGraph, fx: f32) -> [f32; 2] {
+    let y = g.at(fx as f64);
     [r[0] + fx * r[2], r[1] + (1.0 - y as f32) * r[3]]
 }
 
@@ -411,9 +417,10 @@ fn dragging_the_curve_moves_the_region_slider() {
     h.step();
     let r = curve_graph_rect(&mut h);
     let c = develop(&h).curve;
+    let g = graph(&h);
     let undo_before = h.app.session.undo.len();
     // grab the line inside the Lights window (x = 0.625) and pull it down
-    let [x, y] = on_curve(r, &c, 0.625);
+    let [x, y] = on_curve(r, &g, 0.625);
     let d = h.request("ui.drag", json!({"x": x, "y": y, "toX": x, "toY": y + 0.08 * r[3], "steps": 8}), T);
     assert_eq!(d["ok"], true, "{d}");
     h.step();
@@ -426,8 +433,12 @@ fn dragging_the_curve_moves_the_region_slider() {
     // the graph really is redrawn below where the line was
     let graph = curve_graph_rect(&mut h);
     let painted = painted_param_curve(&h, graph)(0.625);
-    let before_level = ParametricCurve::new(&c).at(0.625);
+    let before_level = g.at(0.625);
     assert!(painted < before_level - 0.02, "the painted line followed the drag down: {painted} vs before {before_level}");
+    // and lands where the hand is: 0.08 lower, less the steps of the 8 that egui's drag threshold (6 points) swallows
+    let step = 0.08 * r[3] as f64 / 8.0;
+    let moved = 0.08 - (6.0 / step).floor() * step / r[3] as f64;
+    assert!((before_level - painted - moved).abs() < 0.006, "the line moved {} for a hand motion of {moved}", before_level - painted);
     // and Undo takes the whole gesture back to where it started
     exec(&mut h, "edit.undo", json!({}));
     assert_eq!(develop(&h).curve, c, "undo restores the value the drag started from");
@@ -445,7 +456,7 @@ fn a_horizontal_drag_with_zero_vertical_motion_changes_nothing() {
     assert_eq!(before.darks, 60.0);
     assert_eq!(before.lights, 0.0);
     let r = curve_graph_rect(&mut h);
-    let [x, y] = on_curve(r, &before, 0.51);
+    let [x, y] = on_curve(r, &graph(&h), 0.51);
     // Drag purely horizontally from x=0.51: dx = 20 px, dy = 0
     let d = h.request("ui.drag", json!({"x": x, "y": y, "toX": x + 20.0, "toY": y, "steps": 6}), T);
     assert_eq!(d["ok"], true, "{d}");
@@ -461,16 +472,16 @@ fn a_horizontal_drag_with_zero_vertical_motion_changes_nothing() {
 fn dragging_the_curve_up_raises_the_region_slider() {
     let mut h = curve_open("parametric");
     let r = curve_graph_rect(&mut h);
-    let c = develop(&h).curve;
+    let g = graph(&h);
     // x = 0.375 is inside the Darks window
-    let [x, y] = on_curve(r, &c, 0.375);
+    let [x, y] = on_curve(r, &g, 0.375);
     let d = h.request("ui.drag", json!({"x": x, "y": y, "toX": x, "toY": y - 0.08 * r[3], "steps": 8}), T);
     assert_eq!(d["ok"], true, "{d}");
     h.step();
     let after = develop(&h).curve;
     assert!(after.darks > 0.0, "the Darks slider follows the line up: {}", after.darks);
     assert_eq!((after.shadows, after.lights, after.highlights), (0.0, 0.0, 0.0), "the other regions stay put: {after:?}");
-    assert!(ParametricCurve::new(&after).at(0.375) > ParametricCurve::new(&c).at(0.375), "the curve is drawn bent up at the Darks region");
+    assert!(graph(&h).at(0.375) > g.at(0.375), "the curve is drawn bent up at the Darks region");
 }
 
 /// Which region a drag moves is decided by where on the line it is grabbed: the same drag gesture
@@ -482,9 +493,9 @@ fn the_region_dragged_is_the_one_under_the_pointer() {
     {
         let mut h = curve_open("parametric");
         let r = curve_graph_rect(&mut h);
-        let c = develop(&h).curve;
-        assert_eq!(ParametricCurve::new(&c).region_at(fx as f64), region, "x = {fx} belongs to {control}");
-        let [x, y] = on_curve(r, &c, fx);
+        let g = graph(&h);
+        assert_eq!(g.region_at(fx as f64), region, "x = {fx} belongs to {control}");
+        let [x, y] = on_curve(r, &g, fx);
         let d = h.request("ui.drag", json!({"x": x, "y": y, "toX": x, "toY": y - 0.06 * r[3], "steps": 6}), T);
         assert_eq!(d["ok"], true, "{d}");
         h.step();
@@ -531,7 +542,7 @@ fn hovering_the_line_names_the_region_it_would_move() {
     exec(&mut h, "develop.set", json!({"control": "curve.lights", "value": 60}));
     h.step();
     let r = curve_graph_rect(&mut h);
-    let [x, y] = on_curve(r, &develop(&h).curve, 0.625);
+    let [x, y] = on_curve(r, &graph(&h), 0.625);
     let q = h.request("ui.move", json!({"x": x, "y": y}), T);
     assert_eq!(q["ok"], true, "{q}");
     h.step();

@@ -19,6 +19,7 @@ use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
 use lightcraft_develop::{DevelopSettings, Process, ToneCurve};
 use lightcraft_geom::Point;
 
+use crate::curve::ParametricCurve;
 use crate::curve_stage_tables as t;
 use crate::light_v3::PRO_Y;
 
@@ -74,19 +75,106 @@ fn measured_delta<const K: usize>(amounts: &[f32; K], tables: &[[f32; 257]; K], 
     0.0
 }
 
-/// The parametric curve: the measured regions at the default splits, else the analytic model of earlier processes.
-fn parametric(c: &ToneCurve) -> Lut1 {
-    let splits = [c.split_shadows, c.split_mid, c.split_highlights];
-    if splits.iter().zip(DEFAULT_SPLITS).any(|(s, d)| (s - d).abs() > 1e-6) {
-        return crate::curve::ParametricCurve::new(c).to_lut();
-    }
-    let amounts = [c.shadows, c.darks, c.lights, c.highlights].map(|v| v as f32);
-    let mut lut = Lut1::from_fn(N, |x| {
-        let d: f32 = amounts.iter().zip(t::REGIONS.iter()).map(|(a, r)| measured_delta(&t::REGION_AMOUNTS, r, *a, x)).sum();
-        (x + d).clamp(0.0, 1.0)
-    });
+/// Whether `c` holds Lightroom's default splits, the ones the region tables are measured with.
+fn default_splits(c: &ToneCurve) -> bool {
+    [c.split_shadows, c.split_mid, c.split_highlights].iter().zip(DEFAULT_SPLITS).all(|(s, d)| (s - d).abs() <= 1e-6)
+}
+
+/// The measured regions at `x`, before the curve is kept monotone: the four deltas added to the diagonal.
+fn regions_at(amounts: [f32; 4], x: f32) -> f32 {
+    let d: f32 = amounts.iter().zip(t::REGIONS.iter()).map(|(a, r)| measured_delta(&t::REGION_AMOUNTS, r, *a, x)).sum();
+    (x + d).clamp(0.0, 1.0)
+}
+
+/// The measured parametric curve at the default splits.
+fn measured_parametric(amounts: [f32; 4]) -> Lut1 {
+    let mut lut = Lut1::from_fn(N, |x| regions_at(amounts, x));
     monotone(&mut lut);
     lut
+}
+
+/// The parametric curve: the measured regions at the default splits, else the analytic model of earlier processes.
+fn parametric(c: &ToneCurve) -> Lut1 {
+    if !default_splits(c) {
+        return ParametricCurve::new(c).to_lut();
+    }
+    measured_parametric([c.shadows, c.darks, c.lights, c.highlights].map(|v| v as f32))
+}
+
+/// The parametric curve as `s`'s process renders it, for the Edit panel's graph and its drag: the measured regions
+/// under V9 at the default splits, else the analytic [`ParametricCurve`] (earlier processes, and V9 with moved
+/// splits). Whites is left out, as Lightroom's graph leaves it out.
+#[derive(Clone, Debug)]
+pub struct ParametricGraph {
+    model: ParametricCurve,
+    /// The measured curve, when it is the one rendered.
+    measured: Option<Lut1>,
+}
+
+impl ParametricGraph {
+    pub fn new(s: &DevelopSettings) -> ParametricGraph {
+        let model = ParametricCurve::new(&s.curve);
+        let measured = (s.process.process() >= Process::V9 && default_splits(&s.curve)).then(|| measured_parametric(model.amounts.map(|a| a as f32)));
+        ParametricGraph { model, measured }
+    }
+
+    /// Whether the graph is the measured curve (else the analytic one).
+    pub fn is_measured(&self) -> bool {
+        self.measured.is_some()
+    }
+
+    /// The curve at `x` (0 = black, 1 = white).
+    pub fn at(&self, x: f64) -> f64 {
+        match &self.measured {
+            Some(lut) => lut.eval(if x.is_nan() { 0.0 } else { x as f32 }) as f64,
+            None => self.model.at(x),
+        }
+    }
+
+    /// The region that owns graph position `x` (the splits tile the graph: [`ParametricCurve::region_at`]).
+    pub fn region_at(&self, x: f64) -> usize {
+        self.model.region_at(x)
+    }
+
+    /// Region `region`'s slider amount.
+    pub fn amount(&self, region: usize) -> f64 {
+        self.model.amounts.get(region).copied().unwrap_or(0.0)
+    }
+
+    /// The amount for region `region` after a drag that grabbed the curve at `x`, with the region at `from`, and moved
+    /// it `delta` in output level (a fraction of the graph's height; up is positive). The other regions stay as they
+    /// are. A level the region cannot reach saturates at ±100; no motion keeps `from`.
+    pub fn dragged_amount(&self, region: usize, x: f64, from: f64, delta: f64) -> f64 {
+        if delta == 0.0 || !delta.is_finite() {
+            return from;
+        }
+        if self.measured.is_none() {
+            let per_unit = self.model.level_per_unit(region, x);
+            return if per_unit.abs() > f64::EPSILON { (from + delta / per_unit).clamp(-100.0, 100.0).round() } else { from };
+        }
+        // the measured regions are tables, not linear in the amount: search the amount whose level is the target,
+        // on the side of `from` the drag goes to (so a flat stretch never makes the slider jump back)
+        let x = x.clamp(0.0, 1.0) as f32;
+        let level = |a: f64| {
+            let mut amounts = self.model.amounts.map(|v| v as f32);
+            if let Some(v) = amounts.get_mut(region) {
+                *v = a as f32;
+            }
+            regions_at(amounts, x) as f64
+        };
+        let target = level(from) + delta;
+        let (mut lo, mut hi) = if delta > 0.0 { (from, 100.0) } else { (-100.0, from) };
+        for _ in 0..40 {
+            let mid = (lo + hi) / 2.0;
+            if level(mid) < target {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let a = if delta > 0.0 { hi } else { lo };
+        a.clamp(-100.0, 100.0).round()
+    }
 }
 
 /// The measured Whites curve at `amount`, or `None` at 0.
@@ -260,6 +348,48 @@ mod tests {
         s.curve.split_mid = 40.0;
         let stage = CurveStage::new(&s).expect("a region set");
         assert_eq!(stage.base.v, crate::curve::ParametricCurve::new(&s.curve).to_lut().v);
+    }
+
+    #[test]
+    fn the_graph_is_the_curve_the_stage_renders() {
+        let mut s = v9();
+        (s.curve.shadows, s.curve.darks, s.curve.lights, s.curve.highlights) = (40.0, -30.0, 25.0, -60.0);
+        let graph = ParametricGraph::new(&s);
+        assert!(graph.is_measured());
+        let stage = CurveStage::new(&s).expect("regions set");
+        for i in 0..=64 {
+            let x = i as f32 / 64.0;
+            assert!((graph.at(x as f64) as f32 - stage.base.eval(x)).abs() < 1e-6, "{x}");
+        }
+        // moved splits and earlier processes draw the analytic curve, as they render it
+        s.curve.split_mid = 40.0;
+        let moved = ParametricGraph::new(&s);
+        assert!(!moved.is_measured());
+        assert_eq!(moved.at(0.6), ParametricCurve::new(&s.curve).at(0.6));
+        s.curve.split_mid = 50.0;
+        let v8 = DevelopSettings { process: Process::V8.version(), ..s };
+        assert!(!ParametricGraph::new(&v8).is_measured());
+    }
+
+    #[test]
+    fn a_graph_drag_puts_the_measured_curve_where_the_hand_is() {
+        let mut s = v9();
+        s.curve.darks = 30.0;
+        let graph = ParametricGraph::new(&s);
+        for (region, x) in [(0usize, 0.15f64), (1, 0.375), (2, 0.625), (3, 0.85)] {
+            for delta in [-0.04, 0.03] {
+                let from = graph.amount(region);
+                let a = graph.dragged_amount(region, x, from, delta);
+                let mut after = s.clone();
+                let c = &mut after.curve;
+                *[&mut c.shadows, &mut c.darks, &mut c.lights, &mut c.highlights][region] = a;
+                let got = ParametricGraph::new(&after).at(x) - graph.at(x);
+                assert!((got - delta).abs() < 0.004, "region {region} at {x}: moved {got}, wanted {delta} (amount {from} → {a})");
+            }
+            assert_eq!(graph.dragged_amount(region, x, graph.amount(region), 0.0), graph.amount(region), "no motion, no change");
+            assert_eq!(graph.dragged_amount(region, x, 0.0, 1.0), 100.0, "out of reach saturates high");
+            assert_eq!(graph.dragged_amount(region, x, 0.0, -1.0), -100.0, "and low");
+        }
     }
 
     #[test]

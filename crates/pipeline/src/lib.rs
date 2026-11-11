@@ -60,6 +60,7 @@ pub mod upright;
 pub mod visualize;
 
 pub use curve::{PARAM_AMOUNTS, PARAM_LUT, ParametricCurve};
+pub use curve_stage::ParametricGraph;
 pub use output::{DeepImage, DeepSamples, DisplaySpace, OutputDepth, OutputSpace, OutputTrc, Proof, ProofLut, proof_profile, register_proof_profile};
 pub use visualize::{MaskView, Overlay};
 
