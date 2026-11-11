@@ -144,12 +144,9 @@ pub fn check_selection(app: &LightcraftApp, command: &str) -> Result<(), String>
 
 fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: bool, explicit_group: bool) -> Result<MergeTask, String> {
     let (kind, finish) = lightcraft_engine::merge::parse(&options.command, &options.params()).map_err(|e| e.to_string())?;
-    let job = if explicit_group {
-        app.session.plan_merge_group(kind, finish, ids, preview)
-    } else {
-        app.session.plan_merge(kind, finish, ids, preview)
-    }
-    .map_err(|e| e.to_string())?;
+    let job =
+        if explicit_group { app.session.plan_merge_group(kind, finish, ids, preview) } else { app.session.plan_merge(kind, finish, ids, preview) }
+            .map_err(|e| e.to_string())?;
     let progress = Arc::new(Mutex::new((0.0, "Starting".to_string())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();

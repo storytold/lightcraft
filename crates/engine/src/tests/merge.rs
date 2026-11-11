@@ -315,7 +315,9 @@ fn two_stacks_merge_via_command_and_undersized_loose_is_skipped() {
     assert_eq!(r["skipped"], json!([[ids[6]]]), "{r}");
     assert!(r["path"].as_str().unwrap().ends_with("A_0-HDR.dng"), "{r}");
     // Two collapsed stacks via the command produce two outputs.
-    let r = s.execute("merge.hdr", &json!({"ids": [ids[0], ids[3]], "autoSettings": false})).unwrap();
+    // The first stack already merged to an identical file, which import now skips as a duplicate, so this merge
+    // uses other options to produce a different file.
+    let r = s.execute("merge.hdr", &json!({"ids": [ids[0], ids[3]], "autoSettings": false, "deghost": "high"})).unwrap();
     let merged = r["merged"].as_array().unwrap();
     assert_eq!(merged.len(), 2, "{r}");
     let names: Vec<&str> = merged.iter().map(|m| m["path"].as_str().unwrap()).collect();
@@ -472,7 +474,7 @@ fn middle_group_failure_does_not_stop_later_groups() {
     let failed = r["failed"].as_array().unwrap();
     assert_eq!(failed.len(), 1, "{r}");
     assert_eq!(failed[0]["photos"], json!(missing.iter().map(|p| p.0).collect::<Vec<_>>()), "{r}");
-    assert!(failed[0]["error"].as_str().unwrap().len() > 0, "{r}");
+    assert!(!failed[0]["error"].as_str().unwrap().is_empty(), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
