@@ -189,6 +189,7 @@ fn locale_tags_normalize() {
     assert_eq!(Locale::parse_tag("zh-Hant-TW"), Some(Locale::ZhHant));
     assert_eq!(Locale::parse_tag("zh-CN"), Some(Locale::ZhHans));
     assert_eq!(Locale::parse_tag("ja_JP.UTF-8"), Some(Locale::Ja));
+    assert_eq!(Locale::parse_tag("he_IL.UTF-8"), Some(Locale::He));
     assert_eq!(Locale::parse_tag("pt-br"), Some(Locale::PtBr));
     assert_eq!(Locale::parse_tag("pt-BR"), Some(Locale::PtBr));
     assert_eq!(Locale::parse_tag("pt_BR.UTF-8"), Some(Locale::PtBr));
@@ -383,6 +384,7 @@ fn language_commands_cover_every_language() {
         ("app.language.german", Locale::De),
         ("app.language.russian", Locale::Ru),
         ("app.language.ukrainian", Locale::Uk),
+        ("app.language.hebrew", Locale::He),
         ("app.language.polish", Locale::Pl),
         ("app.language.czech", Locale::Cs),
         ("app.language.italian", Locale::It),
@@ -400,6 +402,9 @@ fn language_commands_cover_every_language() {
     }
     assert_eq!(crate::menus::language_from_command("app.language.klingon"), None);
     assert_eq!(crate::menus::language_from_command("view.detail"), None);
+    assert_eq!(Locale::He.code(), "he");
+    assert_eq!(Locale::He.script(), "Hebr");
+    assert_eq!(Locale::He.tr("Add"), "הוספה");
 }
 
 #[test]
