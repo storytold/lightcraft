@@ -505,10 +505,10 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let mut fixed_air = None;
     let mut keep = None;
+    // a proxy of one fixed size whatever the output's, so a thumbnail, a preview, a window and an export share the range
     let hs_range = hs_range::wanted(s).then(|| {
-        let k = (AIRLIGHT_PROXY_EDGE as f64 / full_w.max(full_h) as f64).min(1.0);
-        let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
-        local::frame_range(src, info, s, &frame, pw, ph)
+        let (pw, ph) = RenderRequest::fit(hs_range::PROXY_EDGE, hs_range::PROXY_EDGE).size(&frame);
+        local::frame_range(src, info, s, &frame, pw.max(1), ph.max(1))
     });
     let hs_range = hs_range.flatten();
     let full = (frame.clone(), full_w, full_h);

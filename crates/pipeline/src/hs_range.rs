@@ -13,6 +13,8 @@ pub struct FrameRange {
     pub hi: f32,
 }
 
+/// Long edge (px) of the whole-frame render the range is measured on, for every output size.
+pub const PROXY_EDGE: usize = 384;
 /// Percentiles of the base layer that span the frame's range.
 const P_LO: f32 = 0.02;
 const P_HI: f32 = 0.99;
@@ -39,10 +41,10 @@ impl FrameRange {
         FrameRange { lo: self.lo + ev, hi: self.hi + ev }
     }
 
-    /// The range of base-layer values `base` (log₂ luminance before exposure `ev`), from every 7th value;
-    /// `None` without a finite value.
+    /// The range of base-layer values `base` (log₂ luminance before exposure `ev`), from every value (a proxy of
+    /// [`PROXY_EDGE`] px holds about 100 000); `None` without a finite value.
     pub fn of(base: &[f32], ev: f32) -> Option<FrameRange> {
-        let mut sample: Vec<f32> = base.iter().step_by(7).copied().filter(|v| v.is_finite()).collect();
+        let mut sample: Vec<f32> = base.iter().copied().filter(|v| v.is_finite()).collect();
         if sample.is_empty() {
             return None;
         }
@@ -96,6 +98,16 @@ mod tests {
         assert!((r.lo - -4.8).abs() < 0.05 && (r.hi - 4.9).abs() < 0.05, "{r:?}");
         assert_eq!(FrameRange::of(&base, 1.0).unwrap(), r.shifted(1.0));
         assert!(FrameRange::of(&[f32::NAN], 0.0).is_none());
+    }
+
+    #[test]
+    fn a_thin_bright_stripe_does_not_flip_the_range_as_it_moves() {
+        // a 350 px wide frame with a 3 px bright stripe (under 1 % of it), one column apart
+        let frame = |x0: usize| -> Vec<f32> {
+            (0..350 * 200).map(|i| if (x0..x0 + 3).contains(&(i % 350)) { 3.0 } else { (i % 350) as f32 / 350.0 * 4.0 - 4.0 }).collect()
+        };
+        let (a, b) = (FrameRange::of(&frame(140), 0.0).unwrap(), FrameRange::of(&frame(141), 0.0).unwrap());
+        assert!((a.hi - b.hi).abs() < 1e-3 && (a.lo - b.lo).abs() < 1e-3, "{a:?} {b:?}");
     }
 
     #[test]
