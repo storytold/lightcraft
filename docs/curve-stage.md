@@ -47,8 +47,10 @@ stage does not run.
 The parametric graph draws the curve the photo renders, from `curve_stage::ParametricGraph`: the measured regions
 under V9 at the default splits, else the analytic model. Dragging the line moves the region under the pointer by
 the amount that puts the drawn curve where the pointer is. The measured tables are not linear in the amount, so the
-amount is searched for, on the side of the starting value the drag moves to. A level out of the region's reach
-saturates at ±100. Whites is not part of the graph, as in Lightroom.
+amount is searched for, on the side of the starting value the drag moves to, on the curve as drawn (kept monotone, so
+where opposite regions fold it back the line is held flat by the peak to its left). A level out of the region's reach
+saturates at ±100. A region that cannot move the line by half an 8-bit level in that direction keeps its value.
+Whites is not part of the graph, as in Lightroom.
 
 ## How it was measured
 

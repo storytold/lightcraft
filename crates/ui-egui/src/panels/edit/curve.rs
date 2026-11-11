@@ -80,12 +80,11 @@ const PARAM_GRAB: f32 = 14.0;
 /// The whole gesture runs inside one `develop` interaction, so it is one undo step (Ctrl+Z takes the
 /// gesture back, not the last frame of it), and every write goes through `develop.set`, so the
 /// slider, the curve and what is drawn are the same state rather than three things kept in step.
-fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::Response, d: &DevelopSettings) {
+fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::Response, d: &DevelopSettings, model: &ParametricGraph) {
     if r.width() <= 1.0 || r.height() <= 1.0 {
         return;
     }
     let t = Tokens::get(ui.ctx());
-    let model = ParametricGraph::new(d);
     let to_screen = |x: f64, y: f64| pos2(r.left() + x as f32 * r.width(), r.bottom() - y as f32 * r.height());
     let from_screen_x = |q: Pos2| ((q.x - r.left()) / r.width()).clamp(0.0, 1.0) as f64;
     // the graph x of a point, and how far it is from the drawn curve (in screen points)
@@ -244,7 +243,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         let pts: Vec<Pos2> =
             (0..=CURVE_SAMPLES).map(|i| to_screen(i as f64 / CURVE_SAMPLES as f64, model.at(i as f64 / CURVE_SAMPLES as f64))).collect();
         p.add(egui::Shape::line(pts, Stroke::new(2.0, Color32::from_gray(220))));
-        param_drag(app, ui, r, &resp, d);
+        param_drag(app, ui, r, &resp, d, &model);
         curve_footer(app, ui, d);
         for &c in PARAM_AMOUNTS.iter().rev() {
             control(app, ui, d, c, true);

@@ -26,6 +26,9 @@ use crate::light_v3::PRO_Y;
 /// Entries per table (as the shipping curve tables).
 pub const N: usize = 1024;
 
+/// The least a region must be able to move the drawn parametric curve for a drag to move its slider: half an 8-bit level.
+const REACH_MIN: f64 = 0.5 / 255.0;
+
 /// Lightroom's default parametric splits: the measured region tables hold for them only.
 const DEFAULT_SPLITS: [f64; 3] = [25.0, 50.0, 75.0];
 
@@ -82,8 +85,12 @@ fn default_splits(c: &ToneCurve) -> bool {
 
 /// The measured regions at `x`, before the curve is kept monotone: the four deltas added to the diagonal.
 fn regions_at(amounts: [f32; 4], x: f32) -> f32 {
-    let d: f32 = amounts.iter().zip(t::REGIONS.iter()).map(|(a, r)| measured_delta(&t::REGION_AMOUNTS, r, *a, x)).sum();
-    (x + d).clamp(0.0, 1.0)
+    (x + regions_delta(amounts, x)).clamp(0.0, 1.0)
+}
+
+/// The sum of the four measured region deltas at `x`.
+fn regions_delta(amounts: [f32; 4], x: f32) -> f32 {
+    amounts.iter().zip(t::REGIONS.iter()).map(|(a, r)| measured_delta(&t::REGION_AMOUNTS, r, *a, x)).sum()
 }
 
 /// The measured parametric curve at the default splits.
@@ -143,7 +150,8 @@ impl ParametricGraph {
 
     /// The amount for region `region` after a drag that grabbed the curve at `x`, with the region at `from`, and moved
     /// it `delta` in output level (a fraction of the graph's height; up is positive). The other regions stay as they
-    /// are. A level the region cannot reach saturates at ±100; no motion keeps `from`.
+    /// are, and the level is the drawn curve's (kept monotone). A level the region cannot reach saturates at ±100; no
+    /// motion, or a region that cannot visibly move the line in that direction, keeps `from`.
     pub fn dragged_amount(&self, region: usize, x: f64, from: f64, delta: f64) -> f64 {
         if delta == 0.0 || !delta.is_finite() {
             return from;
@@ -152,19 +160,46 @@ impl ParametricGraph {
             let per_unit = self.model.level_per_unit(region, x);
             return if per_unit.abs() > f64::EPSILON { (from + delta / per_unit).clamp(-100.0, 100.0).round() } else { from };
         }
-        // the measured regions are tables, not linear in the amount: search the amount whose level is the target,
-        // on the side of `from` the drag goes to (so a flat stretch never makes the slider jump back)
-        let x = x.clamp(0.0, 1.0) as f32;
+        // The measured regions are tables, not linear in the amount: search the amount that puts the drawn curve at the
+        // target, on the side of `from` the drag goes to (so a flat stretch never makes the slider jump back). The drawn
+        // curve is kept monotone, a running maximum, so its level at `x` reads the table entries up to `x`; the other
+        // regions' share of them is the same for every amount tried.
+        let Some(table) = t::REGIONS.get(region) else { return from };
+        let pos = x.clamp(0.0, 1.0) as f32 * (N - 1) as f32;
+        let j = (pos as usize).min(N - 2);
+        let f = pos - j as f32;
+        let mut others = self.model.amounts.map(|v| v as f32);
+        if let Some(v) = others.get_mut(region) {
+            *v = 0.0;
+        }
+        let entries: Vec<(f32, f32)> = (0..=j + 1)
+            .map(|i| {
+                let g = i as f32 / (N - 1) as f32;
+                (g, regions_delta(others, g))
+            })
+            .collect();
         let level = |a: f64| {
-            let mut amounts = self.model.amounts.map(|v| v as f32);
-            if let Some(v) = amounts.get_mut(region) {
-                *v = a as f32;
+            let (mut m, mut at) = (f32::NEG_INFINITY, [0.0f32; 2]);
+            for (i, (g, rest)) in entries.iter().enumerate() {
+                m = m.max((g + rest + measured_delta(&t::REGION_AMOUNTS, table, a as f32, *g)).clamp(0.0, 1.0));
+                if let Some(v) = i.checked_sub(j).and_then(|k| at.get_mut(k)) {
+                    *v = m;
+                }
             }
-            regions_at(amounts, x) as f64
+            (at[0] + (at[1] - at[0]) * f) as f64
         };
-        let target = level(from) + delta;
+        let (start, end) = (level(from), if delta > 0.0 { 100.0 } else { -100.0 });
+        let (target, reach) = (start + delta, level(end));
+        // where the drawn line is held by a peak to its left, the region may hardly move it: then the slider stays
+        if (reach - start).abs() < REACH_MIN {
+            return from;
+        }
+        if (delta > 0.0 && reach < target) || (delta < 0.0 && reach > target) {
+            return end;
+        }
         let (mut lo, mut hi) = if delta > 0.0 { (from, 100.0) } else { (-100.0, from) };
-        for _ in 0..40 {
+        // 20 halvings of the 200-wide range are well inside the rounding to whole amounts
+        for _ in 0..20 {
             let mid = (lo + hi) / 2.0;
             if level(mid) < target {
                 lo = mid;
@@ -390,6 +425,29 @@ mod tests {
             assert_eq!(graph.dragged_amount(region, x, 0.0, 1.0), 100.0, "out of reach saturates high");
             assert_eq!(graph.dragged_amount(region, x, 0.0, -1.0), -100.0, "and low");
         }
+    }
+
+    #[test]
+    fn a_graph_drag_follows_the_drawn_curve_where_it_is_flattened() {
+        // Lights +100 and Highlights -100 fold the measured curve back above 0.75; the drawn curve is held flat there
+        let mut s = v9();
+        (s.curve.shadows, s.curve.darks, s.curve.lights, s.curve.highlights) = (-50.0, 100.0, 100.0, -100.0);
+        let graph = ParametricGraph::new(&s);
+        let x = 0.86;
+        let raw = regions_at(graph.model.amounts.map(|v| v as f32), x as f32) as f64;
+        assert!(graph.at(x) - raw > 0.1, "the stretch is flattened, or this proves nothing: {} vs {raw}", graph.at(x));
+        let drawn = |region: usize, a: f64| {
+            let mut after = s.clone();
+            let c = &mut after.curve;
+            *[&mut c.shadows, &mut c.darks, &mut c.lights, &mut c.highlights][region] = a;
+            ParametricGraph::new(&after).at(x)
+        };
+        // Lights lowers the peak that holds the line: the drawn line moves with the hand
+        let a = graph.dragged_amount(2, x, 100.0, -0.03);
+        assert!((drawn(2, a) - graph.at(x) + 0.03).abs() < 0.004, "Lights {a} moved the line {}", drawn(2, a) - graph.at(x));
+        // Highlights hardly moves the held line at all, so its slider stays rather than running to the end
+        assert!(drawn(3, 100.0) - graph.at(x) < REACH_MIN, "Highlights cannot lift the held line");
+        assert_eq!(graph.dragged_amount(3, x, -100.0, 0.03), -100.0);
     }
 
     #[test]
