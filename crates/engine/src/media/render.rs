@@ -274,6 +274,20 @@ impl RenderJob {
                 // converted for the display below
                 let clip_view = self.request.overlay.is_clipping();
                 let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
+                if let Err(e) = lightcraft_pipeline::check_brush_budget(src, &info, &self.settings, &request) {
+                    return RenderResult {
+                        request_id: self.request_id,
+                        source_key: self.source_key,
+                        photo: self.photo,
+                        level: self.level,
+                        key: self.key,
+                        rendered: Err(e),
+                        gpu_fallback: None,
+                        loaded: None,
+                        quick: None,
+                        display: None,
+                    };
+                }
                 let (mut rendered, gpu_fallback) = develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu);
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB

@@ -640,3 +640,13 @@ fn many_far_flung_strokes_share_one_dab_budget() {
     assert!(t.elapsed().as_secs() < 30, "took {:?}", t.elapsed());
     assert!(out.data.iter().any(|&v| v > 0.0), "the strokes crossing the photo still paint it");
 }
+
+/// Past the shared dab budget a brush mask is an error for the caller, not a mask missing its later (erase) strokes.
+#[test]
+fn an_over_budget_brush_mask_is_reported() {
+    let (w, h) = (64, 64);
+    let far = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
+    let near = BrushStroke { points: vec![Point::new(0.1, 0.1), Point::new(0.9, 0.9)], size: 0.05, ..Default::default() };
+    assert!(!brush_over_budget(std::slice::from_ref(&near), &frame(w, h), w, h));
+    assert!(brush_over_budget(&vec![far; 10], &frame(w, h), w, h));
+}
