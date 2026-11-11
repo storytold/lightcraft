@@ -267,6 +267,8 @@ outlier boundary pixels, a soft form of Photoshop's selection rule, is worth tes
 - **Whole pixels:** every spot, Clone included.
 - **GPU:** no kernel yet; on V8 photos with spots the GPU renderer reads the image back for the spot stage and keeps the
   rest of the render on the device. V1 to V7 keep the device kernels.
+- **Memory:** a spot's box larger than 33.5 MP (8.4 MP on the web), a stroke across most of a large frame at export
+  size, gets the averaged heal rather than the pinned fill's larger working set.
 - **Not done:** the feather-circle drawing, the Remove wording and the source search (5.2, 5.4).
 
 Regression tests in `spots::pinned::tests` cover each mechanism in section 4 that the change addresses; each also
