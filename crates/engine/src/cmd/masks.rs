@@ -1,14 +1,144 @@
 //! Masking and Remove (spot) commands on the active photo.
 
+use lightcraft_codecs::{EncodeImage, EncodeMeta, Samples, encode_png};
 use lightcraft_develop::{
     BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode,
 };
 use lightcraft_geom::Point;
+use lightcraft_pipeline::RenderRequest;
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS};
-use crate::{Result, Session};
+use crate::{Result, Session, SourceLevel};
+
+/// Long edge of an exported matte, unless the caller names one.
+const MATTE_EDGE: f64 = 2048.0;
+/// Bound output-sized RGB work planes, mask alpha, RGBA and PNG buffers: at 64 bytes
+/// per pixel, 3072² budgets 576 MiB, rather than 16 GiB at 16384².
+/// Source decoding is estimated against the memory budget before loading.
+const MATTE_MAX_EDGE: f64 = 3072.0;
+/// A pixel this bright counts as selected when measuring a matte: the mask's own 50 % contour.
+const MATTE_SELECTED: u8 = 128;
+
+/// What [`export_matte`] measures: the selected share of the photo, and the normalized
+/// `[x0, y0, x1, y1]` around the selected pixels (`None`: nothing is selected).
+fn measure_matte(grey: &[u8], w: usize, h: usize) -> (f64, Option<[f64; 4]>) {
+    let coverage = grey.iter().map(|&v| f64::from(v)).sum::<f64>() / (255.0 * grey.len().max(1) as f64);
+    let mut bounds: Option<[usize; 4]> = None;
+    for (i, _) in grey.iter().enumerate().filter(|(_, v)| **v >= MATTE_SELECTED) {
+        let (x, y) = (i % w, i / w);
+        let b = bounds.get_or_insert([x, y, x, y]);
+        *b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+    }
+    let (fw, fh) = (w.max(1) as f64, h.max(1) as f64);
+    (coverage, bounds.map(|b| [b[0] as f64 / fw, b[1] as f64 / fh, (b[2] + 1) as f64 / fw, (b[3] + 1) as f64 / fh]))
+}
+
+/// A detached, bounded matte export. Preparing it never reads or decodes the source.
+pub struct MatteJob {
+    source: crate::media::SourceRef,
+    info: lightcraft_pipeline::SourceInfo,
+    settings: lightcraft_develop::DevelopSettings,
+    edge: usize,
+    mask: u32,
+    path: String,
+    weight: usize,
+}
+
+/// An encoded matte, not published until the session checks its destination again.
+pub struct MatteOutput {
+    path: String,
+    png: Vec<u8>,
+    width: usize,
+    height: usize,
+    coverage: f64,
+    bounds: Option<[f64; 4]>,
+}
+
+impl MatteJob {
+    /// Load and evaluate on a worker, using the shared export and decode gates.
+    pub fn run(self) -> std::result::Result<MatteOutput, String> {
+        let _permit = crate::memory::export_gate().acquire(self.weight);
+        crate::memory::in_background(|| {
+            let loaded = self.source.load_source()?;
+            let info = loaded.info.as_ref().unwrap_or(&self.info);
+            let mut req = RenderRequest::fit(self.edge, self.edge);
+            req.apply_crop = false;
+            let alpha = lightcraft_pipeline::photo_mask(&loaded.image, info, &self.settings, &req, self.mask)?;
+            let grey: Vec<u8> = alpha.data.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            let (coverage, bounds) = measure_matte(&grey, alpha.width, alpha.height);
+            let encoded = EncodeImage { width: alpha.width as u32, height: alpha.height as u32, channels: 1, samples: Samples::U8(&grey) };
+            let png = encode_png(&encoded, &EncodeMeta::default()).map_err(|e| e.to_string())?;
+            Ok(MatteOutput { path: self.path, png, width: alpha.width, height: alpha.height, coverage, bounds })
+        })
+    }
+}
+
+impl MatteOutput {
+    /// Recheck the current catalog before atomic, create-new publication.
+    pub fn publish(self, s: &Session) -> Result<Value> {
+        const C: &str = "mask.export";
+        s.check_write_target(&self.path).map_err(|e| bad(C, e))?;
+        self.publish_guarded(&s.original_guard())
+    }
+
+    /// Publish on a worker using the originals snapshot captured at admission.
+    pub fn publish_guarded(self, guard: &crate::originals::OriginalGuard) -> Result<Value> {
+        const C: &str = "mask.export";
+        guard.check(std::path::Path::new(&self.path)).map_err(|e| bad(C, e))?;
+        crate::export::write_file_new(&self.path, &self.png).map_err(|e| bad(C, e))?;
+        let path = std::fs::canonicalize(&self.path).map_err(|e| bad(C, e.to_string()))?;
+        Ok(json!({"path": path, "width": self.width, "height": self.height, "coverage": self.coverage, "bounds": self.bounds}))
+    }
+}
+
+/// Validate and snapshot `mask.export`; no source work runs on the caller's thread.
+pub fn prepare_matte(s: &mut Session, p: &Value) -> Result<MatteJob> {
+    const C: &str = "mask.export";
+    let path = str_param(p, "path").ok_or_else(|| bad(C, "missing path"))?.to_string();
+    s.check_write_target(&path).map_err(|e| bad(C, e))?;
+    if std::fs::symlink_metadata(&path).is_ok() {
+        return Err(bad(C, "destination already exists; choose a new file name"));
+    }
+    let edge = match p.get("longEdge") {
+        None => MATTE_EDGE,
+        Some(v) => v
+            .as_f64()
+            .filter(|n| n.is_finite() && n.fract() == 0.0 && (16.0..=MATTE_MAX_EDGE).contains(n))
+            .ok_or_else(|| bad(C, "longEdge must be an integer from 16 to 3072"))?,
+    } as usize;
+    let mid = mask_id(p, s.active_mask, C)?;
+    let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+    let photo = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.clone();
+    let settings = (*s.develop_of(id).unwrap_or_default()).clone();
+    let mask = settings.masks.iter().find(|m| m.id == mid).ok_or_else(|| bad(C, "no such mask"))?;
+    if mask.components.is_empty() {
+        return Err(bad(C, "the mask has no components"));
+    }
+    // A bounded developed source still decodes a raw mosaic. Account for that
+    // and compressed bytes before invoking any loader; a gate alone admits one
+    // oversized job. Saturation makes hostile dimensions fail closed.
+    let source_bytes = (photo.width as usize).saturating_mul(photo.height as usize).saturating_mul(32);
+    let file_bytes = usize::try_from(photo.file_size).unwrap_or(usize::MAX).saturating_mul(6);
+    let weight = source_bytes.saturating_add(file_bytes).saturating_add(edge.saturating_mul(edge).saturating_mul(64));
+    if photo.width == 0 || photo.height == 0 || weight > crate::memory::budget() {
+        return Err(bad(C, "source decode and matte exceed the memory budget (or source dimensions are unknown)"));
+    }
+    // Request the actual bounded edge, including 2561–3072: never SourceLevel::Full,
+    // which would develop and retain a full-resolution float RGB raw first.
+    let mut source = s.media.source_ref_uncached(&photo, SourceLevel::Preview);
+    match &mut source {
+        crate::media::SourceRef::File { max_edge, .. } | crate::media::SourceRef::Demo { max_edge, .. } => *max_edge = edge,
+        _ => {}
+    }
+    Ok(MatteJob { source, info: s.source_info(id), settings, edge, mask: mid, path, weight })
+}
+
+/// Synchronous CLI / headless MCP path; the desktop control channel runs this job elsewhere.
+fn export_matte(s: &mut Session, p: &Value) -> Result<Value> {
+    prepare_matte(s, p)?.run().map_err(|e| bad("mask.export", e))?.publish(s)
+}
 
 /// Caps a colour-range shape's sample list at [`MAX_COLOR_RANGE_SAMPLES`] (render cost is pixels x samples).
 fn cap_color_range_samples(shape: &mut MaskShape) {
@@ -633,6 +763,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "{} — stop the SAM 3 download (what has arrived is kept, and a new download resumes from it) → {cancelled}",
             super::always,
             |s, _| Ok(json!({"cancelled": s.segmenter.cancel_download()}))
+        ),
+        cmd!(
+            // File output must not be replayed from the edit journal. `query` means
+            // journal=false here, not a promise that a command has no filesystem effects.
+            query "mask.export",
+            "Export Mask Matte",
+            [],
+            None,
+            "{id?, path, longEdge?: integer px 16..3072 (2048); destination must not exist} — the mask as an 8-bit greyscale PNG over the whole uncropped photo, white where it selects; needs no model → {path, width, height, coverage: 0..1, bounds: [x0, y0, x1, y1] normalized | null}",
+            has_active,
+            |s, p| export_matte(s, p)
         ),
         cmd!(
             "mask.refine",
