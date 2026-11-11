@@ -41,8 +41,8 @@ After the tone map and V4's calibrated Contrast and Blacks, before the curve sta
 4. Convert back to linear Rec.2020.
 
 V8's mixer in `ColorOps` is off under V9 (`ColorOps::mixer`), so the mixer applies once. With the mixer neutral the
-stage does not run. Calibration, Saturation, Vibrance, Point Color and B&W keep their V8 operators, now after
-the curve stage (V1 to V8 run them before the output curves). Colour Grading also runs after the curves, through its own measured V9 stage
+stage does not run. Saturation, Vibrance, Point Color and B&W keep their V8 operators, now after
+the curve stage (V1 to V8 run them before the output curves). Calibration stays scene linear, before the tone map. Colour Grading also runs after the curves, through its own measured V9 stage
 ([grading-stage.md](grading-stage.md)).
 
 ## How it was measured
