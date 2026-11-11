@@ -50,26 +50,29 @@ fn table_at(v: &[f32; 257], x: f32) -> f32 {
     }
 }
 
-/// The delta at `x` of a setting measured at `amounts` (sorted, without 0), linearly between the measured amounts
-/// and towards 0 below the smallest; clamped to the measured range.
+/// The delta at `x` of a setting measured at `amounts` (ascending, without 0), linearly between the measured amounts
+/// and towards 0 below the smallest; clamped to the measured range. Runs per table sample, so it allocates nothing.
 fn measured_delta<const K: usize>(amounts: &[f32; K], tables: &[[f32; 257]; K], amount: f32, x: f32) -> f32 {
     if amount == 0.0 || K == 0 {
         return 0.0;
     }
-    // the measured amounts with 0 between the negative and positive ones
-    let mut keys: Vec<(f32, Option<&[f32; 257]>)> = amounts.iter().zip(tables.iter()).map(|(a, v)| (*a, Some(v))).collect();
-    keys.push((0.0, None));
-    keys.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let (lo, hi) = (keys.first().map_or(0.0, |k| k.0), keys.last().map_or(0.0, |k| k.0));
+    // the measured amounts with 0 (delta 0) between the negative and positive ones: key `i` of K + 1
+    let zero = amounts.partition_point(|a| *a < 0.0);
+    let key = |i: usize| -> (f32, f32) {
+        let k = match i.cmp(&zero) {
+            std::cmp::Ordering::Less => i,
+            std::cmp::Ordering::Equal => return (0.0, 0.0),
+            std::cmp::Ordering::Greater => i - 1,
+        };
+        (amounts.get(k).copied().unwrap_or(0.0), tables.get(k).map_or(0.0, |v| table_at(v, x)))
+    };
+    let (lo, hi) = (key(0).0, key(K).0);
     let a = amount.clamp(lo, hi);
-    let at = |k: &(f32, Option<&[f32; 257]>)| k.1.map_or(0.0, |v| table_at(v, x));
-    for w in keys.windows(2) {
-        if let [k0, k1] = w
-            && a >= k0.0
-            && a <= k1.0
-        {
-            let f = if k1.0 > k0.0 { (a - k0.0) / (k1.0 - k0.0) } else { 0.0 };
-            return at(k0) * (1.0 - f) + at(k1) * f;
+    for i in 0..K {
+        let ((a0, v0), (a1, v1)) = (key(i), key(i + 1));
+        if a >= a0 && a <= a1 {
+            let f = if a1 > a0 { (a - a0) / (a1 - a0) } else { 0.0 };
+            return v0 * (1.0 - f) + v1 * f;
         }
     }
     0.0
@@ -261,6 +264,47 @@ mod tests {
         s.curve.split_mid = 40.0;
         let stage = CurveStage::new(&s).expect("a region set");
         assert_eq!(stage.base.v, crate::curve::ParametricCurve::new(&s.curve).to_lut().v);
+    }
+
+    /// The earlier implementation, which built and sorted the keys per call.
+    fn measured_delta_sorted<const K: usize>(amounts: &[f32; K], tables: &[[f32; 257]; K], amount: f32, x: f32) -> f32 {
+        if amount == 0.0 || K == 0 {
+            return 0.0;
+        }
+        // the measured amounts with 0 between the negative and positive ones
+        let mut keys: Vec<(f32, Option<&[f32; 257]>)> = amounts.iter().zip(tables.iter()).map(|(a, v)| (*a, Some(v))).collect();
+        keys.push((0.0, None));
+        keys.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let (lo, hi) = (keys.first().map_or(0.0, |k| k.0), keys.last().map_or(0.0, |k| k.0));
+        let a = amount.clamp(lo, hi);
+        let at = |k: &(f32, Option<&[f32; 257]>)| k.1.map_or(0.0, |v| table_at(v, x));
+        for w in keys.windows(2) {
+            if let [k0, k1] = w
+                && a >= k0.0
+                && a <= k1.0
+            {
+                let f = if k1.0 > k0.0 { (a - k0.0) / (k1.0 - k0.0) } else { 0.0 };
+                return at(k0) * (1.0 - f) + at(k1) * f;
+            }
+        }
+        0.0
+    }
+
+    #[test]
+    fn measured_delta_reads_the_tables_as_the_sorting_version_did() {
+        assert!(t::REGION_AMOUNTS.windows(2).all(|w| w[0] < w[1]) && t::WHITES_AMOUNTS.windows(2).all(|w| w[0] < w[1]));
+        for amount in [-150.0f32, -100.0, -80.0, -75.0, -30.0, -1.0, 0.0, 0.5, 12.0, 25.0, 60.0, 100.0, 140.0] {
+            for i in 0..=40 {
+                let x = i as f32 / 40.0;
+                for r in &t::REGIONS {
+                    assert_eq!(measured_delta(&t::REGION_AMOUNTS, r, amount, x), measured_delta_sorted(&t::REGION_AMOUNTS, r, amount, x));
+                }
+                assert_eq!(
+                    measured_delta(&t::WHITES_AMOUNTS, &t::WHITES, amount, x),
+                    measured_delta_sorted(&t::WHITES_AMOUNTS, &t::WHITES, amount, x)
+                );
+            }
+        }
     }
 
     #[test]
