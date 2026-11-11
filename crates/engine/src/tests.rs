@@ -29,6 +29,8 @@ mod forget_local;
 mod history_cursor;
 mod hold_view;
 mod ids_params;
+#[cfg(not(target_arch = "wasm32"))]
+mod immich;
 mod import;
 mod import_move;
 mod keyword_list;

@@ -1369,6 +1369,11 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                 None => Ok(Value::Null),
             }
         }
+        // the Immich browser (native only — the client crate does not exist in the web build)
+        #[cfg(not(target_arch = "wasm32"))]
+        "file.importImmich" => crate::immich::open(app, p),
+        #[cfg(target_arch = "wasm32")]
+        "file.importImmich" => Err("Import from Immich is not available in the browser build".into()),
         _ => return None,
     };
     Some(r)

@@ -403,6 +403,15 @@ pub struct Session {
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Configured Immich servers (persisted per user in the config folder, never in the library).
+    pub immich_servers: Vec<cmd::immich::ImmichServer>,
+    /// Where the Immich settings file lives; `None` = the default in the per-user config folder.
+    /// Tests point it at a scratch path so they never touch the real one.
+    pub immich_store: Option<std::path::PathBuf>,
+    /// A background `immich.import` run (the dialog's path): the engine's worker downloads, this
+    /// session commits. Poll with [`Session::poll_immich_import`].
+    #[cfg(not(target_arch = "wasm32"))]
+    pub immich_import: Option<cmd::immich::ImmichImportJob>,
     /// Preparing photos in the background: settings (app-wide and this library's) and the build
     /// it runs ([`prep`]).
     pub prep: prep::PrepState,
@@ -550,6 +559,10 @@ impl Session {
             folder_changes: None,
             activity: Default::default(),
             preview_build: None,
+            immich_servers: Vec::new(),
+            immich_store: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            immich_import: None,
             prep: Default::default(),
             loupe_edge: 0,
             slideshow_export: None,

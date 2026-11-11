@@ -1,5 +1,5 @@
-//! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Slideshow, Faces,
-//! AI Denoise.
+//! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Integrations,
+//! Slideshow, Faces, AI Denoise.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
 //! - **app settings** ([`crate::state::AppSettings`]: startup view, delete confirmation, GPU,
@@ -52,6 +52,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("performance", "Performance"),
     ("display", "Display"),
     ("interface", "Interface"),
+    ("integrations", "Integrations"),
     ("slideshow", "Slideshow"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
@@ -70,6 +71,13 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "performance" => performance_tab(app, ui, &t),
         "display" => display_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
+        "integrations" => {
+            // the Immich client and its workers are native-only; the web build says so
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::immich::settings_tab(app, ui, &t);
+            #[cfg(target_arch = "wasm32")]
+            ui.label(crate::i18n::tr("Immich import is available in the desktop app."));
+        }
         "slideshow" => slideshow_tab(app, ui, &t, true),
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
         "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),

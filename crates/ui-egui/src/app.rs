@@ -117,6 +117,8 @@ impl LightcraftApp {
             sync: None,
             sync_owns_changes: false,
             sync_run: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            immich_task: None,
             lightroom: None,
             lightroom_last: None,
             lightroom_result: None,

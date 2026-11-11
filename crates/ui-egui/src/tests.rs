@@ -40,6 +40,8 @@ mod grid;
 mod grid_drag;
 mod guided_guides;
 mod histogram_drag;
+#[cfg(not(target_arch = "wasm32"))]
+mod immich;
 mod import_recipe;
 mod import_scan_note;
 mod import_thumbnails;

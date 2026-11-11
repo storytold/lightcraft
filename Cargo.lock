@@ -3762,6 +3762,7 @@ dependencies = [
  "lightcraft-geom",
  "lightcraft-gpu",
  "lightcraft-heif",
+ "lightcraft-immich",
  "lightcraft-lensdb",
  "lightcraft-merge",
  "lightcraft-meta",
@@ -3860,6 +3861,16 @@ version = "0.18.0"
 dependencies = [
  "heic-rs",
  "rayon",
+]
+
+[[package]]
+name = "lightcraft-immich"
+version = "0.18.0"
+dependencies = [
+ "lightcraft-fetch",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4057,6 +4068,7 @@ dependencies = [
  "lightcraft-engine",
  "lightcraft-faces",
  "lightcraft-geom",
+ "lightcraft-immich",
  "lightcraft-merge",
  "lightcraft-meta",
  "lightcraft-pipeline",

@@ -218,6 +218,9 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         }
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
+        // OK on the Immich dialog starts the import (the dialog stays open showing progress)
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::Immich { opts } => crate::immich::start_import(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {
             // another library opened meanwhile (from the menu bar, an agent): these numbers are

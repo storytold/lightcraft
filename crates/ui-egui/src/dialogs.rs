@@ -24,7 +24,7 @@ use export::{
     group_checklist, tiff_lzw_note, watermark_preview,
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
-use frame::{
+pub(crate) use frame::{
     DIALOG_CHROME_GUESS, DIALOG_MIN_BODY, DIALOG_SCREEN_MARGIN, choices, clicked_backdrop, dialog_body, dialog_field, field, just_opened, num,
     only_shows, return_confirms, trailing_button_row,
 };
@@ -298,6 +298,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         .min_width(widest)
         .default_width(match dlg {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
+            #[cfg(not(target_arch = "wasm32"))]
+            Dialog::Immich { .. } => 780.0,
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Print => 1100.0,
@@ -389,6 +391,11 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         let frame = ctx.cumulative_frame_nr();
         ctx.data_mut(|d| d.insert_temp(egui::Id::unique(BACKDROP_SHOWN), frame));
     }
+    // closing the Immich dialog stops a running import first (completed batches stay imported)
+    #[cfg(not(target_arch = "wasm32"))]
+    if close && matches!(dlg, Dialog::Immich { .. }) {
+        crate::immich::close(app);
+    }
     if close && matches!(dlg, Dialog::Import { .. }) {
         app.renderer.forget_imports();
     }
@@ -441,6 +448,8 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::RenameAlbum { .. } => "Rename Album",
         Dialog::Rename { .. } => "Rename Photos",
         Dialog::Import { .. } => "Import Photos",
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::Immich { .. } => "Import from Immich",
         Dialog::LightroomResult { .. } => "Lightroom Catalog Import",
         Dialog::LabelNames { .. } => "Edit Color Label Names",
         Dialog::CaptureTime { .. } => "Edit Capture Time",
@@ -524,11 +533,14 @@ impl SamState {
 }
 
 /// The label of a dialog's cancel button.
-fn cancel_label(dlg: &Dialog, sam: &SamState) -> &'static str {
+fn cancel_label(dlg: &Dialog, sam: &SamState, immich_done: bool) -> &'static str {
     match dlg {
         Dialog::SamModel { .. } if sam.running || sam.installed || sam.by_hand => "Close",
         Dialog::SamModel { .. } | Dialog::LensDatabase { .. } => "Not Now",
         Dialog::LightroomResult { .. } => "Close",
+        // the Immich dialog's left button closes it once its import has run its course
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::Immich { .. } if immich_done => "Close",
         _ => "Cancel",
     }
 }
@@ -539,6 +551,9 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::Import { opts } => import_ok_label(opts),
         Dialog::Export { .. } => photos_ok_label("Export", app.session.selection.ids.len().max(1)),
         Dialog::SamModel { .. } => sam_ok_label(dlg, sam).to_string(),
+        // the Immich dialog carries its own Import button (its grid selection is its input)
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::Immich { .. } => String::new(),
         _ => fixed_ok_label(app, dlg, informational).to_string(),
     }
 }
@@ -569,6 +584,9 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
     match dlg {
         // worded with a count or by the SAM state: `ok_label` builds them
         Dialog::Import { .. } | Dialog::Export { .. } | Dialog::SamModel { .. } => "",
+        // the Immich dialog's confirm label is its own Import button (`ok_label` says "")
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::Immich { .. } => "",
         Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
         Dialog::ContactSheet { .. } => "Choose PDF…",
         Dialog::SlideshowExport { .. } => "Export…",
@@ -658,7 +676,11 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
 fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
     let informational = is_informational(dlg);
     let sam = SamState::of(app);
-    let cancel = cancel_label(dlg, &sam);
+    #[cfg(not(target_arch = "wasm32"))]
+    let immich_done = app.immich_task.as_ref().is_some_and(|t| t.import_done);
+    #[cfg(target_arch = "wasm32")]
+    let immich_done = false;
+    let cancel = cancel_label(dlg, &sam, immich_done);
     let ok = ok_label(app, dlg, informational, &sam);
     let ok = ok.as_str();
     let can_confirm = can_confirm(app, dlg, informational);
@@ -737,6 +759,9 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
         {
             app.toast(ctx, e)
         }
+        // the Immich dialog stays open too — the reason goes to its own error line as well
+        #[cfg(not(target_arch = "wasm32"))]
+        Err(e) if matches!(dlg, Dialog::Immich { .. }) => app.toast(ctx, e),
         // the SAM 3 dialog stays open to show the download (or why it can't start)
         Err(e) if matches!(dlg, Dialog::SamModel { .. }) => {
             if let Dialog::SamModel { error, .. } = dlg {
@@ -806,9 +831,12 @@ fn prompt_verb(command: &str) -> &'static str {
 }
 
 /// Whether a dialog stays open after its action succeeded (the SAM 3 dialog while the model
-/// downloads).
+/// downloads; the Immich dialog, which becomes a progress window).
 pub fn keeps_open(app: &LightcraftApp, dlg: &Dialog) -> bool {
-    matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed()
+    let keep = matches!(dlg, Dialog::SamModel { .. }) && !app.session.segmenter.installed();
+    #[cfg(not(target_arch = "wasm32"))]
+    let keep = keep || matches!(dlg, Dialog::Immich { .. });
+    keep
 }
 
 /// The body of the AutoStack dialog.
@@ -2124,6 +2152,8 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::Export { .. } => export_body(app, ui, t, dlg),
         Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
         Dialog::Import { opts } => crate::import::body(app, ui, opts),
+        #[cfg(not(target_arch = "wasm32"))]
+        Dialog::Immich { opts } => crate::immich::body(app, ui, opts),
         // (Settings is never taller than `body_max`, so the scroll area round it never
         // scrolls: its tab bar stays put and its pages scroll by themselves)
         Dialog::Settings { tab } => crate::panels::settings::window(app, ui, tab, body_max),

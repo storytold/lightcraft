@@ -87,6 +87,8 @@ impl LightcraftApp {
             import::tick(self, ctx);
         }
         panels::library_problem::import_waiting(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::immich::tick(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
         tasks::poll(self, ctx);

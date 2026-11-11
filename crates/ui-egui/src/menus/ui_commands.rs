@@ -230,6 +230,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // {path?, into?: open | new, name?, location?}: asks where the catalog goes unless `into` (or
     // Settings) says (#2672, `lightroom_destination`)
     ("file.importLightroom", "Import Lightroom Catalog…", None, "File"),
+    ("file.importImmich", "Import from Immich…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),

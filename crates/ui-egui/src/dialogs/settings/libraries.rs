@@ -14,6 +14,10 @@ pub(crate) fn can_switch_library(app: &LightcraftApp) -> Result<(), String> {
     if app.import.is_some() || app.scan.is_some() {
         return Err("wait for the import to finish before switching libraries".into());
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if app.session.immich_import.as_ref().is_some_and(|job| job.finished.is_none()) {
+        return Err("wait for the Immich import to finish before switching libraries".into());
+    }
     if app.pending_picks.iter().any(|p| p.command == "folder.move") {
         return Err("wait for Move Folder To… to finish before switching libraries".into());
     }

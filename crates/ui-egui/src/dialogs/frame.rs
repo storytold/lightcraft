@@ -8,7 +8,7 @@ use super::{BACKDROP_SHOWN, ControlSpec, Dialog, LightcraftApp, Tokens};
 /// while the dialog is shown counts: in the frame a dialog appears, its input is the click that
 /// opened it (a quick click on a slow frame presses and releases in that one frame), so it never
 /// closes it. (Read from the raw events: egui forgets the press origin on release.)
-pub(super) fn clicked_backdrop(ctx: &egui::Context, window: egui::Rect, title_bar: Option<egui::Rect>, popup_was_open: bool) -> bool {
+pub(crate) fn clicked_backdrop(ctx: &egui::Context, window: egui::Rect, title_bar: Option<egui::Rect>, popup_was_open: bool) -> bool {
     let press_id = egui::Id::unique("dialog-backdrop-press");
     let frame = ctx.cumulative_frame_nr();
     // the same frame too: a second pass of it gets no input
@@ -36,13 +36,13 @@ pub(super) fn clicked_backdrop(ctx: &egui::Context, window: egui::Rect, title_ba
 }
 
 /// Room kept free above and below a dialog (#781).
-pub(super) const DIALOG_SCREEN_MARGIN: f32 = 12.0;
+pub(crate) const DIALOG_SCREEN_MARGIN: f32 = 12.0;
 
 /// A dialog's title bar, frame and button row before the first frame measures them.
-pub(super) const DIALOG_CHROME_GUESS: f32 = 100.0;
+pub(crate) const DIALOG_CHROME_GUESS: f32 = 100.0;
 
 /// A dialog's options never get less room than this, however short the window.
-pub(super) const DIALOG_MIN_BODY: f32 = 80.0;
+pub(crate) const DIALOG_MIN_BODY: f32 = 80.0;
 
 /// A list that scrolls on its own never gets shorter than this to make its dialog fit.
 const DIALOG_MIN_LIST: f32 = 120.0;
@@ -69,7 +69,7 @@ pub fn list_height(ui: &egui::Ui, preferred: f32) -> f32 {
 /// the dialog (it shrinks to its content, so a dialog that fits looks as it would without it;
 /// each dialog keeps a scroll position of its own), drawn directly otherwise. Returns the height
 /// they took when scrolled.
-pub(super) fn dialog_body(ui: &mut egui::Ui, scroll: Option<&str>, max_height: f32, body: impl FnOnce(&mut egui::Ui)) -> Option<f32> {
+pub(crate) fn dialog_body(ui: &mut egui::Ui, scroll: Option<&str>, max_height: f32, body: impl FnOnce(&mut egui::Ui)) -> Option<f32> {
     let Some(name) = scroll else {
         ui.data_mut(|d| d.remove_temp::<f32>(list_shrink_id()));
         body(ui);
@@ -104,7 +104,7 @@ pub fn prompt(app: &mut LightcraftApp, title: &str, hint: &str, value: &str, com
 }
 
 /// A themed slider row editing `v`; true when it changed.
-pub(super) fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
+pub(crate) fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
     match crate::widgets::slider(ui, spec, *v, true, None).value {
         Some(n) => {
             *v = n;
@@ -114,7 +114,7 @@ pub(super) fn num(ui: &mut egui::Ui, spec: &ControlSpec, v: &mut f64) -> bool {
     }
 }
 
-pub(super) fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(crate) fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(LABEL_W, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -129,13 +129,13 @@ pub(super) fn field<R>(ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egu
 /// The rest of a [`field`] row, laid out right to left: `add` places its trailing button(s) first,
 /// then a text field taking exactly the width that's left. (Subtracting a guessed button width
 /// instead made the auto-sized dialog grow every frame when the real button was wider, #8.)
-pub(super) fn trailing_button_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+pub(crate) fn trailing_button_row(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     let h = ui.spacing().interact_size.y.max(24.0);
     ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), h), egui::Layout::right_to_left(egui::Align::Center), add);
 }
 
 /// A labelled row of mutually exclusive choice buttons (ids `button:{id}-{index}`).
-pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &str, options: &[(V, &str)], value: &mut V) {
+pub(crate) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &str, options: &[(V, &str)], value: &mut V) {
     field(ui, label, |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         for (i, (v, l)) in options.iter().enumerate() {
@@ -148,7 +148,7 @@ pub(super) fn choices<V: PartialEq + Copy>(ui: &mut egui::Ui, label: &str, id: &
 
 /// Dialogs that Return confirms with nothing focused (those with text fields confirm from the
 /// field: `dialog_field`).
-pub(super) fn return_confirms(dlg: &Dialog) -> bool {
+pub(crate) fn return_confirms(dlg: &Dialog) -> bool {
     matches!(dlg, Dialog::CopySettings { .. } | Dialog::PasteSettings { .. })
 }
 
@@ -156,7 +156,7 @@ pub(super) fn return_confirms(dlg: &Dialog) -> bool {
 /// selected, so typing replaces it. It takes the focus back only while nothing else has it: taking
 /// it back every frame would keep Tab from ever reaching the dialog's buttons and check boxes.
 /// True when Return confirms the dialog; Esc cancels the dialog (`show`).
-pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
+pub(crate) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, hint: &str) -> bool {
     let r = crate::text_field::TextField::singleline(widget, text).hint(crate::i18n::tr(hint)).width(f32::INFINITY).select_on_focus(true).show(ui);
     // (and takes it back when nothing has it: after a click on the dialog's background or a check box,
     // or when Return gave it up on a refusal; a control Tab reached keeps it). A disabled dialog (a
@@ -170,7 +170,7 @@ pub(super) fn dialog_field(ui: &mut egui::Ui, widget: &str, text: &mut String, h
 
 /// The dialog part `key` is drawn this frame but wasn't the frame before: the dialog has just
 /// opened (to give its first field the focus once).
-pub(super) fn just_opened(ui: &egui::Ui, key: &str) -> bool {
+pub(crate) fn just_opened(ui: &egui::Ui, key: &str) -> bool {
     let id = egui::Id::unique(("dialog-shown", key));
     let pass = ui.ctx().cumulative_pass_nr();
     let last: Option<u64> = ui.data_mut(|d| d.get_temp(id));
@@ -199,7 +199,7 @@ pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
 
 /// A dialog that only shows something: one Close, nothing to confirm or cancel. (Synchronize
 /// Folder is one when its folder turned out up to date.)
-pub(super) fn only_shows(dlg: &Dialog) -> bool {
+pub(crate) fn only_shows(dlg: &Dialog) -> bool {
     matches!(
         dlg,
         Dialog::About

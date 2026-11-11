@@ -43,8 +43,9 @@ pub struct ImportJob {
     pub(super) by_hash: HashMap<String, Option<PhotoId>>,
     pub(super) probe: Option<crate::media::FileProbe>,
     file_bytes: Option<crate::merge::ByteReader>,
-    /// Probes from a preceding scan (not read again).
-    pub(super) cache: HashMap<String, ProbeInfo>,
+    /// Probes from a preceding scan (not read again). Taken back by the caller when the import
+    /// ends — the Immich commit worker hands it to the session for the same purpose.
+    pub(crate) cache: HashMap<String, ProbeInfo>,
     naming: crate::sidecar::SidecarNaming,
     now: String,
     /// Next rename number; `None` once the final representable value has been reserved.

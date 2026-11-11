@@ -1,6 +1,6 @@
 use super::filters::{covers_other_disks, merge_rules, view_rules};
 use super::gps::parse_gps;
-use super::import::{import_batch_done, import_params, list_auto_import_folder};
+use super::import::{import_batch_done, import_finished, import_params, list_auto_import_folder};
 use super::selection::{
     album_param, album_targets, album_targets_or_err, change_flag, change_rating, cull, flip, for_targets, has_library, mark_deleted,
     opt_album_param, rotate, row_step, select_after_deletion, select_by, step, strs,
@@ -1361,17 +1361,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let undo0 = s.undo.len();
                 let report = crate::import::import_with(s, &req.paths, &req.opts)?;
                 let report = import_batch_done(s, report, req.album, req.album_name.as_deref())?;
-                // one undo step for the whole import
-                let ids_of = |k: &str| -> Vec<u64> { report[k].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default() };
-                let (imported, restored) = (ids_of("imported"), ids_of("restored"));
-                let n = s.undo.len().saturating_sub(undo0);
-                let (verb, count) = if imported.is_empty() && !restored.is_empty() { ("Restore", restored.len()) } else { ("Add", imported.len()) };
-                s.merge_undo(n, &format!("{verb} {count} Photo{}", if count == 1 { "" } else { "s" }));
-                let imported = if imported.is_empty() { restored } else { imported };
-                if let Some(f) = imported.first() {
-                    s.selection = Selection::single(PhotoId(*f));
-                }
-                Ok(report)
+                import_finished(s, undo0, report)
             }
         ),
         // ---- persistence

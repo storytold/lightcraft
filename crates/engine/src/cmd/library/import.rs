@@ -113,3 +113,20 @@ pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, m
     }
     Ok(report)
 }
+
+/// What every finished `library.import` does: the whole import is one undo step ("Add N Photos"),
+/// and the first photo it brought in becomes the selection. The app's import task and the
+/// background Immich import commit their batches through this too.
+pub fn import_finished(s: &mut Session, undo0: usize, report: Value) -> Result<Value> {
+    // one undo step for the whole import
+    let ids_of = |k: &str| -> Vec<u64> { report[k].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default() };
+    let (imported, restored) = (ids_of("imported"), ids_of("restored"));
+    let n = s.undo.len().saturating_sub(undo0);
+    let (verb, count) = if imported.is_empty() && !restored.is_empty() { ("Restore", restored.len()) } else { ("Add", imported.len()) };
+    s.merge_undo(n, &format!("{verb} {count} Photo{}", if count == 1 { "" } else { "s" }));
+    let imported = if imported.is_empty() { restored } else { imported };
+    if let Some(f) = imported.first() {
+        s.selection = Selection::single(PhotoId(*f));
+    }
+    Ok(report)
+}

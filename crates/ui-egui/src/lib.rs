@@ -30,6 +30,8 @@ mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod immich;
 pub mod lens_db;
 pub mod lightroom_import;
 pub mod links;
@@ -60,6 +62,7 @@ mod test_budget;
 mod tests;
 #[cfg(test)]
 use tests::panels as tests_panels;
+#[cfg(test)]
 #[cfg(test)]
 use tests::{fixtures as tests_fixtures, render_fixtures as tests_render_fixtures};
 
@@ -339,6 +342,9 @@ pub struct LightcraftApp {
     pub sync_owns_changes: bool,
     /// A Synchronize Folder at work in the background.
     pub sync_run: Option<sync::SyncRun>,
+    /// The Immich import dialog's workers (native only; the dialog state travels with `ui.dialog`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub immich_task: Option<immich::ImmichTask>,
     /// A Lightroom catalog inspect/import in progress.
     pub lightroom: Option<lightroom_import::LightroomTask>,
     /// Last terminal Lightroom result, exposed by the command's status/wait response.
@@ -403,7 +409,7 @@ pub struct LightcraftApp {
 }
 
 /// How long a screenshot waits for in-flight renders before it is captured anyway (and the
-/// headless fallback's settle budget).
+/// headless fallback's settle budge
 const SCREENSHOT_SETTLE_MS: f64 = 3000.0;
 /// How long a windowed screenshot waits for the compositor before falling back to headless.
 const SCREENSHOT_FALLBACK_MS: f64 = 2000.0;
