@@ -162,9 +162,7 @@ impl GradingStage {
             let pos = (diff.abs().to_degrees() / 30.0 - 0.5).clamp(0.0, 5.0);
             let j = (pos as usize).min(4);
             let fa = pos - j as f32;
-            let level = |k: usize| {
-                w.damping.get(k).map_or(1.0, |r| r[j] * (1.0 - fa) + r[j + 1] * fa)
-            };
+            let level = |k: usize| w.damping.get(k).map_or(1.0, |r| r[j] * (1.0 - fa) + r[j + 1] * fa);
             let damp = if c <= t::CHROMA[0] {
                 1.0 + (level(0) - 1.0) * c / t::CHROMA[0]
             } else {
