@@ -2,8 +2,8 @@
 //!
 //! Only what the denoise U-Nets are made of is understood: `Conv` (3 × 3 "same" or 1 × 1, stride 1, no groups, no
 //! dilation) optionally followed by `LeakyRelu`, `ConvTranspose` (2 × 2, stride 2) likewise, `MaxPool` (2 × 2, stride 2),
-//! a two-input `Concat` on the channels that feeds a convolution, an `Add` of two same-shape tensors (as a 1 × 1
-//! identity convolution over both sources), a standalone `LeakyRelu` (as a 1 × 1 identity convolution with the
+//! a two-input `Concat` on the channels that feeds a convolution, an `Add` of two same-shape tensors (elementwise addition),
+//! a standalone `LeakyRelu` (as a 1 × 1 identity convolution with the
 //! activation, when its source has more than one reader), and a final `DepthToSpace` (2, `CRD`). Any other
 //! operator or attribute is [`NetError::Unsupported`], which is reported to the user by both runners.
 
@@ -254,7 +254,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 if ca == 0 {
                     return invalid("LeakyRelu with zero channels");
                 }
-                if ca > 4096 {
+                if ca > MAX_CHANNELS {
                     return unsupported("LeakyRelu with more than 4096 channels");
                 }
                 let alpha = match node.attribute.as_slice() {
@@ -596,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn many_adds_on_a_wide_input_are_rejected_as_too_many_weights() {
+    fn many_adds_on_a_wide_input_are_accepted_up_to_max_ops() {
         use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
 
         fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
@@ -626,6 +626,7 @@ mod tests {
             model
         }
 
+        // 32 Add nodes on 4096 channels should be accepted (32 < MAX_OPS=512, no weight allocation)
         let mut nodes = Vec::new();
         let mut prev = "data".to_string();
         for i in 0..32 {
@@ -634,7 +635,18 @@ mod tests {
             prev = out;
         }
         let wide_model = model(&nodes, 4096, &prev);
-        assert!(matches!(read_bytes(&wide_model), Err(NetError::Invalid(_))));
+        assert!(read_bytes(&wide_model).is_ok(), "many Add nodes on wide input should be accepted");
+
+        // But exceeding MAX_OPS should still be rejected
+        let mut nodes = Vec::new();
+        let mut prev = "data".to_string();
+        for i in 0..=MAX_OPS {
+            let out = format!("a{i}");
+            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out));
+            prev = out;
+        }
+        let too_many_model = model(&nodes, 1, &prev);
+        assert!(matches!(read_bytes(&too_many_model), Err(NetError::Invalid(_))));
     }
 
     #[test]
