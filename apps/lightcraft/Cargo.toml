@@ -13,6 +13,8 @@ workspace = true
 default = ["denoise"]
 denoise = ["lightcraft-engine/denoise"]
 rawnind-model = ["denoise", "lightcraft-engine/rawnind-model"]
+# SAM 3 on an NVIDIA GPU (Linux/Windows); needs the CUDA toolkit at build time
+cuda = ["lightcraft-engine/cuda"]
 # Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it.
 heif = ["lightcraft-codecs/heif"]
