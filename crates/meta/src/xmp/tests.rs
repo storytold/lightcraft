@@ -560,6 +560,28 @@ fn a_later_empty_location_keeps_an_earlier_city() {
     assert_eq!(city, Some("Rome"));
 }
 
+/// The same `rdf:Description` can repeat `LocationShown`; a later blank item must not replace the
+/// city of the earlier one (its `rdf:li` flattens to empty text, so only the structured value has it).
+#[test]
+fn a_repeated_empty_location_in_one_description_keeps_the_city() {
+    let packet = concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/">"#,
+        r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationShown>"#,
+        r#"<place:LocationShown><rdf:Bag><rdf:li></rdf:li></rdf:Bag></place:LocationShown></rdf:Description>"#,
+        r#"</rdf:RDF>"#
+    );
+    let parsed = parse_xmp(packet).expect("valid XMP");
+    assert!(parsed.has_location_metadata(), "the earlier city is still in the packet");
+    let city = parsed
+        .values
+        .get("Iptc4xmpExt:LocationShown")
+        .and_then(|value| value.items().first())
+        .and_then(|item| item.field("Iptc4xmpExt:City"))
+        .and_then(XmpValue::text);
+    assert_eq!(city, Some("Rome"));
+}
+
 #[test]
 fn zero_padded_numeric_references_decode() {
     assert_eq!(unescape_attr("C&#0000000097;non &#x0000041; &#000000065;"), "Canon A A");

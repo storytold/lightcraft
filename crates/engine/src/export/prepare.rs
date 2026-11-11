@@ -236,19 +236,29 @@ impl PreparedExport {
                     if remove_location {
                         let metadata = lightcraft_meta::try_extract(&bytes)
                             .map_err(|e| format!("{label}: can't verify location metadata in this original file: {e}"))?;
-                        let mut xmp_has_location = false;
-                        let embedded = lightcraft_meta::embedded(&bytes);
-                        if let Some(xmp) = embedded.xmp.as_deref() {
-                            let packet = lightcraft_meta::parse_xmp(xmp)
-                                .map_err(|e| format!("{label}: can't verify location metadata in this original file: malformed embedded XMP: {e}"))?;
+                        let unverifiable = |why: &str| format!("{label}: can't verify location metadata in this original file: {why}");
+                        let check_packet = |xmp: &str, what: &str| -> Result<lightcraft_meta::XmpData, String> {
+                            let packet = lightcraft_meta::parse_xmp(xmp).map_err(|e| unverifiable(&format!("malformed {what}: {e}")))?;
                             // A packet whose flattened property map a size limit cut short could hide
                             // a location behind unrelated keys, so it cannot prove absence.
                             if packet.properties_truncated {
-                                return Err(format!(
-                                    "{label}: can't verify location metadata in this original file: the XMP property inventory exceeds the size limit"
-                                ));
+                                return Err(unverifiable(&format!("the {what} property inventory exceeds the size limit")));
                             }
+                            Ok(packet)
+                        };
+                        let mut xmp_has_location = false;
+                        let embedded = lightcraft_meta::embedded(&bytes);
+                        if let Some(xmp) = embedded.xmp.as_deref() {
+                            let packet = check_packet(xmp, "embedded XMP")?;
                             xmp_has_location = packet.has_location_metadata();
+                            if packet.advertises_extended_xmp() && embedded.xmp_extended.is_none() {
+                                return Err(unverifiable("the XMP announces Extended XMP that the file doesn't hold"));
+                            }
+                        }
+                        // JPEG Extended XMP continues the main packet in further APP1 segments and can
+                        // hold GPS or a place on its own.
+                        if let Some(extended) = embedded.xmp_extended.as_deref() {
+                            xmp_has_location |= check_packet(extended, "Extended XMP")?.has_location_metadata();
                         }
                         let embeds_place_name =
                             [metadata.sublocation.as_deref(), metadata.city.as_deref(), metadata.state.as_deref(), metadata.country.as_deref()]

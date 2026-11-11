@@ -857,6 +857,51 @@ fn remove_location_refuses_original_with_unreadable_non_psd_xmp() {
 }
 
 #[test]
+fn remove_location_checks_jpeg_extended_xmp_before_an_original_copy() {
+    let dir = temp_dir("export-noloc-extended-xmp");
+    let rdf = |body: &str| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmpNote="http://ns.adobe.com/xmp/note/" xmlns:exif="http://ns.adobe.com/exif/1.0/">{body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    let main = rdf("<xmpNote:HasExtendedXMP>0123456789ABCDEF0123456789ABCDEF</xmpNote:HasExtendedXMP>");
+    let pixels = [96u8; 12];
+    let image = lightcraft_codecs::EncodeImage::new(2, 2, 3, lightcraft_codecs::Samples::U8(&pixels));
+    let encoded = lightcraft_codecs::EncodeMeta { xmp: Some(&main), ..Default::default() };
+    let announced_only = lightcraft_codecs::encode_jpeg(&image, 90, lightcraft_codecs::ChromaSubsampling::S444, &encoded).unwrap();
+    // An APP1 Extended XMP segment: signature, GUID, full length and offset, then the data.
+    let extended = rdf("<exif:GPSLatitude>37,46.494N</exif:GPSLatitude>");
+    let mut payload = b"http://ns.adobe.com/xmp/extension/\0".to_vec();
+    payload.extend_from_slice(b"0123456789ABCDEF0123456789ABCDEF");
+    payload.extend_from_slice(&u32::try_from(extended.len()).unwrap().to_be_bytes());
+    payload.extend_from_slice(&0u32.to_be_bytes());
+    payload.extend_from_slice(extended.as_bytes());
+    let mut with_gps = announced_only[..2].to_vec();
+    with_gps.extend_from_slice(&[0xff, 0xe1]);
+    with_gps.extend_from_slice(&u16::try_from(payload.len() + 2).unwrap().to_be_bytes());
+    with_gps.extend_from_slice(&payload);
+    with_gps.extend_from_slice(&announced_only[2..]);
+    assert!(lightcraft_meta::try_extract(&with_gps).unwrap().gps.is_none(), "the catalog doesn't read Extended XMP");
+
+    let cases = [("Extended.jpg", with_gps, "other XMP location metadata"), ("Announced.jpg", announced_only, "announces Extended XMP")];
+    let mut paths = Vec::new();
+    for (name, bytes, _) in &cases {
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        paths.push(path.to_string_lossy().to_string());
+    }
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": paths})).unwrap();
+    let options = ExportOptions { format: ExportFormat::Original, remove_location: true, ..Default::default() };
+    for (name, _, expected) in cases {
+        let id = session.catalog.photos().find(|photo| photo.file_name == name).unwrap().id;
+        let error = export_photo(&mut session, id, &options, 1).err().expect("Extended XMP must be verified");
+        assert!(error.contains(expected), "{name}: {error}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn remove_location_refuses_original_image_with_truncated_xmp_inventory() {
     let dir = temp_dir("export-noloc-truncated-xmp");
     // Flattened keys repeat their whole ancestor path, so a small packet can still exhaust the

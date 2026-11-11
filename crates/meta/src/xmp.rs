@@ -91,6 +91,8 @@ impl XmpData {
     /// absence must check [`Self::properties_truncated`] first.
     pub fn has_location_metadata(&self) -> bool {
         const IPTC_LOCATION_STRUCTS: [&str; 2] = ["Iptc4xmpExt:LocationShown", "Iptc4xmpExt:LocationCreated"];
+        // Every flattened child of one LocationShown/LocationCreated root shares its answer.
+        let mut checked_roots: BTreeMap<&str, bool> = BTreeMap::new();
 
         for (key, values) in &self.properties {
             let parts = key.split('/');
@@ -115,25 +117,39 @@ impl XmpData {
                 continue;
             };
 
+            if values.iter().any(|value| !value.trim().is_empty()) {
+                return true;
+            }
             if IPTC_LOCATION_STRUCTS.contains(&location_part) {
                 let root = parts.clone().next().unwrap_or(key);
-                if self.values.get(root).is_some_and(value_has_text) || values.iter().any(|value| !value.trim().is_empty()) {
+                let root_has_text = *checked_roots.entry(root).or_insert_with(|| self.location_root_has_text(root));
+                if root_has_text {
                     return true;
                 }
-                // `values` keeps the first text-bearing occurrence across RDF descriptions, while
-                // flattened child properties retain every occurrence.
-                if self.properties.iter().any(|(candidate, nested_values)| {
-                    candidate.strip_prefix(root).is_some_and(|suffix| suffix.starts_with('/'))
-                        && nested_values.iter().any(|value| !value.trim().is_empty())
-                }) {
-                    return true;
-                }
-            } else if values.iter().any(|value| !value.trim().is_empty()) {
-                return true;
             }
         }
 
         false
+    }
+
+    /// Whether a LocationShown/LocationCreated root holds text in its retained structured value or
+    /// any flattened child. `values` keeps the first text-bearing occurrence across RDF
+    /// descriptions, while flattened child properties retain every occurrence.
+    fn location_root_has_text(&self, root: &str) -> bool {
+        if self.values.get(root).is_some_and(value_has_text) {
+            return true;
+        }
+        let child_prefix = format!("{root}/");
+        self.properties
+            .range::<str, _>((std::ops::Bound::Included(child_prefix.as_str()), std::ops::Bound::Unbounded))
+            .take_while(|(candidate, _)| candidate.starts_with(&child_prefix))
+            .any(|(_, nested_values)| nested_values.iter().any(|value| !value.trim().is_empty()))
+    }
+
+    /// Whether the packet announces a JPEG Extended XMP continuation (`xmpNote:HasExtendedXMP`),
+    /// matched by local name so an undeclared or foreign prefix can't hide the announcement.
+    pub fn advertises_extended_xmp(&self) -> bool {
+        self.properties.keys().any(|key| !key.contains('/') && key.rsplit([':', '}']).next() == Some("HasExtendedXMP"))
     }
 }
 
@@ -213,15 +229,42 @@ fn value_has_text(value: &XmpValue) -> bool {
     false
 }
 
+/// Insert a property into a struct or description map, keeping an earlier text-bearing value when
+/// the same name repeats with a blank one: an IPTC location struct repeated with an empty
+/// `rdf:li` must not hide the place an export's Remove Location has to refuse. `has_text`
+/// remembers each key's answer so every value is walked at most once.
+fn insert_keeping_text(map: &mut BTreeMap<String, XmpValue>, has_text: &mut BTreeMap<String, bool>, key: String, value: XmpValue) {
+    match map.entry(key) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+            slot.insert(value);
+        }
+        std::collections::btree_map::Entry::Occupied(mut slot) => {
+            let existing_has_text = match has_text.get(slot.key()) {
+                Some(known) => *known,
+                None => value_has_text(slot.get()),
+            };
+            if existing_has_text {
+                has_text.insert(slot.key().clone(), true);
+                return;
+            }
+            let new_has_text = value_has_text(&value);
+            has_text.insert(slot.key().clone(), new_has_text);
+            slot.insert(value);
+        }
+    }
+}
+
+/// A description or struct node as a map of its fields (attributes and child elements).
 fn node_struct(n: &Node) -> XmpValue {
     let mut m = BTreeMap::new();
+    let mut has_text = BTreeMap::new();
     for (k, v) in &n.attrs {
         if !is_rdf_meta_attr(k) {
-            m.insert(k.clone(), XmpValue::Text(v.clone()));
+            insert_keeping_text(&mut m, &mut has_text, k.clone(), XmpValue::Text(v.clone()));
         }
     }
     for c in &n.children {
-        m.insert(c.name.clone(), node_value(c));
+        insert_keeping_text(&mut m, &mut has_text, c.name.clone(), node_value(c));
     }
     XmpValue::Struct(m)
 }
@@ -451,6 +494,8 @@ fn is_rdf_meta_attr(k: &str) -> bool {
     matches!(k, "rdf:about" | "rdf:ID" | "rdf:nodeID" | "xml:lang" | "rdf:parseType" | "rdf:resource" | "rdf:datatype") || k.starts_with("xmlns")
 }
 
+/// Flatten an `rdf:Description`'s attribute and element properties into `props` under `prefix`,
+/// charging each key to `budget` and setting `dropped` when the budget leaves one out.
 fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, dropped: &mut bool) {
     for (k, v) in &d.attrs {
         if is_rdf_meta_attr(k) {
@@ -483,6 +528,8 @@ fn take_key_bytes(key: &str, budget: &mut usize, dropped: &mut bool) -> bool {
     true
 }
 
+/// Flatten one property element (simple, array or struct) into `props`, under the same budget
+/// rules as [`collect_description`].
 fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize, dropped: &mut bool) {
     // a path that can't fit the budget isn't built (a long ancestor path shared by many children
     // would otherwise be copied for each of them after the budget is spent)
@@ -661,36 +708,16 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
     let mut values = BTreeMap::new();
-    // Keys whose retained structured value already holds text: later descriptions need not scan
-    // it again just to learn that it is not blank.
-    let mut text_values: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut value_has_text_by_key = BTreeMap::new();
     // One budget for the whole document: several descriptions cannot each spend a fresh one.
     let mut key_budget = MAX_KEY_BYTES;
     let mut dropped = false;
     for d in descs {
         collect_description(d, "", &mut props, &mut key_budget, &mut dropped);
         if let XmpValue::Struct(m) = node_struct(d) {
-            // A later description can repeat a property with an empty value (an IPTC location
-            // struct with a blank `rdf:li`, say). Keep the earlier text-bearing value: otherwise
-            // the empty one would hide the place an export's Remove Location must refuse.
+            // Later descriptions can repeat a property too; the same rule keeps an earlier place.
             for (key, value) in m {
-                match values.entry(key) {
-                    std::collections::btree_map::Entry::Occupied(mut slot) => {
-                        if text_values.contains(slot.key()) {
-                            continue;
-                        }
-                        if value_has_text(&value) {
-                            text_values.insert(slot.key().clone());
-                            slot.insert(value);
-                        }
-                    }
-                    std::collections::btree_map::Entry::Vacant(slot) => {
-                        if value_has_text(&value) {
-                            text_values.insert(slot.key().clone());
-                        }
-                        slot.insert(value);
-                    }
-                }
+                insert_keeping_text(&mut values, &mut value_has_text_by_key, key, value);
             }
         }
     }
