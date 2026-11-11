@@ -251,18 +251,18 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         .or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::vendor::hasselblad::rgb_preview(&tiff, bytes)).flatten())
 }
 
-/// Drops candidate ranges that repeat an earlier one and those past a shared budget of [`scan_budget`] bytes: the
-/// header walks of many directory entries pointing at one long JPEG-like range would otherwise each cost its length.
+/// Drops candidate ranges that repeat an earlier one, that are not a displayable JPEG or JPEG XL, and valid ones
+/// past a shared budget of [`scan_budget`] bytes: a range is charged only once it validates, so invalid ranges
+/// covering most of the file cannot use up the budget before a valid preview.
 fn bound_candidates(found: &mut Vec<&[u8]>, file_len: usize) {
     let mut seen = std::collections::HashSet::new();
     let mut left = scan_budget(file_len);
     found.retain(|s| {
-        let fresh = seen.insert((s.as_ptr() as usize, s.len()));
-        let fits = s.len() <= left;
-        if fresh && fits {
-            left -= s.len();
+        if !seen.insert((s.as_ptr() as usize, s.len())) || !(is_dct_jpeg(s) || is_jxl(s)) || s.len() > left {
+            return false;
         }
-        fresh && fits
+        left -= s.len();
+        true
     });
 }
 
@@ -520,13 +520,30 @@ mod tests;
 mod bound_tests {
     #[test]
     fn repeated_and_over_budget_candidates_are_dropped() {
-        let data = vec![0u8; 4 << 20];
+        let mut data = vec![0u8; 4 << 20];
+        // a valid JPEG header every 16 bytes, so each range below validates
+        for i in 0..64 {
+            data[i * 16..i * 16 + 15].copy_from_slice(&[0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]);
+        }
         let mut found: Vec<&[u8]> = vec![&data[..], &data[..], &data[..]];
         super::bound_candidates(&mut found, data.len());
         assert_eq!(found.len(), 1);
         // overlapping but unequal ranges stop at the shared budget (8 x the file, at least 1 MiB)
-        let mut found: Vec<&[u8]> = (1..=64).map(|i| &data[i..]).collect();
+        let mut found: Vec<&[u8]> = (0..64).map(|i| &data[i * 16..]).collect();
         super::bound_candidates(&mut found, data.len());
         assert!(found.len() <= 8 && found.iter().map(|s| s.len()).sum::<usize>() <= 8 * data.len());
+    }
+
+    #[test]
+    fn invalid_ranges_do_not_use_up_the_budget_before_a_valid_preview() {
+        let mut data = vec![0u8; 2 << 20];
+        let jpeg = [0xff, 0xd8, 0xff, 0xc0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0];
+        data[1 << 20..(1 << 20) + jpeg.len()].copy_from_slice(&jpeg);
+        // 40 distinct invalid ranges of nearly the whole file (far past the 8 x budget), then the valid one
+        let mut found: Vec<&[u8]> = (0..40).map(|i| &data[i..1 << 20]).collect();
+        found.push(&data[1 << 20..]);
+        super::bound_candidates(&mut found, data.len());
+        assert_eq!(found.len(), 1);
+        assert!(found[0].starts_with(&[0xff, 0xd8]));
     }
 }
