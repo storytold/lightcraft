@@ -859,6 +859,11 @@ fn ui_commands_6(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             } else {
                 app.ui.right = RightPanel::Remove;
                 app.ui.visualize_spots = true;
+                // as panel.remove: the panel opens with a brush, so painting works straight away
+                // (None is for choosing in the panel)
+                if !matches!(app.ui.tool.as_str(), "remove" | "fill" | "heal" | "clone") {
+                    app.ui.tool = "remove".into();
+                }
             }
             Ok(Value::Null)
         }

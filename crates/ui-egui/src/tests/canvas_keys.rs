@@ -114,6 +114,18 @@ fn spots_are_added_and_moved_by_keyboard() {
     }
 }
 
+/// With no brush chosen (Remove ▸ Mode ▸ None) Return on the placement point adds no spot, as a
+/// click on the photo adds none.
+#[test]
+fn return_adds_no_spot_without_a_brush() {
+    let mut h = detail("panel.remove");
+    h.app.ui.tool.clear();
+    h.step();
+    focus(&mut h, "spot:new");
+    key(&mut h, "enter", false);
+    assert!(develop(&h).spots.is_empty(), "None paints nothing");
+}
+
 #[test]
 fn gradient_handles_and_pins_move_by_keyboard() {
     let mut h = detail("panel.masking");

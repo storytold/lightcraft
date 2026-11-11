@@ -152,3 +152,22 @@ fn remove_mode_is_a_dropdown_with_none() {
     click_photo(&mut h, 0.7, 0.7);
     assert_eq!(spots(&h), 1, "None paints nothing");
 }
+
+/// Visualize Spots (A) from another panel opens Remove ready to paint, as the Remove button does;
+/// in Remove it only toggles the view and keeps the Mode chosen there, None included.
+#[test]
+fn visualize_spots_opens_remove_with_a_brush() {
+    let mut h = detail("panel.crop");
+    let r = h.request("ui.menu.invoke", json!({"id": "view.visualizeSpots"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(h.app.ui.right, RightPanel::Remove);
+    assert!(h.app.ui.visualize_spots);
+    assert_eq!(h.app.ui.tool, "remove", "the panel opens ready to paint");
+    choose(&mut h, "removeMode", "none");
+    let r = h.request("ui.menu.invoke", json!({"id": "view.visualizeSpots"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(!h.app.ui.visualize_spots);
+    assert!(h.app.ui.tool.is_empty(), "None stays chosen");
+}

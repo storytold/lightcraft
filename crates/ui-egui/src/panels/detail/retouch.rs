@@ -4,6 +4,18 @@ use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect,
 
 // ------------------------------------------------------------------------ remove
 
+/// The `spot.add` mode the Remove panel's Mode paints with, or `None` while no brush is chosen
+/// (Mode ▸ None, or another tool): then the photo takes no new spots, by pointer or by keyboard.
+fn spot_brush(tool: &str) -> Option<&'static str> {
+    match tool {
+        "remove" => Some("remove"),
+        "fill" => Some("fill"),
+        "heal" => Some("heal"),
+        "clone" => Some("clone"),
+        _ => None,
+    }
+}
+
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
 /// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one
 /// (only while a brush is chosen: with Mode ▸ None nothing is painted and no brush circle shows).
@@ -64,12 +76,11 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             .copied()
     };
     let hover = resp.hover_pos().and_then(hit);
-    // with no brush chosen (the Remove panel's Mode is None) the photo takes no new spots
-    let brush = matches!(app.ui.tool.as_str(), "remove" | "fill" | "heal" | "clone");
+    let brush = spot_brush(&app.ui.tool);
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        } else if brush {
+        } else if brush.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
             p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
             p.circle_stroke(h, r * (1.0 - app.ui.remove_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(110)));
@@ -107,7 +118,7 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         let _ = app.run("spot.select", json!({"index": spot}));
         return;
     }
-    if brush
+    if brush.is_some()
         && let Some(q) = resp.interact_pointer_pos()
         && (resp.drag_started() || resp.dragged() || resp.clicked())
     {
@@ -124,13 +135,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()
+        && let Some(mode) = brush
     {
-        let mode = match app.ui.tool.as_str() {
-            "heal" => "heal",
-            "clone" => "clone",
-            "fill" => "fill",
-            _ => "remove",
-        };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         let _ = app.run(
             "spot.add",
@@ -141,7 +147,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
 
 /// Keyboard stand-ins for the Remove tool: each spot's target and source (an arrow press moves
 /// it a step, one undo step; Return selects the spot), and a placement point that the arrows move
-/// and Return turns into a new spot of the brush's size there. True when a spot was added.
+/// and Return turns into a new spot of the brush's size there (only while a brush is chosen, as
+/// with the pointer). True when a spot was added.
 fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &DevelopSettings, grips: &[(usize, bool, Pos2, f32)]) -> bool {
     for &(spot, source, q, _) in grips {
         let at = map.norm(q);
@@ -174,17 +181,14 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         let moved = ((place.0 + dx).clamp(0.0, 1.0), (place.1 + dy).clamp(0.0, 1.0));
         ui.data_mut(|m| m.insert_temp(key, moved));
     }
-    if crate::canvas_keys::has_focus(ui.ctx()) && ui.memory(|m| m.has_focus(crate::canvas_keys::id("spot:new"))) {
+    let brush = spot_brush(&app.ui.tool);
+    if brush.is_some() && crate::canvas_keys::has_focus(ui.ctx()) && ui.memory(|m| m.has_focus(crate::canvas_keys::id("spot:new"))) {
         let r = (app.ui.remove_size as f64 * (map.rect.width().max(map.rect.height())) as f64) as f32;
         ui.painter().circle_stroke(q, r, Stroke::new(1.0, Color32::WHITE));
     }
-    if keys.activated {
-        let mode = match app.ui.tool.as_str() {
-            "heal" => "heal",
-            "clone" => "clone",
-            "fill" => "fill",
-            _ => "remove",
-        };
+    if keys.activated
+        && let Some(mode) = brush
+    {
         let _ = app.run(
             "spot.add",
             json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity}),
