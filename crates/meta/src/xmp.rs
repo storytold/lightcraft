@@ -77,6 +77,17 @@ pub struct XmpData {
     pub values: BTreeMap<String, XmpValue>,
 }
 
+impl XmpData {
+    /// The pixel size the packet's regions were drawn on (`mwg-rs:AppliedToDimensions`), unless one of them says how
+    /// the photo was turned (`mwg-rs:Rotation`: Lightroom's boxes, which the reader already turns upright). It tells
+    /// boxes drawn on the photo as stored from boxes drawn on it upright: see [`crate::upright_regions`].
+    pub fn regions_drawn_on(&self) -> Option<(f64, f64)> {
+        let regions = self.values.get("mwg-rs:Regions")?;
+        let turned = regions.field("mwg-rs:RegionList").is_some_and(|l| l.items().iter().any(|r| r.field("mwg-rs:Rotation").is_some()));
+        if turned { None } else { applied_to(regions) }
+    }
+}
+
 /// A structured XMP value.
 #[derive(Clone, Debug, PartialEq)]
 pub enum XmpValue {
@@ -241,14 +252,21 @@ fn xml_safe(s: &str) -> String {
     s.chars().filter(|&c| is_xml_char(c)).collect()
 }
 
-/// Unescape attribute values (predefined + numeric references; unknown references kept verbatim).
+/// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
+/// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
+/// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
+fn entity_end(rest: &str) -> Option<usize> {
+    let n = rest.bytes().skip(1).take_while(|b| b.is_ascii_alphanumeric() || *b == b'#').count();
+    (rest.as_bytes().get(n + 1) == Some(&b';')).then_some(n + 1)
+}
+
 pub(crate) fn unescape_attr(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
         out.push_str(&rest[..i]);
         rest = &rest[i..];
-        match rest.find(';').and_then(|j| entity(&rest[1..j]).map(|c| (c, j))) {
+        match entity_end(rest).and_then(|j| entity(&rest[1..j]).map(|c| (c, j))) {
             Some((c, j)) => {
                 out.push(c);
                 rest = &rest[j + 1..];
@@ -307,7 +325,7 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                 }
             }
             Event::End(_) if stack.len() > 1 => {
-                let n = stack.pop().expect("len > 1");
+                let Some(n) = stack.pop() else { return Err(XmpError::Xml("end tag without an open element".into())) };
                 scopes.pop();
                 if let Some(parent) = stack.last_mut() {
                     parent.children.push(n);
@@ -342,10 +360,11 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
     }
     // close unterminated elements leniently
     while stack.len() > 1 {
-        let n = stack.pop().expect("len > 1");
-        stack.last_mut().expect("root").children.push(n);
+        let Some(n) = stack.pop() else { return Err(XmpError::Xml("unterminated element without a node".into())) };
+        let Some(parent) = stack.last_mut() else { return Err(XmpError::Xml("unterminated element without a parent".into())) };
+        parent.children.push(n);
     }
-    Ok(stack.pop().expect("root"))
+    stack.pop().ok_or_else(|| XmpError::Xml("xmp packet without a root element".into()))
 }
 
 fn is_rdf_meta_attr(k: &str) -> bool {
@@ -354,8 +373,13 @@ fn is_rdf_meta_attr(k: &str) -> bool {
 
 fn collect_description(d: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
     for (k, v) in &d.attrs {
-        if !is_rdf_meta_attr(k) && take_key_bytes(&format!("{prefix}{k}"), budget) {
-            props.entry(format!("{prefix}{k}")).or_default().push(v.clone());
+        // the budget is checked before the path is built, not after
+        if is_rdf_meta_attr(k) || *budget < prefix.len().saturating_add(k.len()) {
+            continue;
+        }
+        let key = format!("{prefix}{k}");
+        if take_key_bytes(&key, budget) {
+            props.entry(key).or_default().push(v.clone());
         }
     }
     for c in &d.children {
@@ -375,6 +399,11 @@ fn take_key_bytes(key: &str, budget: &mut usize) -> bool {
 }
 
 fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<String>>, budget: &mut usize) {
+    // a path that can't fit the budget isn't built (a long ancestor path shared by many children
+    // would otherwise be copied for each of them after the budget is spent)
+    if *budget < prefix.len().saturating_add(p.name.len()) {
+        return;
+    }
     let key = format!("{prefix}{}", p.name);
     if let Some(arr) = p.children.iter().find(|c| matches!(c.name.as_str(), "rdf:Seq" | "rdf:Bag" | "rdf:Alt")) {
         let mut items: Vec<(bool, String)> = arr
@@ -394,6 +423,12 @@ fn collect_property(p: &Node, prefix: &str, props: &mut BTreeMap<String, Vec<Str
         return;
     }
     let struct_prefix = format!("{key}/");
+    // a struct's path is charged like a key before its fields copy it: that work too is bounded
+    // by the budget, kept fields or not
+    let is_struct = p.attr("rdf:parseType") == Some("Resource") || p.children.iter().any(|c| c.name == "rdf:Description");
+    if is_struct && !take_key_bytes(&key, budget) {
+        return;
+    }
     if p.attr("rdf:parseType") == Some("Resource") {
         for c in &p.children {
             collect_property(c, &struct_prefix, props, budget);
@@ -454,15 +489,20 @@ fn parse_gps_coord(s: &str) -> Option<f64> {
 /// Malformed or out-of-range entries are skipped rather than rejecting the whole list: one bad region
 /// (from Lightroom, digiKam, Picasa, or a hand-edited file) shouldn't hide the rest.
 fn parse_regions(regions: &XmpValue) -> Vec<Region> {
-    // `AppliedToDimensions` documents the pixel size regions were authored against. It's only consulted
+    // `AppliedToDimensions` documents the pixel size regions were authored against. Here it's only consulted
     // for the rare region whose own Area is in pixel units instead of MWG's normalized default below.
-    let px_dims = regions.field("mwg-rs:AppliedToDimensions").and_then(|d| {
+    let px_dims = applied_to(regions);
+    let Some(list) = regions.field("mwg-rs:RegionList") else { return Vec::new() };
+    list.items().iter().filter_map(|item| parse_one_region(item, px_dims)).collect()
+}
+
+/// `mwg-rs:AppliedToDimensions` of a `mwg-rs:Regions` struct: (width, height) in pixels, both positive.
+fn applied_to(regions: &XmpValue) -> Option<(f64, f64)> {
+    regions.field("mwg-rs:AppliedToDimensions").and_then(|d| {
         let w = d.field("stDim:w").and_then(XmpValue::text).and_then(parse_number)?;
         let h = d.field("stDim:h").and_then(XmpValue::text).and_then(parse_number)?;
         (w > 0.0 && h > 0.0).then_some((w, h))
-    });
-    let Some(list) = regions.field("mwg-rs:RegionList") else { return Vec::new() };
-    list.items().iter().filter_map(|item| parse_one_region(item, px_dims)).collect()
+    })
 }
 
 fn parse_one_region(item: &XmpValue, px_dims: Option<(f64, f64)>) -> Option<Region> {
