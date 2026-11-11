@@ -386,6 +386,10 @@ mod tests {
         let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
         s.mixer.blue.sat = -100.0;
         assert!(ColorOps::new(&s).mixer);
+        // V8 (the Highlights/Shadows base change) still applies the earlier mixer, and has no mixer stage
+        s.process = lightcraft_develop::Process::V8.version();
+        assert!(ColorOps::new(&s).mixer);
+        assert!(crate::mixer_stage::MixerStage::new(&s).is_none());
         s.process = lightcraft_develop::Process::V9.version();
         assert!(!ColorOps::new(&s).mixer);
     }
