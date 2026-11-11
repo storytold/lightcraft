@@ -74,6 +74,10 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
             for (inner, data) in crate::preset_import::read_zip(&b).unwrap_or_default() {
                 if inner.to_ascii_lowercase().ends_with(".cube") {
                     let ip = Path::new(&inner);
+                    if data.len() as u64 > MAX_CUBE_BYTES {
+                        failed.push(json!([stem(ip), "file too large for one .cube file"]));
+                        continue;
+                    }
                     let group = ip
                         .parent()
                         .and_then(|d| d.file_name())
