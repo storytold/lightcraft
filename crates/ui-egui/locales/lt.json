@@ -3582,5 +3582,8 @@
   "Unit": "Vienetas",
   "Top bar": "Viršutinė juosta",
   "Tool strip": "Įrankių juosta",
-  "Bottom bar": "Apatinė juosta"
+  "Bottom bar": "Apatinė juosta",
+  "Drive almost full": "Diskas beveik pilnas",
+  "The drive with this library's previews is almost full: {free} free of {total}. The preview cache takes {cache} and grows as the library does. To keep it smaller, set a size limit in Settings → Performance.": "Diskas, kuriame saugomos šios bibliotekos peržiūros, beveik pilnas: liko {free} laisvos vietos iš {total}. Peržiūrų podėlis užima {cache} ir didėja augant bibliotekai. Norėdami jį sumažinti, nustatykite dydžio ribą skiltyje Nustatymai → Našumas.",
+  "Open Performance Settings": "Atverti našumo nustatymus"
 }
