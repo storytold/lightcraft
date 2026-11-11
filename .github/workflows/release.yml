@@ -12,9 +12,9 @@ on:
         type: string
         default: ""
 
-permissions:
-  contents: write
-  packages: write
+# Nothing by default; each job names what it needs. Only `release` writes (the draft GitHub Release
+# and its packages).
+permissions: {}
 
 concurrency:
   group: release-${{ github.ref }}
@@ -33,6 +33,10 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Git dependencies come from storytold
         run: |
@@ -68,6 +72,9 @@ jobs:
 
   release:
     needs: [git-sources, credits]
+    permissions:
+      contents: write
+      packages: write
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/release.yml@main
     with:

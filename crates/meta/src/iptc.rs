@@ -20,6 +20,7 @@ pub fn parse_iptc(b: &[u8]) -> Metadata {
     let mut utf8 = false;
     let mut date: Option<String> = None;
     let mut time: Option<String> = None;
+    let mut seen_keywords = std::collections::HashSet::new();
     let mut i = 0usize;
     while i + 5 <= b.len() {
         if b[i] != 0x1c {
@@ -43,7 +44,7 @@ pub fn parse_iptc(b: &[u8]) -> Metadata {
             (2, 5) => m.title = Some(decode(data, utf8)).filter(|s| !s.is_empty()),
             (2, 25) => {
                 let k = decode(data, utf8);
-                if !k.is_empty() && !m.keywords.contains(&k) {
+                if !k.is_empty() && seen_keywords.insert(k.clone()) {
                     m.keywords.push(k);
                 }
             }
@@ -77,6 +78,18 @@ pub(crate) mod tests {
         out.extend_from_slice(&[0x1c, rec, ds]);
         out.extend_from_slice(&(data.len() as u16).to_be_bytes());
         out.extend_from_slice(data);
+    }
+
+    #[test]
+    fn distinct_keywords_are_kept_once_each_without_rescanning() {
+        let mut b = Vec::new();
+        for i in 0..50_000u32 {
+            ds(&mut b, 2, 25, format!("k{i}").as_bytes());
+            ds(&mut b, 2, 25, b"same");
+        }
+        let m = parse_iptc(&b);
+        assert_eq!(m.keywords.len(), 50_001);
+        assert_eq!(m.keywords.iter().filter(|k| *k == "same").count(), 1);
     }
 
     pub(crate) fn sample_iim() -> Vec<u8> {
