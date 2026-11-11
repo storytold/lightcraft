@@ -203,7 +203,9 @@ so a proxy cached by the offline loupe cannot prevent rebuilding after reconnect
 
 The 2026-11-05 audit of all 747 open PR patches found a highest assigned
 `LOOK_VERSION` of 25 (#1206) and a highest `RENDER_CACHE_VERSION` of
-8,589,934,600 (#160, `8 | (2 << 32)`). This change uses 26 and 8,589,934,601.
+8,589,934,600 (#160, `8 | (2 << 32)`). A 2026-11-11 recheck found
+`LOOK_VERSION` 26 in #3943 and 27 in #3429, so this change uses 28 and
+8,589,934,601.
 Other PRs still assign 14 or 76, and #784 assigns 24 and 81. Whichever look or
 render change lands later must renumber above the versions already on main.
 
