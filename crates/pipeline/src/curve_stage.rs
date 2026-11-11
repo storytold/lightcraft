@@ -122,6 +122,7 @@ pub struct ParametricGraph {
 }
 
 impl ParametricGraph {
+    /// The graph for `s`: measured when `s`'s process is V9 or later and the splits are the defaults.
     pub fn new(s: &DevelopSettings) -> ParametricGraph {
         let model = ParametricCurve::new(&s.curve);
         let measured = (s.process.process() >= Process::V9 && default_splits(&s.curve)).then(|| measured_parametric(model.amounts.map(|a| a as f32)));
@@ -429,6 +430,7 @@ mod tests {
         }
     }
 
+    /// What the graph draws is the stage's base curve, and the analytic one where the stage uses that.
     #[test]
     fn the_graph_is_the_curve_the_stage_renders() {
         let mut s = v9();
@@ -450,6 +452,7 @@ mod tests {
         assert!(!ParametricGraph::new(&v8).is_measured());
     }
 
+    /// In every region, the amount a drag picks moves the drawn curve by the drag's motion.
     #[test]
     fn a_graph_drag_puts_the_measured_curve_where_the_hand_is() {
         let mut s = v9();
@@ -471,9 +474,10 @@ mod tests {
         }
     }
 
+    /// Where opposite regions fold the measured curve back, the drag follows the curve as drawn (held flat by the peak
+    /// to its left): Lights +100 and Highlights −100 fold it above 0.75.
     #[test]
     fn a_graph_drag_follows_the_drawn_curve_where_it_is_flattened() {
-        // Lights +100 and Highlights -100 fold the measured curve back above 0.75; the drawn curve is held flat there
         let mut s = v9();
         (s.curve.shadows, s.curve.darks, s.curve.lights, s.curve.highlights) = (-50.0, 100.0, 100.0, -100.0);
         let graph = ParametricGraph::new(&s);

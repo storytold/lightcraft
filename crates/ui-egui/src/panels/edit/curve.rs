@@ -159,6 +159,8 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
     }
 }
 
+/// The Tone Curve flyout: the channel row, the graph of the selected channel (the parametric curve, or a point curve
+/// with its points) with its drag, the presets row and the sliders below.
 pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings) {
     let t = Tokens::get(ui.ctx());
     // channel selector
