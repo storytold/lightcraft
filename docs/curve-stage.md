@@ -40,8 +40,8 @@ before the colour stage:
 6. Values above SDR white (an HDR render) continue with slope 1.
 
 The tone map no longer applies Whites under V9 (`finish::base_tone`), and the V8 output-curve tables are not built
-(`FinishParams::curves` is `None`). With Whites, the parametric curve and the point curves all neutral, the stage
-does not run and the render is V8's.
+(`FinishParams::curves` is `None`). With Whites, the parametric curve and the point curves all neutral, the curve
+stage does not run.
 
 ## How it was measured
 
@@ -61,6 +61,8 @@ predicted from the grey-step curves under the hue-preserving rule in step 3. The
 ## Limits
 
 - The tables are measured with Lightroom's default splits. Moved splits use the earlier analytic model.
+- The Edit panel's curve graph still draws the analytic parametric curve and drags against it. Under V9 at the
+  default splits the photo renders the measured regions, so the graph's shape can differ from the render's.
 - The point curves' shape between the points is LightCraft's spline, not measured. What is measured for them is how
   they apply: hue preserving, then the red, green and blue curves per channel.
 - Local (mask) Whites keeps the earlier processes' operator.
