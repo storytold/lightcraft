@@ -230,35 +230,18 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                 let out = node.output.first().ok_or_else(|| NetError::Invalid("Add without an output".into()))?;
                 let (ca, la) = shapes.get(src).copied().ok_or_else(|| NetError::Invalid("Add reads a tensor with no shape".into()))?;
                 let (cb, lb) = shapes.get(src2).copied().ok_or_else(|| NetError::Invalid("Add reads a tensor with no shape".into()))?;
-                // same-shape addition as a 1x1 identity convolution over both sources (src2 channels follow src's):
-                // O(C^2) per pixel where elementwise addition is O(C). initializer broadcast is not a residual
-                // connection, reject it.
                 if ca != cb || la != lb {
                     return unsupported("Add of tensors of different shapes");
                 }
                 if ca == 0 {
                     return invalid("Add with zero channels");
                 }
-                if ca > 4096 {
+                if ca > MAX_CHANNELS {
                     return unsupported("Add with more than 4096 channels");
-                }
-                let nn = ca.checked_mul(ca).and_then(|n| n.checked_mul(2)).ok_or_else(|| NetError::Invalid("Add channel count overflows".into()))?;
-                weights_total = weights_total.saturating_add(nn).saturating_add(ca);
-                if weights_total > MAX_WEIGHTS {
-                    return invalid("the network has too many weights");
-                }
-                let mut weight = vec![0.0f32; nn];
-                for c in 0..ca {
-                    if let Some(w) = weight.get_mut(c * ca * 2 + c) {
-                        *w = 1.0;
-                    }
-                    if let Some(w) = weight.get_mut(c * ca * 2 + ca + c) {
-                        *w = 1.0;
-                    }
                 }
                 ids.insert(out.clone(), this);
                 shapes.push((ca, la));
-                ops.push(Op::Conv(Conv { src, src2: Some(src2), cin: ca * 2, cout: ca, k: 1, weight, bias: vec![0.0; ca], leaky: None }));
+                ops.push(Op::Add { src, src2 });
             }
             "LeakyRelu" => {
                 let [a] = node.input.as_slice() else { return invalid("malformed LeakyRelu") };
@@ -598,8 +581,14 @@ mod tests {
             model
         }
 
-        let concat_model =
-            model(&[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])], 4, "a1");
+        let concat_model = model(
+            &[
+                node("Concat", &["data", "data"], "joined", &[("axis", 1)]),
+                node("Add", &["joined", "data"], "a1", &[]),
+            ],
+            4,
+            "a1",
+        );
         assert!(matches!(read_bytes(&concat_model), Err(NetError::Unsupported(_))));
 
         let oversized_model = model(&[node("Add", &["data", "data"], "a1", &[])], 4097, "a1");
