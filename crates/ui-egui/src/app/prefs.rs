@@ -90,9 +90,14 @@ impl LightcraftApp {
     /// While no display profile is chosen, show previews through the profile of the screen the
     /// window is on (`services.screen_profile`), read about once a second so moving the window to
     /// another screen is followed. Without the service (or a profile) the display is sRGB.
-    fn follow_screen_profile(&mut self, _ctx: &egui::Context) {
+    fn follow_screen_profile(&mut self, ctx: &egui::Context) {
+        if self.services.screen_profile.is_none() {
+            return;
+        }
+        // an idle window draws no frames: wake up to read again, so a profile changed in Windows is followed
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
         let now = self.tick_now();
-        if self.services.screen_profile.is_none() || self.screen_profile_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
+        if self.screen_profile_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
             return;
         }
         self.screen_profile_read = Some(now);
