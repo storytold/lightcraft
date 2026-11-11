@@ -26,6 +26,20 @@ fn error(why: impl Into<String>) -> crate::EngineError {
 fn text<'a>(r: &'a Row, k: &str) -> &'a str {
     r.get(k).and_then(Value::as_str).unwrap_or("")
 }
+/// The record a row's `k` column names: its value as a whole number, or `None` when that is missing, NULL, text, a
+/// fraction or out of `i64` range. [`number`] reads a missing, NULL or text value as 0, naming the record whose `id_local` is 0, and
+/// truncates a fraction (1.5 names record 1).
+fn id_of(r: &Row, k: &str) -> Option<i64> {
+    let n = r.get(k)?.as_number()?;
+    let f = n.as_f64()?;
+    // An integer goes through f64 as [`number`] takes the `id_local` of the record it names, so both get the same key
+    // past 2^53 too.
+    if n.is_i64() {
+        return Some(f as i64);
+    }
+    // (2^63 is the first value past i64::MAX; a cast would saturate onto a real id)
+    (f.fract() == 0.0 && f >= i64::MIN as f64 && f < 9_223_372_036_854_775_808.0).then_some(f as i64)
+}
 fn number(r: &Row, k: &str) -> i64 {
     r.get(k).and_then(Value::as_f64).filter(|n| n.is_finite()).unwrap_or(0.0) as i64
 }
@@ -218,11 +232,11 @@ pub struct SkippedImage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkipReason {
-    /// Its `AgLibraryFile` record is gone.
+    /// Its `AgLibraryFile` record is gone, or its `rootFile` is not a whole number.
     MissingFile,
-    /// Its file's `AgLibraryFolder` record is gone.
+    /// Its file's `AgLibraryFolder` record is gone, or the file's `folder` is not a whole number.
     MissingFolder,
-    /// Its folder's `AgLibraryRootFolder` record is gone.
+    /// Its folder's `AgLibraryRootFolder` record is gone, or the folder's `rootFolder` is not a whole number.
     MissingRoot,
     /// Its file name or root folder path is empty.
     IncompletePath,
@@ -630,9 +644,11 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
     for image in table("Adobe_images", true)? {
         ensure_read_active(cancel)?;
         let id = number(&image, "id_local");
-        let record = files.get(&number(&image, "rootFile")).ok_or(SkipReason::MissingFile).and_then(|file| {
-            let folder = folders.get(&number(file, "folder")).ok_or(SkipReason::MissingFolder)?;
-            let root = roots.get(&number(folder, "rootFolder")).ok_or(SkipReason::MissingRoot)?;
+        // read strictly: a NULL, text or fractional reference names no record, not record 0 (or 1 for 1.5), whose
+        // path would merge this image into another photo
+        let record = id_of(&image, "rootFile").and_then(|f| files.get(&f)).ok_or(SkipReason::MissingFile).and_then(|file| {
+            let folder = id_of(file, "folder").and_then(|f| folders.get(&f)).ok_or(SkipReason::MissingFolder)?;
+            let root = id_of(folder, "rootFolder").and_then(|r| roots.get(&r)).ok_or(SkipReason::MissingRoot)?;
             Ok((file, folder, root))
         });
         let (file, folder, root) = match record {
