@@ -90,6 +90,7 @@ def chart():
     patches = []
 
     def put(c, **k):
+        """Place patch colour `c` in the next cell; a colour outside 0..1 is listed but left black."""
         i = len(patches)
         x, y = (i % (W // CELL)) * CELL, (i // (W // CELL)) * CELL
         ok = bool(np.all(c >= 0) and np.all(c <= 1))
@@ -108,6 +109,7 @@ def chart():
 
 
 def variants():
+    """Name and XMP settings of every chart: neutral, each Whites amount, each region amount."""
     v = {"neutral": {}}
     for a in WHITES:
         v[f"whites{a:+d}"] = {"Whites2012": a}
@@ -127,6 +129,7 @@ XYZ_TO_PROPHOTO = (np.array([[1.3459433, -0.2556075, -0.0511118], [-0.5445989, 1
 
 
 def srgb_encode(v):
+    """Linear to sRGB-encoded values."""
     v = np.clip(v, 0, None)
     return np.where(v <= 0.0031308, v * 12.92, 1.055 * v ** (1 / 2.4) - 0.055)
 
@@ -159,6 +162,7 @@ def delta_table(neutral, edited):
 
 
 def tables(render_dir, out_rs):
+    """Measure the Camera Raw renders in `render_dir` and write the Rust tables to `out_rs`."""
     patches = json.load(open(os.path.join(render_dir, "manifest.json")))["patches"]
     tif = lambda n: os.path.join(render_dir, f"curve__{n}.tif")
     n0 = grey_levels(tif("neutral"), patches)
@@ -183,6 +187,7 @@ def tables(render_dir, out_rs):
 
 
 def main():
+    """Command line: `charts OUT_DIR` or `tables RENDER_DIR OUT_RS`."""
     if len(sys.argv) == 3 and sys.argv[1] == "charts":
         out = sys.argv[2]
         os.makedirs(out, exist_ok=True)
