@@ -91,6 +91,12 @@
 
 ## 2026-10-30
 
+### Dark Sony uncompressed RAWs keep their colours
+- Uncompressed Sony files that report 12 bits but store 16-bit words now use the same sample scale in dark and
+  bright scenes. On affected ILCA-99M2 photos, the old brightness-dependent scale subtracted the wrong black level,
+  so the image turned purple after its camera preview was replaced by the RAW render. Existing cached previews
+  and denoise results are refreshed from the original when it is available; no conversion is needed.
+
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
   LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an

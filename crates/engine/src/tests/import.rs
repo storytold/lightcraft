@@ -2513,8 +2513,63 @@ fn smart_previews_from_an_older_look_fit_are_refreshed() {
     }
 }
 
+/// Discard can finish while a refresh loads the original, and the refresh must leave the proxy absent.
+#[test]
+fn smart_preview_discard_can_finish_during_an_opening_refresh_load() {
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    let mut case = SmartLookCase::new("ARW", "discard");
+    case.session.execute("library.smartPreviews", &json!({})).unwrap();
+    edit_smart_header(&case.file, |h| h["look_version"] = json!(0));
+    let (loading, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    let resume = Mutex::new(resume);
+    let plain = case.plain_loader.clone();
+    case.session.media.file_loader = Some(Arc::new(move |path, edge, decode| {
+        loading.send(()).unwrap();
+        resume.lock().unwrap().recv_timeout(Duration::from_secs(10)).unwrap();
+        plain(path, edge, decode)
+    }));
+    let refresh = crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap();
+    started.recv_timeout(Duration::from_secs(5)).unwrap();
+    case.session.execute("library.smartPreviews", &json!({"ids": [case.id.0], "discard": true, "background": true})).unwrap();
+    let discard = case.session.preview_build.as_ref().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !discard.finished.load(std::sync::atomic::Ordering::Relaxed) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let discarded_during_load = !case.file.exists();
+    release.send(()).unwrap();
+    refresh.join().unwrap();
+    assert!(discarded_during_load, "discard must not wait for the original to load");
+    assert!(!case.file.exists(), "refresh must not restore a discarded proxy");
+    let _ = std::fs::remove_dir_all(&case.src);
+    let _ = std::fs::remove_dir_all(&case.lib);
+}
+
+/// An unreadable proxy keeps the refresh pending until the original proxy file can be inspected.
+#[test]
+fn smart_preview_refresh_retries_when_a_proxy_cannot_be_read() {
+    let mut case = SmartLookCase::new("ARW", "unreadable");
+    case.session.execute("library.smartPreviews", &json!({})).unwrap();
+    edit_smart_header(&case.file, |h| h["look_version"] = json!(0));
+    let backup = case.file.with_extension("backup");
+    std::fs::rename(&case.file, &backup).unwrap();
+    // A directory at the proxy path fails to open or read as a file on all platforms.
+    std::fs::create_dir(&case.file).unwrap();
+    crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
+    assert!(!crate::smart::look_checked(&case.dir));
+    std::fs::remove_dir(&case.file).unwrap();
+    std::fs::rename(backup, &case.file).unwrap();
+    crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
+    assert!(!crate::smart::is_stale(&case.file));
+    assert!(crate::smart::look_checked(&case.dir));
+}
+
+/// Exercise the offline and online refresh paths for one RAW format.
 fn smart_look_refresh_for(format: &str) {
-    let mut case = SmartLookCase::new(format);
+    let mut case = SmartLookCase::new(format, format);
     assert_current_smart_look_is_not_rebuilt(&mut case);
     let (old_bytes, png_bytes) = keep_offline_previews(&mut case);
     refresh_online_previews(&mut case, &old_bytes, &png_bytes);
@@ -2537,9 +2592,10 @@ struct SmartLookCase {
 }
 
 impl SmartLookCase {
-    fn new(format: &str) -> Self {
-        let src = temp_dir(&format!("smartlook-src-{format}"));
-        let lib = temp_dir(&format!("smartlook-lib-{format}"));
+    /// Create an isolated library with a RAW stand-in and a PNG control.
+    fn new(format: &str, name: &str) -> Self {
+        let src = temp_dir(&format!("smartlook-src-{name}"));
+        let lib = temp_dir(&format!("smartlook-lib-{name}"));
         write_png(&src.join("a.png"), 3);
         write_png(&src.join("b.png"), 9);
         let mut session = Session::new().with_fs();
@@ -2583,6 +2639,7 @@ fn assert_current_smart_look_is_not_rebuilt(case: &mut SmartLookCase) {
     assert_eq!(case.calls.load(std::sync::atomic::Ordering::SeqCst), 0);
 }
 
+/// Verify that offline originals preserve their proxies and leave the refresh pending.
 fn keep_offline_previews(case: &mut SmartLookCase) -> (Vec<u8>, Vec<u8>) {
     // old headers (no field), originals offline: kept unchanged, and still marked stale
     for f in [&case.file, &case.png_file] {
@@ -2601,23 +2658,32 @@ fn keep_offline_previews(case: &mut SmartLookCase) -> (Vec<u8>, Vec<u8>) {
     assert_eq!(std::fs::read(&case.file).unwrap(), old_bytes, "offline: the stored preview and curve are untouched");
     assert!(crate::smart::is_stale(&case.file), "and it stays marked for the next time");
     assert_eq!(crate::smart::decode(&old_bytes).unwrap().1, Some(case.old), "the old look is still there");
-    // ... and the opening refresh keeps it too, then marks the folder checked
+    // The opening refresh preserves the offline proxy and keeps the migration pending.
     assert!(!crate::smart::look_checked(&case.dir));
     crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
     assert_eq!(std::fs::read(&case.file).unwrap(), old_bytes);
-    assert!(crate::smart::look_checked(&case.dir));
+    assert!(!crate::smart::look_checked(&case.dir), "offline originals must not finish the refresh");
     (old_bytes, png_bytes)
 }
 
+/// Verify that reconnecting an original rebuilds its proxy and invalidates older thumbnail writes.
 fn refresh_online_previews(case: &mut SmartLookCase, old_bytes: &[u8], png_bytes: &[u8]) {
-    // the original comes back: the scan has run at this version, so the next opening leaves it;
-    // Build Smart Previews rebuilds it with the current look
+    // The original comes back: a later library opening retries the pending refresh.
     std::fs::rename(case.src.with_extension("offline"), &case.src).unwrap();
     case.calls.store(0, std::sync::atomic::Ordering::SeqCst);
-    assert!(crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).is_none(), "checked once per version");
-    assert_eq!(std::fs::read(&case.file).unwrap(), old_bytes);
+    let job = case.session.thumb_job(case.id, 256).unwrap();
+    let (cache, key) = job.cache.unwrap();
+    let old_render = std::sync::Arc::new(lightcraft_raster::Rgba8::new(8, 8));
+    cache.put_at(job.cache_generation, key, old_render.clone());
+    assert!(cache.get(key).is_some());
+    crate::cmd::previews::refresh_stale_smart_previews(&mut case.session).unwrap().join().unwrap();
+    assert!(cache.get(key).is_none(), "refresh invalidates the cached thumbnail");
+    cache.put_at(job.cache_generation, key, old_render);
+    assert!(cache.get(key).is_none(), "an older render cannot refill the cache");
+    assert_ne!(std::fs::read(&case.file).unwrap(), old_bytes, "the opening refresh rebuilt the stale proxy");
+    assert!(crate::smart::look_checked(&case.dir), "the successful retry finishes the refresh");
     let r = case.session.execute("library.smartPreviews", &json!({})).unwrap();
-    assert_eq!((r["refreshed"].as_u64(), case.calls.load(std::sync::atomic::Ordering::SeqCst)), (Some(1), 1), "{r}");
+    assert_eq!((r["refreshed"].as_u64(), case.calls.load(std::sync::atomic::Ordering::SeqCst)), (Some(0), 1), "{r}");
     assert_eq!(smart_header(&case.file)["look_version"], json!(crate::camera_preview::LOOK_VERSION));
     assert_eq!(crate::smart::decode(&std::fs::read(&case.file).unwrap()).unwrap().1, Some(case.new), "rebuilt with the current look");
     assert!(!crate::smart::is_stale(&case.file));
