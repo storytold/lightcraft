@@ -492,8 +492,14 @@ fn a_probe_of_a_file_that_cannot_be_read_names_the_path_and_the_cause() {
     for path in [dir.join("no-such-file.jpg"), dir.clone()] {
         let path = path.to_string_lossy().to_string();
         let e = probe(&path).unwrap_err();
-        assert_eq!(e, format!("{path}: {}", std::fs::read(&path).unwrap_err()));
+        // a folder is refused as "not a regular file" before any read, so only the path and a cause are pinned
+        assert!(e.starts_with(&format!("{path}: ")), "{e}");
     }
+    // the system's own words for it, whatever the platform says
+    let missing = dir.join("no-such-file.jpg");
+    let want = std::fs::read(&missing).unwrap_err().to_string();
+    let got = probe(&missing.to_string_lossy()).unwrap_err();
+    assert_eq!(got.strip_prefix(&format!("{}: ", missing.to_string_lossy())), Some(want.as_str()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
