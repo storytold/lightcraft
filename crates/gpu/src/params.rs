@@ -206,7 +206,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     aux.extend_from_slice(&srgb_lut()[..]);
     let curve_off = aux.len();
     let stage_off = curve_off + fp.curves.as_ref().map_or(0, |c| c.len() * CURVE_N as usize);
-    // process V8's stage (red, green, blue, then the base table) or the earlier processes' curves
+    // process V9's stage (red, green, blue, then the base table) or the earlier processes' curves
     let tables = fp.curves.iter().flatten().chain(fp.curve_stage.iter().flat_map(|c| c.chan.iter().chain([&c.base])));
     for l in tables {
         if l.v.len() != CURVE_N as usize {
@@ -222,14 +222,14 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         }
         aux.extend_from_slice(&l.v);
     }
-    // process V8's mixer stage: its 9 chroma and 3 lightness keys, then its table
+    // process V9's mixer stage: its 9 chroma and 3 lightness keys, then its table
     let mstage_off = aux.len();
     if let Some(cs) = &fp.mixer_stage {
         aux.extend(cs.chroma.iter().flatten());
         aux.extend_from_slice(&cs.light);
         aux.extend_from_slice(&cs.table[..]);
     }
-    // process V8's Colour Grading: the Luminance curve, then per wheel its tint, damping and profile
+    // process V9's Colour Grading: the Luminance curve, then per wheel its tint, damping and profile
     let mgrade_off = aux.len();
     let mgrade = fp.ops.measured_grading.as_ref();
     if let Some(g) = mgrade {

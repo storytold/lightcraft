@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure Lightroom's Colour Grading on synthetic charts (process V8, docs/grading-stage.md).
+"""Measure Lightroom's Colour Grading on synthetic charts (process V9, docs/grading-stage.md).
 
     python3 tools/lr_grading_charts.py charts OUT_DIR
         Writes linear DNG charts (the grey steps and colour patches of tools/lr_tone_charts.py) with the settings

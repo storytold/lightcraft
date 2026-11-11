@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure Lightroom's colour mixer on synthetic colour charts (process V8, docs/mixer-stage.md).
+"""Measure Lightroom's colour mixer on synthetic colour charts (process V9, docs/mixer-stage.md).
 
     python3 tools/lr_mixer_charts.py charts OUT_DIR
         Writes linear DNG charts (OkLCh patches: 72 hues x 3 chroma x 3 lightness levels) with the settings embedded

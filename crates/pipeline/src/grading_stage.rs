@@ -1,4 +1,4 @@
-//! Process V8's Colour Grading ([`lightcraft_develop::Process::V8`], `docs/grading-stage.md`), applied the way
+//! Process V9's Colour Grading ([`lightcraft_develop::Process::V9`], `docs/grading-stage.md`), applied the way
 //! Lightroom applies it.
 //!
 //! Measured on Camera Raw renders of synthetic charts (`tools/lr_grading_charts.py`, tables in
@@ -10,7 +10,7 @@
 //!   direction), by their chroma and the angle between their hue and the tint's;
 //! - the wheel's Luminance as a lightness change by lightness.
 //!
-//! The wheels act on the same input colour and their changes add. The stage replaces V7's grading at the end of
+//! The wheels act on the same input colour and their changes add. The stage replaces V8's grading at the end of
 //! [`crate::colorops::ColorOps`], in the same place.
 
 use lightcraft_develop::{ColorGrading, DevelopSettings, Process, Wheel};
@@ -119,9 +119,9 @@ fn luminance(w: usize, v: f32) -> [f32; GRID] {
 }
 
 impl GradingStage {
-    /// The stage for `s`: `None` before V8 or when Colour Grading is neutral.
+    /// The stage for `s`: `None` before V9 or when Colour Grading is neutral.
     pub fn new(s: &DevelopSettings) -> Option<GradingStage> {
-        if s.process.process() < Process::V8 || s.grading.is_neutral() {
+        if s.process.process() < Process::V9 || s.grading.is_neutral() {
             return None;
         }
         let g: &ColorGrading = &s.grading;
@@ -176,22 +176,22 @@ impl GradingStage {
 mod tests {
     use super::*;
 
-    /// Default settings on process V8.
-    fn v8() -> DevelopSettings {
-        DevelopSettings { process: Process::V8.version(), ..Default::default() }
+    /// Default settings on process V9.
+    fn v9() -> DevelopSettings {
+        DevelopSettings { process: Process::V9.version(), ..Default::default() }
     }
 
-    /// The stage for V8 settings with Colour Grading set by `f`.
+    /// The stage for V9 settings with Colour Grading set by `f`.
     fn stage(f: impl Fn(&mut ColorGrading)) -> GradingStage {
-        let mut s = v8();
+        let mut s = v9();
         f(&mut s.grading);
         GradingStage::new(&s).expect("stage")
     }
 
     #[test]
     fn only_v8_with_grading_gets_the_stage() {
-        assert!(GradingStage::new(&v8()).is_none());
-        let mut s = v8();
+        assert!(GradingStage::new(&v9()).is_none());
+        let mut s = v9();
         s.grading.shadows.hue = 200.0;
         assert!(GradingStage::new(&s).is_none(), "a hue without saturation is neutral");
         s.grading.shadows.sat = 30.0;

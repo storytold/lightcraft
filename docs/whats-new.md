@@ -2,35 +2,35 @@
 
 ## Unreleased
 
-### Adobe Standard profiles look as in Lightroom (process V8)
+### Adobe Standard profiles look as in Lightroom (process V9)
 - A raw developed with an imported camera profile that has no tone curve of its own, such as Adobe Standard, now gets
   Lightroom's base tone curve, applied the way Lightroom applies it, instead of the tone of the camera's JPEG. An
   unedited photo then matches Lightroom's in brightness, contrast and colour far more closely. Panasonic Lumix DC-S9
   raws (RW2) are measured and match closely; other cameras get the same curve without a per-camera exposure offset,
-  so they can come out a little lighter or darker than in Lightroom. This is part of rendering process 8: photos you
+  so they can come out a little lighter or darker than in Lightroom. This is part of rendering process 9: photos you
   already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [Lightroom's default base curve](default-tone.md).
 
-### Colour Grading behaves as in Lightroom (process V8)
+### Colour Grading behaves as in Lightroom (process V9)
 - The colour grading wheels now tint as strongly and in the same direction as Lightroom's, reach the same tones (the
   shadows wheel spares the deepest blacks and reaches into the midtones, the global wheel acts most on the
   midtones), and give less tint to colours that already lean its way, so a warm grade no longer oversaturates warm
   colours. Blending, Balance and Luminance follow Lightroom's measured response too. This is part of rendering
-  process 8: photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  process 9: photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [Colour Grading](grading-stage.md).
 
-### The colour mixer behaves as in Lightroom (process V8)
+### The colour mixer behaves as in Lightroom (process V9)
 - Each band of the colour mixer now covers the colours Lightroom's does (a red-orange such as skin answers to
   Orange, Blue reaches further towards aqua and purple), and Hue, Saturation and Luminance follow Lightroom's
   measured response, including how strongly they act at large amounts. The mixer works before the tone curves, as in
-  Lightroom. This is part of rendering process 8: photos you already edited keep their look until you choose
+  Lightroom. This is part of rendering process 9: photos you already edited keep their look until you choose
   Photo ▸ Update to Current Process. See [The colour mixer](mixer-stage.md).
 
-### Whites and the tone curves behave as in Lightroom (process V8)
+### Whites and the tone curves behave as in Lightroom (process V9)
 - Whites now reaches into the upper midtones as Lightroom's does, and the Highlights, Lights, Darks and Shadows
   regions of the parametric curve are as broad as Lightroom's and add up the same way: both follow Lightroom's
   measured response. A contrast curve no longer turns orange towards red: the point curve keeps colours' hue, and
-  the red, green and blue curves act on their channel after it. This is rendering process 8: new photos (and Reset)
+  the red, green and blue curves act on their channel after it. This is rendering process 9: new photos (and Reset)
   get it, photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [Whites and the tone curves](curve-stage.md).
 

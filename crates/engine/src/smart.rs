@@ -97,7 +97,7 @@ struct SmartFacts {
     lens: Option<lightcraft_develop::EmbeddedLens>,
     camera_color: Option<lightcraft_pipeline::CameraColor>,
     local_tone: Option<lightcraft_pipeline::local_tone::LocalTone>,
-    /// `SourceInfo::default_tone` (absent in smart previews written before process V8's default curve).
+    /// `SourceInfo::default_tone` (absent in smart previews written before process V9's default curve).
     #[serde(default)]
     default_tone: Option<f32>,
     /// The semantic mattes whose bytes follow the facts, in this order.

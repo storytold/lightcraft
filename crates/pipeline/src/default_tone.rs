@@ -1,11 +1,11 @@
-//! Lightroom's default base curve, measured (process V8, `docs/default-tone.md`).
+//! Lightroom's default base curve, measured (process V9, `docs/default-tone.md`).
 //!
 //! A camera profile without a tone curve of its own (a DCP without `ProfileToneCurve`, such as the Adobe Standard
 //! profiles) leaves the base tone to the raw converter. Lightroom then applies its default curve, hue preserving on
-//! linear ProPhoto channels. Up to V7 LightCraft keeps the photo's own tone instead (the curve fitted to its camera
+//! linear ProPhoto channels. Up to V8 LightCraft keeps the photo's own tone instead (the curve fitted to its camera
 //! JPEG, `lightcraft_engine::files`), so the same profile renders brighter and flatter than in Lightroom.
 //!
-//! From V8 such a raw ([`SourceInfo::default_tone`]) gets the curve measured on Camera Raw's render of a synthetic
+//! From V9 such a raw ([`SourceInfo::default_tone`]) gets the curve measured on Camera Raw's render of a synthetic
 //! chart of grey steps (`tools/lr_tone_charts.py base`, [`crate::default_tone_table`]), applied the way Lightroom
 //! applies it ([`rgb_tone`]). The chart is a DNG without a baseline exposure. Camera Raw gives a raw of another format
 //! its own exposure offset per camera, which LightCraft does not know: [`camera_ev`] holds the offsets measured on
@@ -26,13 +26,13 @@ pub fn camera_ev(make: &str, model: &str) -> f32 {
     CAMERA_EV.iter().find(|(m, n, _)| make.trim().eq_ignore_ascii_case(m) && model.trim().eq_ignore_ascii_case(n)).map_or(0.0, |c| c.2)
 }
 
-/// The default curve of `info` under `s`: from process V8, for a raw whose profile has no tone curve.
+/// The default curve of `info` under `s`: from process V9, for a raw whose profile has no tone curve.
 pub fn for_source(s: &DevelopSettings, info: &SourceInfo) -> Option<CameraTone> {
-    let v8 = match s.process.process() {
-        Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 => false,
-        Process::V8 => true,
+    let v9 = match s.process.process() {
+        Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => false,
+        Process::V9 => true,
     };
-    curve(info.default_tone.filter(|_| v8 && info.raw)?)
+    curve(info.default_tone.filter(|_| v9 && info.raw)?)
 }
 
 /// The measured curve with the scene shifted by `ev` stops: 32 knots, evenly spaced in stops over the chart's grey
@@ -106,12 +106,13 @@ mod tests {
     }
 
     #[test]
-    fn only_v8_raws_whose_profile_has_no_curve_get_it() {
-        assert!(for_source(&on(Process::V8), &raw(Some(0.0))).is_some());
+    fn only_v9_raws_whose_profile_has_no_curve_get_it() {
+        assert!(for_source(&on(Process::V9), &raw(Some(0.0))).is_some());
         assert!(for_source(&on(Process::V7), &raw(Some(0.0))).is_none());
-        assert!(for_source(&on(Process::V8), &raw(None)).is_none());
+        assert!(for_source(&on(Process::V8), &raw(Some(0.0))).is_none());
+        assert!(for_source(&on(Process::V9), &raw(None)).is_none());
         let rendered = SourceInfo { raw: false, ..raw(Some(0.0)) };
-        assert!(for_source(&on(Process::V8), &rendered).is_none());
+        assert!(for_source(&on(Process::V9), &rendered).is_none());
     }
 
     #[test]

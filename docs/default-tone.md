@@ -1,29 +1,29 @@
-# Lightroom's default base curve, measured (process V8)
+# Lightroom's default base curve, measured (process V9)
 
 > **Changes:** [revision history](#revision-history)
 
-Process V8 gives a raw rendered through a camera profile without a tone curve of its own the base tone Lightroom
-gives it, from measurements of Camera Raw's output. V1 to V7 are unchanged (`docs/process-versions.md`). The code is
+Process V9 gives a raw rendered through a camera profile without a tone curve of its own the base tone Lightroom
+gives it, from measurements of Camera Raw's output. V1 to V8 are unchanged (`docs/process-versions.md`). The code is
 `crates/pipeline/src/default_tone.rs`, its measured table `crates/pipeline/src/default_tone_table.rs`, and the GPU
 kernel's `rgb_tone` in `crates/gpu/src/wgsl/finish.wgsl`.
 
 ## What was wrong
 
 A DNG camera profile (`.dcp`) may carry a tone curve (`ProfileToneCurve`). Adobe Standard profiles do not: they leave
-the base tone to the raw converter. Lightroom then applies its default base curve. Up to V7 LightCraft keeps the
+the base tone to the raw converter. Lightroom then applies its default base curve. Up to V8 LightCraft keeps the
 photo's own tone instead: the file's DNG tone curve, or else the curve fitted to the camera JPEG
 (`files::load`, `kept_tone`). Measured against Camera Raw:
 
 - **The base curve is a different one.** Lightroom's default curve lifts the midtones more and rolls off into white
   later than a typical camera JPEG's. On 5 held-out Panasonic Lumix DC-S9 raws with the Adobe Standard profile, the
-  unedited V7 render is off by 5.03 in lightness (RMS, OkLab × 100), and brighter by 2.41 on average.
-- **It is applied to luminance, not to the channels.** V7 scales all three channels by the curve's change in
+  unedited V8 render is off by 5.03 in lightness (RMS, OkLab × 100), and brighter by 2.41 on average.
+- **It is applied to luminance, not to the channels.** V8 scales all three channels by the curve's change in
   luminance. Lightroom applies the curve to the largest and the smallest channel in linear ProPhoto RGB, and the
   middle channel keeps its relative position between them. On the 327 colour patches of the neutral chart this rule
   predicts Camera Raw's output within 0.26 (OkLab × 100). Scaling by luminance misses by 5.31, and the curve on each
   channel by 0.86.
 
-## What V8 does
+## What V9 does
 
 For a raw whose profile has no tone curve (`SourceInfo::default_tone`, set by `files::load` when a camera profile
 without `ProfileToneCurve` is chosen):
@@ -72,7 +72,7 @@ lightness RMS and mean a/b error (OkLab × 100), lower is better:
 | Highlights and Shadows together | 8.66 → 6.59 | 1.01 → 0.62 |
 | 19 presets (7 groups) | 6.38 → 2.61 | 1.26 → 0.73 |
 
-"Before" is process V8 without this change.
+"Before" is process V9 without this change.
 
 Unedited, the five photos are off by 0.44 to 1.10 in lightness and on average 0.09 darker than Lightroom (2.41
 lighter before). No preset gets worse in tone or in colour.
@@ -89,4 +89,4 @@ lighter before). No preset gets worse in tone or in colour.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-11 | minor | Process V8: Lightroom's default base curve for a raw whose camera profile has none |
+| 2026-11-11 | minor | Process V9: Lightroom's default base curve for a raw whose camera profile has none |

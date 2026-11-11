@@ -246,7 +246,7 @@ fn load_bytes_now(
             kept_tone,
         );
         let local_tone = local_tone(&raw);
-        // From process V8 a profile without a tone curve of its own (Adobe Standard) renders with Lightroom's
+        // From process V9 a profile without a tone curve of its own (Adobe Standard) renders with Lightroom's
         // default curve, shifted by the camera's measured exposure offset (`lightcraft_pipeline::default_tone`).
         let default_tone = dcp.filter(|p| p.color.profile.tone_curve.is_none()).map(|_| {
             let m = &raw.metadata;
