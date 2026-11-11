@@ -224,8 +224,15 @@ impl crate::Session {
     /// without building the guard over the whole library.
     pub fn check_write_target(&self, path: &str) -> Result<(), String> {
         let path = Path::new(path);
-        if std::fs::symlink_metadata(path).is_err() && !is_xmp(path) {
-            return Ok(()); // nothing there to replace, and no sidecar to create
+        if std::fs::symlink_metadata(path).is_err() {
+            // `missing/../IMG_1.jpg` names an existing file once the writer creates `missing`, so a
+            // `..` that cannot be resolved now cannot be checked: refuse it.
+            if path.components().any(|c| c == std::path::Component::ParentDir) && std::fs::canonicalize(folder_of(path)).is_err() {
+                return Err(format!("{}: the folder part has `..` components that cannot be resolved; use a path without them", path.display()));
+            }
+            if !is_xmp(path) {
+                return Ok(()); // nothing there to replace, and no sidecar to create
+            }
         }
         self.original_guard().check(path)
     }
