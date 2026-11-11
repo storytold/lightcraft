@@ -128,6 +128,31 @@ pub fn report(target: Option<TextureFormat>) -> DisplayOutput {
     out
 }
 
+/// Whether to ask for an HDR (scRGB) window surface (LR-VIEW-HDR-DISPLAY, taken when offered; see
+/// lightcraft-hdr-display): `LIGHTCRAFT_HDR_DISPLAY` `0` / `1` (`env`) wins over the preference
+/// (`setting`; off on Linux until turned on).
+pub fn surface_wanted(env: Option<&str>, setting: bool) -> bool {
+    match env {
+        Some("0") => false,
+        Some("1") => true,
+        _ => setting,
+    }
+}
+
+/// Whether to run through XWayland on a Wayland desktop (`display`: X11 is there). XWayland gives
+/// file drag-and-drop from the file manager (winit has none on Wayland), but X11 windows get no HDR
+/// surface: with HDR display on, native Wayland is kept. `LIGHTCRAFT_WAYLAND=1` forces native
+/// Wayland, `=0` XWayland.
+#[cfg_attr(any(not(unix), target_os = "macos"), allow(dead_code))]
+pub fn use_xwayland(display: bool, wayland_env: Option<&str>, hdr_display: bool) -> bool {
+    display
+        && match wayland_env {
+            Some("0") => true,
+            Some(_) => false,
+            None => !hdr_display,
+        }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +195,26 @@ mod tests {
         assert_eq!(preferred_hdr_format(&[F::Bgra8Unorm, F::Rgb10a2Unorm], Platform::MacOs), None);
         assert_eq!(preferred_hdr_format(&all, Platform::X11), None);
         assert_eq!(preferred_hdr_format(&[], Platform::MacOs), None);
+    }
+
+    #[test]
+    fn hdr_display_keeps_native_wayland_unless_told_otherwise() {
+        // no X11 to fall back to: native Wayland whatever is asked
+        assert!(!use_xwayland(false, None, false));
+        assert!(!use_xwayland(false, Some("0"), true));
+        // HDR display on: native Wayland (only it gets an HDR surface); off: XWayland for drops
+        assert!(!use_xwayland(true, None, true));
+        assert!(use_xwayland(true, None, false));
+        // LIGHTCRAFT_WAYLAND forces either way
+        assert!(!use_xwayland(true, Some("1"), false));
+        assert!(use_xwayland(true, Some("0"), true));
+    }
+
+    #[test]
+    fn the_hdr_surface_follows_the_variable_then_the_setting() {
+        assert!(!surface_wanted(Some("0"), true));
+        assert!(surface_wanted(Some("1"), false));
+        assert!(surface_wanted(None, true));
+        assert!(!surface_wanted(Some("x"), false));
     }
 }

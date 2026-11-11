@@ -48,6 +48,8 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        // an HDR window (scRGB) is colour-managed by the system: no monitor profile on top
+        self.renderer.set_scrgb_window(self.hdr_presenter.is_some());
         let limit = self.ui.settings.hot_pixel_limit;
         if self.hot_pixels_applied != Some(limit) {
             self.hot_pixels_applied = Some(limit);

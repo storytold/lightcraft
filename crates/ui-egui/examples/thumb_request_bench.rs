@@ -123,6 +123,7 @@ fn micro(points: usize, pending: bool) {
                     ms: 0.0,
                     quick: None,
                     pixels: None,
+                    hdr: None,
                     native: None,
                 },
             );

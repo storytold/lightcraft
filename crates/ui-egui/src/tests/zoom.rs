@@ -81,6 +81,7 @@ fn a_pending_crop_or_rotation_does_not_reuse_the_old_textures_aspect() {
             ms: 0.0,
             quick: None,
             pixels: None,
+            hdr: None,
         },
     );
     edit(&mut h, |d| d.crop.geometry.rect = lightcraft_geom::Rect::new(0.25, 0.2, 0.75, 0.2 + 1.0 / 3.0));

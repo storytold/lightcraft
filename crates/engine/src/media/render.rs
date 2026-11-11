@@ -32,6 +32,9 @@ pub struct RenderJob {
     pub view_cache: Option<(Arc<PreviewCache>, Hash128)>,
     /// Render for this monitor profile ([`Self::with_display`]).
     pub display: Option<Arc<crate::display::Display>>,
+    /// HDR display ([`RenderJob::with_hdr_display`]): also render the HDR rendition into
+    /// [`Rendered::deep`].
+    pub hdr_display: bool,
     /// Shown on screen at once and not kept: the result may stay on the GPU as a texture
     /// ([`Self::on_screen`]).
     pub on_screen: bool,
@@ -358,7 +361,8 @@ impl RenderJob {
                 let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
                 let pixels_needed =
                     self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
-                let frame = (self.on_screen && !pixels_needed && gpu)
+                // (an HDR display job needs the pixels too: its HDR rendition is rendered beside them)
+                let frame = (self.on_screen && !pixels_needed && !self.hdr_display && gpu)
                     .then(|| develop_on_screen(src, &info, &self.settings, &request, self.stages.as_deref()));
                 let (mut rendered, gpu_fallback) = match frame {
                     Some(OnScreen::Frame(frame, histogram)) => {
@@ -383,6 +387,11 @@ impl RenderJob {
                     Some(OnScreen::Pixels(r)) => (r, None),
                     None => develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu),
                 };
+                // HDR display: the HDR rendition too, for the window to show (see `hdr_display.rs`)
+                if self.hdr_display {
+                    rendered.deep =
+                        super::hdr_display::rendition(&self.settings, &self.request, self.stages.as_deref(), self.display_fit, src, &info);
+                }
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
                 let mut srgb = None;

@@ -207,6 +207,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let drawn_long = target_rect.width().max(target_rect.height()) * ppp;
     // the whole frame at about canvas size; the zoomed part of it is a window render (below)
     let look = d.hash64();
+    let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
     // Diagnostic views that need whole-frame context, or reads too far for one window, still
     // render the whole frame at the size it is drawn. Mask overlays and soft proofing (both act
     // pixel by pixel) are window-safe.
@@ -216,7 +217,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         native_long,
         texture_side,
         draft,
-        windows: overlay_supports_window(overlay),
+        // (a view that paints HDR on an HDR display: whole-frame HDR renders, not 8-bit windows)
+        windows: overlay_supports_window(overlay) && !crate::hdr_view::loupe_paints_hdr(app, &d, overlay, show_before && !split),
     };
     let plan = loupe_plan(app, id, look, sizes);
     // time the full-size drafts where they are what shows: under a window the whole-frame draft
@@ -261,7 +263,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let prepare = prepare_ahead(app);
         look_ahead(app, id, want.max(8), !crop_tool, prepare);
     }
-    let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
     // (the Before render waits for a settled photo like the loupe's own)
     if !settling && (split || show_before || split_view) {
         request_before(app, &ask, [sw, sh]);
@@ -951,6 +952,7 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
+        let job = job.with_hdr_display(app.hdr_presenter.is_some());
         app.renderer.request(Slot::Main, job, 100);
         // the photo on screen comes first: background preparation waits while it is being made
         // (only then: this runs every loupe frame, and a render already shown asks for nothing)
@@ -1020,7 +1022,14 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot
         return "none";
     };
     let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
-    p.with_clip_rect(clip).image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    match (&app.hdr_presenter, &tex.hdr) {
+        // HDR display: an HDR edit's HDR rendition (a headless screenshot draws on the CPU,
+        // which has no HDR callbacks: the SDR rendition)
+        (Some(hp), Some(px)) if !app.offscreen => hp.paint(&p.with_clip_rect(clip), image_rect, px),
+        _ => {
+            p.with_clip_rect(clip).image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+    }
     what
 }
 
