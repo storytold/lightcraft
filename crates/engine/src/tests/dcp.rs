@@ -70,6 +70,29 @@ fn a_profile_without_a_tone_curve_keeps_the_photos_contrast() {
     assert!((tone.apply(0.18) - 0.45).abs() < 0.01, "{}", tone.apply(0.18));
 }
 
+/// Process V8 (`lightcraft_pipeline::default_tone`): a profile without a tone curve marks the source for Lightroom's
+/// default curve (a camera with no measured offset: 0 stops); a profile with a curve, or no profile, does not. Up to
+/// V7 the base tone stays the file's own.
+#[test]
+fn a_profile_without_a_tone_curve_gets_lightrooms_default_curve_from_v8() {
+    use lightcraft_develop::{DevelopSettings, Process};
+    use lightcraft_raw::profile::ToneCurve;
+    let dng = crate::tests_xmp::synthetic_dng_with(None, Default::default());
+    let (_, plain) = crate::files::load_bytes(&dng, 64).unwrap();
+    assert_eq!(plain.default_tone, None);
+    let (_, info) = crate::files::load_bytes_with(&dng, 64, Some(&swapping_profile("Swap"))).unwrap();
+    assert_eq!(info.default_tone, Some(0.0));
+    let mut curved = swapping_profile("Curved");
+    curved.color.profile.tone_curve = ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.45, 1.0, 1.0]);
+    assert_eq!(crate::files::load_bytes_with(&dng, 64, Some(&curved)).unwrap().1.default_tone, None);
+    let on = |p: Process| DevelopSettings { process: p.version(), ..Default::default() };
+    let (v7, v8) =
+        (lightcraft_pipeline::finish::base_tone(&on(Process::V7), &info, 1.0), lightcraft_pipeline::finish::base_tone(&on(Process::V8), &info, 1.0));
+    let lr = lightcraft_pipeline::default_tone::curve(0.0).unwrap();
+    assert!((v8.apply(0.18) - lr.apply(0.18)).abs() < 0.01, "{} vs {}", v8.apply(0.18), lr.apply(0.18));
+    assert!((v7.apply(0.18) - lr.apply(0.18)).abs() > 0.01, "V7 keeps the file's own tone: {}", v7.apply(0.18));
+}
+
 #[test]
 fn import_choose_cache_persist_and_delete() {
     let dir = temp_dir("session");

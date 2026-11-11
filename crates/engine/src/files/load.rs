@@ -246,6 +246,12 @@ fn load_bytes_now(
             kept_tone,
         );
         let local_tone = local_tone(&raw);
+        // From process V8 a profile without a tone curve of its own (Adobe Standard) renders with Lightroom's
+        // default curve, shifted by the camera's measured exposure offset (`lightcraft_pipeline::default_tone`).
+        let default_tone = dcp.filter(|p| p.color.profile.tone_curve.is_none()).map(|_| {
+            let m = &raw.metadata;
+            lightcraft_pipeline::default_tone::camera_ev(m.make.as_deref().unwrap_or(""), m.model.as_deref().unwrap_or(""))
+        });
         let (temp, tint) = scale.as_shot(xy);
         return Ok((
             img,
@@ -259,6 +265,7 @@ fn load_bytes_now(
                 legacy_relative_wb: scale.legacy_relative,
                 camera_color,
                 camera_tone,
+                default_tone,
                 mattes,
                 local_tone,
                 // (the catalog knows the original's size: `media::source_info`)

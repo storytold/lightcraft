@@ -30,6 +30,7 @@ const FIELDS: &[(&str, usize)] = &[
     ("MSTAGE_OFF", 1),
     ("MGRADE", 1),
     ("MGRADE_OFF", 1),
+    ("RGB_TONE", 1),
     ("GAIN", 1),
     ("EV", 1),
     ("AIR", 1),
@@ -292,6 +293,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     // 0: off, else 1 + the number of wheels with a tint
     p.u("MGRADE", mgrade.map_or(0, |g| 1 + g.wheels.len() as u32));
     p.u("MGRADE_OFF", mgrade_off as u32);
+    p.b("RGB_TONE", fp.rgb_tone);
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);

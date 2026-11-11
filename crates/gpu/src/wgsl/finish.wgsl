@@ -93,6 +93,21 @@ fn light_channel(k: u32, x: f32) -> f32 {
     return light_eval(k, encode_srgb(x));
 }
 
+// `default_tone::rgb_tone`: the base tone on the largest and smallest linear ProPhoto channel, the middle
+// channel keeping its place between them (process V8 with Lightroom's default curve).
+fn rgb_tone(c: vec3<f32>) -> vec3<f32> {
+    let p = max(mul3(PRO_FROM_2020, c), vec3<f32>(0.0));
+    let a = max(p.x, max(p.y, p.z));
+    let b = min(p.x, min(p.y, p.z));
+    let fa = tone_apply(a);
+    let fb = tone_apply(b);
+    var o = vec3<f32>(fa);
+    if (a > b) {
+        o = vec3<f32>(fb) + vec3<f32>(fa - fb) * (p - vec3<f32>(b)) / (a - b);
+    }
+    return mul3(PRO_TO_2020, o);
+}
+
 // `Operator::luminance`: scaled by F of the ProPhoto luminance over it.
 fn light_lum(k: u32, p: vec3<f32>) -> vec3<f32> {
     let y = PRO_Y.x * p.x + PRO_Y.y * p.y + PRO_Y.z * p.z;
@@ -822,7 +837,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let yl = lum2020(c);
     let o = tone_apply(yl);
     var d = vec3<f32>(0.0);
-    if (yl > 1e-9) {
+    if (pu(F_RGB_TONE) != 0u) {
+        d = rgb_tone(c);
+    } else if (yl > 1e-9) {
         d = c * o / yl;
     }
     let k = chroma_scale(o);

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Adobe Standard profiles look as in Lightroom (process V8)
+- A raw developed with an imported camera profile that has no tone curve of its own, such as Adobe Standard, now gets
+  Lightroom's base tone curve, applied the way Lightroom applies it, instead of the tone of the camera's JPEG. An
+  unedited photo then matches Lightroom's in brightness, contrast and colour far more closely. Panasonic Lumix DC-S9
+  raws (RW2) are measured and match closely; other cameras get the same curve without a per-camera exposure offset,
+  so they can come out a little lighter or darker than in Lightroom. This is part of rendering process 8: photos you
+  already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [Lightroom's default base curve](default-tone.md).
+
 ### Colour Grading behaves as in Lightroom (process V8)
 - The colour grading wheels now tint as strongly and in the same direction as Lightroom's, reach the same tones (the
   shadows wheel spares the deepest blacks and reaches into the midtones, the global wheel acts most on the

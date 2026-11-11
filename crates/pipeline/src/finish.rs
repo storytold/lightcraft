@@ -239,6 +239,9 @@ pub struct FinishParams {
     /// A LUT profile and its amount (0..2), applied to the display-encoded colour.
     pub lut: Option<(std::sync::Arc<crate::lut::Lut3d>, f32)>,
     pub tone: ToneMap,
+    /// Process V8 with Lightroom's default curve ([`crate::default_tone`]): the tone map applies hue preserving
+    /// on linear ProPhoto channels ([`crate::default_tone::rgb_tone`]) instead of scaling by luminance.
+    pub rgb_tone: bool,
     /// Process V4's calibrated Contrast and Blacks on the camera-look path, applied after
     /// the tone map (`None`: another process or path, or both at 0; see [`crate::light_v3`]).
     pub light: Option<crate::light_v3::LightOps>,
@@ -336,6 +339,7 @@ impl FinishParams {
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
+            rgb_tone: crate::default_tone::for_source(s, info).is_some(),
             light: crate::light_v3::LightOps::new(s, info),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
@@ -419,12 +423,26 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
         },
         // V7, with Whites moved out of the tone map: the curve stage applies Whites as measured against
-        // Lightroom (`crate::curve_stage`)
-        Process::V8 => match info.camera_tone.as_ref().filter(|_| info.raw) {
-            Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, 0.0, 0.0, peak),
+        // Lightroom (`crate::curve_stage`). A raw whose profile has no tone curve gets Lightroom's default
+        // curve, measured (`crate::default_tone`), instead of its own.
+        Process::V8 => match crate::default_tone::for_source(s, info).or(info.camera_tone.filter(|_| info.raw)) {
+            Some(curve) => ToneMap::camera_rolloff_hdr(&curve, 0.0, 0.0, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, 0.0, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, 0.0, l.blacks, peak),
         },
+    }
+}
+
+/// The base tone map applied to colour `c` (linear Rec.2020, luminance `yl`, tone-mapped luminance `o`): scaled by
+/// the luminance change, or from process V8 on Lightroom's default curve hue preserving on linear ProPhoto channels
+/// ([`FinishParams::rgb_tone`]).
+fn tone_mapped(fp: &FinishParams, c: [f32; 3], yl: f32, o: f32) -> [f32; 3] {
+    if fp.rgb_tone {
+        crate::default_tone::rgb_tone(c, |v| fp.tone.apply(v))
+    } else if yl > 1e-9 {
+        c.map(|v| v * o / yl)
+    } else {
+        [0.0; 3]
     }
 }
 
@@ -557,7 +575,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             // --- tone map on luminance, highlight desaturation
             let yl = luminance_2020(c);
             let o = fp.tone.apply(yl);
-            let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+            let mut d = tone_mapped(fp, c, yl, o);
             let k = fp.tone.chroma_scale(o);
             if k != 1.0 {
                 d = d.map(|v| o + (v - o) * k);

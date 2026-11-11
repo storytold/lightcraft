@@ -909,6 +909,33 @@ fn grading_stage_matches() {
     check("V8 grading, B&W", &src, &raw, &s, &req);
 }
 
+/// Process V8's default curve for a raw whose profile has no tone curve (`default_tone`): the GPU applies it hue
+/// preserving on linear ProPhoto channels as the CPU does, alone, with an exposure offset, with Exposure and
+/// Contrast, with the curves and colour stages, and in HDR.
+#[test]
+fn default_tone_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let req = RenderRequest::fit(720, 720);
+    let v8 = || DevelopSettings { process: Process::V8.version(), ..Default::default() };
+    let plain = SourceInfo { raw: true, default_tone: Some(0.0), ..Default::default() };
+    check("V8 default curve", &src, &plain, &v8(), &req);
+    let shifted = SourceInfo { default_tone: Some(-0.1), ..plain.clone() };
+    let mut s = v8();
+    s.light.exposure = 0.7;
+    s.light.contrast = 30.0;
+    check("V8 default curve, offset, Exposure, Contrast", &src, &shifted, &s, &req);
+    s.mixer.orange.sat = 40.0;
+    s.grading.shadows = lightcraft_develop::Wheel { hue: 210.0, sat: 40.0, lum: 0.0 };
+    s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.6 }, Point { x: 1.0, y: 0.95 }];
+    check("V8 default curve, mixer, grading, curves", &src, &shifted, &s, &req);
+    let mut h = v8();
+    h.hdr.enabled = true;
+    check("V8 default curve, HDR", &src, &plain, &h, &req);
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2: of its fine median, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
