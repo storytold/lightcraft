@@ -537,22 +537,29 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
 
 /// The `crs:` develop fields LightCraft writes back into another application's sidecar, so an
 /// edit made here (`light.exposure` → `crs:Exposure2012`, and so on) reaches the other
-/// application instead of being shadowed by our `lc:settings`. Only fields set to a non-default
-/// value are written: a field at its default is not distinguished from an untouched one, so
-/// writing it would overwrite a foreign value or insert a field the packet never had. Fields
-/// not in this list are kept byte for byte, and the existing block is updated in place rather
-/// than duplicated.
-pub fn crs_settings(settings: &DevelopSettings) -> Vec<(&'static str, String)> {
+/// application instead of being shadowed by our `lc:settings`. Only fields that differ from
+/// `previous` are written: a field at its default is not distinguished from an untouched one,
+/// so writing it would overwrite a foreign value or insert a field the packet never had.
+/// Fields not in this list are kept byte for byte, and the existing block is updated in place
+/// rather than duplicated.
+pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSettings>) -> Vec<(&'static str, String)> {
     let light = &settings.light;
+    let prev_light = previous.map(|p| &p.light);
     let all = [
-        ("Exposure2012", light.exposure),
-        ("Contrast2012", light.contrast),
-        ("Highlights2012", light.highlights),
-        ("Shadows2012", light.shadows),
-        ("Whites2012", light.whites),
-        ("Blacks2012", light.blacks),
+        ("Exposure2012", light.exposure, prev_light.map(|l| l.exposure)),
+        ("Contrast2012", light.contrast, prev_light.map(|l| l.contrast)),
+        ("Highlights2012", light.highlights, prev_light.map(|l| l.highlights)),
+        ("Shadows2012", light.shadows, prev_light.map(|l| l.shadows)),
+        ("Whites2012", light.whites, prev_light.map(|l| l.whites)),
+        ("Blacks2012", light.blacks, prev_light.map(|l| l.blacks)),
     ];
-    all.into_iter().map(|(name, v)| (name, v.to_string())).collect()
+    all.into_iter()
+        .filter_map(
+            |(name, current, previous)| {
+                if previous.is_some_and(|p| (current - p).abs() < f64::EPSILON) { None } else { Some((name, current.to_string())) }
+            },
+        )
+        .collect()
 }
 
 /// Read an XMP preset (`crs:` fields + `crs:Name` / `crs:Group`) into one of our presets.
@@ -686,12 +693,10 @@ mod crs_write_tests {
         // Second write: explicit reset to zero
         let mut develop = DevelopSettings::default();
         develop.light.exposure = 0.0;
+        let develop_arc = std::sync::Arc::new(develop);
         let p = s.catalog.photo(PhotoId(1)).unwrap();
-        let mut photo = Photo {
-            develop: std::sync::Arc::new(develop),
-            ..(*p).clone()
-        };
-        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: std::sync::Arc::new(develop), label: "Reset".into(), edited: Some("now".into()) }).unwrap();
+        let mut photo = Photo { develop: develop_arc.clone(), ..(*p).clone() };
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: develop_arc, label: "Reset".into(), edited: Some("now".into()) }).unwrap();
         s.save_sidecar(PhotoId(1)).unwrap();
 
         let text = std::fs::read_to_string(&sidecar).unwrap();
