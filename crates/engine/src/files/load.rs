@@ -15,7 +15,7 @@ pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo),
 
 /// [`load_bytes`] developing a raw file with an imported camera profile (`dcp`) in place of its own colour model.
 pub fn load_bytes_with(bytes: &[u8], max_edge: usize, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> {
-    load_bytes_decoded(bytes, max_edge, RawDecode { dcp, outliers: false })
+    load_bytes_decoded(bytes, max_edge, RawDecode { dcp, outliers: false, dng: None })
 }
 
 /// [`load_bytes`] decoding a raw file as `with` says.

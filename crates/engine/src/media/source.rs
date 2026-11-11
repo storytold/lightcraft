@@ -94,6 +94,9 @@ pub struct RawDecode<'a> {
     pub dcp: Option<&'a DcpProfile>,
     /// Replace a raw's single outlier photosites first ([`DevelopSettings`] `detail.nr_outliers`).
     pub outliers: bool,
+    /// Develop this DNG instead of the file: the photo's converted DNG ([`crate::dng_converter::photo_dng`], issue
+    /// #3921). The file is read when it is gone.
+    pub dng: Option<&'a std::path::Path>,
 }
 
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app), as the third argument says.
@@ -275,6 +278,9 @@ pub enum SourceRef {
         outliers: bool,
         /// A thumbnail's loader, used instead of `loader` (see [`ReducedLoader`]); `None` for every other job.
         reduced: Option<ReducedLoader>,
+        /// The DNG the photo develops from instead of its file (see [`RawDecode::dng`]).
+        /// (shared, not owned: it keeps this variant small)
+        converted: Option<Arc<std::path::Path>>,
     },
     /// A smart preview standing in for a missing original.
     Smart {
@@ -300,8 +306,8 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, outliers, reduced } => {
-                let with = RawDecode { dcp: camera_profile.as_ref().map(|(_, p)| p.as_ref()), outliers: *outliers };
+            SourceRef::File { path, max_edge, loader, fallback, denoise, camera_profile, outliers, reduced, converted } => {
+                let with = RawDecode { dcp: camera_profile.as_ref().map(|(_, p)| p.as_ref()), outliers: *outliers, dng: converted.as_deref() };
                 let made_with = camera_profile.as_ref().map(|(id, _)| id.clone());
                 let plain = || match (reduced, loader) {
                     (Some(l), _) => l(path, *max_edge, with).map(|(image, info, reduced)| DecodedSource {
@@ -396,6 +402,9 @@ pub struct ProbeInfo {
     /// A raw variant that can't be decoded yet: why. The file is described (and will be shown and
     /// edited) from its embedded preview; see [`lightcraft_catalog::Photo::preview_only`].
     pub preview_only: Option<String>,
+    /// The file is a preview-only raw described from the DNG a converter made of it (issue #3921): the photo develops
+    /// from that DNG ([`lightcraft_catalog::CONVERTED_DNG_STAMP`]).
+    pub converted_dng: bool,
 }
 
 pub type FileProbe = Arc<dyn Fn(&str) -> Result<ProbeInfo, String> + Send + Sync>;

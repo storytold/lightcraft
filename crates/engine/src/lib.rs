@@ -31,6 +31,7 @@ pub mod denoise;
 pub mod devices;
 pub mod disk_space;
 pub mod display;
+pub mod dng_converter;
 pub mod doc_path;
 mod errors;
 pub mod export;

@@ -1,4 +1,4 @@
-use super::widgets::{check, choices, heading, hint, row};
+use super::widgets::{check, choices, field, heading, hint, row};
 #[cfg(not(target_arch = "wasm32"))]
 use super::widgets::{label_width, path_label};
 use super::{
@@ -66,6 +66,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
             "Remove Hot Pixels (Detail) leaves a raw unchanged when more than this share of its photosites would be replaced: such a photo doesn't look like hot pixels on a sensor.",
         ),
     );
+    dng_converter(app, ui, t);
     heading(ui, t, crate::i18n::tr("Preview cache"));
     let cur = app.session.cache_mb;
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {
@@ -321,6 +322,56 @@ fn custom_cache_option(cur: u32) -> Option<(u32, String)> {
     }
     let label = if cur.is_multiple_of(1024) { format!("{} GB", cur / 1024) } else { format!("{cur} MB") };
     Some((cur, label))
+}
+
+/// Nikon High Efficiency NEF through Adobe DNG Converter (issue #3921): the switch, where the converter is, and the
+/// cache of converted DNGs.
+fn dng_converter(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, crate::i18n::tr("Nikon High Efficiency NEF"));
+    check(ui, "settings.dngConverterAuto", &mut app.ui.settings.dng_converter_auto, "Convert with Adobe DNG Converter when opened");
+    row(ui, t, crate::i18n::tr("Adobe DNG Converter"), |ui| {
+        field(
+            ui,
+            crate::text_field::TextField::singleline("field:dngConverterPath", &mut app.ui.settings.dng_converter_path)
+                .hint(crate::i18n::tr("Found automatically"))
+                .width(220.0),
+        );
+    });
+    let found = crate::dng_convert::converter(app);
+    let status = match &found {
+        Some(p) => crate::i18n::tr_format!("Found: {path}", path = p.display()),
+        None => crate::i18n::tr("Not found. Adobe DNG Converter is a free download from Adobe.").to_string(),
+    };
+    ui.add(egui::Label::new(RichText::new(&status).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&status);
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "High Efficiency (HE / HE★) NEFs use a licensed codec that LightCraft can't decode, so they open from the camera's embedded JPEG. With Adobe DNG Converter installed, LightCraft can run it to make a DNG in its cache and develop that from the raw data. The NEF stays your file and is never changed. Each DNG takes about 1.7 times the NEF's space. Edits made on the embedded JPEG may look different on the raw data.",
+        ),
+    );
+    if let Some(dir) = lightcraft_engine::dng_converter::cache_dir() {
+        let shown = dir.display().to_string();
+        ui.add(egui::Label::new(RichText::new(&shown).size(11.0).color(t.text_dim)).truncate()).on_hover_text(&shown);
+    }
+    // listing the cache every frame would be slow: refresh every 2 s and after a Delete
+    let now = ui.input(|i| i.time);
+    let (files, bytes) = match ui.data(|d| d.get_temp::<(f64, (usize, u64))>(crate::dng_convert::usage_id())) {
+        Some((at, v)) if now - at < crate::dng_convert::LOOKUP_TTL.as_secs_f64() => v,
+        _ => {
+            let v = lightcraft_engine::dng_converter::cache_usage();
+            ui.data_mut(|d| d.insert_temp(crate::dng_convert::usage_id(), (now, v)));
+            v
+        }
+    };
+    row(ui, t, crate::i18n::tr("Converted DNGs"), |ui| {
+        ui.label(RichText::new(format!("{files} · {:.1} MB", bytes as f64 / 1048576.0)).color(t.text));
+        let r = ui.add_enabled(files > 0, egui::Button::new(crate::i18n::tr("Delete")));
+        register(ui, "button:settingsClearDngCache", r.rect);
+        if r.clicked() {
+            crate::dng_convert::clear_cache(app, ui.ctx());
+        }
+    });
 }
 
 #[cfg(test)]

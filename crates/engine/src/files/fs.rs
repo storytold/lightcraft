@@ -66,7 +66,7 @@ pub fn fs_pair_loader() -> PairLoader {
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = read_source(path, with.dng)?;
         let r = load_vec_pair(bytes, max_edge, spec, with);
         crate::memory::release();
         r
@@ -82,7 +82,7 @@ pub fn fs_pair_loader() -> PairLoader {
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader =
-        Arc::new(|path: &str, max_edge: usize, with: RawDecode<'_>| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge, with)));
+        Arc::new(|path: &str, max_edge: usize, with: RawDecode<'_>| fs_load(path, max_edge, with.dng, |bytes| load_vec(bytes, max_edge, with)));
     let probe: FileProbe = Arc::new(|path: &str| {
         use std::io::Read;
         // one open, then everything from the open file: its size and modification time are not
@@ -94,6 +94,9 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
         let mut info = probe_bytes(path, &bytes)?;
+        if info.preview_only.is_some() {
+            with_converted_dng(path, &mut info);
+        }
         info.file_modified = meta.as_ref().and_then(modified_iso);
         Ok(info)
     });
@@ -102,20 +105,63 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
 pub fn fs_reduced_loader() -> ReducedLoader {
-    Arc::new(|path: &str, max_edge: usize, with: RawDecode<'_>| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, with)))
+    Arc::new(|path: &str, max_edge: usize, with: RawDecode<'_>| fs_load(path, max_edge, with.dng, |bytes| load_vec_reduced(bytes, max_edge, with)))
 }
 
-/// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.
-fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
+/// Read `path` (or the photo's converted DNG, `dng`: see [`read_source`]) and `load` it, waiting on
+/// [`crate::memory::work_gate`] as [`fs_hooks`] explains.
+fn fs_load<T>(path: &str, max_edge: usize, dng: Option<&std::path::Path>, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
     let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
     let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 });
     let gate = crate::memory::work_gate();
     let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let bytes = read_source(path, dng)?;
     let r = load(bytes);
     // the file, the samples and the intermediate images are gone: give their pages back
     crate::memory::release();
     r
+}
+
+/// The bytes to develop the photo at `path` from: the file's, or the DNG it develops from (`dng`: a Nikon High
+/// Efficiency NEF converted by Adobe DNG Converter, as the catalog records it: [`crate::dng_converter::photo_dng`];
+/// issue #3921). A DNG that is gone or can't be read falls back to the file, which shows its embedded preview. No
+/// other file is read: a photo the catalog doesn't mark as converted never looks for a DNG.
+fn read_source(path: &str, dng: Option<&std::path::Path>) -> Result<Vec<u8>, String> {
+    if let Some(dng) = dng {
+        match std::fs::read(dng) {
+            Ok(bytes) => return Ok(bytes),
+            // (a cleared or purged cache: the photo shows its embedded preview until it is converted again)
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => log::warn!("converted DNG {} can't be read, developing {path} instead: {e}", dng.display()),
+        }
+    }
+    std::fs::read(path).map_err(|e| format!("{path}: {e}"))
+}
+
+/// A preview-only NEF whose converted DNG is cached (a High Efficiency NEF, issue #3921) is described from the DNG: its size, orientation,
+/// white balance and lens data, no preview-only reason, and [`crate::media::ProbeInfo::converted_dng`] set. Everything
+/// else (metadata, XMP, content hash, file size) stays the original file's, which remains the photo's file. The DNG is
+/// found from the content hash the probe just computed; one that is missing, unreadable or not decodable changes
+/// nothing.
+pub(super) fn with_converted_dng(path: &str, info: &mut crate::media::ProbeInfo) {
+    // (any preview-only NEF: only a High Efficiency one is ever converted, and looking costs one file-system call)
+    if info.preview_only.is_none() {
+        return;
+    }
+    let Some(hash) = info.content_hash.as_deref() else { return };
+    let Some(dng) = crate::dng_converter::dng_path(std::path::Path::new(path), hash).filter(|d| d.is_file()) else { return };
+    let Ok(bytes) = std::fs::read(&dng) else { return };
+    let Ok(d) = probe_bytes(path, &bytes) else { return };
+    if d.preview_only.is_some() || d.kind != info.kind {
+        return;
+    }
+    info.width = d.width;
+    info.height = d.height;
+    info.orientation = d.orientation;
+    info.as_shot_wb = d.as_shot_wb;
+    info.embedded_lens = d.embedded_lens;
+    info.preview_only = None;
+    info.converted_dng = true;
 }
 
 /// The modification time in `meta` as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the

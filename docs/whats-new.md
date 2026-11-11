@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Nikon High Efficiency NEF through Adobe DNG Converter
+- Nikon HE / HE★ NEFs still open from the camera's embedded JPEG: their codec is licensed and LightCraft can't decode
+  it. If you install the free Adobe DNG Converter, the Preview only notice offers Convert with Adobe DNG Converter:
+  LightCraft runs it, keeps the DNG in its own cache and develops the photo from its raw data. The NEF stays your
+  file and is never changed. Edits made on the embedded JPEG may look different on the raw data. Settings ▸
+  Performance can convert such files when you open them in Edit, and shows and deletes the converted DNGs (issue
+  #3921; see [Adobe DNG Converter](dng-converter.md)).
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth

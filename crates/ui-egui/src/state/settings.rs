@@ -156,6 +156,11 @@ pub struct AppSettings {
     /// Remove Hot Pixels leaves a raw alone when more than this share of its photosites, in percent, would be
     /// replaced (`app.hotPixelLimit`).
     pub hot_pixel_limit: f32,
+    /// Convert a Nikon High Efficiency NEF with Adobe DNG Converter when it is opened (`app.dngConverter` `auto`;
+    /// issue #3921). Off by default.
+    pub dng_converter_auto: bool,
+    /// Where Adobe DNG Converter is ("" = its default install location; `app.dngConverter` `path`).
+    pub dng_converter_path: String,
     /// The Info panel's metadata fields with several photos selected: true (the default) shows the
     /// values the selected photos share and marks each field where they differ (Selected Photos),
     /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
@@ -242,6 +247,8 @@ impl Default for AppSettings {
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
             hot_pixel_limit: HOT_PIXEL_LIMIT_DEFAULT,
+            dng_converter_auto: false,
+            dng_converter_path: String::new(),
             info_selected_photos: true,
             film_names: true,
             film_badges: true,

@@ -21,6 +21,7 @@ mod command_error;
 pub mod control;
 pub mod destination;
 pub mod dialogs;
+pub mod dng_convert;
 pub mod docking;
 mod drop_overlay;
 pub mod export_task;
@@ -379,6 +380,10 @@ pub struct LightcraftApp {
     memory_applied: Option<u32>,
     /// The hot pixel limit last applied (percent).
     hot_pixels_applied: Option<f32>,
+    /// The Adobe DNG Converter settings last applied (`app.dngConverter`: auto, path).
+    dng_converter_applied: Option<(bool, String)>,
+    /// Nikon High Efficiency NEFs being converted or that failed to convert (issue #3921).
+    pub(crate) dng: dng_convert::DngState,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
     /// Why the display profile setting could not be applied (shown in Settings ▸ Display).

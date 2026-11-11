@@ -326,5 +326,9 @@
   "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet",
   "Bring photos in with File › Import Photos… ({keys}).": "Fotos holen Sie mit Datei › Fotos importieren… ({keys}) in die Bibliothek.",
   "View › Detail View ({keys}).": "Ansicht › Detailansicht ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys}).",
+  "Found: {path}": "Gefunden: {path}",
+  "Adobe DNG Converter failed: {why}": "Adobe DNG Converter ist fehlgeschlagen: {why}",
+  "{n} raws converted, {f} failed": "{n} RAWs konvertiert, {f} fehlgeschlagen",
+  "{n} converted DNGs could not be deleted (see the log)": "{n} konvertierte DNGs konnten nicht gelöscht werden (siehe Protokoll)"
 }

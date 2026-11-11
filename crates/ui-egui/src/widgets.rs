@@ -236,12 +236,24 @@ pub fn preview_only_explanation(reason: &str) -> String {
     )
 }
 
+/// What was clicked in a [`preview_only_notice`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NoticeClicks {
+    /// Reload from Disk.
+    pub reload: bool,
+    /// Convert with Adobe DNG Converter (a High Efficiency NEF, issue #3921).
+    pub convert: bool,
+}
+
 /// A panel notice for a raw shown from its embedded preview (Edit, Info): an amber info icon,
 /// "Preview only", the explanation and a Reload from Disk button (`button:reloadPreviewOnly:{key}`:
 /// for a file a newer version can decode that was offline when its library opened). Registered as
-/// `notice:previewOnly:{key}`. `true` when the button was clicked.
-pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
-    let mut reload = false;
+/// `notice:previewOnly:{key}`. For a Nikon High Efficiency NEF, `dng` says where Adobe DNG Converter stands: a line
+/// while it converts or after it failed, and a Convert button (`button:convertHighEfficiency:{key}`) when it is
+/// installed, or how to get it.
+pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str, dng: Option<&crate::dng_convert::Status>) -> NoticeClicks {
+    use crate::dng_convert::Status;
+    let mut clicks = NoticeClicks::default();
     let t = Tokens::get(ui.ctx());
     let r = egui::Frame::NONE
         .fill(t.canvas)
@@ -257,14 +269,56 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
             });
             ui.add_space(2.0);
             ui.label(egui::RichText::new(preview_only_explanation(reason)).size(11.5).color(t.text_label));
+            match dng {
+                Some(s @ (Status::Converting | Status::Queued)) => {
+                    let text = if *s == Status::Converting { "Converting with Adobe DNG Converter…" } else { "Waiting for Adobe DNG Converter…" };
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new().size(12.0));
+                        ui.label(egui::RichText::new(crate::i18n::tr(text)).size(11.5).color(t.text));
+                    });
+                }
+                Some(Status::Failed(why)) => {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr_format!("Adobe DNG Converter failed: {why}", why = why)).size(11.5).color(t.caution),
+                    );
+                }
+                Some(Status::NotFound) => {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            "Install the free Adobe DNG Converter to develop these files from their raw data (Settings › Performance).",
+                        ))
+                        .size(11.5)
+                        .color(t.text_label),
+                    );
+                }
+                Some(Status::Ready) => {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            "Adobe DNG Converter is installed: convert this file to develop it from its raw data. Edits made on the embedded JPEG may look different on the raw data.",
+                        ))
+                        .size(11.5)
+                        .color(t.text_label),
+                    );
+                }
+                None => {}
+            }
             ui.add_space(6.0);
-            reload = text_button(ui, &format!("reloadPreviewOnly:{key}"), "Reload from Disk", false).clicked();
+            ui.horizontal(|ui| {
+                clicks.reload = text_button(ui, &format!("reloadPreviewOnly:{key}"), "Reload from Disk", false).clicked();
+                if matches!(dng, Some(Status::Ready | Status::Failed(_))) {
+                    clicks.convert = text_button(ui, &format!("convertHighEfficiency:{key}"), "Convert with Adobe DNG Converter", false).clicked();
+                }
+            });
         })
         .response;
     let r = r.on_hover_text(crate::i18n::tr_format!("Decoder: {reason}", reason = reason));
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, crate::i18n::tr("Preview only: editing the camera's embedded JPEG")));
     register(ui, format!("notice:previewOnly:{key}"), r.rect);
-    reload
+    clicks
 }
 
 // ------------------------------------------------------------------ colour helpers

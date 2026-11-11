@@ -74,6 +74,14 @@ use lightcraft_color::Xy;
 use lightcraft_tiff::{Tiff, TiffError};
 use serde::{Deserialize, Serialize};
 
+/// Whether `reason`, a [`RawError::Unsupported`] message (or a catalog's stored preview-only reason), says the file is
+/// a Nikon High Efficiency NEF (HE / HE★). The app offers to convert those with a DNG converter the user installed
+/// (issue #3921); it compares the part before " (", so a reworded explanation keeps matching.
+pub fn is_nef_high_efficiency(reason: &str) -> bool {
+    let name = vendor::nef::HIGH_EFFICIENCY.split(" (").next().unwrap_or(vendor::nef::HIGH_EFFICIENCY);
+    reason.strip_prefix(name).is_some_and(|rest| rest.is_empty() || rest.starts_with(" ("))
+}
+
 /// Upper bound on decoded samples (guards allocations driven by header values).
 pub const MAX_SAMPLES: usize = 1 << 30;
 

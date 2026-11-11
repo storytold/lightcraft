@@ -206,7 +206,8 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
-    let preview_checked = ph.preview_stamp(&info.preview_only);
+    // (a file described from its converted DNG is marked so: the photo develops from that DNG, issue #3921)
+    let preview_checked = if info.converted_dng { lightcraft_catalog::CONVERTED_DNG_STAMP.to_string() } else { ph.preview_stamp(&info.preview_only) };
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
@@ -289,7 +290,10 @@ pub(crate) fn lens_ops(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog:
 /// gave it a Kelvin scale keeps the relative scale's 6500 / 0 until a decode or Reload reads the file (issue #730).
 pub(crate) fn as_shot_wb_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Option<Op> {
     let read = info.as_shot_wb.filter(|(t, tint)| t.is_finite() && tint.is_finite())?;
-    (ph.develops_raw() && !ph.relative_wb() && ph.as_shot_wb != Some(read)).then_some(Op::SetAsShotWb { id, wb: Some(read) })
+    // a preview-only raw that develops from its converted DNG now (issue #3921) takes the DNG's as-shot white, which
+    // its Kelvin scale comes from
+    let converted = info.converted_dng && info.preview_only.is_none() && ph.kind == lightcraft_catalog::MediaKind::Raw;
+    ((converted || (ph.develops_raw() && !ph.relative_wb())) && ph.as_shot_wb != Some(read)).then_some(Op::SetAsShotWb { id, wb: Some(read) })
 }
 
 /// The ops that bring photo `id` and its virtual copies up to date with what their file is now

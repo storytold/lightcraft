@@ -14,6 +14,7 @@ pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
 mod develop;
+pub mod dng_convert;
 mod edit;
 mod export;
 pub(crate) mod face_detect;
@@ -172,6 +173,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(browse::specs());
         v.extend(missing::specs());
         v.extend(recheck::specs());
+        v.extend(dng_convert::specs());
         v.extend(lens_refresh::specs());
         v.extend(sync::specs());
         v.extend(metadata::specs());
