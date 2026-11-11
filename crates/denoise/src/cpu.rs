@@ -216,7 +216,7 @@ impl NetRunner {
                     &mut w.lower,
                     &mut w.product,
                 )?,
-                Op::Add { .. } => add(a, b.expect("Add needs two inputs"), shape.side, dest)?,
+                Op::Add { .. } => add(a, b.ok_or_else(|| bad("Add needs two inputs"))?, shape.side, dest)?,
                 Op::MaxPool2 { .. } => pool(a, shape.side, dest)?,
                 Op::DepthToSpace2 { .. } => shuffle(a, shape.side, dest)?,
             }
