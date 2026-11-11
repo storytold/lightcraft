@@ -790,9 +790,12 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
             // a readable sidecar whose merge fails (e.g. the merged packet exceeds the XMP limits), or one
             // that is valid but over the parser's complexity limits: fail the save and keep the file
             // as it is, rather than replace metadata that could be read
+            // (text with no `rdf:RDF` element parses as empty metadata but holds nothing to keep: it is replaced
+            // after a backup, as any sidecar that is not XMP)
             Err(why)
                 if why == lightcraft_meta::XmpError::TooComplex
-                    || lightcraft_meta::parse_xmp(old.strip_prefix('\u{feff}').unwrap_or(old)).is_ok() =>
+                    || (lightcraft_meta::parse_xmp(old.strip_prefix('\u{feff}').unwrap_or(old)).is_ok()
+                        && !matches!(&why, lightcraft_meta::XmpError::Xml(m) if m.contains("no rdf:RDF element"))) =>
             {
                 return Err(std::io::Error::other(format!("the sidecar is readable but could not be merged ({why}); it was left unchanged")));
             }
@@ -1618,6 +1621,21 @@ mod tests {
         assert!(super::sidecar_contents(&path, fresh, "t").is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), old);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no backup was made");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Text that is not XMP at all (it parses as empty metadata, but has no `rdf:RDF` element) is backed up and replaced.
+    #[test]
+    fn a_sidecar_with_no_rdf_element_is_backed_up_and_replaced() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-plain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.xmp");
+        std::fs::write(&path, "not xml at all").unwrap();
+        let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
+        let (data, merged, backup) = super::sidecar_contents(&path, fresh.clone(), "t").unwrap();
+        assert!(!merged && data == fresh);
+        assert!(backup.is_some_and(|b| std::fs::read_to_string(b).unwrap() == "not xml at all"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
