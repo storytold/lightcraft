@@ -63,6 +63,11 @@ pub struct ConvT2 {
 pub enum Op {
     Conv(Conv),
     ConvT2(ConvT2),
+    /// Elementwise addition of two same-shape tensors.
+    Add {
+        src: TensorId,
+        src2: TensorId,
+    },
     /// 2 × 2 maximum, stride 2.
     MaxPool2 {
         src: TensorId,
@@ -145,6 +150,20 @@ impl Net {
                     }
                     check_weights(i, &c.weight, c.cin.checked_mul(c.cout).and_then(|n| n.checked_mul(4)), &c.bias, c.cout, c.leaky, &mut weights)?;
                     Shape { channels: c.cout, level: a.level - 1 }
+                }
+                Op::Add { src, src2 } => {
+                    let a = shape_of(*src)?;
+                    let b = shape_of(*src2)?;
+                    if a.channels != b.channels || a.level != b.level {
+                        return invalid(format!("layer {i}: add of tensors of different shapes"));
+                    }
+                    if a.channels == 0 {
+                        return invalid(format!("layer {i}: add with zero channels"));
+                    }
+                    if a.channels > MAX_CHANNELS {
+                        return invalid(format!("layer {i}: add with more than {} channels", MAX_CHANNELS));
+                    }
+                    Shape { channels: a.channels, level: a.level }
                 }
                 Op::MaxPool2 { src } => {
                     let a = shape_of(*src)?;

@@ -35,6 +35,7 @@ fn sources(op: &Op) -> (usize, Option<usize>) {
     match op {
         Op::Conv(c) => (c.src, c.src2),
         Op::ConvT2(c) => (c.src, None),
+        Op::Add { src, src2 } => (*src, Some(*src2)),
         Op::MaxPool2 { src } | Op::DepthToSpace2 { src } => (*src, None),
     }
 }
@@ -215,6 +216,7 @@ impl NetRunner {
                     &mut w.lower,
                     &mut w.product,
                 )?,
+                Op::Add { .. } => add(a, b.expect("Add needs two inputs"), shape.side, dest)?,
                 Op::MaxPool2 { .. } => pool(a, shape.side, dest)?,
                 Op::DepthToSpace2 { .. } => shuffle(a, shape.side, dest)?,
             }
@@ -377,6 +379,19 @@ fn shuffle(a: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
                     }
                 }
             }
+        }
+    }
+    Ok(())
+}
+fn add(a: &[f32], b: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
+    let pixels = side * side;
+    let channels = a.len() / pixels;
+    for c in 0..channels {
+        let a_plane = &a[c * pixels..(c + 1) * pixels];
+        let b_plane = &b[c * pixels..(c + 1) * pixels];
+        let d_plane = &mut dest[c * pixels..(c + 1) * pixels];
+        for (d, (&av, &bv)) in d_plane.iter_mut().zip(a_plane.iter().zip(b_plane)) {
+            *d = av + bv;
         }
     }
     Ok(())
