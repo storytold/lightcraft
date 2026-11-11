@@ -247,6 +247,7 @@ mod tests {
         use lightcraft_raw::*;
         let (w, h) = (32usize, 24usize);
         let raw = RawImage {
+            level_sources: Default::default(),
             format: RawFormat::Dng,
             width: w,
             height: h,

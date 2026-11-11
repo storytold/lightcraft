@@ -272,6 +272,7 @@ mod tests {
 
     fn raw_with(color: ColorData) -> RawImage {
         RawImage {
+            level_sources: Default::default(),
             format: crate::RawFormat::Dng,
             width: 1,
             height: 1,

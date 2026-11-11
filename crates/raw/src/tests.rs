@@ -25,10 +25,44 @@ fn cfa_helpers() {
     }
 }
 
+/// `level_sources` survives a serde round trip, and an image serialized before the field existed reads as Unknown.
+#[test]
+fn level_sources_round_trip_and_default_to_unknown() {
+    let raw = RawImage {
+        level_sources: LevelSources { black: LevelSource::Metadata, white: LevelSource::Fallback },
+        format: RawFormat::Cr2,
+        width: 4,
+        height: 2,
+        cpp: 1,
+        data: RawData::U16((0..8).collect()),
+        cfa: Cfa::bayer("RGGB"),
+        bits: 14,
+        black: BlackLevel::uniform(512.0),
+        white: vec![16383.0],
+        active_area: Rect::new(0, 0, 4, 2),
+        crop: Rect::new(0, 0, 4, 2),
+        orientation: Orientation::Normal,
+        color: ColorData::default(),
+        wb_multipliers: None,
+        linearized: false,
+        pixel_aspect: 1.0,
+        opcodes: OpcodeLists::default(),
+        metadata: Metadata::default(),
+        lens_metadata: Default::default(),
+    };
+    let mut json = serde_json::to_value(&raw).unwrap();
+    assert_eq!(serde_json::from_value::<RawImage>(json.clone()).unwrap(), raw);
+    json.as_object_mut().unwrap().remove("level_sources").unwrap();
+    let legacy: RawImage = serde_json::from_value(json).unwrap();
+    assert_eq!(legacy.level_sources, LevelSources { black: LevelSource::Unknown, white: LevelSource::Unknown });
+    assert_eq!(legacy, RawImage { level_sources: LevelSources::default(), ..raw });
+}
+
 #[test]
 fn a_picture_made_elsewhere_is_finished_like_develop_does() {
     let (w, h) = (12usize, 10usize);
     let raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,
@@ -82,6 +116,7 @@ fn a_picture_made_elsewhere_is_finished_like_develop_does() {
 fn an_active_area_that_wraps_past_the_image_is_corrupt() {
     let (w, h) = (12usize, 10usize);
     let mut raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,

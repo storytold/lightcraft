@@ -100,6 +100,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     metadata.width = Some(w as u32);
     metadata.height = Some(h as u32);
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::KodakDcs,
         width: w,
         height: h,

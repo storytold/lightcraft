@@ -102,7 +102,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     }
     let mut d = vec![0u16; n];
     crate::unpack::unpack_msb(src, 12, &mut d);
-    let white = super::white_from_data(&d, 12);
+    let (white, white_source) = super::white_from_data_sourced(&d, 12);
     let black = BlackLevel::uniform(0.0);
     let frame = crate::wb_estimate::Frame { data: &d, width: w, crop, cfa: &cfa, black: &black, white };
     let wb = match preview {
@@ -115,6 +115,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     metadata.height = Some(crop.height as u32);
     let orientation = raw.u16(t::ORIENTATION).or_else(|| tiff.ifds.first().and_then(|i| i.u16(t::ORIENTATION))).unwrap_or(1);
     let img = RawImage {
+        level_sources: crate::LevelSources { black: crate::LevelSource::Fallback, white: white_source },
         format: RawFormat::Mef,
         width: w,
         height: h,
@@ -226,6 +227,8 @@ mod tests {
         assert_eq!(r.data, RawData::U16(px));
         assert_eq!(r.orientation, Orientation::from_exif(6));
         assert_eq!(r.crop, Rect::new(0, 0, 16, 6));
+        // the format's black is a constant 0; no plateau
+        assert_eq!(r.level_sources, crate::LevelSources { black: crate::LevelSource::Fallback, white: crate::LevelSource::Fallback });
         assert_eq!(crate::probe_info(&f).unwrap(), r.info());
     }
 

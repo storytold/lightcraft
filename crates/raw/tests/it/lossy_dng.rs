@@ -20,6 +20,7 @@ fn mosaic(w: usize, h: usize) -> RawImage {
         ..Default::default()
     };
     RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,

@@ -34,6 +34,8 @@ jxl = ["dep:jxl-oxide"]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }
+# `level_sources` serde round trip; already in the workspace.
+serde_json = { workspace = true }
 zune-jpegxl = { workspace = true }
 # Pinned CC0 corpus identities; not a product dependency.
 sha2 = { version = "0.10", default-features = false, features = ["std"] }

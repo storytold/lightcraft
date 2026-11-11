@@ -367,6 +367,7 @@ mod tests {
         };
         let data = (0..w * h).map(|_| (512.0 + 2000.0 + 30.0 * noise()).round() as u16).collect();
         RawImage {
+            level_sources: Default::default(),
             format: RawFormat::Arw,
             width: w,
             height: h,

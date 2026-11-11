@@ -16,6 +16,7 @@ fn sample(comp: DngCompression) -> Vec<u8> {
     let (w, h) = (24usize, 16usize);
     let data: Vec<u16> = (0..w * h).map(|i| (i * 97 % 4000) as u16).collect();
     let raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,
@@ -155,6 +156,7 @@ fn non_finite_black_levels_and_samples_develop() {
         })
         .collect();
     let raw = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Dng,
         width: w,
         height: h,

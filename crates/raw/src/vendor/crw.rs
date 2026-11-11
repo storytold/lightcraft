@@ -55,6 +55,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         ..Metadata::default()
     };
     let img = RawImage {
+        level_sources: Default::default(),
         format: RawFormat::Crw,
         width: h.width,
         height: h.height,
