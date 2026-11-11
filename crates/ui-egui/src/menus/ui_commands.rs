@@ -132,6 +132,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.infoSelectedPhotos", "Show Metadata for Selected Photos", None, ""),
     ("view.fullScreenPreview", "Full Screen Preview", Some("F"), "View"),
     ("view.lightsOut", "Lights Out", Some("Shift+L"), "View"),
+    // {color?: theme|black|darkGray|mediumGray|lightGray|white}; {} reads it (issue #4102)
+    ("view.loupeBackground", "Loupe Background", None, ""),
     ("view.enterFullScreen", "Enter Full Screen", Some("Cmd+Shift+F"), "View"),
     ("view.infoOverlay", "Cycle Info Overlay", Some("Cmd+I"), "View"),
     ("view.viewOptions", "View Options…", Some("Cmd+J"), "View"),

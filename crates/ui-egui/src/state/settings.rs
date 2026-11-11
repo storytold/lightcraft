@@ -1,6 +1,6 @@
-use super::view::LoupeInfo;
 #[cfg(test)]
 use super::view::{InfoOverlay, LoupeInfoField};
+use super::view::{LoupeBackground, LoupeInfo};
 use super::{Deserialize, Serialize};
 
 /// Which view the app opens in.
@@ -199,6 +199,10 @@ pub struct AppSettings {
     /// View ▸ View Options: the lines the loupe's info overlay shows in Info 1 and Info 2.
     #[serde(deserialize_with = "lenient")]
     pub loupe_info: LoupeInfo,
+    /// View ▸ Loupe Background: the colour behind the photo in the Detail view and the full-screen
+    /// preview (`view.loupeBackground`). A value this version doesn't know reads as Theme.
+    #[serde(deserialize_with = "lenient")]
+    pub loupe_background: LoupeBackground,
     /// File ▸ Import Lightroom Catalog…: ask whether the catalog merges into the open library or
     /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
     #[serde(deserialize_with = "lenient")]
@@ -258,6 +262,7 @@ impl Default for AppSettings {
             focus_point: false,
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
+            loupe_background: LoupeBackground::Theme,
             lightroom_import: LightroomImport::Ask,
             lens_database: Default::default(),
         }

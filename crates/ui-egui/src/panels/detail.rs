@@ -383,7 +383,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !fullscreen {
         photo.preview_only.as_deref().inspect(|why| preview_only_pill(ui, canvas, why));
     }
-    loupe_context_menu(app, &resp, id);
+    loupe_context_menu(app, &resp, id, img_rect);
 }
 
 /// Names the loupe for screen readers as the grid names the same photo (file, rating, flag, label), not
@@ -392,9 +392,21 @@ fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft
     crate::widgets::announce(resp, crate::i18n::tr_format!("Photo: {name}", name = super::grid::cell_description(app, photo)));
 }
 
-/// The loupe's right-click menu: zoom commands and the grid's photo menu.
-fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) {
+/// The loupe's right-click menu: zoom commands and the grid's photo menu on the photo; around it,
+/// the Loupe Background colours (issue #4102).
+fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId, img_rect: Rect) {
+    // where the right-click that opened the menu landed, kept while the menu stays open
+    let key = egui::Id::unique("loupe-menu-background");
+    if resp.secondary_clicked() {
+        let around = resp.interact_pointer_pos().is_some_and(|p| !img_rect.contains(p));
+        resp.ctx.data_mut(|d| d.insert_temp(key, around));
+    }
+    let around = resp.ctx.data(|d| d.get_temp::<bool>(key)).unwrap_or(false);
     crate::widgets::context_menu(resp, |ui| {
+        if around {
+            background_menu(app, ui);
+            return;
+        }
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
                 if ui.button(crate::i18n::tr(label)).clicked() {
@@ -405,6 +417,21 @@ fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoI
         ui.separator();
         super::grid::context_menu(app, ui, id);
     });
+}
+
+/// The right-click menu around the photo: the Loupe Background colours, the current one checked.
+fn background_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    use crate::state::LoupeBackground;
+    let current = app.ui.settings.loupe_background;
+    for b in LoupeBackground::ALL {
+        if ui.selectable_label(current == b, crate::i18n::tr(b.label())).clicked() {
+            let _ = app.run("view.loupeBackground", json!({"color": b.id()}));
+            ui.close();
+        }
+        if b == LoupeBackground::Theme {
+            ui.separator();
+        }
+    }
 }
 
 /// A fine grid while a transform (geometry) slider is dragged, to judge verticals.

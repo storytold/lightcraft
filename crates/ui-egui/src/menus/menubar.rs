@@ -209,6 +209,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "view.fullScreenPreview",
             "view.lightsOut",
+            "@Loupe Background",
             "view.enterFullScreen",
             "---",
             "view.showOriginal",
@@ -620,6 +621,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             }
             v
         }
+        "Loupe Background" => loupe_background_items(app.ui.settings.loupe_background),
         "Loupe Overlay" => {
             // Lightroom Classic's View ▸ Loupe Overlay ▸ Layout Image: choose the graphic, show it,
             // and how opaque it is and how dark the photo is outside it
@@ -1164,6 +1166,24 @@ fn switch_open_title(ctx: &egui::Context, titles: &[egui::Response]) -> Option<e
 /// A submenu row showing `text` at `depth`, whose rows `children` draws one level deeper,
 /// bounded like every level. The row is registered as `menusub:<label>` (the untranslated
 /// label), and while its submenu is open it is the anchor the next frame's room is measured from.
+/// View ▸ Loupe Background (also the right-click menu around the photo): one checkable item per colour.
+fn loupe_background_items(current: crate::state::LoupeBackground) -> Vec<MenuNode> {
+    use crate::state::LoupeBackground;
+    let mut v = vec![item(
+        "view.loupeBackground",
+        json!({"color": LoupeBackground::Theme.id()}),
+        LoupeBackground::Theme.label(),
+        None,
+        true,
+        Some(current == LoupeBackground::Theme),
+    )];
+    v.push(MenuNode::Separator);
+    for b in LoupeBackground::ALL.into_iter().skip(1) {
+        v.push(item("view.loupeBackground", json!({"color": b.id()}), b.label(), None, true, Some(current == b)));
+    }
+    v
+}
+
 fn submenu(ui: &mut egui::Ui, label: &str, text: String, depth: usize, bar_bottom: Option<f32>, children: impl FnOnce(&mut egui::Ui)) {
     let r = crate::widgets::menu_button(ui, text, |ui| crate::menu_level::level(ui, depth + 1, bar_bottom, children));
     crate::widgets::register(ui, format!("menusub:{label}"), r.response.rect);
