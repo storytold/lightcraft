@@ -1246,7 +1246,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
+source = "git+https://github.com/storytold/craft-libs?rev=6e03f65bf45181db77ba6229716e6624db9eb25b#6e03f65bf45181db77ba6229716e6624db9eb25b"
 dependencies = [
  "chrono",
  "dunce",
@@ -1256,6 +1256,7 @@ dependencies = [
  "image",
  "log",
  "plist",
+ "rustix 1.1.5",
  "semver",
  "serde",
  "serde_json",
@@ -3598,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "chrono",
  "craft-update",
@@ -3627,7 +3628,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-catalog"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "chrono",
  "crc32fast",
@@ -3648,7 +3649,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-cli"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "dhat",
  "lightcraft-codecs",
@@ -3665,7 +3666,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-codecs"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "avif-serialize",
  "bytemuck",
@@ -3696,7 +3697,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-color"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "lightcraft-geom",
  "proptest",
@@ -3705,7 +3706,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-denoise"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "faer-core",
  "lightcraft-denoise-core",
@@ -3722,7 +3723,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-denoise-core"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "dhat",
  "lightcraft-raster",
@@ -3738,7 +3739,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-develop"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "lightcraft-color",
  "lightcraft-geom",
@@ -3750,7 +3751,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-engine"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "ab_glyph",
  "chrono",
@@ -3797,7 +3798,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-faces"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "lightcraft-testkit",
  "matrixmultiply",
@@ -3812,7 +3813,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-fetch"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "log",
  "rustls",
@@ -3823,14 +3824,14 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-film"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "libm",
 ]
 
 [[package]]
 name = "lightcraft-geocode"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "miniz_oxide 0.9.1",
  "serde",
@@ -3838,7 +3839,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-geom"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "proptest",
  "serde",
@@ -3846,7 +3847,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-gpu"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "bytemuck",
  "lightcraft-color",
@@ -3866,7 +3867,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-heif"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "heic-rs",
  "rayon",
@@ -3874,14 +3875,14 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-inpaint"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "rayon",
 ]
 
 [[package]]
 name = "lightcraft-lensdb"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
@@ -3890,7 +3891,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-mcp"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "lightcraft-codecs",
  "lightcraft-engine",
@@ -3901,7 +3902,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-merge"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "lightcraft-codecs",
  "lightcraft-color",
@@ -3917,7 +3918,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-meta"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "chrono",
  "lightcraft-geom",
@@ -3931,7 +3932,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-pipeline"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "dhat",
  "image",
@@ -3950,7 +3951,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-preview"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "jpeg-encoder",
  "lightcraft-raster",
@@ -3962,7 +3963,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-raster"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "libc",
  "lightcraft-color",
@@ -3974,7 +3975,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-raw"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "chrono",
  "craft-crw",
@@ -4000,7 +4001,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-scenes"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "image",
  "lightcraft-color",
@@ -4011,7 +4012,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-segment"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -4025,7 +4026,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-slideshow"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "lightcraft-raster",
  "serde",
@@ -4034,15 +4035,15 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-sysmem"
-version = "0.18.0"
+version = "0.21.0"
 
 [[package]]
 name = "lightcraft-testkit"
-version = "0.18.0"
+version = "0.21.0"
 
 [[package]]
 name = "lightcraft-tiff"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "proptest",
  "serde",
@@ -4051,7 +4052,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-ui-egui"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "craft-ui",
  "craft-update",
@@ -4084,7 +4085,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-web"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "craft-web-api",
  "crc32fast",
@@ -4108,7 +4109,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-wincolor"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "lightcraft-testkit",
  "windows-sys 0.61.2",
@@ -7927,7 +7928,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.18.0"
+version = "0.21.0"
 dependencies = [
  "brotli",
  "flate2",
