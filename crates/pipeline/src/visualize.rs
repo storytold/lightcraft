@@ -281,7 +281,7 @@ const DETAIL_GAIN: f32 = 320.0;
 /// image's size: the evaluated alpha of the mask an [`Overlay::Mask`] shows (see
 /// [`Overlay::mask`]) or a sharpening view's [`sharpen_plane`]; `masks` is the set of alphas an
 /// [`Overlay::AllMasks`] shows, one per visible mask with components.
-pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>, masks: Option<&[Plane]>) {
+pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>, masks: Option<&[impl std::borrow::Borrow<Plane>]>) {
     match o {
         // drawn by the renderer from the HDR rendition ([`hdr_range`])
         Overlay::None | Overlay::HdrRange => {}
@@ -317,7 +317,7 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>
             // one view of the union of the masks: painting the planes one after another
             // overwrites (White on Black, Image on Black…) or compounds (Color) the earlier ones
             let mut union: Option<Plane> = None;
-            for a in masks.unwrap_or_default().iter().filter(|a| (a.width, a.height) == (img.width, img.height)) {
+            for a in masks.unwrap_or_default().iter().map(std::borrow::Borrow::borrow).filter(|a| (a.width, a.height) == (img.width, img.height)) {
                 match &mut union {
                     None => union = Some(a.clone()),
                     Some(u) => u.data.iter_mut().zip(&a.data).for_each(|(u, a)| *u = u.max(*a)),

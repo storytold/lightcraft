@@ -695,8 +695,8 @@ fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> 
 }
 
 /// The alpha planes an `Overlay::AllMasks` shows: one per visible mask that has components,
-/// reusing the render's own evaluation where available (a fresh evaluation otherwise).
-fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Vec<Plane>> {
+/// borrowing the render's own evaluation where available (a fresh evaluation otherwise), so no plane is copied twice.
+fn overlay_alphas_all<'a>(o: Overlay, plan: &Plan<'_>, prep: &'a Prepared) -> Option<Vec<std::borrow::Cow<'a, Plane>>> {
     if !matches!(o, Overlay::AllMasks { .. }) {
         return None;
     }
@@ -706,9 +706,18 @@ fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Ve
     let shown = plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(masks::max_masks(prep.img.width, prep.img.height));
     for m in shown {
         if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
-            out.push(e.alpha.clone());
+            out.push(std::borrow::Cow::Borrowed(&e.alpha));
         } else {
-            out.push(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()));
+            out.push(std::borrow::Cow::Owned(masks::evaluate_one(
+                m,
+                &plan.frame,
+                plan.w,
+                plan.h,
+                &prep.img,
+                &prep.log_l,
+                ev,
+                plan.mattes.as_deref(),
+            )));
         }
     }
     Some(out)
