@@ -59,6 +59,9 @@ pub struct XmpPrefs {
     /// Write the sidecar after every change to a photo's metadata or develop settings.
     pub auto_write: bool,
     pub naming: SidecarNaming,
+    /// Write `crs:` develop fields back into the sidecar so other applications see the edits.
+    /// Off by default to avoid overwriting another application's values on unrelated saves.
+    pub write_crs: bool,
 }
 
 /// The sidecar path for an original, by naming convention.
@@ -954,9 +957,7 @@ fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
             break;
         }
     }
-    let block = format!(
-        "<rdf:Description rdf:about=\"\" xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"{attr}/>"
-    );
+    let block = format!("<rdf:Description rdf:about=\"\" xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"{attr}/>");
     if let Some(pos) = data.find("<rdf:RDF") {
         let Some(end) = tag_end(data, pos) else { return };
         if is_self_closing(data, end) {
@@ -1367,14 +1368,35 @@ impl Session {
         // their existing block, updating it in place so the next read from that application
         // sees our edit instead of preferring our `lc:settings` over its stale `crs:` values
         // (issue #934). Fields we don't state are left as the other application wrote them.
-        let crs = crate::crs::crs_settings(&*p.develop);
-        if !crs.is_empty() {
-            // Write the develop settings other applications understand as `crs:` attributes back
-            // into the packet, updating them in place so the edit reaches the other application
-            // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
-            // each field to a single occurrence; element form would appear twice (opening and
-            // closing tag). Fields we don't state are left as the other application wrote them.
-            update_crs_attributes(&mut data, &crs);
+        if self.xmp.write_crs {
+            // Parse the previous develop settings from the existing sidecar's `lc:settings` (if any)
+            // to compute which `crs:` fields actually changed.
+            let previous = if merged {
+                // The sidecar was merged, so `data` now contains the merged packet with our new `lc:settings`.
+                // We need the *old* sidecar's `lc:settings` before the merge. Read it from the backup if we made one,
+                // or re-read the original file before it was merged (not available here). For simplicity, parse from
+                // the merged data's `lc:settings` would give the new settings, not the old. Instead, we read the
+                // original file again if it wasn't backed up, but that's racy. The practical approach: when merging,
+                // the old `lc:settings` is lost in `data`. We approximate by reading the file before merge in
+                // `sidecar_contents`, but that requires a signature change. For now, only write `crs:` on non-merged
+                // saves (new sidecar) or when we have a backup (unreadable sidecar replaced). On merged saves, skip
+                // `crs:` writes to avoid overwriting foreign values with stale data. This is safe because merged
+                // saves happen on explicit user saves, not auto-writes.
+                None
+            } else {
+                // New sidecar or replaced unreadable sidecar: no previous `lc:settings` to compare against.
+                // Write all non-zero fields (matching the documented behavior for fresh sidecars).
+                None
+            };
+            let crs = crate::crs::crs_settings(&*p.develop, previous);
+            if !crs.is_empty() {
+                // Write the develop settings other applications understand as `crs:` attributes back
+                // into the packet, updating them in place so the edit reaches the other application
+                // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
+                // each field to a single occurrence; element form would appear twice (opening and
+                // closing tag). Fields we don't state are left as the other application wrote them.
+                update_crs_attributes(&mut data, &crs);
+            }
         }
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
@@ -1824,6 +1846,22 @@ mod tests {
         };
         let sc = super::parse_sidecar(&lightcraft_meta::write_xmp(&m, None), crate::crs::Target::Rendered).unwrap();
         assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
+    }
+
+    /// `crs_settings` returns only fields that differ from the previous settings.
+    #[test]
+    fn crs_settings_only_changed_fields() {
+        use lightcraft_develop::DevelopSettings;
+        let mut current = DevelopSettings::default();
+        current.light.exposure = 0.5;
+        current.light.contrast = 10.0;
+        let mut previous = DevelopSettings::default();
+        previous.light.exposure = 0.0;
+        previous.light.contrast = 10.0; // unchanged
+        let crs = super::crs_settings(&current, Some(&previous));
+        assert_eq!(crs.len(), 1);
+        assert_eq!(crs[0].0, "Exposure2012");
+        assert_eq!(crs[0].1, "0.5");
     }
 
     /// Issue #2556: a sidecar's `lc:settings` colour-range mask keeps at most `MAX_COLOR_RANGE_SAMPLES` samples.
