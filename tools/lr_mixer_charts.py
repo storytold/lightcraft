@@ -69,6 +69,7 @@ def sliders():
 
 
 def variants():
+    """Name and XMP settings of every chart: neutral, then each mixer slider at each amount."""
     v = {"neutral": {}}
     for stem, key in sliders():
         for a in AMOUNTS:
@@ -129,6 +130,7 @@ def response(lab0, lab, light, chroma):
 
 
 def table(render_dir, out_bin):
+    """Measure the Camera Raw renders in `render_dir` and write the binary table to `out_bin`."""
     patches = [p for p in json.load(open(os.path.join(render_dir, "manifest.json")))["patches"] if p["ok"]]
     tif = lambda n: os.path.join(render_dir, f"mixer__{n}.tif")
     lab0 = oklab_patches(tif("neutral"), patches)
@@ -157,6 +159,7 @@ def table(render_dir, out_bin):
 
 
 def main():
+    """Command line: `charts OUT_DIR` or `table RENDER_DIR OUT_BIN`."""
     if len(sys.argv) == 3 and sys.argv[1] == "charts":
         out = sys.argv[2]
         os.makedirs(out, exist_ok=True)

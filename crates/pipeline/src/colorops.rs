@@ -381,6 +381,16 @@ mod tests {
     }
 
     #[test]
+    fn v8_leaves_the_mixer_to_the_mixer_stage() {
+        // from V8 `crate::mixer_stage` applies the mixer, so `ColorOps` must not apply it again
+        let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
+        s.mixer.blue.sat = -100.0;
+        assert!(ColorOps::new(&s).mixer);
+        s.process = lightcraft_develop::Process::V8.version();
+        assert!(!ColorOps::new(&s).mixer);
+    }
+
+    #[test]
     fn calibration_keeps_white_and_moves_primaries() {
         assert!(calibration_matrix(&Calibration::default()).is_none());
         let cal = Calibration { red_hue: 60.0, blue_sat: -50.0, ..Default::default() };

@@ -48,10 +48,12 @@ pub struct MixerStage {
     pub table: Box<[f32; TABLE_LEN]>,
 }
 
+/// The little-endian `f32` at byte `off` of the table, if it is inside.
 fn f32_at(off: usize) -> Option<f32> {
     TABLE.get(off..off + 4).and_then(|b| b.try_into().ok()).map(f32::from_le_bytes)
 }
 
+/// The little-endian `u32` at byte `off` of the table, if it is inside.
 fn u32_at(off: usize) -> Option<u32> {
     TABLE.get(off..off + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes)
 }
@@ -191,10 +193,12 @@ mod tests {
     use super::*;
     use lightcraft_develop::Hsl;
 
+    /// Default settings on process V8.
     fn v8() -> DevelopSettings {
         DevelopSettings { process: Process::V8.version(), ..Default::default() }
     }
 
+    /// OkLCh of a linear Rec.2020 colour (`h` in radians).
     fn lch_of(d: [f32; 3]) -> [f32; 3] {
         lab_to_lch(oklab_from_2020(d))
     }
@@ -204,6 +208,7 @@ mod tests {
         oklab_to_2020(lch_to_lab([l, c, h.to_radians()]))
     }
 
+    /// Hue change from `a` to `b` in degrees, in -180..180.
     fn hue_shift(a: [f32; 3], b: [f32; 3]) -> f32 {
         let d = (lch_of(b)[2] - lch_of(a)[2]).to_degrees();
         (d + 180.0).rem_euclid(360.0) - 180.0

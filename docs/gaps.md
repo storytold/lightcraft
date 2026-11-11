@@ -90,6 +90,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Gap 3: from process V8 the colour mixer is measured against Camera Raw ([mixer-stage.md](mixer-stage.md)); gap not closed |
 | 2026-11-11 | minor | Gap 3: from process V8 Whites and the tone curves are measured against Camera Raw ([curve-stage.md](curve-stage.md)); gap not closed |
 | 2026-11-01 | minor | Gap 13: Lightroom catalog backup zips import directly, and a backup of an imported catalog adds no collection twice (#2592); the gap stays open |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
