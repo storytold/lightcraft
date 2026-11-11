@@ -108,11 +108,7 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
         // failed GL start falls back to Vulkan, the next renderer in the order)
         Some((WindowRenderer::Glow, None))
     } else if os == "linux" {
-        // Linux follows the order: GL first, Vulkan after a failed GL start, glow last
-        match order.first() {
-            Some(WindowRenderer::Wgpu(b)) => Some((WindowRenderer::Wgpu(*b), None)),
-            _ => Some((WindowRenderer::Glow, None)),
-        }
+        pick_probed(files, &order, &mut problems, compose_window)
     } else {
         Some((WindowRenderer::Wgpu(backend::window_backends()), None))
     };
