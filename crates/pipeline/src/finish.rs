@@ -91,6 +91,7 @@ pub struct Vig {
     pub style: VignetteStyle,
 }
 
+/// Build the photo's post-crop vignette parameters, or `None` when Amount is 0 (no vignette).
 fn vignette(s: &DevelopSettings) -> Option<Vig> {
     let v = &s.vignette;
     (v.amount != 0.0).then(|| {

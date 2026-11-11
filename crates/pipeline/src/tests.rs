@@ -821,6 +821,9 @@ fn stored_process_numbers_render_with_a_known_process() {
     }
 }
 
+/// Paint diverges from Color (and from Highlight) in both vignette directions: when darkening it
+/// lifts the black point and lowers corner contrast and saturation; when lightening it lifts
+/// channels below `1 - PAINT_LEVEL` and leaves the rest alone; amount 0 is a no-op.
 #[test]
 fn vignette_paint_style_differs_from_color() {
     use lightcraft_develop::VignetteStyle;
@@ -899,6 +902,25 @@ fn vignette_paint_style_differs_from_color() {
     s2.vignette.style = VignetteStyle::ColorPriority;
     let r_color = render(&src2, &SourceInfo::default(), &s2, &RenderRequest::fit(16, 16));
     assert_eq!(r_paint.image.data, r_color.image.data, "Paint at amount 0 differs from Color");
+
+    // (7) positive Paint lifts channels below 1 - PAINT_LEVEL and leaves the rest alone
+    let paint_corner = |src: &Rgb32f, amount: f64| {
+        let mut s = DevelopSettings::default();
+        s.vignette.amount = amount;
+        s.vignette.style = VignetteStyle::PaintOverlay;
+        s.vignette.midpoint = 0.0;
+        render(src, &SourceInfo::default(), &s, &RenderRequest::fit(16, 16)).image.data[0]
+    };
+    let dark = Rgb32f::from_fn(16, 16, |_, _| [0.05, 0.025, 0.0125]);
+    let dark0 = paint_corner(&dark, 0.0);
+    let dark60 = paint_corner(&dark, 60.0);
+    for c in 0..3 {
+        assert!(dark60[c] > dark0[c], "channel {c}: positive Paint did not lift the dark corner");
+    }
+    let bright = Rgb32f::from_fn(16, 16, |_, _| [0.98, 0.96, 0.99]);
+    let bright0 = paint_corner(&bright, 0.0);
+    let bright60 = paint_corner(&bright, 60.0);
+    assert_eq!(bright60, bright0, "positive Paint moved a channel above the paint level");
 }
 
 /// A crop a hair wide (or of no size, as a command or a sidecar can set) shown to fit made the
