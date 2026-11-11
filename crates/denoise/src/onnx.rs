@@ -13,7 +13,7 @@ use std::path::Path;
 use crate::onnx_proto::{self, AttributeProto, NodeProto, TensorProto, ValueInfoProto};
 use std::io::Read;
 
-use crate::net::{Conv, ConvT2, MAX_OPS, MAX_WEIGHTS, Net, NetError, Op, TensorId};
+use crate::net::{Conv, ConvT2, MAX_CHANNELS, MAX_OPS, MAX_WEIGHTS, Net, NetError, Op, TensorId};
 
 fn unsupported<T>(why: impl Into<String>) -> Result<T, NetError> {
     Err(NetError::Unsupported(why.into()))
@@ -111,10 +111,7 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                     continue;
                 }
                 let next = &nodes[j];
-                if next.op_type == "LeakyRelu"
-                    && next.input.first().map(String::as_str) == Some(out)
-                    && readers.get(out).copied() == Some(1)
-                {
+                if next.op_type == "LeakyRelu" && next.input.first().map(String::as_str) == Some(out) && readers.get(out).copied() == Some(1) {
                     if next.input.len() != 1 || next.output.len() != 1 || next.attribute.iter().any(|a| a.name != "alpha") {
                         return invalid("malformed LeakyRelu");
                     }
@@ -581,14 +578,8 @@ mod tests {
             model
         }
 
-        let concat_model = model(
-            &[
-                node("Concat", &["data", "data"], "joined", &[("axis", 1)]),
-                node("Add", &["joined", "data"], "a1", &[]),
-            ],
-            4,
-            "a1",
-        );
+        let concat_model =
+            model(&[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])], 4, "a1");
         assert!(matches!(read_bytes(&concat_model), Err(NetError::Unsupported(_))));
 
         let oversized_model = model(&[node("Add", &["data", "data"], "a1", &[])], 4097, "a1");
@@ -807,12 +798,16 @@ mod tests {
         let mut graph = Vec::new();
         len_field(1, &node("Conv", &["data", "w1"], "c1", &[("group", 1)]), &mut graph);
         // Valid MaxPool: 2x2 kernel, stride 2, no padding, no dilation
-        len_field(1, &node_with_ints("MaxPool", &["data"], "mp1", &[
-            ("kernel_shape", &[2, 2]),
-            ("strides", &[2, 2]),
-            ("pads", &[0, 0, 0, 0]),
-            ("dilations", &[1, 1]),
-        ]), &mut graph);
+        len_field(
+            1,
+            &node_with_ints(
+                "MaxPool",
+                &["data"],
+                "mp1",
+                &[("kernel_shape", &[2, 2]), ("strides", &[2, 2]), ("pads", &[0, 0, 0, 0]), ("dilations", &[1, 1])],
+            ),
+            &mut graph,
+        );
         len_field(1, &leaky_relu_node(&["c1"], "l1", 0.2), &mut graph); // alpha=0.2
         let mut depth_to_space = node("DepthToSpace", &["l1"], "rgb", &[("blocksize", 2)]);
         let mut mode = Vec::new();
