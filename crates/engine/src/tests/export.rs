@@ -798,6 +798,8 @@ fn remove_location_refuses_original_with_embedded_place_names() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A place only an IPTC Extension LocationShown holds, which the catalog doesn't model, still
+/// refuses an Original copy with Remove Location on, for JPEG and PSD alike.
 #[test]
 fn remove_location_refuses_original_with_iptc_extension_location_xmp() {
     let dir = temp_dir("export-noloc-iptc-extension");
@@ -856,6 +858,8 @@ fn remove_location_refuses_original_with_unreadable_non_psd_xmp() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// JPEG Extended XMP is checked too: GPS in it, an announced extension that is missing, or one
+/// under another GUID each refuse an Original copy with Remove Location on.
 #[test]
 fn remove_location_checks_jpeg_extended_xmp_before_an_original_copy() {
     let dir = temp_dir("export-noloc-extended-xmp");
@@ -910,6 +914,8 @@ fn remove_location_checks_jpeg_extended_xmp_before_an_original_copy() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An XMP packet whose flattened inventory hit the key budget can't prove GPS is absent, so an
+/// Original copy with Remove Location on is refused.
 #[test]
 fn remove_location_refuses_original_image_with_truncated_xmp_inventory() {
     let dir = temp_dir("export-noloc-truncated-xmp");

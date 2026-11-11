@@ -531,6 +531,7 @@ fn flattened_keys_stay_within_the_cumulative_budget() {
     assert!(d.properties_truncated, "the map says it is not a complete inventory");
 }
 
+/// A small packet keeps every property and is not marked truncated.
 #[test]
 fn a_packet_within_the_budget_keeps_a_complete_inventory() {
     let d = parse_xmp(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="A"/></rdf:RDF>"#).unwrap();
