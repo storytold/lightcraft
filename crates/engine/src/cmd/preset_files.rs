@@ -67,8 +67,15 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
                             it.unmapped.extend(crate::profile_refs::report(&look, &r));
                             profile = json!({"name": look["name"], "id": it.preset.settings["profile"].get("id")});
                         }
-                        let row = json!({"name": it.preset.name, "group": it.preset.group, "file": f, "unmapped": it.unmapped, "profile": profile});
-                        pending.push((it.preset, row));
+                        let mut row =
+                            json!({"name": it.preset.name, "group": it.preset.group, "file": f, "unmapped": it.unmapped, "profile": profile});
+                        if dry {
+                            // a dry run keeps nothing: the row is final, the parsed preset is dropped
+                            row["id"] = json!(it.preset.id);
+                            imported.push(row);
+                        } else {
+                            pending.push((it.preset, row));
+                        }
                     }
                 }
                 Err(e) => failed.push(json!([f, e])),
@@ -77,7 +84,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // split, not cloned: a large import holds one copy of the parsed presets
     let (presets, rows): (Vec<_>, Vec<_>) = pending.into_iter().unzip();
-    let ids = if dry { presets.iter().map(|p| Some(p.id.clone())).collect() } else { s.add_presets_each(presets) };
+    let ids = if dry { Vec::new() } else { s.add_presets_each(presets) };
     for (mut row, id) in rows.into_iter().zip(ids) {
         match id {
             Some(id) => {
