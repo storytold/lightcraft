@@ -401,6 +401,13 @@ fn preset_export_preserves_originals(command: &str, selection: serde_json::Value
         assert_eq!(std::fs::read(&sidecar).unwrap(), b"existing sidecar");
         assert_eq!(std::fs::read(&appended_sidecar).unwrap(), b"appended sidecar");
     }
+    // `..` through a folder that does not exist yet could reach the original once it is created
+    let mut params = selection.clone();
+    params["path"] = json!(dir.join("missing/../IMG_1.jpg").to_string_lossy());
+    let error = s.execute(command, &params).unwrap_err().to_string();
+    assert!(error.contains("cannot be resolved"), "{error}");
+    assert!(!dir.join("missing").exists());
+    assert_eq!(std::fs::read(&src).unwrap(), original);
     let _ = std::fs::remove_dir_all(dir);
 }
 
