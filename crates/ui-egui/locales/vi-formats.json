@@ -322,5 +322,10 @@
   "View › Detail View ({keys}).": "Xem › Chế độ xem chi tiết ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Tệp › Xuất… · Tệp › In… ({keys}).",
   "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
+  "Show photos with {path}": "Hiện ảnh có {path}",
+  "Show photos with {path} (includes the keywords below it)": "Hiện ảnh có {path} (gồm cả các từ khóa bên dưới)",
+  "Add {path} to the selected photos ({n})": "Thêm {path} vào các ảnh đã chọn ({n})",
+  "Take {path} off the selected photos ({n})": "Gỡ {path} khỏi các ảnh đã chọn ({n})",
+  "Stop showing only photos with {path}": "Ngừng chỉ hiện ảnh có {path}"
 }

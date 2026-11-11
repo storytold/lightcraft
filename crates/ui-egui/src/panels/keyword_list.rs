@@ -207,11 +207,14 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
     let state = ticks.tick(&r.path);
     let inside = ticks.inside(&r.path);
     let boxr = Rect::from_center_size(pos2(x + 22.0, cy), vec2(13.0, 13.0));
-    let on = !selection.is_empty();
+    // the photos a click reaches: each once, those the library has (a stale id in the selection,
+    // such as an undone virtual copy, is not one)
+    let reached = ticks.photos();
+    let on = reached > 0;
     // (it senses drags too, so a press there that moves doesn't pick the keyword up)
     let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
     let tb = ui.interact(boxr.expand(3.0), egui::Id::unique(("keyword-list-tick", r.path.to_lowercase())), sense);
-    crate::widgets::announce(&tb, format!("{} {}", crate::i18n::tr("Keyword"), r.path));
+    crate::widgets::announce(&tb, tick_name(state, &r.path, reached));
     register(ui, format!("keywordCheck:{}", r.path), boxr);
     let edge = if on { t.text_label } else { t.text_dim.gamma_multiply(0.5) };
     match state {
@@ -236,20 +239,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, r: &Row, selection: &[PhotoId
             }
         }
     }
-    // (with nothing selected it does nothing, and says nothing)
-    let tb = if on {
-        let does = crate::i18n::tr(match state {
-            Tick::All => "Remove from Selected Photos",
-            _ => "Add to Selected Photos",
-        });
-        // what is inside comes first: it is what the box shows
-        match inside_said(inside) {
-            Some(said) => tb.on_hover_text(format!("{said}\n{does}")),
-            None => tb.on_hover_text(does),
-        }
-    } else {
-        tb
-    };
+    let tb = tick_hover(tb, state, &r.path, reached, inside);
     if tb.clicked() {
         let key = if state == Tick::All { "removeKeywords" } else { "addKeywords" };
         let _ = app.run("photo.setMeta", json!({key: [r.path]}));
@@ -313,6 +303,34 @@ fn inside_said(inside: &[String]) -> Option<String> {
     let more = inside.len().saturating_sub(INSIDE_NAMED);
     let names = if more > 0 { format!("{named} {}", crate::i18n::tr_format!("+{n} more", n = more)) } else { named };
     (!inside.is_empty()).then(|| crate::i18n::tr_format!("Inside: {names}", names = names))
+}
+
+/// What the tick box does when clicked, as one sentence: it gives the keyword to the selected
+/// photos or, when all of them have it, takes it away. Nothing selected: the box does nothing.
+fn tick_action(state: Tick, path: &str, selected: usize) -> Option<String> {
+    let shown = path.replace('|', " › ");
+    match (selected, state) {
+        (0, _) => None,
+        (n, Tick::All) => Some(crate::i18n::tr_format!("Take {path} off the selected photos ({n})", path = shown, n = n)),
+        (n, _) => Some(crate::i18n::tr_format!("Add {path} to the selected photos ({n})", path = shown, n = n)),
+    }
+}
+
+/// The tick box's name for a screen reader: what a click does, or the keyword it belongs to.
+fn tick_name(state: Tick, path: &str, selected: usize) -> String {
+    tick_action(state, path, selected).unwrap_or_else(|| format!("{} {path}", crate::i18n::tr("Keyword")))
+}
+
+/// The tick box's tooltip: what is inside the keyword (it is what the box shows), then what a
+/// click does; with no photo selected, what to do first.
+fn tick_hover(tb: egui::Response, state: Tick, path: &str, selected: usize, inside: &[String]) -> egui::Response {
+    match tick_action(state, path, selected) {
+        Some(does) => match inside_said(inside) {
+            Some(said) => tb.on_hover_text(format!("{said}\n{does}")),
+            None => tb.on_hover_text(does),
+        },
+        None => tb.on_hover_text(crate::i18n::tr("Select photos to tick")),
+    }
 }
 
 /// A row while a keyword or photos are dragged: outlined under the pointer when the drop would
@@ -576,6 +594,11 @@ impl Ticks {
     /// keywords below it, at any depth. Empty for a keyword with nothing applied inside.
     pub(crate) fn inside(&self, path: &str) -> &[String] {
         self.inside.get(&lightcraft_catalog::keywords::clean(path).to_lowercase()).map_or(&[], Vec::as_slice)
+    }
+
+    /// How many photos the selection reaches: each once, those the library has.
+    pub(crate) fn photos(&self) -> usize {
+        self.photos
     }
 
     /// The tick box of `path`: a photo counts when it has the keyword itself (any case); one with

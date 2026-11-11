@@ -104,6 +104,47 @@ fn the_arrow_shows_the_photos_with_the_keyword() {
     assert_eq!(h.app.session.filter.keyword.as_deref(), Some("mountains"));
 }
 
+/// Hover `id` and wait for a tooltip holding `text` (tooltips wait for the pointer to rest).
+fn hover_says(h: &mut Headless, id: &str, text: &str) -> bool {
+    ask(h, "ui.hoverWidget", json!({"id": id}));
+    h.step_until(Duration::from_secs(5), |h| h.painted_text().iter().any(|t| t.contains(text)))
+}
+
+/// The tick box says what it does to the selected photos (give the keyword, or take it away once
+/// they all have it), and with no photo selected says what to do first.
+#[test]
+fn the_tick_box_says_what_it_does_to_the_selection() {
+    let (mut h, _) = keywords_panel();
+    run(&mut h, "keyword.create", json!({"name": "Weddings"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordFilter"}));
+    ask(&mut h, "ui.text", json!({"text": "wedd"}));
+    assert!(hover_says(&mut h, "keywordCheck:Weddings", "Add Weddings to the selected photos (2)"), "{:?}", h.painted_text());
+    ask(&mut h, "ui.clickWidget", json!({"id": "keywordCheck:Weddings"}));
+    assert!(hover_says(&mut h, "keywordCheck:Weddings", "Take Weddings off the selected photos (2)"), "{:?}", h.painted_text());
+    run(&mut h, "library.select", json!({"ids": []}));
+    assert!(hover_says(&mut h, "keywordCheck:Weddings", "Select photos to tick"), "{:?}", h.painted_text());
+}
+
+/// The count in the tick box's words is the photos the click reaches: each once, those the
+/// library has. A selection naming a photo twice, or one that is gone (an undone virtual copy),
+/// doesn't count them, and with none left the box says what to do first.
+#[test]
+fn the_tick_box_counts_only_the_existing_distinct_selected_photos() {
+    let (mut h, ids) = keywords_panel();
+    run(&mut h, "keyword.create", json!({"name": "Weddings"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "field:keywordFilter"}));
+    ask(&mut h, "ui.text", json!({"text": "wedd"}));
+    let gone = lightcraft_catalog::PhotoId(9_999_999);
+    let first = lightcraft_catalog::PhotoId(ids[0]);
+    h.app.session.selection.ids = vec![first, first, gone];
+    h.settle(SETTLE);
+    assert!(hover_says(&mut h, "keywordCheck:Weddings", "Add Weddings to the selected photos (1)"), "{:?}", h.painted_text());
+    h.app.session.selection.ids = vec![gone];
+    h.app.session.selection.active = None;
+    h.settle(SETTLE);
+    assert!(hover_says(&mut h, "keywordCheck:Weddings", "Select photos to tick"), "{:?}", h.painted_text());
+}
+
 fn find(h: &mut Headless, text: &str) {
     ask(h, "ui.clickWidget", json!({"id": "field:keywordFilter"}));
     ask(h, "ui.key", json!({"key": "A", "cmd": true}));

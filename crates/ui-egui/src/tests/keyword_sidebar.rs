@@ -60,6 +60,58 @@ fn keywords_section_draws_only_the_rows_near_the_screen() {
     assert!(!rows.contains(&"Keyword 00000".to_string()), "{rows:?}");
 }
 
+/// Hover `id` and wait for a tooltip holding `text` (tooltips wait for the pointer to rest).
+fn hover_says(h: &mut Headless, id: &str, text: &str) -> bool {
+    let r = h.request("ui.hoverWidget", json!({"id": id}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step_until(Duration::from_secs(5), |h| h.painted_text().iter().any(|t| t.contains(text)))
+}
+
+/// Given the left sidebar, when it is drawn, then the keyword section is headed "By Keyword" (it
+/// browses, like By Date; the Keyword List in the right panel is the one that gives keywords), and
+/// its widget id is still `sidebarSection:keywords`.
+#[test]
+fn the_keyword_section_is_headed_by_keyword() {
+    let h = app(12, 6);
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "sidebarSection:keywords"), "the header keeps its id");
+    let texts = h.painted_text();
+    assert!(texts.iter().any(|t| t == "By Keyword"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "Keywords"), "the old heading is gone: {texts:?}");
+}
+
+/// Given a keyword in the left list, when the pointer rests on its row, then the tooltip says a
+/// click shows the photos with it (a keyword with others inside it says those are included).
+#[test]
+fn a_left_keyword_row_says_it_shows_the_photos() {
+    let mut h = app(12, 6);
+    let r = h.request("ui.clickWidget", json!({"id": "keywordToggle:Keyword 00000"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(
+        hover_says(&mut h, "source:keyword:Keyword 00000", "Show photos with Keyword 00000 (includes the keywords below it)"),
+        "{:?}",
+        h.painted_text()
+    );
+    assert!(hover_says(&mut h, "source:keyword:Keyword 00000|Child", "Show photos with Keyword 00000 › Child"), "{:?}", h.painted_text());
+}
+
+/// Given the keyword that is already the filter, when the pointer rests on its row, then the
+/// tooltip says a click stops showing only its photos (the click clears the filter), not "Show
+/// photos with", which would be the opposite of what happens.
+#[test]
+fn a_chosen_left_keyword_row_says_it_clears_the_filter() {
+    let mut h = app(12, 6);
+    let r = h.request("ui.clickWidget", json!({"id": "source:keyword:Keyword 00001"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.filter.keyword.as_deref(), Some("Keyword 00001"));
+    assert!(hover_says(&mut h, "source:keyword:Keyword 00001", "Stop showing only photos with Keyword 00001"), "{:?}", h.painted_text());
+    let r = h.request("ui.clickWidget", json!({"id": "source:keyword:Keyword 00001"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.filter.keyword, None, "the click clears it");
+}
+
 /// Timings on a library the size of the report's (58,000 photos): `cargo test --release -p
 /// lightcraft-ui-egui --lib probe_keyword_sidebar_cost -- --ignored --nocapture`.
 #[test]
