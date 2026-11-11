@@ -7,7 +7,7 @@
 //! activation, when its source has more than one reader), and a final `DepthToSpace` (2, `CRD`). Any other
 //! operator or attribute is [`NetError::Unsupported`], which is reported to the user by both runners.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::onnx_proto::{self, AttributeProto, NodeProto, TensorProto, ValueInfoProto};
@@ -69,7 +69,15 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
 
     let nodes = &graph.node;
     let mut i = 0;
+    let mut fused_indices = HashSet::new();
     while i < nodes.len() {
+        // Skip nodes that were fused as LeakyRelu activations
+        while i < nodes.len() && fused_indices.contains(&i) {
+            i += 1;
+        }
+        if i >= nodes.len() {
+            break;
+        }
         if ops.len() >= MAX_OPS {
             return invalid("the network has too many layers");
         }
@@ -95,25 +103,31 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
         let lookup = |name: &str| -> Result<TensorId, NetError> {
             ids.get(name).copied().ok_or_else(|| NetError::Invalid(format!("`{}` reads `{name}`, which nothing makes", node.op_type)))
         };
-        // a LeakyRelu straight after this layer, which nothing else reads, is part of it
+        // a LeakyRelu consuming this output, which nothing else reads, is part of it
         let mut fuse_leaky = |out: &str| -> Result<(Option<f32>, String), NetError> {
-            if let Some(next) = nodes.get(i)
-                && next.op_type == "LeakyRelu"
-                && next.input.first().map(String::as_str) == Some(out)
-                && readers.get(out).copied() == Some(1)
-            {
-                if next.input.len() != 1 || next.output.len() != 1 || next.attribute.iter().any(|a| a.name != "alpha") {
-                    return invalid("malformed LeakyRelu");
+            // Search forward for a LeakyRelu consuming this output
+            for j in i..nodes.len() {
+                if fused_indices.contains(&j) {
+                    continue;
                 }
-                // only an omitted alpha gets the ONNX default; one that is not a single float must not read as 0
-                let alpha = match next.attribute.as_slice() {
-                    [] => 0.01,
-                    [AttributeProto { f: Some(f), kind: 0 | 1, .. }] => *f,
-                    _ => return invalid("LeakyRelu alpha is not a single float"),
-                };
-                i += 1;
-                let name = next.output.first().cloned().ok_or_else(|| NetError::Invalid("LeakyRelu without an output".into()))?;
-                return Ok((Some(alpha), name));
+                let next = &nodes[j];
+                if next.op_type == "LeakyRelu"
+                    && next.input.first().map(String::as_str) == Some(out)
+                    && readers.get(out).copied() == Some(1)
+                {
+                    if next.input.len() != 1 || next.output.len() != 1 || next.attribute.iter().any(|a| a.name != "alpha") {
+                        return invalid("malformed LeakyRelu");
+                    }
+                    // only an omitted alpha gets the ONNX default; one that is not a single float must not read as 0
+                    let alpha = match next.attribute.as_slice() {
+                        [] => 0.01,
+                        [AttributeProto { f: Some(f), kind: 0 | 1, .. }] => *f,
+                        _ => return invalid("LeakyRelu alpha is not a single float"),
+                    };
+                    fused_indices.insert(j);
+                    let name = next.output.first().cloned().ok_or_else(|| NetError::Invalid("LeakyRelu without an output".into()))?;
+                    return Ok((Some(alpha), name));
+                }
             }
             Ok((None, out.to_string()))
         };
@@ -705,6 +719,145 @@ mod tests {
         assert!(net.is_ok(), "a LeakyRelu residual model was rejected: {:?}", net.err());
         let net = net.unwrap();
         assert_eq!((net.in_channels, net.out_channels()), (4, 3));
+    }
+
+    #[test]
+    fn leaky_relu_fuses_across_interleaved_nodes() {
+        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
+
+        fn varint(mut v: u64, out: &mut Vec<u8>) {
+            loop {
+                let b = (v & 0x7f) as u8;
+                v >>= 7;
+                if v == 0 {
+                    out.push(b);
+                    return;
+                }
+                out.push(b | 0x80);
+            }
+        }
+
+        fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            for (name, value) in ints {
+                let mut a = Vec::new();
+                len_field(1, name.as_bytes(), &mut a);
+                varint_field(3, *value as u64, &mut a);
+                varint_field(20, 2, &mut a);
+                len_field(5, &a, &mut n);
+            }
+            n
+        }
+
+        /// Create a node with INTS attributes (for kernel_shape, strides, etc.).
+        fn node_with_ints(op: &str, inputs: &[&str], output: &str, ints: &[(&str, &[i64])]) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, op.as_bytes(), &mut n);
+            for &(name, values) in ints {
+                let mut a = Vec::new();
+                len_field(1, name.as_bytes(), &mut a);
+                // field 8: INTS (wire type 2) - varint-encoded list
+                varint(8 << 3 | 2, &mut a);
+                // length of the list in bytes (we'll compute after writing values)
+                let mut vals = Vec::new();
+                for &v in values {
+                    varint(v as u64, &mut vals);
+                }
+                varint(vals.len() as u64, &mut a);
+                a.extend_from_slice(&vals);
+                // field 20: type = 7 (INTS)
+                varint_field(20, 7, &mut a);
+                len_field(5, &a, &mut n);
+            }
+            n
+        }
+
+        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
+            let mut t = Vec::new();
+            for d in dims {
+                varint_field(1, *d, &mut t);
+            }
+            varint_field(2, 1, &mut t);
+            len_field(8, name.as_bytes(), &mut t);
+            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+            len_field(9, &raw, &mut t);
+            t
+        }
+
+        /// Create a LeakyRelu node with a float `alpha` attribute (ONNX requires FLOAT type).
+        fn leaky_relu_node(inputs: &[&str], output: &str, alpha: f32) -> Vec<u8> {
+            let mut n = Vec::new();
+            for i in inputs {
+                len_field(1, i.as_bytes(), &mut n);
+            }
+            len_field(2, output.as_bytes(), &mut n);
+            len_field(4, b"LeakyRelu", &mut n);
+            // alpha attribute: field 1=name, field 2=float value (wire type 5), field 20=type=1 (FLOAT)
+            let mut a = Vec::new();
+            len_field(1, b"alpha", &mut a);
+            // field 2 with wire type 5 (fixed 4-byte float)
+            varint(2 << 3 | 5, &mut a);
+            a.extend_from_slice(&alpha.to_le_bytes());
+            // field 20: type = 1 (FLOAT)
+            varint_field(20, 1, &mut a);
+            len_field(5, &a, &mut n);
+            n
+        }
+
+        // Conv produces "c1", then an unrelated MaxPool (reading "data") comes between,
+        // then a LeakyRelu consumes "c1". The fusion should still happen.
+        let mut graph = Vec::new();
+        len_field(1, &node("Conv", &["data", "w1"], "c1", &[("group", 1)]), &mut graph);
+        // Valid MaxPool: 2x2 kernel, stride 2, no padding, no dilation
+        len_field(1, &node_with_ints("MaxPool", &["data"], "mp1", &[
+            ("kernel_shape", &[2, 2]),
+            ("strides", &[2, 2]),
+            ("pads", &[0, 0, 0, 0]),
+            ("dilations", &[1, 1]),
+        ]), &mut graph);
+        len_field(1, &leaky_relu_node(&["c1"], "l1", 0.2), &mut graph); // alpha=0.2
+        let mut depth_to_space = node("DepthToSpace", &["l1"], "rgb", &[("blocksize", 2)]);
+        let mut mode = Vec::new();
+        len_field(1, b"mode", &mut mode);
+        len_field(4, b"CRD", &mut mode);
+        varint_field(20, 3, &mut mode);
+        len_field(5, &mode, &mut depth_to_space);
+        len_field(1, &depth_to_space, &mut graph);
+        len_field(5, &tensor("w1", &[12, 4, 1, 1], &[0.1; 48]), &mut graph);
+        len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
+        len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(16), Ok(16)]), &mut graph);
+        let mut ops = Vec::new();
+        len_field(1, b"", &mut ops);
+        varint_field(2, 13, &mut ops);
+        let mut model = Vec::new();
+        varint_field(1, 8, &mut model);
+        len_field(7, &graph, &mut model);
+        len_field(8, &ops, &mut model);
+
+        let net = read_bytes(&model);
+        assert!(net.is_ok(), "LeakyRelu across interleaved nodes was rejected: {:?}", net.err());
+        let net = net.unwrap();
+        assert_eq!((net.in_channels, net.out_channels()), (4, 3));
+        // The Conv should have the leaky ReLU fused with alpha=0.2
+        let ops = net.ops();
+        assert_eq!(ops.len(), 3); // Conv (fused), MaxPool, DepthToSpace
+        match &ops[0] {
+            crate::net::Op::Conv(c) => {
+                assert_eq!(c.leaky, Some(0.2), "LeakyRelu alpha should be fused into Conv");
+            }
+            _ => panic!("first op should be fused Conv"),
+        }
+        assert!(matches!(ops[1], crate::net::Op::MaxPool2 { .. }));
+        assert!(matches!(ops[2], crate::net::Op::DepthToSpace2 { .. }));
     }
 
     #[test]
