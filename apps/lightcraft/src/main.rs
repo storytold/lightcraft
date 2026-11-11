@@ -201,6 +201,10 @@ impl eframe::App for App {
         // app after this and the session's last writes (face data) still go out under the lock.
         #[cfg(target_os = "macos")]
         self.0.session.release_library_lock();
+        // macOS only: the process ends below without dropping the app, so a ready update's helper
+        // starts here. Elsewhere dropping the app starts it.
+        #[cfg(target_os = "macos")]
+        self.0.start_pending_update();
         // macOS (#1331): end the process here, before eframe tears the window down, as Quit from
         // the menu bar already does (PR #444). AccessKit's macOS adapter subclasses the window's
         // content view and restores its class on teardown; AppKit's Touch Bar support observes

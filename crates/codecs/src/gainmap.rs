@@ -585,6 +585,10 @@ pub fn encode_jpeg(base: &EncodeImage, gain: &GainImage, m: &GainMapMeta, qualit
     if !matches!(gain.channels, 1 | 3) || gain.width == 0 || gain.height == 0 || gain.data.len() < gain.width * gain.height * gain.channels {
         return Err(Error::Encode("gain map image is malformed".into()));
     }
+    // (jpeg_par::encode gives an empty JPEG past this, which would be appended as a size-0 gain map)
+    if gain.width > u16::MAX as usize || gain.height > u16::MAX as usize {
+        return Err(Error::Encode("JPEG dimensions are limited to 65535".into()));
+    }
     if !m.is_valid() || m.multichannel != (gain.channels == 3) {
         return Err(Error::Encode("gain map metadata doesn't match the map".into()));
     }
@@ -784,6 +788,21 @@ mod tests {
                 assert!((a[0] - b[0]).abs() < 1e-5);
             }
         }
+    }
+
+    #[test]
+    fn a_gain_map_wider_than_a_jpeg_allows_is_refused() {
+        let base = [0u8; 3];
+        let gain = GainImage { width: 65_536, height: 1, channels: 1, data: vec![0; 65_536] };
+        let r = encode_jpeg(
+            &EncodeImage::new(1, 1, 3, Samples::U8(&base)),
+            &gain,
+            &GainMapMeta::default(),
+            90,
+            ChromaSubsampling::S444,
+            &EncodeMeta::default(),
+        );
+        assert!(matches!(r, Err(Error::Encode(m)) if m.contains("65535")));
     }
 
     #[test]
