@@ -1246,7 +1246,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=a231e517c3b371e1bf0ee8af71ed807424a9a05d#a231e517c3b371e1bf0ee8af71ed807424a9a05d"
+source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 dependencies = [
  "chrono",
  "dunce",
@@ -3744,6 +3744,7 @@ dependencies = [
  "ab_glyph",
  "chrono",
  "craft-docpath",
+ "crc32fast",
  "fs4",
  "harfrust 0.13.3",
  "jxl-oxide",
