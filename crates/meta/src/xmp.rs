@@ -81,10 +81,24 @@ pub struct XmpData {
     /// live with a partial map; a check that must prove a property is *absent* (an embedded
     /// location before copying an Original) must treat it as unverifiable instead.
     pub properties_truncated: bool,
-    /// True when any element or attribute anywhere in the packet, including inside array items
-    /// that [`XmpData::properties`] flattens to their text, is an Exif GPS property.
-    pub names_gps: bool,
+    /// True when the parsed tree, before flattening or merging repeated properties, names an Exif
+    /// GPS property anywhere or holds a place property (see `LOCATION_PROPERTIES`) with non-blank
+    /// text anywhere, including inside array items that [`XmpData::properties`] flattens to their
+    /// text and repeated structs that [`XmpData::values`] keeps only once.
+    pub names_location: bool,
 }
+
+/// Properties that name a place; a blank one is not a location.
+const LOCATION_PROPERTIES: [&str; 8] = [
+    "Iptc4xmpCore:Location",
+    "Iptc4xmpCore:CountryCode",
+    "photoshop:City",
+    "photoshop:State",
+    "photoshop:Country",
+    "lc:location",
+    "Iptc4xmpExt:LocationShown",
+    "Iptc4xmpExt:LocationCreated",
+];
 
 impl XmpData {
     /// Whether the XMP inventory names GPS or a non-empty place field. LocationShown and
@@ -96,7 +110,7 @@ impl XmpData {
         const IPTC_LOCATION_STRUCTS: [&str; 2] = ["Iptc4xmpExt:LocationShown", "Iptc4xmpExt:LocationCreated"];
         // Every flattened child of one LocationShown/LocationCreated root shares its answer.
         let mut checked_roots: BTreeMap<&str, bool> = BTreeMap::new();
-        if self.names_gps {
+        if self.names_location {
             return true;
         }
 
@@ -107,19 +121,7 @@ impl XmpData {
                 return true;
             }
 
-            let Some(location_part) = parts.clone().find(|part| {
-                matches!(
-                    *part,
-                    "Iptc4xmpCore:Location"
-                        | "Iptc4xmpCore:CountryCode"
-                        | "photoshop:City"
-                        | "photoshop:State"
-                        | "photoshop:Country"
-                        | "lc:location"
-                        | "Iptc4xmpExt:LocationShown"
-                        | "Iptc4xmpExt:LocationCreated"
-                )
-            }) else {
+            let Some(location_part) = parts.clone().find(|part| LOCATION_PROPERTIES.contains(part)) else {
                 continue;
             };
 
@@ -620,9 +622,53 @@ fn is_gps_name(name: &str) -> bool {
     name.starts_with("exif:GPS") || name.starts_with("exifEX:GPS")
 }
 
-/// Whether any element or attribute in the tree is an Exif GPS property. The parser caps the tree
-/// at `MAX_NODES`, so this walk inventories every node, array items included.
-fn tree_names_gps(root: &Node) -> bool {
+/// Whether the tree names an Exif GPS property anywhere or holds a place property with non-blank
+/// text anywhere. Each node is visited at most twice (a place's subtree is scanned once and not
+/// walked again), and the parser caps the tree at `MAX_NODES`.
+fn tree_names_location(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if is_gps_name(&node.name) {
+            return true;
+        }
+        for (name, value) in &node.attrs {
+            if is_gps_name(name) || (LOCATION_PROPERTIES.contains(&name.as_str()) && !value.trim().is_empty()) {
+                return true;
+            }
+        }
+        if LOCATION_PROPERTIES.contains(&node.name.as_str()) {
+            if subtree_has_text(node) {
+                return true;
+            }
+            // A blank place may still enclose a GPS property.
+            if subtree_names_gps(node) {
+                return true;
+            }
+            continue;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// Whether a node or any descendant holds non-blank text: element text, an `rdf:resource`, or a
+/// field attribute (RDF syntax attributes such as `rdf:parseType` and `xml:lang` don't count).
+fn subtree_has_text(root: &Node) -> bool {
+    let mut pending = vec![root];
+    while let Some(node) = pending.pop() {
+        if !node.text.trim().is_empty() {
+            return true;
+        }
+        if node.attrs.iter().any(|(name, value)| (name == "rdf:resource" || !is_rdf_meta_attr(name)) && !value.trim().is_empty()) {
+            return true;
+        }
+        pending.extend(&node.children);
+    }
+    false
+}
+
+/// Whether a node or any descendant is an Exif GPS property, as an element or an attribute.
+fn subtree_names_gps(root: &Node) -> bool {
     let mut pending = vec![root];
     while let Some(node) = pending.pop() {
         if is_gps_name(&node.name) || node.attrs.iter().any(|(name, _)| is_gps_name(name)) {
@@ -739,7 +785,7 @@ fn fmt_gps_coord(v: f64, pos: char, neg: char) -> String {
 pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     let s = s.trim_start_matches('\u{feff}');
     let tree = parse_tree(s)?;
-    let names_gps = tree_names_gps(&tree);
+    let names_location = tree_names_location(&tree);
     let mut descs = Vec::new();
     find_descriptions(&tree, &mut descs);
     let mut props = BTreeMap::new();
@@ -833,7 +879,7 @@ pub fn parse_xmp(s: &str) -> Result<XmpData, XmpError> {
     }
     m.regions = values.get("mwg-rs:Regions").map(parse_regions).unwrap_or_default();
     let lc_settings = props.get("lc:settings").and_then(|v| v.first()).cloned();
-    Ok(XmpData { metadata: m, lc_settings, properties: props, values, properties_truncated: dropped, names_gps })
+    Ok(XmpData { metadata: m, lc_settings, properties: props, values, properties_truncated: dropped, names_location })
 }
 
 fn frac(v: f64) -> String {

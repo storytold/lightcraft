@@ -571,7 +571,7 @@ fn gps_inside_a_bag_item_counts_as_location() {
     );
     let parsed = parse_xmp(packet).expect("valid XMP");
     assert!(parsed.properties.keys().all(|key| !key.contains("GPS")), "flattening drops the item's fields");
-    assert!(parsed.names_gps);
+    assert!(parsed.names_location);
     assert!(parsed.has_location_metadata());
 }
 
@@ -586,6 +586,34 @@ fn a_nested_location_is_judged_by_its_own_fields() {
     };
     assert!(!parse_xmp(&packet("")).expect("valid XMP").has_location_metadata(), "a blank place beside a title");
     assert!(parse_xmp(&packet("Rome")).expect("valid XMP").has_location_metadata());
+}
+
+/// A place inside a struct array item has no flattened key of its own; the tree inventory finds
+/// it, and a blank one there still doesn't count.
+#[test]
+fn a_location_inside_an_array_item_counts_unless_blank() {
+    let packet = |city: &str| {
+        format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" xmlns:o="urn:other"><rdf:Description><o:Shots><rdf:Bag><rdf:li rdf:parseType="Resource"><place:LocationCreated><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City>{city}</place:City></rdf:li></rdf:Bag></place:LocationCreated></rdf:li></rdf:Bag></o:Shots></rdf:Description></rdf:RDF>"#
+        )
+    };
+    let with_city = parse_xmp(&packet("Rome")).expect("valid XMP");
+    assert!(with_city.properties.keys().all(|key| !key.contains("Location")), "flattening drops the item's fields");
+    assert!(with_city.has_location_metadata());
+    assert!(!parse_xmp(&packet(" ")).expect("valid XMP").has_location_metadata(), "a blank place is no location");
+}
+
+/// A struct repeated in one description keeps its first copy in `values` when that copy has text
+/// elsewhere; a place only the later copy names must still be found.
+#[test]
+fn a_place_in_a_later_repeated_struct_counts() {
+    let packet = concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" xmlns:o="urn:other"><rdf:Description>"#,
+        r#"<o:Work rdf:parseType="Resource"><o:Title>Bridge</o:Title><place:LocationCreated><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City></place:City></rdf:li></rdf:Bag></place:LocationCreated></o:Work>"#,
+        r#"<o:Work rdf:parseType="Resource"><place:LocationCreated><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationCreated></o:Work>"#,
+        r#"</rdf:Description></rdf:RDF>"#
+    );
+    assert!(parse_xmp(packet).expect("valid XMP").has_location_metadata());
 }
 
 /// The same `rdf:Description` can repeat `LocationShown`; a later blank item must not replace the
