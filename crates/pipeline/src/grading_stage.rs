@@ -64,6 +64,7 @@ fn bracket(keys: &[f32], x: f32) -> (usize, usize, f32) {
     }
 }
 
+/// Linear blend of two lightness grids, `f` = 0 gives `a`.
 fn lerp_grid(a: &[f32; GRID], b: &[f32; GRID], f: f32) -> [f32; GRID] {
     std::array::from_fn(|i| a[i] * (1.0 - f) + b[i] * f)
 }
@@ -175,10 +176,12 @@ impl GradingStage {
 mod tests {
     use super::*;
 
+    /// Default settings on process V8.
     fn v8() -> DevelopSettings {
         DevelopSettings { process: Process::V8.version(), ..Default::default() }
     }
 
+    /// The stage for V8 settings with Colour Grading set by `f`.
     fn stage(f: impl Fn(&mut ColorGrading)) -> GradingStage {
         let mut s = v8();
         f(&mut s.grading);

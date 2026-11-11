@@ -49,6 +49,7 @@ M2 = np.array([[0.2104542553, 0.793617785, -0.0040720468], [1.9779984951, -2.428
 
 
 def variants():
+    """Name and XMP settings of every chart (neutral, wheels, Luminance, Blending, Balance, checks)."""
     v = {"neutral": {}}
     for w, (kh, ks, kl) in WHEELS.items():
         for h in HUES:
@@ -94,6 +95,7 @@ def oklab_patches(path, patches):
 
 
 def tables(render_dir, out_rs):
+    """Measure the Camera Raw renders in `render_dir` and write the Rust tables to `out_rs`."""
     patches = json.load(open(os.path.join(render_dir, "manifest.json")))["patches"]
     ok = np.array([p["ok"] for p in patches])
     grey = ok & np.array([p["kind"] == "grey" for p in patches])
@@ -101,6 +103,7 @@ def tables(render_dir, out_rs):
     cache = {}
 
     def lab(n):
+        """OkLab patches of render `n`, read once."""
         if n not in cache:
             cache[n] = oklab_patches(os.path.join(render_dir, f"grade__{n}.tif"), patches)
         return cache[n]
@@ -209,6 +212,7 @@ def tables(render_dir, out_rs):
 
 
 def main():
+    """Command line: `charts OUT_DIR` or `tables RENDER_DIR OUT_RS`."""
     if len(sys.argv) == 3 and sys.argv[1] == "charts":
         out = sys.argv[2]
         os.makedirs(out, exist_ok=True)
