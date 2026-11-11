@@ -277,11 +277,34 @@ pub struct Headless {
 impl Drop for Headless {
     fn drop(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.app.session.wait_for_photos_imports();
+        {
+            self.finish_preparing();
+            // one still preparing (a run that is panicking, or a batch past the bound) holds Photos' slot
+            // with no worker to free it: the wait would last its whole hour, so it is let go
+            if self.app.export.as_ref().is_some_and(crate::export_task::ExportTask::is_preparing) {
+                self.app.export = None;
+            }
+            self.app.session.wait_for_photos_imports();
+        }
     }
 }
 
 impl Headless {
+    /// Frames until a background export has set its photos up and started its worker. An export
+    /// still preparing holds its Apple Photos slot without writing anything, so a run that ends
+    /// now (or waits for Photos) would abandon it, or wait on a slot nothing is working to free.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn finish_preparing(&mut self) {
+        // (a run that is already failing draws no frame: a panic in one while unwinding aborts the process)
+        if std::thread::panicking() {
+            return;
+        }
+        let t0 = Instant::now();
+        while self.app.export.as_ref().is_some_and(crate::export_task::ExportTask::is_preparing) && t0.elapsed() < Duration::from_secs(120) {
+            self.step();
+        }
+    }
+
     /// Wrap `app` (its control channel is replaced by the driver's).
     /// Invalid dimensions fall back to 1600×1000 at scale 1; external callers can use
     /// [`viewport_pixels`] to reject them before constructing the session.
