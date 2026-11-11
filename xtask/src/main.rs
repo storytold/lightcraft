@@ -159,9 +159,13 @@ pub fn cargo() -> Command {
 static CI_CAPS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Opt this run into CI's resource caps: the subcommands that build and run the test suite (`ci`,
-/// `test`) call it first, so every cargo and test binary they start, including parity and WASM
-/// subprocesses, gets them. Ordinary developer builds keep their own settings.
-fn use_ci_caps() {
+/// `test`) call it once they hold the CI slot, so every cargo and test binary they start, including
+/// parity and WASM subprocesses, gets them. Ordinary developer builds keep their own settings.
+///
+/// It takes the slot so it can't run before the slot is held: the first capped command takes the
+/// RAM snapshot behind [`ci_caps`], and a snapshot taken while another run still holds the slot
+/// counts that run's memory as used, shrinking this run's jobs and threads for its whole length.
+fn use_ci_caps(_slot: &Option<ci_lock::Held>) {
     CI_CAPS.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 

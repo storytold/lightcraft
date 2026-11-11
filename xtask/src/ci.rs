@@ -157,11 +157,11 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     if base.is_some() && !quick {
         return Err("ci: --base only applies to --quick".into());
     }
-    use_ci_caps();
     let root = root();
     let command = std::iter::once("cargo xtask ci").chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
     // held until ci returns: one run at a time per machine (ci_lock.rs)
-    let _slot = ci_lock::acquire(&root, &command)?;
+    let slot = ci_lock::acquire(&root, &command)?;
+    use_ci_caps(&slot);
     let plan = if quick {
         let (base, files) = ci_quick::changed_files(&root, base)?;
         let plan = ci_quick::plan(&files, &ci_quick::packages(&root, &metadata()?), base);

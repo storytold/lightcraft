@@ -334,12 +334,13 @@ pub fn doc_args<'a>(args: &Args<'a>, packages: &BTreeMap<String, Package>) -> Op
 /// `cargo xtask test`.
 pub fn run(raw: &[&str]) -> Result<(), String> {
     let args = parse(raw)?;
-    super::use_ci_caps();
     let root = super::root();
+    // probed before the caps are on, so the probe doesn't take their RAM snapshot (use_ci_caps)
     let nextest = if crate::ci::nextest() { Some(nextest_args(&args)?) } else { None };
     let command = std::iter::once("cargo xtask test").chain(raw.iter().copied()).collect::<Vec<_>>().join(" ");
     // held until the run ends: one ci or test run at a time per machine (ci_lock.rs)
-    let _slot = ci_lock::acquire(&root, &command)?;
+    let slot = ci_lock::acquire(&root, &command)?;
+    super::use_ci_caps(&slot);
     let packages = packages(&super::metadata()?, &args.packages)?;
     let mut failed = Vec::new();
     let mut summary = Vec::new();
