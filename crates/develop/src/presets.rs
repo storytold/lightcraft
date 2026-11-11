@@ -212,7 +212,8 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
         return current.merged(settings).unwrap_or_else(|_| current.clone());
     }
     let cur = current.to_json();
-    let mut base = original.to_json();
+    // with the defaults the stored JSON leaves out, so an option the original had off is restored
+    let mut base = original.to_json_for_merge();
     if let (Some(b), Some(c)) = (base.as_object_mut(), cur.as_object()) {
         for k in REPAIR_KEYS {
             if let Some(v) = c.get(k) {
@@ -341,6 +342,30 @@ mod tests {
         assert_eq!(b.light.exposure, 1.0);
         assert_eq!(b.effects.clarity, 30.0);
         assert_eq!(b.crop.geometry.angle, 0.0);
+    }
+
+    /// A preset turning on an option the photo's settings leave out (`camera_local_tone` is
+    /// omitted while off) still applies at a low amount: the option stays off, the rest scales.
+    #[test]
+    fn amount_keeps_fields_the_settings_leave_out() {
+        let base = DevelopSettings::default();
+        let partial = json!({"profile": {"camera_local_tone": true}, "light": {"exposure": 1.0}});
+        let low = apply_partial(&base, &partial, 0.3);
+        assert!(!low.profile.camera_local_tone);
+        assert!((low.light.exposure - 0.3).abs() < 1e-9, "{}", low.light.exposure);
+        let half = apply_partial(&base, &partial, 0.5);
+        assert!(half.profile.camera_local_tone);
+        assert!((half.light.exposure - 0.5).abs() < 1e-9);
+        // HDR is left out at its defaults too: its numbers still scale from them
+        let hdr = json!({"hdr": {"sdr_contrast": 80.0}, "light": {"exposure": 1.0}});
+        let low = apply_partial(&base, &hdr, 0.3);
+        assert!((low.hdr.sdr_contrast - 24.0).abs() < 1e-9, "{}", low.hdr.sdr_contrast);
+        // a named preset composed on the original: below half the original's off comes back
+        let mut on = base.clone();
+        on.profile.camera_local_tone = true;
+        let p = Preset { id: "p".into(), name: "p".into(), group: "g".into(), settings: partial.clone(), favorite: false, builtin: false };
+        assert!(!p.apply_on(&on, &base, 0.3).profile.camera_local_tone);
+        assert!(p.apply_on(&on, &base, 0.5).profile.camera_local_tone);
     }
 
     #[test]
