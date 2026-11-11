@@ -1,4 +1,5 @@
 # Python packages for tools/lr_tone_charts.py (crates/pipeline/src/curve_stage_tables.rs, docs/curve-stage.md).
+# Needs Python 3.12 or newer (numpy 2.5); use a matching interpreter, e.g. python3.12 -m venv.
 #   python3 -m venv .venv-lr-tone && .venv-lr-tone/bin/pip install -r tools/requirements-lr-tone-charts.txt
 numpy==2.5.4
 tifffile==2026.11.8
