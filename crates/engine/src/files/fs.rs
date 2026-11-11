@@ -86,7 +86,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let probe: FileProbe = Arc::new(|path: &str| {
         // one open, then everything from the open file: its size and modification time are not
         // round trips of their own (on a network share each of them is one)
-        let file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+        let file = crate::read_file::open_for_read(path).map_err(|e| format!("{path}: {e}"))?;
         let meta = file.metadata().ok();
         let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
         let _permit = crate::memory::work_gate().acquire(len);
