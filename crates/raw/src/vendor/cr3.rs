@@ -215,10 +215,22 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let maker = static_maker.as_ref().and_then(|m| m.ifds.first());
     // Retain only the first useful timed maker note: repeated CTMD records must not accumulate
     // independent copies of every bounded TIFF value in memory.
+    // Records aliasing the same bytes are parsed once, and all parses share a budget of twice the file (at least 1 MiB);
+    // a record past what is left is skipped, a later smaller one still parsed.
+    let mut seen = std::collections::HashSet::new();
+    let mut left = bytes.len().saturating_mul(2).max(1 << 20);
     let timed_maker = container
         .timed_exif(bytes)
         .into_iter()
         .filter(|b| b.tag == 0x927c)
+        .filter(|b| seen.insert((b.data.as_ptr() as usize, b.data.len())))
+        .filter(|b| match left.checked_sub(b.data.len()) {
+            Some(rest) => {
+                left = rest;
+                true
+            }
+            None => false,
+        })
         .filter_map(|b| Tiff::parse(b.data).ok())
         .find(|t| t.ifds.first().is_some_and(|m| m.contains(COLOR_DATA)));
     let color_maker = timed_maker.as_ref().and_then(|t| t.ifds.first()).or(maker);
