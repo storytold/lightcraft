@@ -108,6 +108,7 @@ impl LightcraftApp {
             compare_windows: [None; 2],
             compare_tiles: Default::default(),
             compare_hold_until: f64::NEG_INFINITY,
+            survey_motion: Default::default(),
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
