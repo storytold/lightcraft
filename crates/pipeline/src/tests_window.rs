@@ -376,6 +376,39 @@ fn a_spot_overlapping_the_window_edge_matches_the_whole_render() {
     check_whole("edge", &s, PixelWindow { x: 300, y: 200, w: 240, h: 240 }, 1, 0.1);
 }
 
+/// Given a spot whose reads span exactly the 8192 px a window may grow to, a window over it is grown
+/// to hold them, not refused and read at its own edge, on the processes before V9 and V9's whole
+/// pixels alike (a 2×2 window then read the dark half for the bright source: 89 instead of 243).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_spot_reading_exactly_the_span_limit_matches_the_whole_render() {
+    use lightcraft_develop::{Process, Spot, SpotMode};
+    use lightcraft_geom::Point;
+    let (w, h) = (10_000, 16);
+    let src = Rgb32f::from_fn(w, h, |x, _| if x < 5000 { [0.1; 3] } else { [0.9; 3] });
+    let req = RenderRequest::fit(w, h);
+    // the target box is [998, 1002), its source [9186, 9190): 8192 px between them
+    let spot = Spot {
+        mode: SpotMode::Clone,
+        points: vec![Point::new(0.1, 0.5)],
+        size: 0.0001,
+        feather: 0.0,
+        opacity: 100.0,
+        source_offset: Some(Point::new(0.8188, 0.0)),
+    };
+    let win = PixelWindow { x: 999, y: 7, w: 2, h: 2 };
+    for p in [Process::V1, Process::V8, Process::V9] {
+        let s = DevelopSettings { process: p.version(), spots: vec![spot.clone()], ..Default::default() };
+        let f = render(&src, &SourceInfo::default(), &s, &req).image;
+        let part = render(&src, &SourceInfo::default(), &s, &RenderRequest { window: Some(win), ..req }).image;
+        for (x, y) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let (a, b) = (f.get(win.x + x, win.y + y), part.get(x, y));
+            assert_eq!(a, b, "{p:?} at ({x}, {y})");
+            assert!(a[0] > 200, "{p:?}: the bright source, {a:?}");
+        }
+    }
+}
+
 // Given a spot with an automatic source, two windows over the same spot choose the same source
 #[test]
 fn an_automatic_spot_source_does_not_depend_on_the_window() {

@@ -233,31 +233,30 @@ pub fn window_for_reads_checked(
     if spots.is_empty() && autos.is_empty() {
         return Some(win);
     }
-    let to_out = frame.norm_to_out(full_w, full_h);
-    let origin = to_out.apply(Point::new(0.0, 0.0));
-    // (target box, source box) of each spot, in output pixels: [x0, y0, x1, y1]
+    let method = HealMethod::of(s);
+    // (target box, source box) of each spot, in output pixels: [x0, y0, x1, y1), the pixels
+    // `apply` reads with a weight, worked out as it lays the spot out (a pixel more would refuse a
+    // window that fits at the span limit, a pixel less would read the window's edge instead)
     let boxes: Vec<([f64; 4], [f64; 4])> = spots
         .iter()
         .filter_map(|spot| {
-            let r = radius_px(spot.size, ppl);
-            let pts: Vec<_> = spot.points.iter().map(|p| to_out.apply(*p)).collect();
-            let first = pts.first()?;
-            let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
-            for p in &pts {
-                (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
-            }
-            // the box `apply` works in: the stroke plus a radius, plus a radius of padding
-            let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
-            // the source box is the target box moved by the offset, a pixel wider on each side: `apply`
-            // reads from the box's whole-pixel start, by the offset rounded to whole pixels (V9) or
-            // with its bilinear neighbour (before V9), up to a pixel past the box moved exactly
-            let s = match spot.source_offset {
-                Some(o) => {
-                    let b = to_out.apply(o);
-                    let (dx, dy) = (b.x - origin.x, b.y - origin.y);
-                    [t[0] + dx - 1.0, t[1] + dy - 1.0, t[2] + dx + 1.0, t[3] + dy + 1.0]
+            let l = layout(spot, frame, full_w, full_h, ppl)?;
+            let t = [l.bx, l.by, l.bx + l.bw, l.by + l.bh].map(|v| v as f64);
+            let s = match l.offset {
+                // whole pixels from V9; before, the bilinear neighbour too unless the offset is whole
+                Some((dx, dy)) => {
+                    let reach = |d: f32| match method {
+                        HealMethod::Pinned => (d.round(), d.round()),
+                        HealMethod::Averaged => (d.floor(), d.ceil()),
+                    };
+                    let ((x0, x1), (y0, y1)) = (reach(dx), reach(dy));
+                    [t[0] + f64::from(x0), t[1] + f64::from(y0), t[2] + f64::from(x1), t[3] + f64::from(y1)]
                 }
-                None => [t[0] - 4.2 * r - 1.0, t[1] - 4.2 * r - 1.0, t[2] + 4.2 * r + 1.0, t[3] + 4.2 * r + 1.0],
+                // the source is chosen as the spot renders, up to 4.2 radii away
+                None => {
+                    let d = 4.2 * f64::from(l.r) + 1.0;
+                    [t[0] - d, t[1] - d, t[2] + d, t[3] + d]
+                }
             };
             Some((t, s)).filter(|(t, s)| t.iter().chain(s).all(|v| v.is_finite()))
         })
@@ -745,10 +744,10 @@ mod tests {
         assert_eq!(window_for_reads(&hidden, &frame, 4000, 3000, ppl, win), win);
     }
 
-    /// A window holds every source pixel [`apply`] reads with a weight, whatever the spot's sub-pixel
-    /// position and offset: the whole pixels V9 rounds the offset to and V8's bilinear neighbours
-    /// (one pixel short, the window's edge pixel was read instead and a tile differed from the whole
-    /// render).
+    /// A window holds exactly the pixels [`apply`] reads with a weight, whatever the spot's sub-pixel
+    /// position and offset: the whole pixels V9 rounds the offset to, and V8's bilinear neighbours.
+    /// One pixel short, the window's edge pixel was read instead and a tile differed from the whole
+    /// render; one pixel more refused windows that fit at the span limit.
     #[test]
     fn a_window_holds_every_source_pixel_a_spot_reads() {
         use crate::PixelWindow;
@@ -772,15 +771,16 @@ mod tests {
             let (ox, oy) = (300.0 + 11.0 * f, -200.0 - 5.0 * f);
             let spot = spot_at(cx / 4000.0, cy / 3000.0, 12.3 / 4000.0, Some(Point::new(ox / 4000.0, oy / 3000.0)));
             let win = PixelWindow { x: 1995, y: 1495, w: 10, h: 10 };
-            let g = window_for_reads(&with_spots(vec![spot.clone()]), &frame, fw, fh, ppl, win);
             let l = layout(&spot, &frame, fw, fh, ppl).expect("a spot inside the image");
             let (dx, dy) = l.offset.expect("an explicit source");
-            for method in BOTH {
+            for process in [Process::V8, Process::V9] {
+                let s = DevelopSettings { process: process.version(), ..with_spots(vec![spot.clone()]) };
+                let method = HealMethod::of(&s);
+                let g = window_for_reads(&s, &frame, fw, fh, ppl, win);
                 let ((x0, x1), (y0, y1)) = (reads(l.bx, l.bw, dx, method), reads(l.by, l.bh, dy, method));
-                assert!(
-                    x0 >= g.x as i64 && x1 < (g.x + g.w) as i64 && y0 >= g.y as i64 && y1 < (g.y + g.h) as i64,
-                    "{method:?}, step {i}: reads x {x0}..={x1}, y {y0}..={y1} outside {g:?}"
-                );
+                // the target box and the pixels its source is read from, and nothing more
+                let want = (l.bx.min(x0 as usize), l.by.min(y0 as usize), (l.bx + l.bw).max(x1 as usize + 1), (l.by + l.bh).max(y1 as usize + 1));
+                assert_eq!((g.x, g.y, g.x + g.w, g.y + g.h), want, "{process:?}, step {i}: reads x {x0}..={x1}, y {y0}..={y1}");
             }
         }
     }
