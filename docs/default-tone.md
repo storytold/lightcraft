@@ -40,11 +40,19 @@ A raw without a camera profile, a profile with a tone curve of its own, and a re
 
 **The exposure offset.** The chart is a DNG with a baseline exposure of 0. For a raw of another format (RW2, ARW, NEF
 and so on) Camera Raw uses an exposure offset of its own per camera, which the file does not carry and LightCraft
-does not know. `default_tone::camera_ev` holds the offsets measured on photos:
+does not know. `default_tone::camera_ev` holds the offsets:
 
 | Camera | Offset (stops) | Measured on |
 |---|---:|---|
-| Panasonic Lumix DC-S9 (RW2) | −0.10 | 5 photos, the shift that leaves Lightroom's unedited renders no brighter or darker on average |
+| Panasonic Lumix DC-S9 (RW2) | −0.10 | 5 photos (training set; the 5 held-out photos land 0.00 lighter on average) |
+| Panasonic Lumix DC-S5 (RW2) | −0.04 | 6 photos from 6 days; with the offset 0.10 darker than Lightroom on average (0.44 lighter without) |
+| Panasonic Lumix DC-S5 II (DC-S5M2, RW2) | −0.03 | 6 photos from 6 days; 0.02 darker (0.32 lighter without) |
+| Panasonic Lumix DC-S5 IIX (DC-S5M2X, RW2) | −0.05 | 6 photos from 6 days; 0.06 darker (0.56 lighter without) |
+
+Lightness differences are OkLab × 100, the mean over the central three quarters of each frame, unedited, against
+Camera Raw's render through the same camera's Adobe Standard profile. Adding a camera takes about 5 photos: render
+them unedited through Camera Raw and LightCraft, and pick the offset that leaves the mean lightness difference at 0
+(about 11.8 per stop).
 
 Other cameras get 0. Without the offset the S9 renders 1.1 lighter in lightness than Lightroom (OkLab × 100), so a
 camera not measured can be off by about that much.
@@ -79,7 +87,8 @@ lighter before). No preset gets worse in tone or in colour.
 
 ## Limits
 
-- One camera's offset is measured. Others render with the chart's curve as it is.
+- Four cameras' offsets are measured (the Lumix S9, S5, S5 II and S5 IIX). Other cameras render with the chart's
+  curve as it is, which on these four would be 0.3 to 1.2 lighter than Lightroom.
 - The curve is measured for Camera Raw's process version 2012 (`crs:ProcessVersion` 11.0), one chart, grey steps up to
   the DNG's white. Above white it rolls off as V5's camera curves do, not as measured.
 - Smart previews are built without the imported camera profile, so a photo whose original is offline renders

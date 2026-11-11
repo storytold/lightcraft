@@ -16,10 +16,11 @@ use crate::default_tone_table::GREY;
 use crate::tone::CameraTone;
 use lightcraft_develop::{DevelopSettings, Process};
 
-/// Exposure offsets measured per camera (make, model, stops) for a raw rendered through its Adobe Standard profile:
-/// the shift of the chart's curve that leaves Lightroom's unedited renders of the camera's photos no brighter or
-/// darker on average (`docs/default-tone.md`).
-const CAMERA_EV: [(&str, &str, f32); 1] = [("Panasonic", "DC-S9", -0.10)];
+/// Exposure offsets per camera (make, model, stops) for a raw rendered through its Adobe Standard profile: the shift
+/// of the chart's curve that leaves Lightroom's unedited renders of the camera's photos no brighter or darker on
+/// average, measured per camera (`docs/default-tone.md`).
+const CAMERA_EV: [(&str, &str, f32); 4] =
+    [("Panasonic", "DC-S9", -0.10), ("Panasonic", "DC-S5", -0.04), ("Panasonic", "DC-S5M2", -0.03), ("Panasonic", "DC-S5M2X", -0.05)];
 
 /// The measured exposure offset of a camera in stops, 0 for a camera not measured.
 pub fn camera_ev(make: &str, model: &str) -> f32 {
@@ -134,7 +135,8 @@ mod tests {
     fn camera_offsets_are_by_make_and_model() {
         assert_eq!(camera_ev("Panasonic", "DC-S9"), -0.10);
         assert_eq!(camera_ev("PANASONIC ", "dc-s9"), -0.10);
-        assert_eq!(camera_ev("Panasonic", "DC-S5M2"), 0.0);
+        assert_eq!(camera_ev("Panasonic", "DC-S5M2"), -0.03);
+        assert_eq!(camera_ev("Panasonic", "DC-G9M2"), 0.0);
         assert_eq!(camera_ev("Sony", "ILCE-7M4"), 0.0);
     }
 
