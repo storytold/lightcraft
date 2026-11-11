@@ -307,6 +307,11 @@ struct PrefsFile {
     /// the file is kept.
     #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_prep")]
     prep: Option<crate::prep::PrepSettings>,
+    /// A background build of this library's previews was started and has not run to its end: the
+    /// preparation takes it up again, also after a restart. Set and cleared by
+    /// [`Session::prep_tick`] only; the rules are at [`crate::prep::PrepState::unfinished`].
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    prep_unfinished: bool,
     /// Folder for smart previews (default: `Smart Previews` in the library).
     smart_previews_dir: Option<String>,
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
@@ -601,6 +606,7 @@ impl Session {
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
         self.prep.library = prefs.prep.map(crate::prep::PrepSettings::sanitized);
+        self.prep.unfinished = prefs.prep_unfinished;
         self.slideshow = prefs.slideshow.sanitized();
         self.slide_layout = prefs.slide_layout.sanitized();
         self.slide_overlays = prefs.slide_overlays.sanitized();
@@ -920,6 +926,7 @@ impl Session {
             import: self.import_defaults.clone(),
             cache_mb: self.cache_mb,
             prep: self.prep.library,
+            prep_unfinished: self.prep.unfinished,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
             slideshow: self.slideshow.clone(),
