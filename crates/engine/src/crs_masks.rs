@@ -164,7 +164,7 @@ fn radial_feather(m: &XmpValue, container: &str) -> f64 {
 
 /// One mask component of a correction in `container` → our component JSON; `Err(kind)` names an
 /// unsupported one.
-fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String> {
+fn component(m: &XmpValue, container: &str, aspect: f64, tables: &Values) -> Result<Value, String> {
     let what = text(m, "crs:What").unwrap_or("");
     let op = match num(m, "crs:MaskBlendMode").unwrap_or(0.0) as i64 {
         1 => "subtract",
@@ -172,6 +172,13 @@ fn component(m: &XmpValue, container: &str, aspect: f64) -> Result<Value, String
         _ => "add",
     };
     let invert = flag(m, "crs:MaskInverted").unwrap_or(false);
+    // an AI selection Lightroom stored with the packet, whatever its kind (`crate::crs_mask_table`); without one,
+    // Subject and Sky are made our way below
+    if what == "Mask/Image"
+        && let Some(shape) = crate::crs_mask_table::image_mask(tables, m)
+    {
+        return Ok(json!({"op": op, "invert": invert, "shape": shape}));
+    }
     // positions are fractions of the image's width / height; our radii are in long-edge units
     let (sx, sy) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
     let shape = match what {
@@ -263,7 +270,12 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             let comps = c.field("crs:CorrectionMasks").map(XmpValue::items).unwrap_or_default();
             let mut parts = Vec::new();
             for m in comps {
-                match component(m, container, aspect) {
+                let part = component(m, container, aspect, values);
+                // a selection Lightroom stored that couldn't be read or placed: our own stand-in, if any, isn't it
+                if crate::crs_mask_table::stored(values, m) && !matches!(&part, Ok(v) if v["shape"].get("seg").is_some()) {
+                    skipped.push("AI mask (stored selection unreadable)".into());
+                }
+                match part {
                     Ok(v) => parts.push(v),
                     Err(kind) => skipped.push(kind),
                 }
