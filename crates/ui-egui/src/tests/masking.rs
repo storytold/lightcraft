@@ -2331,6 +2331,8 @@ fn a_drawn_gradient_lands_under_the_drag_on_a_warped_photo() {
     assert!((handle(&h, id, 1) - at(0.6, 0.7)).length() < 2.0, "end at the release");
     exec(&mut h, "edit.undo", json!({}));
     assert!(develop(&h).masks.is_empty(), "one undo step");
+}
+
 /// Lens Blur Brush Refinement: Focus / Blur pick a brush that paints on the photo from the Edit
 /// panel (one `lensBlur.brushStroke` per drag, with the brush's settings); ⌥ erases; Reset clears.
 #[test]
