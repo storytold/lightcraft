@@ -208,9 +208,11 @@ impl Session {
         use std::collections::{HashMap, HashSet};
         // indexed: a collection of 10 000+ presets was quadratic (minutes) to import
         let mut ids: HashSet<String> = self.presets.iter().map(|q| q.id.clone()).collect();
-        // (name, group, settings): `Value` hashes as it compares (0.0 and -0.0 are one key), so a
-        // preset is looked up rather than compared with every namesake
-        let key_of = |p: &Preset| (p.name.clone(), p.group.clone(), p.settings.clone());
+        // (name, group, settings): a preset is looked up rather than compared with every namesake.
+        // Every number is keyed as an f64 with -0.0 folded into 0.0: `0` and `0.0` are unequal
+        // `Value`s with equal hashes, so a crafted file of them would collide in one bucket.
+        // shortcut: integers past 2^53 lose precision in the key, so two such presets are one
+        let key_of = |p: &Preset| (p.name.clone(), p.group.clone(), canonical_numbers(&p.settings));
         let mut present: HashSet<(String, String, serde_json::Value)> = self.presets.iter().map(key_of).collect();
         // the next suffix to try per generated id, so a batch of clashes doesn't probe from 2 each time
         let mut next_suffix: HashMap<String, u32> = HashMap::new();
@@ -238,6 +240,17 @@ impl Session {
             self.presets.push(p);
         }
         added
+    }
+}
+
+/// `v` with every number replaced by its f64 (`-0.0` as `0.0`), so equal numbers hash and compare alike.
+fn canonical_numbers(v: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match v {
+        Value::Number(n) => n.as_f64().and_then(|f| serde_json::Number::from_f64(f + 0.0)).map_or_else(|| v.clone(), Value::Number),
+        Value::Array(a) => Value::Array(a.iter().map(canonical_numbers).collect()),
+        Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), canonical_numbers(x))).collect()),
+        _ => v.clone(),
     }
 }
 
