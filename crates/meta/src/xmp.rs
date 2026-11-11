@@ -229,12 +229,12 @@ fn xml_safe(s: &str) -> String {
     s.chars().filter(|&c| is_xml_char(c)).collect()
 }
 
-/// Unescape attribute values (predefined + numeric references; unknown references kept verbatim).
-/// Where the `;` of a reference starting at `rest` (its `&`) ends it, looked for only as far as
-/// the longest reference reaches (`&#x10FFFF;`): a text of many `&` with a distant `;` is read
-/// once, not once per `&`.
+/// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
+/// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
+/// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
 fn entity_end(rest: &str) -> Option<usize> {
-    rest.char_indices().take(11).find(|&(_, c)| c == ';').map(|(i, _)| i)
+    let n = rest.bytes().skip(1).take_while(|b| b.is_ascii_alphanumeric() || *b == b'#').count();
+    (rest.as_bytes().get(n + 1) == Some(&b';')).then_some(n + 1)
 }
 
 pub(crate) fn unescape_attr(s: &str) -> String {

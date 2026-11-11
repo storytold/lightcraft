@@ -72,11 +72,12 @@ struct Parser<'a> {
 /// Deepest `<dict>` / `<array>` nesting read (real looks nest a handful of levels).
 const MAX_DEPTH: usize = 64;
 
-/// Where the `;` of a reference starting at `rest` (its `&`) ends it, looked for only as far as
-/// the longest reference reaches (`&#x10FFFF;`): a text of many `&` with a distant `;` is read
-/// once, not once per `&`.
+/// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
+/// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
+/// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
 fn entity_end(rest: &str) -> Option<usize> {
-    rest.char_indices().take(11).find(|&(_, c)| c == ';').map(|(i, _)| i)
+    let n = rest.bytes().skip(1).take_while(|b| b.is_ascii_alphanumeric() || *b == b'#').count();
+    (rest.as_bytes().get(n + 1) == Some(&b';')).then_some(n + 1)
 }
 
 fn unescape(t: &str) -> String {
@@ -505,6 +506,12 @@ mod tests {
         let hostile = format!("{};&amp;", "&".repeat(200_000));
         assert_eq!(unescape(&hostile), format!("{};&", "&".repeat(200_000)));
         assert_eq!(unescape("&lt;a&gt; &#x10FFFF; &unknownreference;"), "<a> \u{10FFFF} &unknownreference;");
+    }
+
+    #[test]
+    fn zero_padded_numeric_references_decode() {
+        assert_eq!(unescape("C&#0000000097;non &#x0000041; &#000000065;"), "Canon A A");
+        assert_eq!(unescape("&abc&#xyz;&;"), "&abc&#xyz;&;");
     }
 
     #[test]

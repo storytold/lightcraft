@@ -501,6 +501,12 @@ fn flattened_keys_stay_within_the_cumulative_budget() {
 }
 
 #[test]
+fn zero_padded_numeric_references_decode() {
+    assert_eq!(unescape_attr("C&#0000000097;non &#x0000041; &#000000065;"), "Canon A A");
+    assert_eq!(unescape_attr("&abc&#xyz;&;"), "&abc&#xyz;&;");
+}
+
+#[test]
 fn entity_rejects_signed_numeric_references() {
     assert_eq!(entity("#+65"), None);
     assert_eq!(entity("#x+41"), None);
