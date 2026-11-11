@@ -440,10 +440,13 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: 
         if fill {
             fill_box(&mut src, &tgt, &alpha, bw, bh);
         }
-        if heal && pinned {
-            src = pinned::heal(&pinned::Patch { w: bw, h: bh, src: &src, tgt: &tgt, dist: &dist, r });
+        // (a box too big for the pinned heal's working memory gets the averaged one)
+        let healed = if heal && pinned { pinned::heal(&pinned::Patch { w: bw, h: bh, src: &src, tgt: &tgt, dist: &dist, r }) } else { None };
+        let pinned_here = healed.is_some();
+        if let Some(healed) = healed {
+            src = healed;
         }
-        let low = if heal && !pinned {
+        let low = if heal && !pinned_here {
             // Tone correction from the spot's *surroundings* only: normalized convolution of
             // (target − source) over pixels outside the stroke (a membrane-like interpolation).
             let outside: Vec<f32> = alpha.iter().map(|a| if *a < 0.02 { 1.0 } else { 0.0 }).collect();

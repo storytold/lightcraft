@@ -59,18 +59,26 @@ fn dec(v: f32) -> f32 {
     (v.exp() - LOG_FLOOR).max(0.0)
 }
 
+/// The most pixels a spot's box may hold for the pinned heal. At its peak the heal keeps about 16
+/// floats per pixel of the box alive (the source and edge ratio in log space, the solver's planes, the
+/// output) on top of what [`super::apply`] holds: about 2 GB at this size, 512 MB on the web. A
+/// bigger box, a stroke across most of a large frame at export size, gets the averaged heal instead
+/// of an allocation that could fail.
+pub(super) const MAX_PIXELS: usize = super::MAX_SPOT_SPAN * super::MAX_SPOT_SPAN / 2;
+
 /// The healed box: inside the spot (distance below `r`) the source with its detail matched, pinned to
-/// the photo at the spot's edge; outside it the photo. Inputs of mismatched sizes give the photo back.
-pub(super) fn heal(p: &Patch<'_>) -> Vec<[f32; 3]> {
-    let n = p.w.saturating_mul(p.h);
+/// the photo at the spot's edge; outside it the photo. Inputs of mismatched sizes give the photo back;
+/// `None` when the box holds more than [`MAX_PIXELS`] pixels (nothing is allocated then).
+pub(super) fn heal(p: &Patch<'_>) -> Option<Vec<[f32; 3]>> {
+    let n = p.w.checked_mul(p.h).filter(|n| *n <= MAX_PIXELS)?;
     if p.src.len() != n || p.tgt.len() != n || p.dist.len() != n {
-        return p.tgt.to_vec();
+        return Some(p.tgt.to_vec());
     }
     let cover: Vec<bool> = p.dist.iter().map(|d| *d < p.r).collect();
-    let Some(sub) = SubBox::around(&cover, p.w, p.h) else { return p.tgt.to_vec() };
+    let Some(sub) = SubBox::around(&cover, p.w, p.h) else { return Some(p.tgt.to_vec()) };
     let source = source_log(p, detail_gain(p, &cover));
-    let edge = edge_ratio(p, &cover, &source);
-    let fill = solve(p, &cover, &edge, &sub);
+    // (the edge ratio is freed before the output is allocated)
+    let fill = solve(p, &cover, &edge_ratio(p, &cover, &source), &sub);
     let mut out = p.tgt.to_vec();
     for yy in 0..sub.h {
         for xx in 0..sub.w {
@@ -85,7 +93,7 @@ pub(super) fn heal(p: &Patch<'_>) -> Vec<[f32; 3]> {
             }
         }
     }
-    out
+    Some(out)
 }
 
 /// How much the source's fine detail is scaled so that it matches the photo's around the spot: the
@@ -200,7 +208,8 @@ impl SubBox {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{HealMethod, apply};
+    use super::super::{HealMethod, MAX_SPOT_SPAN, apply};
+    use super::{MAX_PIXELS, Patch, heal};
     use crate::geometry::Frame;
     use lightcraft_develop::{DevelopSettings, Process, Spot, SpotMode};
     use lightcraft_geom::Point;
@@ -422,5 +431,17 @@ mod tests {
             apply(&mut out, &[spot], &frame, frame.px_per_long(40), HealMethod::Pinned);
             assert!(out.data.iter().flatten().all(|v| v.is_finite() && *v >= 0.0), "{mode:?} at {p:?} size {size}");
         }
+    }
+
+    /// A box bigger than [`MAX_PIXELS`] (or one whose area overflows) is left to the averaged heal
+    /// before anything is allocated; one at the limit is not.
+    #[test]
+    fn a_box_too_big_for_the_working_memory_is_left_to_the_averaged_heal() {
+        let patch = |w, h| Patch { w, h, src: &[], tgt: &[], dist: &[], r: 1.0 };
+        assert!(heal(&patch(MAX_PIXELS + 1, 1)).is_none());
+        assert!(heal(&patch(MAX_SPOT_SPAN, MAX_SPOT_SPAN)).is_none());
+        assert!(heal(&patch(usize::MAX, 2)).is_none());
+        // (at the limit, the empty slices are a size mismatch: the photo comes back as it is)
+        assert_eq!(heal(&patch(MAX_PIXELS, 1)), Some(Vec::new()));
     }
 }
