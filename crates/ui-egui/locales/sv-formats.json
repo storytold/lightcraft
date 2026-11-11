@@ -253,7 +253,7 @@
   "{pct} %": "{pct} %",
   "{photos} catalog records processed; {collections} collections.": "{photos} katalogposter bearbetade; {collections} samlingar.",
   "{pid} (missing)": "{pid} (saknas)",
-  "{sel_n} selected · {counted}": "{sel_n} markerade · {counted}",
+  "{sel_n} selected · {counted}": "Markerade: {sel_n} · {counted}",
   "{size} GB": "{size} GB",
   "{stage}… {:.0}%": "{stage}… {:.0} %",
   "{s} s of AV1 video": "{s} s AV1-video",
