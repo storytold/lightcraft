@@ -248,13 +248,16 @@ pub fn window_for_reads_checked(
             }
             // the box `apply` works in: the stroke plus a radius, plus a radius of padding
             let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
+            // the source box is the target box moved by the offset, a pixel wider on each side: `apply`
+            // reads from the box's whole-pixel start, by the offset rounded to whole pixels (V9) or
+            // with its bilinear neighbour (before V9), up to a pixel past the box moved exactly
             let s = match spot.source_offset {
                 Some(o) => {
                     let b = to_out.apply(o);
                     let (dx, dy) = (b.x - origin.x, b.y - origin.y);
-                    [t[0] + dx, t[1] + dy, t[2] + dx, t[3] + dy]
+                    [t[0] + dx - 1.0, t[1] + dy - 1.0, t[2] + dx + 1.0, t[3] + dy + 1.0]
                 }
-                None => [t[0] - 4.2 * r, t[1] - 4.2 * r, t[2] + 4.2 * r, t[3] + 4.2 * r],
+                None => [t[0] - 4.2 * r - 1.0, t[1] - 4.2 * r - 1.0, t[2] + 4.2 * r + 1.0, t[3] + 4.2 * r + 1.0],
             };
             Some((t, s)).filter(|(t, s)| t.iter().chain(s).all(|v| v.is_finite()))
         })
@@ -740,6 +743,46 @@ mod tests {
         // a hidden mask reads nothing
         let hidden = DevelopSettings { masks: vec![Mask { visible: false, ..auto.masks[0].clone() }], ..Default::default() };
         assert_eq!(window_for_reads(&hidden, &frame, 4000, 3000, ppl, win), win);
+    }
+
+    /// A window holds every source pixel [`apply`] reads with a weight, whatever the spot's sub-pixel
+    /// position and offset: the whole pixels V9 rounds the offset to and V8's bilinear neighbours
+    /// (one pixel short, the window's edge pixel was read instead and a tile differed from the whole
+    /// render).
+    #[test]
+    fn a_window_holds_every_source_pixel_a_spot_reads() {
+        use crate::PixelWindow;
+        let (fw, fh) = (4000, 3000);
+        let frame = Frame::new(fw, fh, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(fw);
+        // whole pixels read along one axis from box start `b`, length `n`, offset `o`
+        let reads = |b: usize, n: usize, o: f32, method: HealMethod| -> (i64, i64) {
+            let at = |i: usize| (b + i) as f32 + o;
+            match method {
+                HealMethod::Pinned => (b as i64 + o.round() as i64, (b + n - 1) as i64 + o.round() as i64),
+                HealMethod::Averaged => {
+                    let last = at(n - 1);
+                    (at(0).floor() as i64, last.floor() as i64 + i64::from(last.fract() > 0.0))
+                }
+            }
+        };
+        for i in 0..40 {
+            let f = f64::from(i) / 40.0;
+            let (cx, cy) = (2000.0 + 7.0 * f, 1500.0 + 3.0 * f);
+            let (ox, oy) = (300.0 + 11.0 * f, -200.0 - 5.0 * f);
+            let spot = spot_at(cx / 4000.0, cy / 3000.0, 12.3 / 4000.0, Some(Point::new(ox / 4000.0, oy / 3000.0)));
+            let win = PixelWindow { x: 1995, y: 1495, w: 10, h: 10 };
+            let g = window_for_reads(&with_spots(vec![spot.clone()]), &frame, fw, fh, ppl, win);
+            let l = layout(&spot, &frame, fw, fh, ppl).expect("a spot inside the image");
+            let (dx, dy) = l.offset.expect("an explicit source");
+            for method in BOTH {
+                let ((x0, x1), (y0, y1)) = (reads(l.bx, l.bw, dx, method), reads(l.by, l.bh, dy, method));
+                assert!(
+                    x0 >= g.x as i64 && x1 < (g.x + g.w) as i64 && y0 >= g.y as i64 && y1 < (g.y + g.h) as i64,
+                    "{method:?}, step {i}: reads x {x0}..={x1}, y {y0}..={y1} outside {g:?}"
+                );
+            }
+        }
     }
 
     // Given a window that would have to grow past the cap, there is no answer (never a wrong one)
