@@ -7,6 +7,10 @@
   Loupe and Develop as in the grids and slideshows. Before, LightCraft ignored them. Like the arrow keys, they do
   nothing while a dialog or a text field has the keyboard. Pressed over a slider or another control, they only
   change the photo: the control under the pointer is left as it was.
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
 
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
