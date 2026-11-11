@@ -49,10 +49,12 @@ pub(super) struct Patch<'a> {
     pub r: f32,
 }
 
+/// A linear value into the log space the heal works in (negative values count as black).
 fn enc(v: f32) -> f32 {
     (v.max(0.0) + LOG_FLOOR).ln()
 }
 
+/// A log-space value back to linear, never below black: the inverse of [`enc`].
 fn dec(v: f32) -> f32 {
     (v.exp() - LOG_FLOOR).max(0.0)
 }
@@ -105,6 +107,7 @@ fn detail_gain(p: &Patch<'_>, cover: &[bool]) -> f32 {
     }
 }
 
+/// The median of `v`; `None` with fewer than [`MIN_SAMPLES`] values or a non-finite median.
 fn median(mut v: Vec<f32>) -> Option<f32> {
     if v.len() < MIN_SAMPLES {
         return None;
@@ -179,6 +182,8 @@ struct SubBox {
 }
 
 impl SubBox {
+    /// The bounding box of the `true` pixels of `cover` (`w × h`), grown by one pixel and kept inside
+    /// the box; `None` when no pixel is covered.
     fn around(cover: &[bool], w: usize, h: usize) -> Option<SubBox> {
         let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
         for (i, _) in cover.iter().enumerate().filter(|(_, c)| **c) {
@@ -203,6 +208,7 @@ mod tests {
 
     const W: usize = 256;
 
+    /// A grey pixel of value `v`.
     fn grey(v: f32) -> [f32; 3] {
         [v; 3]
     }
@@ -215,6 +221,7 @@ mod tests {
         (f64::from(h) / f64::from(u32::MAX)) as f32 * 2.0 - 1.0
     }
 
+    /// Distance from the centre of pixel (x, y) to the point `c`.
     fn dist(x: usize, y: usize, c: (f32, f32)) -> f32 {
         (x as f32 + 0.5 - c.0).hypot(y as f32 + 0.5 - c.1)
     }
@@ -232,6 +239,7 @@ mod tests {
         }
     }
 
+    /// `img` with `spot` applied by `method`.
     fn healed(img: &Rgb32f, spot: Spot, method: HealMethod) -> Rgb32f {
         let mut out = img.clone();
         let frame = Frame::new(img.width, img.height, &DevelopSettings::default(), true);
@@ -248,6 +256,7 @@ mod tests {
             .collect()
     }
 
+    /// Mean and standard deviation of `v`.
     fn mean_std(v: &[f32]) -> (f32, f32) {
         let m = v.iter().sum::<f32>() / v.len() as f32;
         (m, (v.iter().map(|x| (x - m).powi(2)).sum::<f32>() / v.len() as f32).sqrt())
@@ -270,6 +279,7 @@ mod tests {
         img
     }
 
+    /// V7 and older photos keep the averaged heal; V8 and new photos get the pinned one.
     #[test]
     fn the_process_picks_the_heal() {
         let on = |p: Process| DevelopSettings { process: p.version(), ..Default::default() };
@@ -278,8 +288,8 @@ mod tests {
         assert_eq!(HealMethod::of(&DevelopSettings::default()), HealMethod::Pinned, "new photos get the latest process");
     }
 
-    // Given a spot on a brightness ramp and a source on a flat area, the healed patch meets the
-    // ramp at the spot's edge (the averaged correction left a step of about 10 % there)
+    /// Given a spot on a brightness ramp and a source on a flat area, the healed patch meets the
+    /// ramp at the spot's edge (the averaged correction left a step of about 10 % there)
     #[test]
     fn a_heal_on_a_gradient_meets_it_at_the_edge() {
         let truth = Rgb32f::from_fn(W, W, |x, y| grey(if y < 100 { 0.3 } else { 0.3 + 0.004 * (x as f32 - 128.0) }));
@@ -294,8 +304,8 @@ mod tests {
         assert!(max_err(&pinned, &truth, c, 0.0, r) < 0.01, "inside");
     }
 
-    // Given texture moved from a bright area into one 4 stops darker, the patch keeps the texture's
-    // contrast relative to its new light (added in linear light, it was 7x too strong, a third clipped)
+    /// Given texture moved from a bright area into one 4 stops darker, the patch keeps the texture's
+    /// contrast relative to its new light (added in linear light, it was 7x too strong, a third clipped)
     #[test]
     fn a_heal_into_a_shadow_keeps_the_texture_contrast() {
         let truth = Rgb32f::from_fn(W, W, |x, y| grey(if x < 128 { 0.8 } else { 0.05 } * (1.0 + 0.25 * noise(x, y, 7))));
@@ -312,8 +322,8 @@ mod tests {
         assert!(a > 3.0 * want, "the averaged heal's contrast {a}: the test would not catch a revert");
     }
 
-    // Given a dark line just outside the spot that its edge doesn't touch, the patch stays as light
-    // as its surroundings (the averaged correction pulled the line's darkness in)
+    /// Given a dark line just outside the spot that its edge doesn't touch, the patch stays as light
+    /// as its surroundings (the averaged correction pulled the line's darkness in)
     #[test]
     fn a_heal_ignores_what_does_not_touch_the_spot() {
         let (c, r) = ((128.0, 150.0), 20.0);
@@ -329,8 +339,8 @@ mod tests {
         assert!(a < 0.28, "the averaged heal's darkest {a}: the test would not catch a revert");
     }
 
-    // Given a source half a pixel off the grid, Heal and Clone keep the grain (bilinear reads
-    // between pixels halved it)
+    /// Given a source half a pixel off the grid, Heal and Clone keep the grain (bilinear reads
+    /// between pixels halved it)
     #[test]
     fn sources_are_read_at_whole_pixels() {
         let img = Rgb32f::from_fn(W, W, |x, y| grey(0.3 * (1.0 + 0.2 * noise(x, y, 3))));
@@ -345,8 +355,8 @@ mod tests {
         }
     }
 
-    // Given a source less grainy than the area around the spot, the patch takes the grain of its
-    // surroundings, not the source's
+    /// Given a source less grainy than the area around the spot, the patch takes the grain of its
+    /// surroundings, not the source's
     #[test]
     fn a_heal_matches_the_grain_around_the_spot() {
         let img = Rgb32f::from_fn(W, W, |x, y| grey(0.3 * (1.0 + if x < 128 { 0.06 } else { 0.11 } * noise(x, y, 5))));
@@ -359,8 +369,8 @@ mod tests {
         assert!(a < 0.65, "the averaged heal keeps the source's grain ({a}): the test would not catch a revert");
     }
 
-    // Given the same scene rendered at two sizes, the half-size heal matches the full-size one,
-    // downsampled (settings are resolution independent)
+    /// Given the same scene rendered at two sizes, the half-size heal matches the full-size one,
+    /// downsampled (settings are resolution independent)
     #[test]
     fn a_heal_matches_between_preview_and_export_size() {
         let scene = |n: usize| {
@@ -384,6 +394,7 @@ mod tests {
         assert!(worst < 0.01, "largest difference {worst}");
     }
 
+    /// The same photo and spot heal to the same pixels every time.
     #[test]
     fn a_heal_is_deterministic() {
         let img = Rgb32f::from_fn(W, W, |x, y| grey(0.3 * (1.0 + 0.2 * noise(x, y, 9))));
@@ -391,6 +402,7 @@ mod tests {
         assert_eq!(healed(&img, spot.clone(), HealMethod::Pinned).data, healed(&img, spot, HealMethod::Pinned).data);
     }
 
+    /// Spots with NaN, infinite or far-off positions, sizes and sources render finite, non-negative pixels.
     #[test]
     fn hostile_heal_spots_render_finite_pixels() {
         let img = Rgb32f::from_fn(40, 30, |x, y| if x < 5 { [0.0; 3] } else { [x as f32 / 40.0, y as f32 / 30.0, 0.0] });
