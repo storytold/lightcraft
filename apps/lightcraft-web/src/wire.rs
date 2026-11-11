@@ -33,6 +33,9 @@ pub struct WireJob {
     pub origin: Source,
     /// Decode the source at most this long.
     pub max_edge: usize,
+    /// Resize an already decoded source exactly as the engine's cached-source path does.
+    #[serde(default)]
+    pub fit_edge: Option<usize>,
     pub raw: bool,
     #[serde(default)]
     pub relative_wb: bool,
@@ -67,7 +70,8 @@ impl WireJob {
     /// `view`: the slot name, for jobs that keep a stage cache.
     pub fn from_job(job: &RenderJob, thumb_cached: bool, view: &str) -> WireJob {
         let max_edge = match &job.source {
-            SourceRef::Demo { max_edge, .. } | SourceRef::File { max_edge, .. } | SourceRef::Fit { max_edge, .. } => *max_edge,
+            SourceRef::Demo { max_edge, .. } | SourceRef::File { max_edge, .. } => *max_edge,
+            SourceRef::Fit { from, .. } => from.image.width.max(from.image.height),
             SourceRef::Loaded(img) => img.image.width.max(img.image.height),
             SourceRef::Smart { .. } => 2560,
         };
@@ -77,6 +81,10 @@ impl WireJob {
             level: job.level,
             origin: job.origin.clone(),
             max_edge,
+            fit_edge: match &job.source {
+                SourceRef::Fit { max_edge, .. } => Some(*max_edge),
+                _ => None,
+            },
             raw: job.info.raw,
             relative_wb: job.info.relative_wb,
             legacy_relative_wb: job.info.legacy_relative_wb,
@@ -114,6 +122,7 @@ impl WireJob {
         RenderRequest {
             max_w: self.max_w,
             max_h: self.max_h,
+            exact_size: false,
             quality: if self.draft { Quality::Draft } else { Quality::Full },
             apply_crop: self.apply_crop,
             overlay: lightcraft_engine::pipeline::Overlay::from_parts(self.overlay.0, self.overlay.1),
@@ -195,6 +204,10 @@ impl WorkerCore {
                 self.sources.insert(key, src.clone(), cost);
                 src
             }
+        };
+        let src = match job.fit_edge {
+            Some(max_edge) => SourceRef::Fit { from: Box::new(src), max_edge }.load_source()?,
+            None => src,
         };
         let info = src.info_or(job.info());
         let mut rendered = match &job.stages {
@@ -455,7 +468,11 @@ mod tests {
         let mut core = WorkerCore::default();
         assert_eq!(core.needs_original(&wire), None, "demo scenes are generated");
         let a = core.render(&wire, None).unwrap();
-        let b = job.run().rendered.unwrap();
+        // The worker uses the CPU. A native thumbnail job may use an already initialized GPU,
+        // so exact serialization parity must use the engine's CPU reference (#3778), regardless
+        // of test order. The window test above separately checks native CPU/GPU equivalence.
+        let source = job.source.load_source().unwrap();
+        let b = lightcraft_engine::pipeline::render(&source.image, &source.info_or(job.info), &job.settings, &job.request);
         assert_eq!((a.image.width, a.image.height), (b.image.width, b.image.height));
         assert_eq!(a.image.data, b.image.data);
         assert_eq!(a.histogram, b.histogram);
@@ -472,6 +489,7 @@ mod tests {
             level: SourceLevel::Thumb,
             origin,
             max_edge: 512,
+            fit_edge: None,
             raw: false,
             relative_wb: false,
             legacy_relative_wb: false,

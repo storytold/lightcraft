@@ -498,6 +498,9 @@ impl Session {
         if !clicks.iter().any(|c| c.include) {
             return Err("click the object to include it first".into());
         }
+        if clicks.len() > MAX_CLICKS {
+            return Err(format!("an Object selection takes at most {MAX_CLICKS} clicks"));
+        }
         #[cfg(feature = "sam")]
         {
             self.segment_wait(id, worker::Kind::Clicks(Self::model_clicks(clicks)), None)?.ok_or_else(|| "nothing was selected".to_string())
@@ -775,7 +778,7 @@ mod tests {
     fn no_region_for_nothing_or_most_of_the_photo() {
         assert!(detail_region(&seg_box(50, 0, 0, 0, 0), 1.0).is_none());
         assert!(detail_region(&seg_box(50, 2, 2, 48, 48), 1.0).is_none());
-        let damaged = SegMask { side: 50, data: "?".into(), rect: None };
+        let damaged = SegMask { side: 50, data: "?".into(), rect: None, grid: None };
         assert!(detail_region(&damaged, 1.0).is_none());
     }
 }

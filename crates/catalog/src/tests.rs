@@ -12,6 +12,26 @@ fn photo(c: &mut Catalog, name: &str, date: &str) -> PhotoId {
     id
 }
 
+/// ORF probes record both supported and preview-only outcomes, without changing other formats.
+#[test]
+fn orf_support_checks_keep_a_stamp_even_when_sensor_data_decodes() {
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "a.orf".into() }, "a.orf", "ORF", 4, 3, "2026-01-01");
+    p.kind = MediaKind::Raw;
+    assert!(p.preview_only_stale(), "legacy supported ORF needs the withdrawal recheck");
+    p.set_preview_only(None);
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    assert!(p.develops_raw(), "supported uncompressed ORF remains sensor-decodable");
+    p.set_preview_only(Some("Olympus compressed ORF".into()));
+    assert_eq!(p.preview_checked, APP_VERSION);
+    assert!(!p.preview_only_stale());
+    assert!(!p.develops_raw());
+    p.format = "DNG".into();
+    p.set_preview_only(None);
+    assert!(p.preview_checked.is_empty(), "other supported formats keep their existing semantics");
+    assert!(!p.preview_only_stale());
+}
+
 #[test]
 fn date_token_matches_time_part_case_insensitively() {
     let mut c = Catalog::new();

@@ -6,8 +6,16 @@ use egui_kittest::{Harness, kittest::NodeT};
 use lightcraft_ui_egui::{LightcraftApp, Services};
 
 fn harness() -> Harness<'static, LightcraftApp> {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.headless_host = true;
+    let mut builder = Harness::builder().with_size(vec2(1500.0, 950.0));
+    // Settings lists each language by its own name, and some scripts (Georgian, the CJK
+    // languages) have glyphs only in the craft-fonts faces (releases always have them): without
+    // them the names are drawn as boxes, which this check of roles and titles doesn't need
+    if lightcraft_engine::CRAFT_FONTS.is_empty() {
+        builder = builder.allow_missing_glyphs();
+    }
+    let mut h = builder.build_ui_state(
         |ui, app: &mut LightcraftApp| {
             app.logic(&ui.ctx().clone());
             app.ui(ui);
