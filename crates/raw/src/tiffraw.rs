@@ -247,7 +247,12 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
         }
         comp::LOSSY_JPEG => {
             // lossy DNG: each chunk is a baseline (DCT) JPEG of 8-bit samples
-            let (px, jw, jh, jc) = lossy_jpeg(src, cpp, MAX_JPEG_SAMPLES)?;
+            // a JPEG decoded for a tile may hold no more samples than the tile (a real one is exactly the tile):
+            // many small tiles pointing at one big JPEG would otherwise each decode all of it
+            // (the JPEG codes whole MCUs, at most 32 × 32 pixels each, so its size is the tile's rounded up to them)
+            let mcu = |v: usize| v.div_ceil(32).saturating_mul(32);
+            let tile_budget = mcu(cw).saturating_mul(mcu(ch)).saturating_mul(if cpp == 1 { 1 } else { 3 }).clamp(1, MAX_JPEG_SAMPLES);
+            let (px, jw, jh, jc) = lossy_jpeg(src, cpp, tile_budget)?;
             // the buffer holds the rows the decoded JPEG covers (the caller zero-fills the tile's
             // remainder and reads only rows it fills): a tile-many-larger decoded JPEG does not
             // get the nominal tile's full buffer (issue #1517)
@@ -271,6 +276,16 @@ fn decode_chunk(data: &[u8], info: &ImageInfo, c: &Chunk, order: ByteOrder, pack
             // Deflate compresses at most about 1:1032, so a source this far under half of its
             // nominal length cannot reconstruct the chunk: refused before the nominal buffer is
             // inflated and predicted, which padding-only work would make gigabytes.
+            // Nor may the nominal chunk be mostly padding outside the image (a tile far larger than the picture):
+            // its allocation and predictor pass would be spent on samples nobody reads.
+            if n > vw
+                .saturating_mul(vh)
+                .saturating_mul(cpp)
+                .saturating_mul(MAX_PADDING_FACTOR)
+                .saturating_add(MAX_WRITER_TILE_SAMPLES.saturating_mul(cpp))
+            {
+                return Err(RawError::Limit("deflated chunk is mostly padding outside the image"));
+            }
             if (src.len() as u64).saturating_mul(2048) < inflate_len {
                 return Err(RawError::Corrupt(format!("a deflated chunk of {inflate_len} bytes is packed into only {} bytes", src.len())));
             }
@@ -314,6 +329,13 @@ fn jxl_chunk(_: &[u8], _: usize, _: usize, _: usize, _: usize, _: usize, _: u32,
 fn jxl_chunk_check(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits: u32, float: bool) -> Result<()> {
     jxl_chunk(src, cw, ch, vw, vh, cpp, bits, float).map(|_| ())
 }
+
+/// How many times its in-image samples a deflated chunk's nominal size may reach (plus a writer tile of slack):
+/// edge tiles of real files are mostly inside the image.
+const MAX_PADDING_FACTOR: usize = 32;
+/// Samples per plane of the largest Deflate tile the DNG writer pads to (2048 × 2048, `dngwrite::MAX_DEFLATE_TILE`),
+/// which a small image's one tile is nearly all padding of: such files still decode.
+const MAX_WRITER_TILE_SAMPLES: usize = 2048 * 2048;
 
 /// The most samples a tiled JPEG chunk or a white-balance preview may decode to: far more than
 /// any real lossy tile or preview carries, and small enough that a JPEG header alone cannot size
@@ -503,6 +525,39 @@ mod lossy_tests {
         assert!((px(2, 3)[0] as i32 - 40).abs() <= 3 && (px(2, 3)[2] as i32 - 200).abs() <= 3, "{:?}", px(2, 3));
         assert!((px(20, 3)[0] as i32 - 220).abs() <= 3, "second tile: {:?}", px(20, 3));
         assert!((px(10, 5)[1] as i32 - 150).abs() <= 6, "green ramp: {:?}", px(10, 5));
+    }
+
+    /// A small tile may not decode a JPEG much larger than itself (a table of tiny tiles all pointing at one big
+    /// JPEG would decode it once per tile); a JPEG that fills the tile's whole 32 × 32 MCU block still decodes.
+    #[test]
+    fn a_lossy_tile_may_not_decode_a_much_larger_jpeg() {
+        let encode = |w: usize, h: usize| {
+            let mut out = Vec::new();
+            jpeg_encoder::Encoder::new(&mut out, 90).encode(&vec![128u8; w * h * 3], w as u16, h as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+            out
+        };
+        let image = |jpeg: &[u8]| {
+            let mut file = vec![0u8; 8];
+            file.extend_from_slice(jpeg);
+            let info = ImageInfo {
+                width: 4,
+                height: 4,
+                bits_per_sample: vec![8, 8, 8],
+                samples_per_pixel: 3,
+                compression: comp::LOSSY_JPEG,
+                photometric: 34892,
+                planar: 1,
+                predictor: 1,
+                sample_format: 1,
+                new_subfile_type: 0,
+                layout: Layout::Tiles { tile_width: 16, tile_height: 16 },
+                offsets: vec![8],
+                byte_counts: vec![jpeg.len() as u64],
+            };
+            read_image(&file, &info, ByteOrder::Little, Packing::Msb)
+        };
+        assert!(image(&encode(32, 32)).is_ok());
+        assert!(matches!(image(&encode(256, 256)), Err(RawError::Corrupt(_))));
     }
 
     fn strip_info(compression: u16, offsets: Vec<u64>, byte_counts: Vec<u64>) -> ImageInfo {
