@@ -220,7 +220,7 @@ pub fn compose_with(
 ) -> (Rgba8, Layout) {
     let s = s.clone().sanitized();
     let (w, h) = slide_size(out_w, out_h);
-    let has_photo = photo.width > 0 && photo.height > 0 && photo.data.len() == photo.width * photo.height;
+    let has_photo = photo.width > 0 && photo.height > 0 && Some(photo.data.len()) == photo.width.checked_mul(photo.height);
     let aspect = if has_photo { photo.width as f64 / photo.height as f64 } else { f64::NAN };
     let l = layout(&s, aspect, w, h);
     let c = s.backdrop_color;
