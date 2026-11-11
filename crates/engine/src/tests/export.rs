@@ -405,7 +405,8 @@ fn preset_export_preserves_originals(command: &str, selection: serde_json::Value
     let mut params = selection.clone();
     params["path"] = json!(dir.join("missing/../IMG_1.jpg").to_string_lossy());
     let error = s.execute(command, &params).unwrap_err().to_string();
-    assert!(error.contains("cannot be resolved"), "{error}");
+    // Windows resolves `..` lexically and finds the original; Unix cannot resolve it and refuses
+    assert!(error.contains("cannot be resolved") || error.contains("never writes over an original"), "{error}");
     assert!(!dir.join("missing").exists());
     assert_eq!(std::fs::read(&src).unwrap(), original);
     let _ = std::fs::remove_dir_all(dir);
