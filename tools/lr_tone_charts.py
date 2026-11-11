@@ -137,11 +137,31 @@ def srgb_encode(v):
     return np.where(v <= 0.0031308, v * 12.92, 1.055 * v ** (1 / 2.4) - 0.055)
 
 
+ADOBE_RGB_NAME = "Adobe RGB (1998)"
+
+
+def read_render(path):
+    """A Camera Raw render as RGB 0..1, after checking it is the 16-bit Adobe RGB (1998) TIFF the tables assume.
+
+    Another export setting would still give plausible numbers, but wrong ones, so it is refused.
+    """
+    import tifffile
+    with tifffile.TiffFile(path) as t:
+        page = t.pages[0]
+        icc = page.tags.get(34675)  # InterColorProfile
+        profile = bytes(icc.value) if icc is not None else b""
+        a = page.asarray()
+    if a.dtype != np.uint16 or a.ndim != 3 or a.shape[2] != 3:
+        raise SystemExit(f"{path}: expected a 16-bit RGB TIFF, got {a.dtype} {a.shape}")
+    # the profile's description: ASCII in ICC v2, UTF-16 in v4
+    if not any(n in profile for n in (ADOBE_RGB_NAME.encode(), ADOBE_RGB_NAME.encode("utf-16-be"))):
+        raise SystemExit(f"{path}: expected an embedded {ADOBE_RGB_NAME} profile (export from Camera Raw in that colour space)")
+    return a.astype(np.float64) / 65535.0
+
+
 def grey_levels(path, patches):
     """The grey steps of a Camera Raw render as sRGB-encoded linear ProPhoto values (the curve stage's domain)."""
-    import tifffile
-    a = tifffile.imread(path).astype(np.float64)
-    a /= 65535.0 if a.max() > 255 else 255.0
+    a = read_render(path)
     out = []
     for q in patches:
         if q["kind"] != "grey" or not q["ok"]:
