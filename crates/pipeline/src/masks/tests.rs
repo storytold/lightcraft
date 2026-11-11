@@ -627,9 +627,18 @@ fn people_and_subject_use_person_mattes() {
 
 #[test]
 fn the_evaluated_mask_count_is_bounded_by_the_alpha_plane_memory() {
+    let fr = |w: f64, h: f64| Frame::new(w as usize, h as usize, &Default::default(), true);
     // a 24 MP render keeps a few dozen planes, a 100 MP one fewer, but never fewer than MIN_MASKS
-    assert!(max_masks(6000, 4000) * 6000 * 4000 * 4 <= MAX_ALPHA_BYTES);
-    assert_eq!(max_masks(20_000, 20_000), MIN_MASKS);
-    assert!(max_masks(1, 1) >= 1000);
-    assert!(max_masks(0, 0) >= MIN_MASKS);
+    assert!(max_masks(&fr(6000.0, 4000.0), 6000, 4000) * 6000 * 4000 * 4 <= MAX_ALPHA_BYTES);
+    assert_eq!(max_masks(&fr(20_000.0, 20_000.0), 20_000, 20_000), MIN_MASKS);
+    assert!(max_masks(&fr(1.0, 1.0), 1, 1) >= 1000);
+    assert!(max_masks(&fr(1.0, 1.0), 0, 0) >= MIN_MASKS);
+}
+
+#[test]
+fn a_window_applies_the_same_masks_as_the_full_frame() {
+    let f = Frame::new(6000, 4000, &Default::default(), true);
+    let full = max_masks(&f, 6000, 4000);
+    let win = f.window(6000, 4000, crate::PixelWindow { x: 0, y: 0, w: 600, h: 400 });
+    assert_eq!(max_masks(&win, 600, 400), full);
 }

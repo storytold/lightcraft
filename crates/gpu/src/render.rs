@@ -728,7 +728,7 @@ pub fn render(
     }
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
-        let list = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(lightcraft_pipeline::masks::max_masks(w, h));
+        let list = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(lightcraft_pipeline::masks::max_masks(&plan.frame, w, h));
         match (list.map(|m| m.id).position(|id| id == m.id), masks.as_ref()) {
             (Some(mi), Some(all)) => Ok(cx.slice(all, mi * n, n)),
             _ => Err(m),
@@ -740,8 +740,12 @@ pub fn render(
     // on the CPU, instead of one synchronous readback per mask (which stalls the pipeline N times).
     let all_overlay_alphas: Option<Vec<Plane>> = if matches!(req.overlay, lightcraft_pipeline::Overlay::AllMasks { .. }) {
         masks.as_ref().map(|all| {
-            let list: Vec<_> =
-                s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(lightcraft_pipeline::masks::max_masks(w, h)).collect();
+            let list: Vec<_> = s
+                .masks
+                .iter()
+                .filter(|m| m.visible && !m.components.is_empty())
+                .take(lightcraft_pipeline::masks::max_masks(&plan.frame, w, h))
+                .collect();
             if list.is_empty() {
                 return Vec::new();
             }
@@ -982,7 +986,8 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
     let s = &*plan.settings;
     let (w, h) = (plan.w, plan.h);
     // as the CPU path keeps them: the first `max_masks`, so over-cap documents render the same
-    let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(lightcraft_pipeline::masks::max_masks(w, h)).collect();
+    let list: Vec<_> =
+        s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(lightcraft_pipeline::masks::max_masks(&plan.frame, w, h)).collect();
     if list.is_empty() {
         return (None, Vec::new());
     }

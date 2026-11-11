@@ -143,9 +143,16 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 const MAX_ALPHA_BYTES: usize = 8 << 30;
 const MIN_MASKS: usize = 16;
 
-/// How many masks of a `w` × `h` render are evaluated (the first ones, in order).
-pub fn max_masks(w: usize, h: usize) -> usize {
+fn cap_for(w: usize, h: usize) -> usize {
     (MAX_ALPHA_BYTES / w.saturating_mul(h).saturating_mul(4).max(1)).max(MIN_MASKS)
+}
+
+/// How many masks of a `w` × `h` render of `frame` are evaluated (the first ones, in order). The cap is defined on the
+/// frame's full output size, so a preview or window applies the same masks as the export; the alpha-plane byte bound is
+/// then enforced separately on the window actually rendered (never tighter than the full frame's, as a window is no larger).
+pub fn max_masks(frame: &Frame, w: usize, h: usize) -> usize {
+    let full = frame.view.map_or(cap_for(w, h), |v| cap_for(v.full_w as usize, v.full_h as usize));
+    full.min(cap_for(w, h))
 }
 
 /// The visible masks with components, evaluated in order (`mattes`: the source's, see [`Mattes`]).
@@ -154,7 +161,7 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
-        .take(max_masks(w, h))
+        .take(max_masks(frame, w, h))
         .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes), adjust: m.adjust })
         .collect()
 }
