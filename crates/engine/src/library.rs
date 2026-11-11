@@ -605,6 +605,7 @@ impl Session {
         self.recent_keywords = prefs.recent_keywords;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
+        self.prep.opened_library();
         self.prep.library = prefs.prep.map(crate::prep::PrepSettings::sanitized);
         self.prep.unfinished = prefs.prep_unfinished;
         self.slideshow = prefs.slideshow.sanitized();

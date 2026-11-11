@@ -893,3 +893,44 @@ fn a_view_that_keeps_changing_starts_one_build_once_it_is_still() {
     drop(s);
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// CodeRabbit on #4093: a view signature is only its photos' ids and their count, so two
+/// libraries can carry the same one. The view guards, waits, and step count the first library
+/// earned must not follow the session into the second: a build that ran to its end there
+/// leaves `started_for` set, and the second library's owed build would never start.
+#[test]
+fn an_unfinished_build_is_taken_up_when_its_library_opens_after_another() {
+    let mode = crate::prep::Mode::Library;
+    // the second library, left by a session whose build did not run to its end
+    let (mut s2, root2, ids2) = library("prep-switch-second", 4);
+    let hold = crate::prep::TestHold::new();
+    for id in &ids2[..3] {
+        s2.prep_tick(mode, Some(*id), false);
+    }
+    let b2 = s2.preview_build.clone().expect("the second library's build started");
+    assert!(marked_unfinished(&root2), "its build is owed");
+    b2.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&b2), "a cancelled build stops");
+    drop(s2);
+    drop(hold);
+    // the first library, in the session that switches: its build runs to its end
+    let (mut s, root, ids) = library("prep-switch-first", 4);
+    for id in &ids[..3] {
+        s.prep_tick(mode, Some(*id), false);
+    }
+    let b = s.preview_build.clone().expect("the first library's view is prepared");
+    assert!(wait_finished(&b), "built");
+    s.prep_tick(mode, None, false);
+    assert!(!s.prep.unfinished, "run to its end: nothing is owed here");
+    // the switch: the second library is owed a build for the same view signature
+    s.open_library(root2.join("lib"), false).unwrap();
+    assert!(s.prep.unfinished, "read with the second library");
+    let next = build_after(&mut s, &b).expect("the second library's owed build is taken up, not blocked by the first library's guards");
+    assert!(next.background);
+    assert_eq!(next.total, 4);
+    next.cancel.store(true, Ordering::Relaxed);
+    assert!(wait_finished(&next), "a cancelled build stops");
+    drop(s);
+    std::fs::remove_dir_all(&root).unwrap();
+    std::fs::remove_dir_all(&root2).unwrap();
+}

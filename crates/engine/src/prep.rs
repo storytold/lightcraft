@@ -274,6 +274,28 @@ impl std::fmt::Debug for PrepState {
 }
 
 impl PrepState {
+    /// Forget the view state a library that was open before left behind, when a library
+    /// opens: the view guards (`started_for`, `declined_for`, and the view last seen), the
+    /// settle and retry waits, and the step count were earned in that library's views, and a
+    /// view signature is only its photos' ids and their count, so another library's view can
+    /// carry the same one — what the old library started, declined, or was still counting
+    /// would block or hurry this one's preparation (CodeRabbit on #4093). What a library
+    /// opens with is kept: the settings (`app`, and `library`, which the caller has just read
+    /// from this library), what it is owed (`unfinished`, likewise), the settle wait a test
+    /// asks for (`settle`), and the build being followed (`build`, in its library,
+    /// `build_library`): a build left over from the library before says nothing about this
+    /// one, and is told apart by the library it was started in.
+    pub(crate) fn opened_library(&mut self) {
+        self.seen = None;
+        self.started_for = None;
+        self.declined_for = None;
+        self.not_before = None;
+        self.retry_at = None;
+        self.steps_in = None;
+        self.last_at = None;
+        self.steps = 0;
+    }
+
     /// The settings in use.
     pub fn settings(&self) -> PrepSettings {
         self.library.unwrap_or(self.app)
