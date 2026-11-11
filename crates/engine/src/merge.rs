@@ -513,6 +513,14 @@ impl Session {
         Ok((jobs, skipped))
     }
 
+    /// Plan one merge of `ids` as a single explicit group: the ids are merged as given (deduped, in order) and a
+    /// collapsed stack among them is not expanded, as [`Session::plan_merges_from_groups`] does. The desktop
+    /// batch (HDR for Each Bracket Set) plans each set this way, so its photos are not merged again.
+    pub fn plan_merge_group(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
+        let (mut jobs, _) = self.plan_merges_from_groups(kind, finish, vec![ids.to_vec()], preview)?;
+        jobs.pop().ok_or_else(|| EngineError::Other("nothing to merge".into()))
+    }
+
     /// Plan one merge job per explicit group in `groups`, without re-expanding collapsed stacks.
     /// Groups are the retained IDs from [`lightcraft_catalog::Catalog::bracket_sets`] (or similar
     /// filtering): each group is merged as given (deduped, in order), so a bracket subset is not

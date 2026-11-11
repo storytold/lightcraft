@@ -79,7 +79,8 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "compare.swap" | "compare.makeSelect" | "compare.set" => app.ui.view == ViewMode::Compare,
         "slideshow.togglePause" | "slideshow.next" | "slideshow.previous" | "slideshow.end" => app.ui.slideshow.is_some(),
         s if s.starts_with("dialog.merge") || (s.starts_with("merge.") && s.ends_with("Last")) => {
-            app.session.selected().len() >= 2 && app.merge.final_task.is_none()
+            app.merge.final_task.is_none()
+                && crate::merge::merge_command_of(s).is_some_and(|command| crate::merge::check_selection(app, &command).is_ok())
         }
         _ => true,
     }
