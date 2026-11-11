@@ -84,10 +84,10 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
 /// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
-/// 14: a lens database's vignetting correction reaches the sensor proxy only in the share the camera JPEG shows
+/// 26: a lens database's vignetting correction reaches the sensor proxy only in the share the camera JPEG shows
 /// (`camera_vignetting_amount`, ranked within chromaticity classes), not whole: JPEGs that show less of it fitted looks too
 /// dark, with skewed colour. The same for a DNG's tone fit; a CR3 proxy gets the gain where its framed pixels come from.
-pub const LOOK_VERSION: u32 = 14;
+pub const LOOK_VERSION: u32 = 26;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

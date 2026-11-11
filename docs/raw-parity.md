@@ -223,7 +223,7 @@ Neither names ORF or specifies its file layout. These references do not establis
   ΔL\* −11, chroma ×0.39. RW2 140 of 174 files accepted, median 5.0. NEF 13 of 13, 2.9–7.8. RAF 23 of
   24, pooled X-H2S 1.62 / X-T4 2.34 (measured before `LOOK_VERSION` 13 stopped applying the embedded vignetting
   correction twice); X-S10, 60 photos not used to find that bug, mean ΔE00 2.71 → 2.55 with it fixed. Since
-  `LOOK_VERSION` 14 a lens database's vignetting reaches the fit only in the share the camera JPEG shows (an
+  `LOOK_VERSION` 26 a lens database's vignetting reaches the fit only in the share the camera JPEG shows (an
   ILCE-7M3 with an FE 28mm F2 at f/2, whose JPEG shows none of it, had rendered darker and orange with the whole
   profile). SRW 2.2–7.6.
 - Against Lightroom itself (few): Sony DRO median ΔE76 7.5 → 3.3; Olympus E-1 vs Lightroom Classic
@@ -297,7 +297,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-07 | patch | Camera look: a lens database's vignetting reaches the per-file fit only in the share the camera JPEG shows (`LOOK_VERSION` 14), so raws whose JPEG shows little or none of it (mostly Sony) no longer render too dark, with skewed colour, with lensfun profiles. |
+| 2026-11-07 | patch | Camera look: a lens database's vignetting reaches the per-file fit only in the share the camera JPEG shows (`LOOK_VERSION` 26), so raws whose JPEG shows little or none of it (mostly Sony) no longer render too dark, with skewed colour, with lensfun profiles. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-26 | patch | Bundled camera profile count 5 → 9 (Nikon Z 6II, Z 8 and D5300, ILCE-7RM5); counts only |

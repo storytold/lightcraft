@@ -298,6 +298,9 @@ pub(super) fn look_proxies(
     let Some(vignette) = database.and_then(|e| e.vignette) else {
         return proxies(raw, bytes, transform, PROXY, 0.0, lens, embedded);
     };
+    // A CR3's framing (`estimate_cr3_framing`) is estimated here on the uncorrected sensor, not the corrected one as
+    // before: it compares edge directions, which a smooth vignetting gain hardly moves. On the 22 corpus CR3s with a
+    // database profile it came out the same both ways (21 unmoved, the R50 V at scale 0.986).
     let (mut sensor, reference, clipped, framing) = framed_proxies(raw, bytes, transform, PROXY, 0.0, lens, None)?;
     // CR3 proxies come back oriented like the JPEG (their framing aligned to it), the others in sensor orientation
     let orientation = if raw.format == lightcraft_raw::RawFormat::Cr3 { lightcraft_geom::Orientation::Normal } else { raw.orientation };
