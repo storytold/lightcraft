@@ -188,7 +188,7 @@ impl Store for FsStore {
         }
         let tmp = self.path(&format!("{name}.tmp"));
         let written = (|| {
-            let mut w = Counter { inner: io::BufWriter::with_capacity(1 << 20, create_staging(&tmp)?), n: 0 };
+            let mut w = Counter { inner: io::BufWriter::with_capacity(1 << 20, create_staging(&tmp)?), n: 0, limit: MAX_READ };
             fill(&mut w)?;
             w.flush()?;
             let f = w.inner.into_inner().map_err(|e| e.into_error())?;
@@ -290,14 +290,19 @@ impl Store for FsStore {
     }
 }
 
-/// Counts the bytes written through it.
+/// Counts the bytes written through it, and refuses more than [`MAX_READ`]: a file this store cannot read
+/// back is not committed over the one it can (the write fails and the old file stays).
 struct Counter<W> {
     inner: W,
     n: u64,
+    limit: u64,
 }
 
 impl<W: io::Write> io::Write for Counter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.n.saturating_add(buf.len() as u64) > self.limit {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("more than the {} bytes a catalog file may hold", self.limit)));
+        }
         let k = self.inner.write(buf)?;
         self.n += k as u64;
         Ok(k)
@@ -400,5 +405,19 @@ mod tests_staging {
         store.truncate("catalog.log", 1).unwrap();
         assert_eq!(std::fs::read(dir.join("catalog.log")).unwrap(), b"a");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod counter_tests {
+    use super::Counter;
+    use std::io::Write;
+
+    #[test]
+    fn a_counter_refuses_what_passes_its_limit() {
+        let mut c = Counter { inner: Vec::new(), n: 0, limit: 8 };
+        c.write_all(b"12345678").unwrap();
+        assert_eq!(c.write(b"9").unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(c.inner, b"12345678");
     }
 }

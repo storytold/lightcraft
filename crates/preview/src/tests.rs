@@ -852,6 +852,29 @@ fn dims_finds_a_size_marker_past_the_first_few_kib() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What is written, reported by `dims` and decoded share one pixel bound.
+#[test]
+fn the_pixel_bound_is_the_same_for_write_dims_and_read() {
+    use crate::disk::encode_jpeg;
+    // too big to write (the size is checked before any pixel is read)
+    assert!(encode_jpeg(&Rgba8 { width: 20_000, height: 20_000, data: Vec::new() }).is_none());
+    let dir = temp_dir("pixel-bound");
+    let d = DiskCache::new(&dir, 1 << 28);
+    let key = hash_bytes(b"bound");
+    assert!(d.put(key, &gradient(40, 30, 5)));
+    assert_eq!(d.dims(key), Some((40, 30)));
+    // a file whose header claims 20 000 x 20 000: not reported as kept, and not decoded
+    let file = files_under(&dir).into_iter().find(|f| f.ends_with(disk::EXT)).expect("the cached file");
+    let path = dir.join(file);
+    let mut jpeg = std::fs::read(&path).unwrap();
+    let sof = jpeg.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    jpeg[sof + 5..sof + 9].copy_from_slice(&[0x4E, 0x20, 0x4E, 0x20]);
+    std::fs::write(&path, jpeg).unwrap();
+    assert_eq!(d.dims(key), None);
+    assert!(d.get(key).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A picture bigger than the room pruning leaves is removed by the pruning its own write starts: `put` says it
 /// was not kept (CodeRabbit on #3077).
 #[test]

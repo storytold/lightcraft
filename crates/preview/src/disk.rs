@@ -207,7 +207,8 @@ impl DiskCache {
             let more = limit.saturating_sub(head.len() as u64);
             (&mut f).take(more).read_to_end(&mut head).ok()?;
             if let Some(dims) = jpeg_dims(&head) {
-                return Some(dims);
+                // a picture past the decode bound is not one `get` would return: not reported as kept
+                return Some(dims).filter(|&(w, h)| w.checked_mul(h).is_some_and(|n| n <= MAX_THUMB_PIXELS));
             }
             if (head.len() as u64) < limit {
                 // the whole file was read
@@ -474,7 +475,12 @@ pub fn is_cache_file(shard: &str, name: &str) -> bool {
 
 /// Encode a thumbnail as the cache stores it (JPEG, RGB, 4:2:0).
 pub fn encode_jpeg(img: &Rgba8) -> Option<Vec<u8>> {
-    if img.width == 0 || img.height == 0 || img.width > u16::MAX as usize || img.height > u16::MAX as usize {
+    if img.width == 0
+        || img.height == 0
+        || img.width > u16::MAX as usize
+        || img.height > u16::MAX as usize
+        || img.width.checked_mul(img.height)? > MAX_THUMB_PIXELS
+    {
         return None;
     }
     let mut rgb = Vec::with_capacity(img.width * img.height * 3);
@@ -488,8 +494,10 @@ pub fn encode_jpeg(img: &Rgba8) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Most pixels of a cached thumbnail (a 5120 x 6400 image; thumbnails and previews are far smaller).
-const MAX_THUMB_PIXELS: usize = 32 << 20;
+/// Most pixels of a cached picture, read or written (16384 x 16384: above a 150 MP medium-format full-size preview). The
+/// same bound applies to what is written, to what `dims` reports and to what `get` decodes, so a stored preview is
+/// always one that reads back.
+const MAX_THUMB_PIXELS: usize = 256 << 20;
 
 /// How much of a cached file [`DiskCache::dims`] reads: the JPEG headers this cache writes come
 /// first and are a few hundred bytes.
