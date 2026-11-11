@@ -3535,5 +3535,11 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Starten Sie die App mit --control 7980 (oder LIGHTCRAFT_CONTROL_PORT), dann verbindet lightcraft-cli mcp --connect einen Agenten mit ihr.",
   "Welcome": "Willkommen",
   "Next": "Weiter",
-  "Get Started": "Loslegen"
+  "Get Started": "Loslegen",
+  "Album name (empty outside an album view)": "Albumname (leer außerhalb einer Albumansicht)",
+  "Export date, UTC (YYYYMMDD)": "Exportdatum, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Exportzeit, UTC (HHMM)",
+  "Insert variable": "Variable einfügen",
+  "Insert…": "Einfügen…",
+  "none  ({album}, {date}, {hour})": "keine  ({album}, {date}, {hour})"
 }

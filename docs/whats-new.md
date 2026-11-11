@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+### Export subfolder variables
+- The Export dialog's Subfolder field now supports `{album}` (active album name sanitized for filesystem safety, empty outside an album view), `{date}` (batch export date in `YYYYMMDD`, UTC), and `{hour}` (batch export time in `HHMM`, UTC). An **Insert…** dropdown next to the field inserts tokens at the cursor. Tokens are stored in presets and expanded at export time, so the same preset produces dated subfolders on every use.
 ### Export Effect Presets leaves your originals alone
 - Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
   the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,

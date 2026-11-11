@@ -2425,5 +2425,11 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "Album name (empty outside an album view)": "Nama album (kosong di luar tampilan album)",
+  "Export date, UTC (YYYYMMDD)": "Tanggal ekspor, UTC (YYYYMMDD)",
+  "Export time, UTC (HHMM)": "Waktu ekspor, UTC (HHMM)",
+  "Insert variable": "Sisipkan variabel",
+  "Insert…": "Sisipkan…",
+  "none  ({album}, {date}, {hour})": "tidak ada  ({album}, {date}, {hour})"
 }

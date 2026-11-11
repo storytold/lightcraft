@@ -39,7 +39,7 @@ pub use params::{
 };
 #[cfg(test)]
 use place::Placer;
-pub use place::{write_file, write_file_durable, write_file_new};
+pub use place::{clean_album_name, clean_subfolder, expand_subfolder, write_file, write_file_durable, write_file_new};
 pub use prepare::{
     AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
 };
@@ -74,7 +74,10 @@ pub struct ExportOptions {
     pub start_number: u32,
     /// A specific folder for the whole batch, or each photo's own folder.
     pub destination_mode: DestinationMode,
-    /// Created inside the destination folder (empty = none).
+    /// Created inside the destination folder (empty = none). Supports `{album}`, `{date}`
+    /// (YYYYMMDD, UTC) and `{hour}` (HHMM, UTC) variables, expanded during batch preparation
+    /// once per batch using the active album view (or empty outside an album view). Presets store
+    /// the raw template.
     pub subfolder: String,
     /// When a file of the same name exists in the destination folder.
     pub conflict: Conflict,

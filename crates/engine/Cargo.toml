@@ -45,12 +45,11 @@ harfrust = { version = "0.13", default-features = false, features = ["std"] }
 unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
 lightcraft-segment = { workspace = true, optional = true }
+chrono = { workspace = true }
 
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lightcraft-fetch = { workspace = true }
-# capture-time parsing for face recognition (native only)
-chrono = { workspace = true }
 # free space of the drive holding the preview cache (the low-disk alert; pure Rust: rustix / windows-sys)
 fs4 = { workspace = true }
 
