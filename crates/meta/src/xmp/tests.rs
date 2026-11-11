@@ -623,3 +623,18 @@ fn paths_are_not_built_past_the_key_budget() {
     let _ = parse_xmp(&doc);
     assert!(t.elapsed().as_secs() < 10, "took {:?}", t.elapsed());
 }
+
+/// One walker answers both the parser and the Remove Location check: nested text counts, blanks
+/// don't, and a tree past the node budget counts as text-bearing instead of being walked in full.
+#[test]
+fn value_has_text_finds_nested_text_and_stops_at_the_node_budget() {
+    let blank = XmpValue::Array(vec![XmpValue::Text("  ".into()), XmpValue::Struct(BTreeMap::new())]);
+    assert!(!value_has_text(&blank));
+    let nested = XmpValue::Array(vec![XmpValue::Struct(BTreeMap::from([("Iptc4xmpExt:City".to_string(), XmpValue::Text("Rome".into()))]))]);
+    assert!(value_has_text(&nested));
+    let oversized = XmpValue::Array(vec![XmpValue::Text(String::new()); MAX_NODES + 1]);
+    assert!(value_has_text(&oversized), "a tree past the node budget is treated as text-bearing");
+    let data = XmpData { values: BTreeMap::from([("Iptc4xmpExt:LocationShown".to_string(), nested)]), ..XmpData::default() };
+    let data = XmpData { properties: BTreeMap::from([("Iptc4xmpExt:LocationShown".to_string(), vec![String::new()])]), ..data };
+    assert!(data.has_location_metadata(), "the structured value's city is found");
+}

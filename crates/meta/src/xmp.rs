@@ -92,41 +92,6 @@ impl XmpData {
     pub fn has_location_metadata(&self) -> bool {
         const IPTC_LOCATION_STRUCTS: [&str; 2] = ["Iptc4xmpExt:LocationShown", "Iptc4xmpExt:LocationCreated"];
 
-        let has_text = |root: &XmpValue| {
-            let mut pending = Vec::new();
-            if pending.try_reserve(1).is_err() {
-                return true;
-            }
-            pending.push(root);
-            let mut visited = 0usize;
-            while let Some(value) = pending.pop() {
-                visited = visited.saturating_add(1);
-                // Parsed trees are capped at MAX_NODES. If a caller constructs an XmpData with a
-                // larger tree, conservatively treat it as location-bearing rather than risk an
-                // unbounded walk in an export privacy check.
-                if visited > MAX_NODES {
-                    return true;
-                }
-                match value {
-                    XmpValue::Text(text) if !text.trim().is_empty() => return true,
-                    XmpValue::Array(items) => {
-                        if pending.len().saturating_add(items.len()) > MAX_NODES || pending.try_reserve(items.len()).is_err() {
-                            return true;
-                        }
-                        pending.extend(items);
-                    }
-                    XmpValue::Struct(fields) => {
-                        if pending.len().saturating_add(fields.len()) > MAX_NODES || pending.try_reserve(fields.len()).is_err() {
-                            return true;
-                        }
-                        pending.extend(fields.values());
-                    }
-                    XmpValue::Text(_) => {}
-                }
-            }
-            false
-        };
-
         for (key, values) in &self.properties {
             let parts = key.split('/');
             if parts.clone().any(|part| part.starts_with("exif:GPS") || part.starts_with("exifEX:GPS")) {
@@ -152,7 +117,7 @@ impl XmpData {
 
             if IPTC_LOCATION_STRUCTS.contains(&location_part) {
                 let root = parts.clone().next().unwrap_or(key);
-                if self.values.get(root).is_some_and(has_text) || values.iter().any(|value| !value.trim().is_empty()) {
+                if self.values.get(root).is_some_and(value_has_text) || values.iter().any(|value| !value.trim().is_empty()) {
                     return true;
                 }
                 // `values` keeps the first text-bearing occurrence across RDF descriptions, while
@@ -216,18 +181,31 @@ impl XmpValue {
 }
 
 /// Whether a structured value holds any non-blank text. A tree larger than the parser's node
-/// budget counts as text-bearing (the conservative answer for a privacy check).
+/// budget counts as text-bearing (the conservative answer for a privacy check): parsed trees are
+/// capped at MAX_NODES, so only a caller-built `XmpData` can reach it, and the walk stays bounded.
 fn value_has_text(value: &XmpValue) -> bool {
-    let mut pending = vec![value];
+    let mut pending = Vec::new();
+    if pending.try_reserve(1).is_err() {
+        return true;
+    }
+    pending.push(value);
     let mut visited = 0usize;
     while let Some(value) = pending.pop() {
         visited = visited.saturating_add(1);
         if visited > MAX_NODES {
             return true;
         }
-        match value {
+        let children = match value {
             XmpValue::Text(text) if !text.trim().is_empty() => return true,
-            XmpValue::Array(items) => pending.extend(items.iter()),
+            XmpValue::Text(_) => continue,
+            XmpValue::Array(items) => items.len(),
+            XmpValue::Struct(fields) => fields.len(),
+        };
+        if pending.len().saturating_add(children) > MAX_NODES || pending.try_reserve(children).is_err() {
+            return true;
+        }
+        match value {
+            XmpValue::Array(items) => pending.extend(items),
             XmpValue::Struct(fields) => pending.extend(fields.values()),
             XmpValue::Text(_) => {}
         }
