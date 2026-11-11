@@ -208,6 +208,10 @@ fn samsung_sef_trailer_without_eoi() {
     assert_eq!(full.image.data, reference.image.data, "the same pixels as the file with its EOI");
     let small = decode(&pano, DecodeOptions::fit(32, 32)).unwrap();
     assert_eq!((small.source_width, small.source_height), (160, 96));
+    // the fast display decode too, scaled (where the trailer after the scan used to fail it)
+    let (fit, _) = lightcraft_codecs::decode_jpeg_srgb8_fit(&pano, 32, 32).unwrap().unwrap();
+    let (fit_ref, _) = lightcraft_codecs::decode_jpeg_srgb8_fit(&jpeg, 32, 32).unwrap().unwrap();
+    assert_eq!((fit.width, fit.height, &fit.data), (fit_ref.width, fit_ref.height, &fit_ref.data));
     // an FF D9 inside the SEF data is not the image's end
     let eoi_in_data = sef_file(scan, block, b"SEFH", 0x08E0, &[0xFF, 0xC0, 0, 0x11, 0xFF, 0xD9, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], None);
     assert_eq!(read_header(&eoi_in_data).unwrap().width, 160);
