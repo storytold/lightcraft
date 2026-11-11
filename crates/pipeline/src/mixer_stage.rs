@@ -100,7 +100,9 @@ fn bracket(v: f32) -> (Option<usize>, Option<usize>, f32) {
 
 /// The combined table of `(slider, amount)` pairs: hue and lightness changes add, chroma changes multiply.
 fn combine(sliders: &[(usize, f32)]) -> Option<Box<[f32; TABLE_LEN]>> {
-    let active: Vec<_> = sliders.iter().filter(|(_, v)| *v != 0.0 && v.is_finite()).collect();
+    // each slider's two measured amounts and weight, found once
+    let active: Vec<(usize, (Option<usize>, Option<usize>, f32))> =
+        sliders.iter().filter(|(_, v)| *v != 0.0 && v.is_finite()).map(|(s, v)| (*s, bracket(*v))).collect();
     if active.is_empty() {
         return None;
     }
@@ -109,8 +111,8 @@ fn combine(sliders: &[(usize, f32)]) -> Option<Box<[f32; TABLE_LEN]>> {
         for out in 0..OUTPUTS {
             for bin in 0..HUES {
                 let mut acc = if out == 1 { 1.0 } else { 0.0 };
-                for (slider, v) in &active {
-                    let (a0, a1, f) = bracket(*v);
+                for (slider, (a0, a1, f)) in &active {
+                    let (a0, a1, f) = (*a0, *a1, *f);
                     let at = |a: Option<usize>| a.map_or(0.0, |a| measured(*slider, a, row, out, bin));
                     let r = at(a0) * (1.0 - f) + at(a1) * f;
                     match out {

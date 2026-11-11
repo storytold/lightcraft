@@ -22,16 +22,17 @@ Region size barely matters: the response follows the frame's range, not how much
 ## What V9 does
 
 1. **The frame's range.** The base layer's 2nd and 99th percentile in log₂ luminance (`FrameRange`), plus exposure.
-   It comes from a small render of the whole output frame, 384 px on the long edge, the same proxy Dehaze uses for
-   its airlight (`local::frame_range`, `Plan::hs_range`). So a zoomed window, a preview and an export of one photo
-   share it.
+   It comes from a render of the whole output frame at a fixed 384 px on the long edge, whatever the output's size,
+   built like the proxy Dehaze uses for its airlight (`local::frame_range`, `Plan::hs_range`). So a zoomed window, a
+   thumbnail, a preview and an export of one photo share it.
 2. **Highlights** adds `amount × a × smooth(low, 2.8, base)` to the base layer's log luminance (`FrameRange::highlights`):
    - `span` is the range's width in stops, at least 0.1.
    - The strength is `a = 0.7 × (span / 5)^2.4`, clamped to 0.2…8.
    - It reaches down to `low = −1 − 0.8 × max(span − 5, 0)` stops.
 3. **Shadows**, local Whites, Blacks, Contrast, Clarity and Texture are V8's.
 
-It applies to global Highlights and to Highlights in masks. A photo with Highlights at 0 renders as V8.
+It applies to global Highlights and to Highlights in masks. With Highlights at 0 (globally and in every mask) the range
+is not measured and Highlights adds nothing.
 
 ## How it was fitted
 
@@ -67,6 +68,9 @@ Three presets get worse: Muted (tone 4.92 → 5.35, colour 0.72 → 0.85), Sunse
   unchecked.
 - The percentiles come from a 384 px proxy, so a frame whose range is set by a few tiny highlights can read a
   slightly different range than the full image would.
+- The proxy is white-balanced but not passed through a DNG's own local tone map (`ProfileGainTableMap`, applied
+  before the base layer when the photo's Profile option asks for it). For such a photo the range describes the
+  tones before that map.
 - The formula is a fit, not a measurement of Lightroom's operator: its shape matches on these photos, its constants
   may not hold for very wide or very narrow ranges (the strength is clamped).
 
