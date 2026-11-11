@@ -357,6 +357,11 @@ const NEUTRAL_CHROMA: f64 = 0.03;
 /// Fewest pixels a chromaticity class needs to take part in [`camera_vignetting_amount`].
 const MIN_CLASS_PIXELS: usize = 32;
 
+/// Camera JPEG level at or above which a channel counts as clipped in [`camera_vignetting_amount`], as for the colour
+/// pairs (`pairs::colour_pair`): the JPEG's brightness no longer follows the scene there, whether or not the sensor
+/// clipped too ([`SENSOR_CLIP`]).
+const JPEG_CLIP: f32 = 0.98;
+
 /// The chromaticity class of a sensor pixel in [`camera_vignetting_amount`]: 0 near-neutral, else 1 + its hue sector.
 fn chromaticity_class(p: [f64; 3]) -> usize {
     let p = p.map(|v| v.max(0.0));
@@ -381,7 +386,8 @@ fn chromaticity_class(p: [f64; 3]) -> usize {
 /// ranks across hues would read that as vignetting: the correlation is taken within classes of similar sensor
 /// chromaticity ([`chromaticity_class`]), averaged by their pixel counts. Within a class the camera's rendering is
 /// taken as alike: two saturations of one hue that it renders differently, one gathered toward the corners, can still
-/// read as vignetting. Clipped, black and non-finite pixels are left out. Proxies of different sizes, or fewer than
+/// read as vignetting. Pixels clipped on the sensor (`clipped`) or in the JPEG ([`JPEG_CLIP`]), black and non-finite
+/// pixels are left out. Proxies of different sizes, or fewer than
 /// [`MIN_VIGNETTING_PIXELS`] usable pixels, keep the whole correction.
 pub(super) fn camera_vignetting_amount(
     sensor: &Rgb32f,
@@ -397,7 +403,7 @@ pub(super) fn camera_vignetting_amount(
     let usable = |p: &[f32; 3]| p.iter().all(|v| v.is_finite()) && luminance_2020(*p) > 0.0;
     let mut classes: Vec<Vec<(f64, [f64; 3], [f64; 3])>> = vec![Vec::new(); HUE_SECTORS + 1];
     for (i, ((s, r), g)) in sensor.data.iter().zip(&reference.data).zip(gains).enumerate() {
-        if clipped.get(i).copied().unwrap_or(false) || !usable(s) || !usable(r) {
+        if clipped.get(i).copied().unwrap_or(false) || !usable(s) || !usable(r) || r.iter().any(|v| *v >= JPEG_CLIP) {
             continue;
         }
         let s = s.map(f64::from);

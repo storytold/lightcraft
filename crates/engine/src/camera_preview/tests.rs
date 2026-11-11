@@ -2834,7 +2834,8 @@ fn the_vignetting_gain_of_a_framed_proxy_is_taken_where_its_pixels_come_from() {
 /// What `camera_vignetting_amount` can't measure on keeps the whole correction: proxies of different sizes, and a flat
 /// scene, where every share ranks alike (a tie keeps the larger share, the correction a camera JPEG usually has).
 /// Clipped and black pixels are left out: here they sit where the correction would brighten or darken them most and
-/// would pull the share of a JPEG without any correction up. Non-finite pixels don't spoil the measurement.
+/// would pull the share of a JPEG without any correction up. A JPEG clips highlights the sensor doesn't, so pixels
+/// clipped in the JPEG are left out without the sensor's clip mask too. Non-finite pixels don't spoil the measurement.
 #[test]
 fn camera_vignetting_amount_falls_back_and_leaves_out_what_it_cannot_measure() {
     use lightcraft_develop::EmbeddedVignette;
@@ -2878,7 +2879,11 @@ fn camera_vignetting_amount_falls_back_and_leaves_out_what_it_cannot_measure() {
     let amount = measure(&sensor, &clipped_reference, &corners);
     assert!(amount < 0.051, "clipped pixels are left out: measured {amount}");
     let amount = measure(&sensor, &clipped_reference, &unclipped);
-    assert!(amount > 0.1, "the clipped pixels would have pulled the share up: {amount}");
+    assert!(amount < 0.051, "pixels clipped in the JPEG alone are left out: measured {amount}");
+    let mut bright_reference = reference.clone();
+    bright_reference.data.iter_mut().zip(&corners).filter(|(_, c)| **c).for_each(|(p, _)| *p = [0.97; 3]);
+    let amount = measure(&sensor, &bright_reference, &unclipped);
+    assert!(amount > 0.1, "the same pixels, just below the clip, would have pulled the share up: {amount}");
 
     // the quarter it brightens least, black in the JPEG
     let mut dark_reference = reference.clone();

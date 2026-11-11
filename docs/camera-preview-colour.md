@@ -144,8 +144,8 @@ classes of similar sensor chromaticity (near-neutral and eight hue sectors), wei
 that renders some hues brighter than others would otherwise read as vignetting where those hues gather toward the
 corners. A CR3 proxy moved to its JPEG's framing gets the gain of the position each pixel shows, and a DNG's tone fit
 (`fit_dng_tone`) takes a database profile in the measured share too. The whole correction is kept when nothing can
-be measured: proxies of different sizes, fewer than 256 usable pixels (clipped, black and non-finite ones are left
-out, as are chromaticity classes under 32 pixels), a lens-warped sensor proxy (the gain would no longer be at each
+be measured: proxies of different sizes, fewer than 256 usable pixels (pixels clipped on the sensor or in the camera
+JPEG, black and non-finite ones are left out, as are chromaticity classes under 32 pixels), a lens-warped sensor proxy (the gain would no longer be at each
 pixel's source position); shares that rank alike keep the larger one. Within a class the camera's rendering is taken as alike, so two
 saturations of one hue that it renders differently, one gathered toward the corners, can still read as vignetting.
 With the whole profile, an ILCE-7M3 frame at f/2 with an FE 28mm F2 (lensfun: corners at 16 % of the centre) fitted
