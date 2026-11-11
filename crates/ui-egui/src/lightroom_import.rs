@@ -966,6 +966,8 @@ mod tests {
         };
         let report = inspect_report(CatalogImport {
             source: "synthetic.lrcat".into(),
+            catalog_id: None,
+            catalog_path: None,
             photos: vec![
                 photo(1, "//server/share/a.dng", Original::Refused("it is on another computer".into())),
                 photo(2, "D:/Photos/b.dng", Original::NotHere),
