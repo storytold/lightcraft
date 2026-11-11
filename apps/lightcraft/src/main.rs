@@ -35,8 +35,12 @@ mod hdr_display;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(any(target_os = "linux", windows))]
+mod profile_file;
 #[cfg(target_os = "macos")]
 mod screen_profile;
+#[cfg(windows)]
+mod win_screen_profile;
 mod window_gpu;
 
 use dialog_filter::FileDialogExt as _;
@@ -197,6 +201,10 @@ impl eframe::App for App {
         // app after this and the session's last writes (face data) still go out under the lock.
         #[cfg(target_os = "macos")]
         self.0.session.release_library_lock();
+        // macOS only: the process ends below without dropping the app, so a ready update's helper
+        // starts here. Elsewhere dropping the app starts it.
+        #[cfg(target_os = "macos")]
+        self.0.start_pending_update();
         // macOS (#1331): end the process here, before eframe tears the window down, as Quit from
         // the menu bar already does (PR #444). AccessKit's macOS adapter subclasses the window's
         // content view and restores its class on teardown; AppKit's Touch Bar support observes
@@ -371,6 +379,7 @@ fn main() -> eframe::Result {
                 app.notices.extend(launch_notices);
                 app.notices.extend(window_notice);
                 app.gpu_notice = true;
+                app.disk_space_notice = true;
                 // an empty library opens where Import is offered (a grid, with the sidebar); before
                 // the snapshot below, so this alone isn't written to the settings file
                 if problem.is_none() && files.is_empty() {

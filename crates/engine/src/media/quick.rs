@@ -25,6 +25,15 @@ pub struct QuickJob {
     pub cached: Vec<(Arc<PreviewCache>, Hash128)>,
     /// Embedded preview of an unedited raw: (path, loader, max edge).
     pub embedded: Option<(String, PreviewLoader, usize)>,
+    /// Where a decoded [`Self::embedded`] preview is kept in memory, so stepping back to a photo
+    /// shows its camera JPEG again without reading and decoding it (culling goes back and forth):
+    /// the cache (memory only, never its disk), the key for this photo and edge, and the cache's
+    /// generation when the job was made (a Discard Preview Cache since then keeps the picture out).
+    pub embedded_cache: Option<(Arc<PreviewCache>, Hash128, u64)>,
+    /// Whether [`Self::embedded_cache`] keeps the decoded preview on disk too: a grid thumbnail,
+    /// so a folder seen before fills in from small files at once instead of every raw being read
+    /// and its camera JPEG decoded again (the loupe's large stand-ins stay in memory).
+    pub embedded_on_disk: bool,
     /// Import tiles need this many pixels when a render can provide them. `None` accepts any
     /// camera JPEG immediately (ordinary transient stand-ins and preview-only imports).
     /// An undersized JPEG remains the fallback if the render fails or is unavailable.
@@ -79,13 +88,30 @@ impl QuickJob {
             }
         }
         let mut embedded_fallback = None;
-        if let Some((path, loader, edge)) = &self.embedded
-            && let Some(image) = loader(path, *edge)
-        {
-            if self.minimum_embedded_edge.is_none_or(|minimum| image.width.max(image.height) >= minimum) {
-                return done(rendered(image), Some(QuickSource::Embedded));
+        if let Some((path, loader, edge)) = &self.embedded {
+            let kept =
+                self.embedded_cache.as_ref().and_then(|(cache, k, _)| if self.embedded_on_disk { cache.get(*k) } else { cache.get_memory(*k) });
+            let image = match kept {
+                Some(img) => Some(Arc::unwrap_or_clone(img)),
+                None => {
+                    let image = loader(path, *edge);
+                    // written for the generation the job was made in: a cache cleared meanwhile stays clear
+                    if let (Some(image), Some((cache, k, generation))) = (&image, &self.embedded_cache) {
+                        if self.embedded_on_disk {
+                            cache.put_deferred_at(*generation, *k, Arc::new(image.clone()));
+                        } else {
+                            cache.put_memory_at(*generation, *k, Arc::new(image.clone()));
+                        }
+                    }
+                    image
+                }
+            };
+            if let Some(image) = image {
+                if self.minimum_embedded_edge.is_none_or(|minimum| image.width.max(image.height) >= minimum) {
+                    return done(rendered(image), Some(QuickSource::Embedded));
+                }
+                embedded_fallback = Some(image);
             }
-            embedded_fallback = Some(image);
         }
         if let Some(job) = self.small {
             let r = job.run();
@@ -100,14 +126,36 @@ impl QuickJob {
     }
 }
 
-/// What identifies a photo's pixels for caching: its content hash, else its source.
-/// Which decode of a photo a loaded source is: its file's content and, when it has one, its database lens profile
+/// The thumbnail cache's key for the camera JPEG standing for the thumbnail of cache key `k`.
+pub(super) fn embedded_thumb_key(k: Hash128) -> Hash128 {
+    Hasher128::new().str("embedded-thumb").u64((k.0 >> 64) as u64).u64(k.0 as u64).finish()
+}
+
+/// ORF decoding changed when compressed sensor support was withdrawn. Keep its old renders
+/// out even before catalog rechecking finishes, and distinguish sensor from preview-only
+/// pixels after Reload. Other formats keep their existing keys. This is deliberately not
+/// part of `content_key`: smart previews and denoise products identify the original file.
+pub(super) fn decoder_key(p: &Photo) -> u64 {
+    if !p.format.eq_ignore_ascii_case("ORF") {
+        return 0;
+    }
+    // Spread the status bit: this salt is XORed with frontend dimensions, so adjacent
+    // integers could cancel a small resize occurring at the same time as a recheck.
+    let h = Hasher128::new().str("orf-withdrawal-v1").u64(u64::from(p.preview_only.is_some())).finish();
+    ((h.0 as u64) ^ ((h.0 >> 64) as u64)) | 1
+}
+
+/// Which decode of a photo a loaded source is: its file's content, decoder identity and database lens profile
 /// ([`lens_key`]; the decode fits the starting colour through it). A job's source is kept only when this still
 /// matches when the job finishes ([`super::Session::accept`]), so a decode started before a profile change never
 /// returns to the cache after `cmd::lens_refresh` has dropped the photo's sources.
 pub fn source_identity(p: &Photo) -> Hash128 {
     let mut k = Hasher128::new();
     k.str(&content_key(p));
+    let decoder = decoder_key(p);
+    if decoder != 0 {
+        k.str("decoder").u64(decoder);
+    }
     let lens = lens_key(p);
     if lens != 0 {
         k.u64(lens);

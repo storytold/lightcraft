@@ -24,6 +24,9 @@ jobs:
       # Same craft-fonts commit as release.yml.
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       timeout-minutes: 90
+      # A green run takes about 40 min. A hung test is stopped at 80 min, so the log lists the
+      # processes still running and the leg fails as timed out instead of being cancelled at 90.
+      gate-timeout-minutes: 80
       # xtask ci runs cargo test: the demo scene cache is per process, so nextest is slower here.
       tools: ""
       packages: >-
