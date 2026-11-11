@@ -1,19 +1,19 @@
-//! Process V8's tone-curve stage ([`lightcraft_develop::Process::V8`], `docs/curve-stage.md`): Whites, the
+//! Process V9's tone-curve stage ([`lightcraft_develop::Process::V9`], `docs/curve-stage.md`): Whites, the
 //! parametric curve and the point curves, applied the way Lightroom applies them.
 //!
 //! Measured on Camera Raw renders of synthetic charts (`tools/lr_tone_charts.py`):
 //! - Whites, the parametric curve, the master point curve, Contrast and Blacks act hue-preserving on linear ProPhoto
 //!   RGB: the curve maps the largest and the smallest channel (on sRGB-encoded values), and the middle channel keeps
 //!   its relative position between them in linear light. Predicting coloured patches from the curve measured on
-//!   grey steps this way leaves 0.03 to 0.16 (OkLab × 100), against 0.3 to 3.4 for V7.
+//!   grey steps this way leaves 0.03 to 0.16 (OkLab × 100), against 0.3 to 3.4 for V8.
 //! - The red, green and blue curves act per channel on sRGB-encoded linear ProPhoto RGB, after the master curve.
 //! - Whites and the four parametric regions are tables of Camera Raw's measured output (`curve_stage_tables`):
 //!   Whites reaches into the midtones (Whites −50 lowers encoded 0.6 by about 10/255), and each region is broad and
 //!   overlapping. The regions add: the sum of single regions reproduces three at once within 1/255.
 //!
-//! The stage runs after the tone map, Process V4's calibrated Contrast and Blacks and V8's colour mixer
+//! The stage runs after the tone map, Process V4's calibrated Contrast and Blacks and V9's colour mixer
 //! ([`crate::mixer_stage`]), before the colour stage. It
-//! replaces V7's curves on encoded output values; the tone map leaves Whites to it.
+//! replaces V8's curves on encoded output values; the tone map leaves Whites to it.
 
 use lightcraft_color::spline::{Lut1, MonotoneCurve};
 use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
@@ -110,9 +110,9 @@ fn monotone(lut: &mut Lut1) {
 }
 
 impl CurveStage {
-    /// The stage for `s`: `None` before V8, or when Whites, the parametric curve and every point curve are neutral.
+    /// The stage for `s`: `None` before V9, or when Whites, the parametric curve and every point curve are neutral.
     pub fn new(s: &DevelopSettings) -> Option<CurveStage> {
-        if s.process.process() < Process::V8 {
+        if s.process.process() < Process::V9 {
             return None;
         }
         let c = &s.curve;
@@ -196,14 +196,14 @@ fn mul3(m: &[[f32; 3]; 3], d: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
 
-    /// Default settings on process V8.
-    fn v8() -> DevelopSettings {
-        DevelopSettings { process: Process::V8.version(), ..Default::default() }
+    /// Default settings on process V9.
+    fn v9() -> DevelopSettings {
+        DevelopSettings { process: Process::V9.version(), ..Default::default() }
     }
 
-    /// V8 settings with only Whites at `v`.
+    /// V9 settings with only Whites at `v`.
     fn with_whites(v: f64) -> DevelopSettings {
-        let mut s = v8();
+        let mut s = v9();
         s.light.whites = v;
         s
     }
@@ -215,8 +215,8 @@ mod tests {
 
     #[test]
     fn earlier_processes_and_neutral_settings_have_no_stage() {
-        assert!(CurveStage::new(&v8()).is_none(), "neutral settings are the identity");
-        for p in Process::ALL.iter().filter(|p| **p < Process::V8) {
+        assert!(CurveStage::new(&v9()).is_none(), "neutral settings are the identity");
+        for p in Process::ALL.iter().filter(|p| **p < Process::V9) {
             let s = DevelopSettings { process: p.version(), ..with_whites(-50.0) };
             assert!(CurveStage::new(&s).is_none(), "{p:?}");
         }
@@ -236,7 +236,7 @@ mod tests {
     #[test]
     fn regions_add_and_act_in_their_own_range() {
         let curve = |f: fn(&mut ToneCurve)| {
-            let mut s = v8();
+            let mut s = v9();
             f(&mut s.curve);
             CurveStage::new(&s).expect("a region set")
         };
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn other_splits_fall_back_to_the_analytic_curve() {
-        let mut s = v8();
+        let mut s = v9();
         s.curve.highlights = 50.0;
         s.curve.split_mid = 40.0;
         let stage = CurveStage::new(&s).expect("a region set");
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn colour_curves_act_per_channel_after_the_master() {
-        let mut s = v8();
+        let mut s = v9();
         s.curve.red = vec![Point { x: 0.0, y: 0.0 }, Point { x: 0.5, y: 0.7 }, Point { x: 1.0, y: 1.0 }];
         let stage = CurveStage::new(&s).expect("a red curve");
         let (to, from) = matrices();
@@ -305,7 +305,7 @@ mod tests {
 
     #[test]
     fn refine_saturation_at_zero_undoes_what_the_curves_added() {
-        let mut s = v8();
+        let mut s = v9();
         s.curve.master = vec![Point { x: 0.0, y: 0.0 }, Point { x: 0.25, y: 0.15 }, Point { x: 0.75, y: 0.85 }, Point { x: 1.0, y: 1.0 }];
         let sat = |stage: &CurveStage| {
             let (to, from) = matrices();

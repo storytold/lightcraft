@@ -2,18 +2,18 @@
 
 ## Unreleased
 
-### The colour mixer behaves as in Lightroom (process V8)
+### The colour mixer behaves as in Lightroom (process V9)
 - Each band of the colour mixer now covers the colours Lightroom's does (a red-orange such as skin answers to
   Orange, Blue reaches further towards aqua and purple), and Hue, Saturation and Luminance follow Lightroom's
   measured response, including how strongly they act at large amounts. The mixer works before the tone curves, as in
-  Lightroom. This is part of rendering process 8: photos you already edited keep their look until you choose
+  Lightroom. This is part of rendering process 9: photos you already edited keep their look until you choose
   Photo ▸ Update to Current Process. See [The colour mixer](mixer-stage.md).
 
-### Whites and the tone curves behave as in Lightroom (process V8)
+### Whites and the tone curves behave as in Lightroom (process V9)
 - Whites now reaches into the upper midtones as Lightroom's does, and the Highlights, Lights, Darks and Shadows
   regions of the parametric curve are as broad as Lightroom's and add up the same way: both follow Lightroom's
   measured response. A contrast curve no longer turns orange towards red: the point curve keeps colours' hue, and
-  the red, green and blue curves act on their channel after it. This is rendering process 8: new photos (and Reset)
+  the red, green and blue curves act on their channel after it. This is rendering process 9: new photos (and Reset)
   get it, photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [Whites and the tone curves](curve-stage.md).
 

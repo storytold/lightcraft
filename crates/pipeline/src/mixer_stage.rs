@@ -1,11 +1,11 @@
-//! Process V8's mixer stage ([`lightcraft_develop::Process::V8`], `docs/mixer-stage.md`): the colour mixer,
+//! Process V9's mixer stage ([`lightcraft_develop::Process::V9`], `docs/mixer-stage.md`): the colour mixer,
 //! applied the way Lightroom applies it.
 //!
 //! Measured on Camera Raw renders of synthetic OkLCh charts (`tools/lr_mixer_charts.py`):
 //! - Each slider's effect is a table of Camera Raw's measured response (`mixer_stage.bin`): per OkLab hue (72 bins of
 //!   5°), chroma level and lightness level (3 × 3), the hue shift, the relative chroma change and the lightness
 //!   change, at ±25, ±50, ±75 and ±100. Amounts in between are interpolated linearly, towards 0 below 25.
-//! - Lightroom's bands differ from V7's: their centres sit elsewhere on the hue circle (Orange at OkLab hue 50, not
+//! - Lightroom's bands differ from V8's: their centres sit elsewhere on the hue circle (Orange at OkLab hue 50, not
 //!   82), Blue is wider and Red and Magenta narrower, and the response grows faster than linearly with the amount.
 //! - All 24 sliders act on the same input colour: their hue and lightness changes add and their chroma changes
 //!   multiply.
@@ -13,7 +13,7 @@
 //!   single-setting renders leaves 1.17 (OkLab × 100) in this order, 1.66 with the mixer after the curves.
 //!
 //! The stage runs after the tone map and Process V4's calibrated Contrast and Blacks, before the curve stage
-//! ([`crate::curve_stage`]). It replaces V7's mixer in [`crate::colorops::ColorOps`].
+//! ([`crate::curve_stage`]). It replaces V8's mixer in [`crate::colorops::ColorOps`].
 
 use lightcraft_color::perceptual::{lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
 use lightcraft_develop::{DevelopSettings, Process};
@@ -142,9 +142,9 @@ fn level(keys: &[f32; 3], x: f32) -> (usize, usize, f32) {
 }
 
 impl MixerStage {
-    /// The stage for `s`: `None` before V8, or when the mixer is neutral.
+    /// The stage for `s`: `None` before V9, or when the mixer is neutral.
     pub fn new(s: &DevelopSettings) -> Option<MixerStage> {
-        if s.process.process() < Process::V8 {
+        if s.process.process() < Process::V9 {
             return None;
         }
         let (chroma, light) = levels()?;
@@ -193,9 +193,9 @@ mod tests {
     use super::*;
     use lightcraft_develop::Hsl;
 
-    /// Default settings on process V8.
-    fn v8() -> DevelopSettings {
-        DevelopSettings { process: Process::V8.version(), ..Default::default() }
+    /// Default settings on process V9.
+    fn v9() -> DevelopSettings {
+        DevelopSettings { process: Process::V9.version(), ..Default::default() }
     }
 
     /// OkLCh of a linear Rec.2020 colour (`h` in radians).
@@ -235,8 +235,8 @@ mod tests {
 
     #[test]
     fn only_v8_with_a_mixer_gets_the_stage() {
-        assert!(MixerStage::new(&v8()).is_none());
-        let mut s = v8();
+        assert!(MixerStage::new(&v9()).is_none());
+        let mut s = v9();
         s.calibration.blue_hue = -20.0;
         assert!(MixerStage::new(&s).is_none(), "Calibration keeps the earlier operator");
         s.mixer.orange.sat = 30.0;
@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn a_band_moves_its_own_colours_and_leaves_the_others() {
-        let mut s = v8();
+        let mut s = v9();
         s.mixer.orange = Hsl { hue: 0.0, sat: -60.0, lum: 0.0 };
         let st = MixerStage::new(&s).expect("stage");
         // Lightroom's Orange centre sits near OkLab hue 51
@@ -261,13 +261,13 @@ mod tests {
 
     #[test]
     fn hue_and_luminance_follow_the_measured_direction() {
-        let mut s = v8();
+        let mut s = v9();
         s.mixer.blue.hue = -100.0;
         let st = MixerStage::new(&s).expect("stage");
         let blue = colour(0.6, 0.1, 255.0);
         // Lightroom's Blue Hue −100 turns blue towards aqua (lower OkLab hue)
         assert!(hue_shift(blue, st.apply(blue)) < -10.0, "{}", hue_shift(blue, st.apply(blue)));
-        let mut s = v8();
+        let mut s = v9();
         s.mixer.green.lum = -80.0;
         let st = MixerStage::new(&s).expect("stage");
         let green = colour(0.7, 0.1, 140.0);
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn amounts_interpolate_and_grow_with_the_slider() {
         let shift = |v: f64| {
-            let mut s = v8();
+            let mut s = v9();
             s.mixer.yellow.hue = v;
             let st = MixerStage::new(&s).expect("stage");
             let c = colour(0.85, 0.1, 100.0);
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn sliders_combine_on_the_same_input() {
         let one = |f: &dyn Fn(&mut DevelopSettings)| {
-            let mut s = v8();
+            let mut s = v9();
             f(&mut s);
             MixerStage::new(&s).expect("stage")
         };
@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn near_neutral_colours_keep_their_lightness() {
-        let mut s = v8();
+        let mut s = v9();
         s.mixer.red.lum = 100.0;
         s.mixer.blue.sat = 60.0;
         let st = MixerStage::new(&s).expect("stage");

@@ -162,8 +162,8 @@ impl ColorOps {
             hue: bands.map(|b| (b.hue / 100.0) as f32 * 0.5),
             sat: bands.map(|b| (b.sat / 100.0) as f32),
             lum: bands.map(|b| (b.lum / 100.0) as f32 * 0.18),
-            // from process V8 the colour stage applies the mixer (`crate::mixer_stage`)
-            mixer: !s.mixer.is_neutral() && s.process.process() < lightcraft_develop::Process::V8,
+            // from process V9 the colour stage applies the mixer (`crate::mixer_stage`)
+            mixer: !s.mixer.is_neutral() && s.process.process() < lightcraft_develop::Process::V9,
             points: if crate::is_bw(s) {
                 Vec::new()
             } else {
@@ -367,7 +367,7 @@ mod tests {
 
     #[test]
     fn mixer_targets_its_band() {
-        // V7's mixer (from V8 the colour stage applies it: `crate::mixer_stage`)
+        // V7's mixer (from V9 the colour stage applies it: `crate::mixer_stage`)
         let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
         s.mixer.blue.sat = -100.0;
         let ops = ColorOps::new(&s);
@@ -382,11 +382,11 @@ mod tests {
 
     #[test]
     fn v8_leaves_the_mixer_to_the_mixer_stage() {
-        // from V8 `crate::mixer_stage` applies the mixer, so `ColorOps` must not apply it again
+        // from V9 `crate::mixer_stage` applies the mixer, so `ColorOps` must not apply it again
         let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
         s.mixer.blue.sat = -100.0;
         assert!(ColorOps::new(&s).mixer);
-        s.process = lightcraft_develop::Process::V8.version();
+        s.process = lightcraft_develop::Process::V9.version();
         assert!(!ColorOps::new(&s).mixer);
     }
 

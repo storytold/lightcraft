@@ -498,6 +498,9 @@ impl Session {
         if !clicks.iter().any(|c| c.include) {
             return Err("click the object to include it first".into());
         }
+        if clicks.len() > MAX_CLICKS {
+            return Err(format!("an Object selection takes at most {MAX_CLICKS} clicks"));
+        }
         #[cfg(feature = "sam")]
         {
             self.segment_wait(id, worker::Kind::Clicks(Self::model_clicks(clicks)), None)?.ok_or_else(|| "nothing was selected".to_string())
