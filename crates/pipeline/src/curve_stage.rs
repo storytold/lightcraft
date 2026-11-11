@@ -90,6 +90,7 @@ fn parametric(c: &ToneCurve) -> Lut1 {
     lut
 }
 
+/// The measured Whites curve at `amount`, or `None` at 0.
 fn whites(amount: f64) -> Option<Lut1> {
     if amount == 0.0 {
         return None;
@@ -180,11 +181,13 @@ impl CurveStage {
     }
 }
 
+/// Linear Rec.2020 to linear ProPhoto and back, built once.
 fn matrices() -> &'static ([[f32; 3]; 3], [[f32; 3]; 3]) {
     static M: std::sync::OnceLock<([[f32; 3]; 3], [[f32; 3]; 3])> = std::sync::OnceLock::new();
     M.get_or_init(crate::light_v3::prophoto_matrices)
 }
 
+/// Multiplies a colour by a 3 × 3 matrix.
 fn mul3(m: &[[f32; 3]; 3], d: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|r| m[r][0] * d[0] + m[r][1] * d[1] + m[r][2] * d[2])
 }
@@ -193,10 +196,12 @@ fn mul3(m: &[[f32; 3]; 3], d: [f32; 3]) -> [f32; 3] {
 mod tests {
     use super::*;
 
+    /// Default settings on process V8.
     fn v8() -> DevelopSettings {
         DevelopSettings { process: Process::V8.version(), ..Default::default() }
     }
 
+    /// V8 settings with only Whites at `v`.
     fn with_whites(v: f64) -> DevelopSettings {
         let mut s = v8();
         s.light.whites = v;
