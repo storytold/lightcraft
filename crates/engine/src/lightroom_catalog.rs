@@ -18,8 +18,9 @@ type Row = BTreeMap<String, Value>;
 const COMMAND: &str = "library.importLightroom";
 /// Largest catalog database or WAL read into memory (4 GiB). The whole file is held in RAM, so the cap stays finite.
 const MAX_FILE: u64 = 1 << 32;
-/// Expanded XMP packets kept from one catalog, all rows together (each is bounded on its own).
-const MAX_XMP_TOTAL: usize = 1 << 30;
+/// The longest XMP packet kept for one image (what a compressed one may expand to). The bound is per
+/// image, never a running total, so the size of a catalog alone cannot drop a packet.
+const MAX_XMP_PACKET: usize = 16 << 20;
 /// Keyword paths kept for the photos of one catalog, all together (a million photos at ~1 KB of paths each still fit).
 const MAX_KEYWORD_BYTES: usize = 1 << 30;
 
@@ -102,13 +103,13 @@ impl Reader {
     }
 
     fn xmp_table(&self) -> Result<(Vec<Row>, Vec<String>), String> {
-        self.xmp_table_within(MAX_XMP_TOTAL)
+        self.xmp_table_within(MAX_XMP_PACKET)
     }
 
-    /// The `Adobe_AdditionalMetadata` rows. Packets past `max_total` decoded bytes together are
-    /// left off their rows, each named in the warnings, so one oversized catalog keeps the
-    /// packets that fit and every row's other columns.
-    fn xmp_table_within(&self, max_total: usize) -> Result<(Vec<Row>, Vec<String>), String> {
+    /// The `Adobe_AdditionalMetadata` rows. A packet past `max_packet` decoded bytes is left off
+    /// its row and named in the warnings; the bound is per image, so the size of the catalog alone
+    /// never drops a packet.
+    fn xmp_table_within(&self, max_packet: usize) -> Result<(Vec<Row>, Vec<String>), String> {
         let Some(t) = self.tables.iter().find(|t| t.name == "Adobe_AdditionalMetadata") else { return Ok((Vec::new(), Vec::new())) };
         let columns = t.column_names.as_ref().ok_or_else(|| "cannot read Adobe_AdditionalMetadata columns".to_string())?;
         let rows = self.db.read_table(t.rootpage, columns.len()).map_err(|e| format!("Adobe_AdditionalMetadata: {e:?}"))?;
@@ -117,7 +118,6 @@ impl Reader {
         }
         let mut warnings = Vec::new();
         let mut out = Vec::with_capacity(rows.len());
-        let mut xmp_total = 0usize;
         for row in rows {
             let image = row
                 .values
@@ -136,30 +136,20 @@ impl Reader {
                     SqlValue::Null => Some(Value::Null),
                     SqlValue::Integer(n) => Some(json!(n)),
                     SqlValue::Real(n) => Some(json!(n)),
-                    // a text packet counts toward the total like a decoded one
-                    SqlValue::Text(s) if column == "xmp" && xmp_total.saturating_add(s.len()) > max_total => {
-                        warnings.push(format!("image {image}: the XMP packets together exceed {} MiB; this one is left out", max_total >> 20));
+                    SqlValue::Text(s) if column == "xmp" && s.len() > max_packet => {
+                        warnings.push(format!("image {image}: the XMP packet exceeds {} MiB; it is left out", max_packet >> 20));
                         None
                     }
-                    SqlValue::Text(s) => {
-                        if column == "xmp" {
-                            xmp_total += s.len();
-                        }
-                        Some(json!(s))
-                    }
+                    SqlValue::Text(s) => Some(json!(s)),
                     SqlValue::Blob(bytes) if column == "xmp" => {
                         // the declared size (the decode checks it) against what is left, before inflating
                         let declared = bytes.get(..4).and_then(|s| <[u8; 4]>::try_from(s).ok()).map_or(0, |s| u32::from_be_bytes(s) as usize);
-                        let over = |n: usize| n <= 16 << 20 && xmp_total.saturating_add(n) > max_total;
+                        let over = |n: usize| n > max_packet;
                         let decoded = if over(declared) { Ok(None) } else { decode_xmp_bytes(&bytes).map(Some) };
                         match decoded {
-                            Ok(Some(packet)) if !over(packet.len()) => {
-                                xmp_total += packet.len();
-                                Some(Value::String(packet))
-                            }
+                            Ok(Some(packet)) if !over(packet.len()) => Some(Value::String(packet)),
                             Ok(_) => {
-                                warnings
-                                    .push(format!("image {image}: the XMP packets together exceed {} MiB; this one is left out", max_total >> 20));
+                                warnings.push(format!("image {image}: the XMP packet exceeds {} MiB; it is left out", max_packet >> 20));
                                 None
                             }
                             Err(error) => {
