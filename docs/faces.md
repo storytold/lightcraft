@@ -250,7 +250,11 @@ suggest names for the ones you have not:
   Naming a face also makes it one of the faces the others are compared with, so the suggestions improve as you go.
 - Faces come from the names other apps wrote into your photos (read from XMP), from Photo ▸ Detect Faces, or both. A face is
   aligned using the detector's five landmarks (eyes, nose, mouth corners) when it finds the same face, and cut out by its box
-  otherwise.
+  otherwise. Each face goes through the model twice, as it is and mirrored left to right, and the two results are averaged
+  (issue #1920): the same person then matches more often. On 1,800 LFW pairs with AuraFace v1, at its match bar of 0.40,
+  94.3 % of a person's pairs matched instead of 93.1 % (92.9 % instead of 89.3 % for faces 37 pixels wide, 82.4 % instead
+  of 76.8 % at 24 pixels), and no pair of two different people matched either way. It doubles the time the model takes per
+  face. Faces scanned before this are embedded again, once, by the next scan.
 - Everything stays on your computer. The embeddings (one short list of numbers per face) are cached in the library folder in
   `face-embeddings-<model id>.bin`, one file per model, so switching models back and forth does not start over; they are
   not part of the catalog and not written to XMP.
