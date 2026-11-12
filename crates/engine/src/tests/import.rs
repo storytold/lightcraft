@@ -34,7 +34,7 @@ fn write_png(path: &Path, seed: u8) {
 }
 
 fn exif_clock_block(original: Option<&str>, digitized: Option<&str>) -> Vec<u8> {
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
 
     let mut exif = IfdBuilder::new();
     if let Some(value) = original {
@@ -2857,8 +2857,8 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
 /// writes as UTC: an iPhone photo landed five hours late and after 19:00 on the wrong day.
 #[test]
 fn a_heic_is_dated_by_its_exif_and_not_by_the_file() {
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
     use lightcraft_heif::testdata::{Spec, build};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
     let src = temp_dir("heic-capture-time");
     let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
     let mut exif = IfdBuilder::new();

@@ -259,12 +259,13 @@ fn op_variants_are_versioned() {
             Op::SetFolderRecord { .. } => 6,
             Op::SetAsShotWb { .. } => 7,
             Op::SetHistoryCursor { .. } => 8,
-            Op::SetLensChecked { .. } => 13,
+            Op::SetLensChecked { .. } => 14,
         }
     }
-    /// v13: `Photo.lens_checked` (v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154); v11:
-    /// `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 13;
+    /// v14: `Photo.lens_checked` (v13: Lens Blur in develop settings and mask adjustments; v12: `Catalog.grids` and
+    /// `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9:
+    /// `Photo.preview_checked` and `Op::SetContent.preview_checked`).
+    const NEWEST_FIELDS: u32 = 14;
     let newest = since(&Op::SetLensChecked { id: PhotoId(1), checked: String::new() });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

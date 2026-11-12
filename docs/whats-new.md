@@ -13,9 +13,21 @@
   asks for every photo (`library.refreshLensProfiles` with `all`). When a changed database makes it read photos it had
   already looked up, its notice says so, and the command's result counts the photos it skipped (`skipped`) and those
   it read again for the new database (`recheck`).
-- The catalog format is now version 13 (`Photo.lens_checked`, `Op::SetLensChecked`). Once this version has opened a
+- The catalog format is now version 14 (`Photo.lens_checked`, `Op::SetLensChecked`). Once this version has opened a
   library, older versions refuse it, as with every format change. Opening a library in an older format now says so
   once, with the other library notices, and `library.info` → `load.upgradedFrom` names the format it was in.
+
+### Flatpak updates
+- Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
+  This permissions repair must first arrive through your existing host-side update method. Flatpaks
+  managed by a software repository continue to use its package manager, and launcher-pinned versions
+  keep their selected version.
+
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
