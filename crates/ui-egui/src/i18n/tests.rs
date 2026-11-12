@@ -1337,3 +1337,42 @@ fn hebrew_photo_workflows_and_navigation_are_translated() {
     assert_eq!(Locale::He.tr("IMG_1234.CR3"), "IMG_1234.CR3");
     assert_eq!(Locale::En.tr("Next Photo"), "Next Photo");
 }
+
+/// Rating/culling, albums, filters and metadata are visible native Hebrew UI labels.
+/// Command IDs and image file names remain the same, and untranslated values fall back.
+#[test]
+fn hebrew_photo_rating_filters_and_metadata_are_translated() {
+    let hebrew = Locale::He.catalog();
+    for english in [
+        "Rate ★",
+        "Rate ★★★ and advance",
+        "Rate ★★★★★ and advance",
+        "Pick Flag",
+        "Reject",
+        "Rejected",
+        "Compare (Shift+C)",
+        "New Smart Album…",
+        "Quick Collection",
+        "Search Photos",
+        "Filter Presets",
+        "Apply Filter Preset",
+        "Metadata Preset",
+        "Save Metadata to File",
+        "Rename Photos…",
+        "Import Lightroom Catalog…",
+        "Export with Preset",
+        "Export Album…",
+        "Print…",
+        "Show in Finder",
+        "Show in Explorer",
+    ] {
+        let translated = hebrew.get(english).unwrap_or_else(|| panic!("missing Hebrew photo UI source key: {english:?}"));
+        assert_ne!(translated, english, "untranslated: {english:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)), "no Hebrew letters: {english:?}");
+    }
+    assert_eq!(Locale::He.tr("Rate ★★★★★ and advance"), "דירוג ★★★★★ ומעבר הלאה");
+    assert_eq!(Locale::He.tr("Compare (Shift+C)"), "השוואה (Shift+C)");
+    assert_eq!(Locale::He.tr("Search Photos"), "חיפוש תמונות");
+    assert_eq!(Locale::He.tr("IMG_2026.CR3"), "IMG_2026.CR3");
+    assert_eq!(Locale::En.tr("Search Photos"), "Search Photos");
+}
