@@ -3,8 +3,8 @@
 //! Prints the TIFF structure (with `--tree`), decode result, timings (MP/s) and basic statistics.
 //! Exits unsuccessfully if any input cannot be read, decoded or developed, while inspecting the remaining files.
 
+use craft_tiff::{Ifd, Tiff, Value};
 use lightcraft_raw::{Method, RawData, decode, embedded_preview, probe};
-use lightcraft_tiff::{Ifd, Tiff, Value};
 use std::process::ExitCode;
 use std::time::Instant;
 

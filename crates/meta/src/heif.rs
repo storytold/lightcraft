@@ -575,7 +575,7 @@ fn exif_tiff(item: &[u8]) -> Option<&[u8]> {
 #[allow(clippy::arithmetic_side_effects)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
 
     /// One item's bytes, as `embedded` gathers them: its place from `iloc`, then its extents.
     fn item_bytes(file: &[u8], iloc: &[u8], idat: Option<&[u8]>, id: u32) -> Option<Vec<u8>> {
@@ -822,9 +822,9 @@ mod tests {
     #[test]
     fn a_synthetic_heif_file_carries_its_exif() {
         let tiff = iphone_exif("2026:10:18 13:00:00", "-05:00");
-        let mut spec = lightcraft_heif::testdata::Spec::new(64, 64, &|x, _| [x as u16 * 4, 0, 0]);
+        let mut spec = craft_heif::testdata::Spec::new(64, 64, &|x, _| [x as u16 * 4, 0, 0]);
         spec.exif = Some(tiff.clone());
-        let file = lightcraft_heif::testdata::build(&spec);
+        let file = craft_heif::testdata::build(&spec);
         assert!(is_heif(&file));
         assert_eq!(crate::embedded(&file).exif.as_deref(), Some(tiff.as_slice()));
         assert_eq!(crate::extract(&file).capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-18T13:00:00-05:00"));
@@ -1558,7 +1558,7 @@ mod upstream_tests {
     use super::*;
     // the whole routing, not just this module: a HEIC must reach the HEIF branch of `embedded`
     use crate::embedded;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
 
     /// One box: its own size, its four-letter kind, then its payload.
     fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
@@ -1750,14 +1750,14 @@ mod upstream_tests {
         assert!(embedded(&lying).exif.is_none());
     }
 
-    /// The real container writer of `lightcraft-heif`, so the reader is proved against the layout
+    /// The real container writer of `craft-heif`, so the reader is proved against the layout
     /// a HEIF encoder produces and not only against this module's own test builder.
     #[test]
     fn a_synthetic_heif_file_carries_its_exif() {
         let tiff = iphone_exif("2026:10:18 13:00:00", "-05:00");
-        let mut spec = lightcraft_heif::testdata::Spec::new(64, 64, &|x, _| [x as u16 * 4, 0, 0]);
+        let mut spec = craft_heif::testdata::Spec::new(64, 64, &|x, _| [x as u16 * 4, 0, 0]);
         spec.exif = Some(tiff.clone());
-        let file = lightcraft_heif::testdata::build(&spec);
+        let file = craft_heif::testdata::build(&spec);
         assert!(is_heif(&file));
         assert_eq!(embedded(&file).exif.as_deref(), Some(tiff.as_slice()));
         assert_eq!(crate::extract(&file).capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-18T13:00:00-05:00"));
