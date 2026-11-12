@@ -183,7 +183,7 @@ fn the_auto_commands_read_the_positive() {
         let wb = s.execute("develop.wb", &json!({"mode": "auto"})).unwrap();
         let pick = s.execute("develop.wbPick", &json!({"x": 0.5, "y": 0.5})).unwrap();
         s.execute("develop.autoBwMix", &json!({})).unwrap();
-        let bw = s.develop_of(s.active().unwrap()).unwrap().bw_mix.clone();
+        let bw = s.develop_of(s.active().unwrap()).unwrap().bw_mix;
         s.execute("develop.auto", &json!({})).unwrap();
         let d = s.develop_of(s.active().unwrap()).unwrap();
         (wb, pick, format!("{bw:?}"), format!("{:?}", d.light))
