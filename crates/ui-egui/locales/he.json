@@ -1076,5 +1076,15 @@
   "Flag": "סימון בדגל",
   "Generated demo photo": "תמונת הדגמה שנוצרה",
   "Increase Grid Thumbnail Size": "הגדלת התמונות הממוזערות ברשת",
-  "Decrease Grid Thumbnail Size": "הקטנת התמונות הממוזערות ברשת"
+  "Decrease Grid Thumbnail Size": "הקטנת התמונות הממוזערות ברשת",
+  "Quality": "איכות",
+  "Resolution (ppi)": "רזולוציה (ppi)",
+  "Limit file size (KB, 0 = off)": "מגבלת גודל קובץ (KB, 0 = ללא הגבלה)",
+  "If file exists": "אם הקובץ קיים",
+  "Include on Export": "הכללה בייצוא",
+  "Will Export": "ייכלל בייצוא",
+  "HDR output": "פלט HDR",
+  "HDR TIFF needs 32-bit float.": "TIFF ב־HDR מחייב נקודה צפה של 32 סיביות.",
+  "Managed by Printer (Adobe RGB)": "ניהול צבע בידי המדפסת (Adobe RGB)",
+  "Managed by Printer (sRGB)": "ניהול צבע בידי המדפסת (sRGB)"
 }

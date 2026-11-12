@@ -1733,3 +1733,25 @@ fn hebrew_parallel_round6_culling_labels() {
         );
     }
 }
+
+#[test]
+fn hebrew_parallel_round6_export_labels() {
+    for (source, expected) in [
+        ("Quality", "איכות"),
+        ("Resolution (ppi)", "רזולוציה (ppi)"),
+        ("Limit file size (KB, 0 = off)", "מגבלת גודל קובץ (KB, 0 = ללא הגבלה)"),
+        ("If file exists", "אם הקובץ קיים"),
+        ("Include on Export", "הכללה בייצוא"),
+        ("Will Export", "ייכלל בייצוא"),
+        ("HDR output", "פלט HDR"),
+        ("HDR TIFF needs 32-bit float.", "TIFF ב־HDR מחייב נקודה צפה של 32 סיביות."),
+        ("Managed by Printer (Adobe RGB)", "ניהול צבע בידי המדפסת (Adobe RGB)"),
+        ("Managed by Printer (sRGB)", "ניהול צבע בידי המדפסת (sRGB)"),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew source label regression: {source}"
+        );
+    }
+}
