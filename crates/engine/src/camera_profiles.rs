@@ -416,8 +416,8 @@ mod tests {
         // Staleness test uses fixed version 13 (tested in smart/tests.rs)
     }
 
-            #[test]
-            fn same_second_profile_replacement_changes_render_cache_key() {
+    #[test]
+    fn same_second_profile_replacement_changes_render_cache_key() {
         let dir = std::env::temp_dir().join(format!("lc-camera-profile-cache-{}", std::process::id()));
         let mut first = profile();
         first.model = "ILCE-7CR".into();
