@@ -180,6 +180,14 @@ pub(super) fn crop_overlay(
         app.gesture = None;
         let _ = app.run("develop.endInteraction", json!({}));
     }
+    // resizing (a corner or an edge, not a move of the whole box): the size the crop gives, in pixels,
+    // next to the pointer, from this frame's crop (issue #4106)
+    if let Some(Gesture::CropHandle { handle: 0..=7, .. }) = app.gesture
+        && let Some(at) = resp.interact_pointer_pos().or_else(|| ui.input(|i| i.pointer.latest_pos()))
+        && let Some(text) = crop_size_text(app, id)
+    {
+        size_readout(ui, at, &text, resp.rect);
+    }
     if let Some(at) = readout_at {
         // the canvas (the loupe's own rect), not the photo: rotating happens in the margin around it
         angle_readout(ui, at, shown_angle, resp.rect);
@@ -318,6 +326,32 @@ fn angle_readout(ui: &egui::Ui, at: Pos2, angle: f64, bounds: Rect) {
     p.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
     p.galley(rect.min + vec2(6.0, 3.0), galley, Color32::WHITE);
     register(ui, "cropAngleReadout", rect);
+}
+
+/// The size photo `id` comes out at with its crop, at its full resolution (what an export at full size
+/// gives), as "W × H px". While the crop tool shows the remembered ratio's box on an untouched photo,
+/// that box's size. `None` without the photo.
+pub(crate) fn crop_size_text(app: &LightcraftApp, id: PhotoId) -> Option<String> {
+    let p = app.session.catalog.photo(id)?;
+    let mut d = DevelopSettings::clone(&*app.session.develop_of(id)?);
+    if let Some(geometry) = app.crop_tool_preview().filter(|_| app.session.active() == Some(id)) {
+        d.crop.geometry = geometry;
+    }
+    let (w, h) = lightcraft_pipeline::native_output_size(p.width.max(1) as usize, p.height.max(1) as usize, &d);
+    // rounded as an export rounds them
+    Some(format!("{} × {} px", w.round().max(1.0) as u64, h.round().max(1.0) as u64))
+}
+
+/// While resizing the crop: its size in pixels next to the pointer, kept inside `bounds` like the
+/// angle readout.
+fn size_readout(ui: &egui::Ui, at: Pos2, text: &str, bounds: Rect) {
+    let t = Tokens::get(ui.ctx());
+    let p = top_painter(ui, "crop-size-readout");
+    let galley = p.layout_no_wrap(text.to_string(), t.font(12.5), Color32::WHITE);
+    let rect = readout_rect(at, galley.size() + vec2(12.0, 6.0), bounds);
+    p.rect_filled(rect, 4.0, Color32::from_black_alpha(170));
+    p.galley(rect.min + vec2(6.0, 3.0), galley, Color32::WHITE);
+    register(ui, "cropSizeReadout", rect);
 }
 
 /// Guided Upright: draw up to four guides along lines that should be vertical or horizontal. Guides are

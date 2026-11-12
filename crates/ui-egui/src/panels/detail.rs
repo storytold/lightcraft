@@ -24,10 +24,10 @@ mod masks;
 mod retouch;
 mod window;
 
-pub(crate) use crop::crop_angle_label;
 use crop::crop_overlay;
 #[cfg(test)]
 pub(crate) use crop::readout_rect;
+pub(crate) use crop::{crop_angle_label, crop_size_text};
 #[cfg(test)]
 use crop::{flipped_corners, outside_crop_mesh, rotate_cursor_turn};
 #[cfg(test)]
