@@ -1,3 +1,19 @@
+//! Mapping between LightCraft's develop settings and the `crs:` XMP namespace used by Adobe
+//! Camera Raw / Lightroom and other raw developers.
+//!
+//! Reading `crs:` fields is best-effort: LightCraft's pipeline renders differently, so values
+//! carry over but the look is approximate. Only fields present in a packet are applied, and the
+//! result is a partial settings object merged like a preset, so everything else keeps its
+//! current or default value. Packets marked `crs:AlreadyApplied="True"` are skipped because the
+//! pixels already contain the edit.
+//!
+//! Writing `crs:` fields back updates an existing packet in place, adding only fields that
+//! differ from the previous settings (or from the defaults when there are none), so a foreign
+//! application's values are never overwritten or duplicated (issue #934).
+//!
+//! See `docs/xmp-interop.md` for the full interchange specification: the field mapping, spot
+//! removal, local corrections, preset files, and camera profiles.
+
 use std::collections::BTreeMap;
 
 use lightcraft_develop::{DevelopSettings, MIXER_BANDS, Preset};
@@ -540,16 +556,17 @@ pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSetting
     let calibration = &settings.calibration;
     let curve = &settings.curve;
     let grading = &settings.grading;
-    let prev_light = previous.map(|p| &p.light);
-    let prev_effects = previous.map(|p| &p.effects);
-    let prev_color = previous.map(|p| &p.color);
-    let prev_detail = previous.map(|p| &p.detail);
-    let prev_vignette = previous.map(|p| &p.vignette);
-    let prev_grain = previous.map(|p| &p.grain);
-    let prev_optics = previous.map(|p| &p.optics);
-    let prev_calibration = previous.map(|p| &p.calibration);
-    let prev_curve = previous.map(|p| &p.curve);
-    let prev_grading = previous.map(|p| &p.grading);
+    let default = DevelopSettings::default();
+    let prev_light = previous.map(|p| &p.light).or(Some(&default.light));
+    let prev_effects = previous.map(|p| &p.effects).or(Some(&default.effects));
+    let prev_color = previous.map(|p| &p.color).or(Some(&default.color));
+    let prev_detail = previous.map(|p| &p.detail).or(Some(&default.detail));
+    let prev_vignette = previous.map(|p| &p.vignette).or(Some(&default.vignette));
+    let prev_grain = previous.map(|p| &p.grain).or(Some(&default.grain));
+    let prev_optics = previous.map(|p| &p.optics).or(Some(&default.optics));
+    let prev_calibration = previous.map(|p| &p.calibration).or(Some(&default.calibration));
+    let prev_curve = previous.map(|p| &p.curve).or(Some(&default.curve));
+    let prev_grading = previous.map(|p| &p.grading).or(Some(&default.grading));
     // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
     const EPS: f64 = 1e-6;
     let all = [
@@ -704,16 +721,26 @@ mod crs_write_tests {
     }
 
     /// An explicit reset to zero must be written to the `crs:` field so the other application
-    /// sees the reset instead of its stale value.
+    /// sees the reset instead of its stale value. The sidecar carries prior `lc:settings` so a
+    /// default-valued field has a baseline to differ from; without it, a default is
+    /// indistinguishable from an untouched field and is not written.
     #[test]
     fn crs_write_writes_explicit_zero_reset() {
         use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 
-        /// A sidecar with a non-zero exposure from another application.
-        const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5"/>
-          </rdf:RDF></x:xmpmeta>"#;
+        /// A sidecar with prior `lc:settings` (exposure 0.5) and a stale `crs:Exposure2012="0.5"`
+        /// from another application.
+        let mut prior = DevelopSettings::default();
+        prior.light.exposure = 0.5;
+        let settings = prior.to_json().to_string();
+        let escaped = settings.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+        let foreign = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/"
+            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5" lc:settings="{}"/>
+          </rdf:RDF></x:xmpmeta>"#,
+            escaped
+        );
 
         let dir = std::env::temp_dir().join(format!("lightcraft-crs-write-zero-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -721,7 +748,7 @@ mod crs_write_tests {
         let original = dir.join("IMG_1.jpg");
         std::fs::write(&original, b"original").unwrap();
         let sidecar = dir.join("IMG_1.xmp");
-        std::fs::write(&sidecar, FOREIGN).unwrap();
+        std::fs::write(&sidecar, &foreign).unwrap();
 
         // our edit: explicit reset to zero
         let mut develop = DevelopSettings::default();
