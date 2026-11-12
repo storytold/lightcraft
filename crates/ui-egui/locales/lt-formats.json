@@ -320,5 +320,20 @@
   "Panel layout could not be restored: {error}": "Nepavyko atkurti skydelių išdėstymo: {error}",
   "Panel move was not applied: {error}": "Skydelio perkėlimas neįvykdytas: {error}",
   "{name} is installed": "{name} įdiegtas",
-  "{name} is installed and in use: face recognition is on": "{name} įdiegtas ir naudojamas: veidų atpažinimas įjungtas"
+  "{name} is installed and in use: face recognition is on": "{name} įdiegtas ir naudojamas: veidų atpažinimas įjungtas",
+  "Adjustments: {n}": "Koregavimai: {n}",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importuokite nuotraukas pasirinkę Failas › Importuoti nuotraukas… ({keys}).",
+  "Can't read this folder: {}": "Nepavyksta perskaityti šio aplanko: {}",
+  "File › Export… · File › Print… ({keys}).": "Failas › Eksportuoti… · Failas › Spausdinti… ({keys}).",
+  "LightCraft can correct distortion and vignetting for many lenses using the open lens database (lensfun, about {size} MB).": "Naudodama atvirą „lensfun“ objektyvų duomenų bazę (apie {size} MB), „LightCraft“ gali koreguoti daugelio objektyvų sukeltą iškraipymą ir vinjetavimą.",
+  "No lens profile found for {}.": "Nerastas objektyvo {} profilis.",
+  "Profile: {} (lens database)": "Profilis: {} (objektyvų duomenų bazė)",
+  "The drive with this library's previews is almost full: {free} free of {total}. The preview cache takes {cache} and grows as the library does. To keep it smaller, set a size limit in Settings → Performance.": "Diskas, kuriame saugomos šios bibliotekos peržiūros, beveik pilnas: laisva {free} iš {total}. Peržiūrų podėlis užima {cache} ir didėja kartu su biblioteka. Norėdami jį apriboti, nustatymuose pasirinkite Našumas ir nustatykite dydžio ribą.",
+  "The lens database is not installed (about {size} MB).": "Objektyvų duomenų bazė neįdiegta (apie {size} MB).",
+  "View › Detail View ({keys}).": "Rodinys › Išsamus rodinys ({keys}).",
+  "{n} file{} skipped (not a supported photo type)": "Praleista failų: {n}{} (nepalaikomas nuotraukų tipas)",
+  "{n} folder{} could not be read": "Nepavyko perskaityti aplankų: {n}{}",
+  "{n} photos got their lens profile": "Objektyvo profilis priskirtas nuotraukų: {n}",
+  "{title}: {line}": "{title}: {line}",
+  "{} of {} (no catalog has this)": "{} iš {} (tokio įrašo nėra jokiame kataloge)"
 }
