@@ -105,11 +105,20 @@ fn a_failed_write_is_held_reported_and_retried() {
     store.flush().unwrap();
     let fail = Arc::new(AtomicBool::new(true));
     let f = fail.clone();
+    let log_path = dir.join(LOG);
     fault::install(
         &dir,
-        Arc::new(
-            move |step| if f.load(Ordering::SeqCst) && step == fault::Step::Sync { Err(std::io::Error::other("disk full (test)")) } else { Ok(()) },
-        ),
+        Arc::new(move |step| {
+            if f.load(Ordering::SeqCst) && step == fault::Step::Sync {
+                // Inject the torn tail before the failed sync returns. Writing it from the test
+                // thread races a successful retry and can append a foreign tail after that retry.
+                use std::io::Write;
+                std::fs::OpenOptions::new().append(true).open(&log_path)?.write_all(b"{\"seq\":")?;
+                Err(std::io::Error::other("disk full (test)"))
+            } else {
+                Ok(())
+            }
+        }),
     );
     // (one append: the log thread can fail the first before a second arrives, and then refuses it)
     store.append(LOG, b"1\n2\n").unwrap();
@@ -125,12 +134,7 @@ fn a_failed_write_is_held_reported_and_retried() {
     // a cut within what is held keeps it (the journal cuts back to its own length on an error)
     store.truncate(LOG, 6).unwrap();
     assert_eq!(store.read(LOG).unwrap().unwrap(), b"0\n1\n2\n");
-    // a fragment of a failed write left in the file is cut before the retry
-    {
-        use std::io::Write;
-        let mut file = std::fs::OpenOptions::new().append(true).open(dir.join(LOG)).unwrap();
-        file.write_all(b"{\"seq\":").unwrap();
-    }
+    // The failed sync injected a fragment: the retry must remove it before writing the held bytes.
     fail.store(false, Ordering::SeqCst);
     wait_until("retried on its own", || store.unwritten().is_none());
     store.append(LOG, b"3\n").unwrap();

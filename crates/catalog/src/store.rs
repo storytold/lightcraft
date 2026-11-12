@@ -149,6 +149,27 @@ pub(crate) fn create_staging(tmp: &std::path::Path) -> io::Result<std::fs::File>
     std::fs::OpenOptions::new().write(true).create_new(true).open(tmp)
 }
 
+/// Recheck after a potentially long fill: neither the folder nor the staging name may now
+/// belong to another save. Holding `file` also prevents Unix inode reuse while comparing it.
+pub(crate) fn check_staging(folder: &OpenedFolder, path: &Path, file: &std::fs::File) -> io::Result<()> {
+    folder.check()?;
+    let named = std::fs::symlink_metadata(path)?;
+    if !named.is_file() {
+        return Err(io::Error::other("the snapshot staging file was replaced"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let held = file.metadata()?;
+        if (held.dev(), held.ino()) != (named.dev(), named.ino()) {
+            return Err(io::Error::other("the snapshot staging file was replaced"));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = file; // Folder/file identity on Windows remains outside this Unix mitigation.
+    Ok(())
+}
+
 impl Store for FsStore {
     fn read(&mut self, name: &str) -> io::Result<Option<Vec<u8>>> {
         #[cfg(not(target_arch = "wasm32"))]
@@ -177,11 +198,10 @@ impl Store for FsStore {
             self.appender = None;
         }
         let tmp = self.path(&format!("{name}.tmp"));
-        {
-            let mut f = create_staging(&tmp)?;
-            f.write_all(data)?;
-            f.sync_all()?;
-        }
+        let mut f = create_staging(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        check_staging(&self.folder, &tmp, &f)?;
         std::fs::rename(&tmp, self.path(name))?;
         self.sync_dir();
         Ok(())
@@ -203,21 +223,26 @@ impl Store for FsStore {
             self.appender = None;
         }
         let tmp = self.path(&format!("{name}.tmp"));
+        let mut file = create_staging(&tmp)?;
         let written = (|| {
-            let mut w = Counter { inner: io::BufWriter::with_capacity(1 << 20, create_staging(&tmp)?), n: 0 };
+            let mut w = Counter { inner: io::BufWriter::with_capacity(1 << 20, &mut file), n: 0 };
             fill(&mut w)?;
             w.flush()?;
-            let f = w.inner.into_inner().map_err(|e| e.into_error())?;
-            f.sync_all()?;
-            Ok(w.n)
+            let n = w.n;
+            drop(w);
+            file.sync_all()?;
+            Ok(n)
         })();
         let n = match written {
             Ok(n) => n,
             Err(e) => {
-                let _ = std::fs::remove_file(&tmp);
+                if check_staging(&self.folder, &tmp, &file).is_ok() {
+                    let _ = std::fs::remove_file(&tmp);
+                }
                 return Err(e);
             }
         };
+        check_staging(&self.folder, &tmp, &file)?;
         std::fs::rename(&tmp, self.path(name))?;
         self.sync_dir();
         Ok(n)

@@ -270,13 +270,13 @@ impl Writer {
 
     fn replace(&mut self, data: &[u8]) -> io::Result<()> {
         self.folder.check()?;
+        self.hook(crate::fault::Step::Write)?;
+        let mut file = crate::store::create_staging(&self.tmp)?;
         let written = (|| {
-            self.hook(crate::fault::Step::Write)?;
-            let mut f = crate::store::create_staging(&self.tmp)?;
-            f.write_all(data)?;
+            file.write_all(data)?;
             self.hook(crate::fault::Step::Sync)?;
-            f.sync_all()?;
-            drop(f);
+            file.sync_all()?;
+            crate::store::check_staging(&self.folder, &self.tmp, &file)?;
             std::fs::rename(&self.tmp, &self.path)
         })();
         match written {
@@ -291,7 +291,9 @@ impl Writer {
                 Ok(())
             }
             Err(e) => {
-                let _ = std::fs::remove_file(&self.tmp);
+                if crate::store::check_staging(&self.folder, &self.tmp, &file).is_ok() {
+                    let _ = std::fs::remove_file(&self.tmp);
+                }
                 Err(e)
             }
         }

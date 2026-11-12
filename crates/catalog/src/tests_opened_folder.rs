@@ -305,3 +305,62 @@ fn a_link_to_the_folder_is_followed() {
     assert!(folder.check().is_err(), "the link leads to another folder now");
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_snapshot_swap_during_fill_cannot_publish_another_librarys_staging_file() {
+    let dir = scratch("stream-swap-publish");
+    let mut store = FsStore::open(&dir).unwrap();
+    let mut away = None;
+    let result = store.write_atomic_with(SNAPSHOT, &mut |writer| {
+        writer.write_all(b"our pending snapshot")?;
+        away = Some(put_another_folder_at(&dir));
+        std::fs::write(dir.join(format!("{SNAPSHOT}.tmp")), b"their pending snapshot")?;
+        Ok(())
+    });
+    assert!(result.is_err(), "a folder swapped during a streamed save must be refused");
+    assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), b"their snapshot");
+    assert_eq!(std::fs::read(dir.join(format!("{SNAPSHOT}.tmp"))).unwrap(), b"their pending snapshot");
+    let _ = std::fs::remove_dir_all(away.unwrap());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_snapshot_swap_during_fill_cannot_remove_another_librarys_staging_file() {
+    let dir = scratch("stream-swap-cleanup");
+    let mut store = FsStore::open(&dir).unwrap();
+    let mut away = None;
+    let result = store.write_atomic_with(SNAPSHOT, &mut |writer| {
+        writer.write_all(b"our pending snapshot")?;
+        away = Some(put_another_folder_at(&dir));
+        std::fs::write(dir.join(format!("{SNAPSHOT}.tmp")), b"their pending snapshot")?;
+        Err(std::io::Error::other("streaming save failed"))
+    });
+    assert!(result.is_err());
+    assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), b"their snapshot");
+    assert_eq!(std::fs::read(dir.join(format!("{SNAPSHOT}.tmp"))).unwrap(), b"their pending snapshot");
+    let _ = std::fs::remove_dir_all(away.unwrap());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_replaced_staging_name_is_neither_published_nor_removed() {
+    for fail_fill in [false, true] {
+        let dir = scratch(&format!("staging-name-{fail_fill}"));
+        let mut store = FsStore::open(&dir).unwrap();
+        store.write_atomic(SNAPSHOT, b"committed snapshot").unwrap();
+        let tmp = dir.join(format!("{SNAPSHOT}.tmp"));
+        let result = store.write_atomic_with(SNAPSHOT, &mut |writer| {
+            writer.write_all(b"our pending snapshot")?;
+            std::fs::remove_file(&tmp)?;
+            std::fs::write(&tmp, b"another save's staging file")?;
+            if fail_fill { Err(std::io::Error::other("stream failed")) } else { Ok(()) }
+        });
+        assert!(result.is_err(), "a staging name no longer belonging to this save must be refused");
+        assert_eq!(std::fs::read(dir.join(SNAPSHOT)).unwrap(), b"committed snapshot");
+        assert_eq!(std::fs::read(&tmp).unwrap(), b"another save's staging file");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
