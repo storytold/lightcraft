@@ -1626,3 +1626,21 @@ fn hebrew_round2_errors_labels_translate_exactly() {
         assert_eq!(Locale::He.tr(source), expected, "Hebrew translation mismatch: {source}");
     }
 }
+
+#[test]
+fn hebrew_round2_edit_labels_translate_exactly() {
+    for (source, expected) in [
+        ("Reset all edits", "איפוס כל העריכות"),
+        ("Reset All", "איפוס הכול"),
+        ("Reset Sliders", "איפוס המחוונים"),
+        ("Copy History Step Settings to Before", "העתקת הגדרות שלב בהיסטוריה למצב ״לפני״"),
+        ("Apply to All Masks", "החלה על כל המסכות"),
+        ("Clear Guides", "הסרת קווי עזר"),
+        ("Clear History", "ניקוי ההיסטוריה"),
+        ("Clear Reference", "הסרת תמונת הייחוס"),
+        ("Before/After Side by Side", "השוואת לפני ואחרי זה לצד זה"),
+        ("Before/After (Y)", "לפני/אחרי (Y)"),
+    ] {
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew translation mismatch: {source}");
+    }
+}

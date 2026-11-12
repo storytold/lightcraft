@@ -1036,5 +1036,15 @@
   "Wait for the import to finish": "יש להמתין לסיום הייבוא",
   "A folder is already being synchronized": "כבר מתבצע סנכרון של תיקייה",
   "A folder is being synchronized": "מתבצע סנכרון של תיקייה",
-  "Looking for photos…": "מחפש תמונות…"
+  "Looking for photos…": "מחפש תמונות…",
+  "Reset all edits": "איפוס כל העריכות",
+  "Reset All": "איפוס הכול",
+  "Reset Sliders": "איפוס המחוונים",
+  "Copy History Step Settings to Before": "העתקת הגדרות שלב בהיסטוריה למצב ״לפני״",
+  "Apply to All Masks": "החלה על כל המסכות",
+  "Clear Guides": "הסרת קווי עזר",
+  "Clear History": "ניקוי ההיסטוריה",
+  "Clear Reference": "הסרת תמונת הייחוס",
+  "Before/After Side by Side": "השוואת לפני ואחרי זה לצד זה",
+  "Before/After (Y)": "לפני/אחרי (Y)"
 }
