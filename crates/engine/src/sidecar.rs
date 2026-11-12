@@ -4,17 +4,18 @@
 //! It handles both our own `lc:` namespace and the interoperable `crs:` namespace
 //! used by Adobe Camera Raw / Lightroom and other raw developers.
 
+use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use lightcraft_catalog::{ColorLabel, Flag, ImportStems};
-use lightcraft_meta::{Metadata, Orientation, Region, XmpData};
+use lightcraft_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
 use lightcraft_develop::DevelopSettings;
 
-use crate::crs::Target;
-use crate::import::ImportWarning;
+use crate::{EngineError, Result, Session};
 
 /// Sidecar file naming.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
