@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::crs::Props;
-use crate::preset_import::{Imported, build, group_from_dir, read_zip};
+use crate::preset_import::{Imported, MAX_ZIP_ENTRY, MAX_ZIP_TOTAL, build, group_from_dir, read_zip_spending};
 
 // ----------------------------------------------------------------------------- property lists
 
@@ -72,13 +72,26 @@ struct Parser<'a> {
 /// Deepest `<dict>` / `<array>` nesting read (real looks nest a handful of levels).
 const MAX_DEPTH: usize = 64;
 
+/// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
+/// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
+/// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
+fn entity_end(rest: &str) -> Option<usize> {
+    let n = rest.bytes().skip(1).take_while(|b| b.is_ascii_alphanumeric() || *b == b'#').count();
+    (rest.as_bytes().get(n + 1) == Some(&b';')).then_some(n + 1)
+}
+
 fn unescape(t: &str) -> String {
     let mut out = String::with_capacity(t.len());
     let mut rest = t;
     while let Some(p) = rest.find('&') {
         out.push_str(&rest[..p]);
         rest = &rest[p..];
-        let Some(end) = rest.find(';') else { break };
+        // no `;` within a reference's reach: the `&` is kept and the search goes on after it
+        let Some(end) = entity_end(rest) else {
+            out.push('&');
+            rest = &rest[1..];
+            continue;
+        };
         let ent = &rest[1..end];
         let c = match ent {
             "amp" => Some('&'),
@@ -335,11 +348,13 @@ struct Acc {
     sums: BTreeMap<String, (f64, (f64, f64))>,
     curves: BTreeMap<String, Vec<(f64, f64)>>,
     unmapped: Vec<String>,
+    /// What `unmapped` holds, for the look-up (a look names each unsupported setting once).
+    seen: std::collections::HashSet<String>,
 }
 
 impl Acc {
     fn skip(&mut self, what: String) {
-        if !self.unmapped.contains(&what) {
+        if self.seen.insert(what.clone()) {
             self.unmapped.push(what);
         }
     }
@@ -455,7 +470,18 @@ pub fn read_lmp(path: &str, bytes: &[u8], group: Option<String>) -> Result<Impor
 /// Read a Luminar looks collection (`.mplumpack`, a zip): every look, grouped by the pack's
 /// `GroupName` (else the pack's file name).
 pub fn read_mplumpack(path: &str, bytes: &[u8]) -> Result<Vec<Imported>, String> {
-    let entries = read_zip(bytes)?;
+    let mut budget = MAX_ZIP_TOTAL;
+    read_mplumpack_within(path, bytes, &mut budget)
+}
+
+/// [`read_mplumpack`] unpacking at most `budget` bytes, which it spends: packs inside one zip
+/// share the zip's budget.
+pub(crate) fn read_mplumpack_within(path: &str, bytes: &[u8], budget: &mut usize) -> Result<Vec<Imported>, String> {
+    // spent as each entry unpacks: a pack that fails part way still used its budget
+    let mut spent = 0;
+    let entries = read_zip_spending(bytes, MAX_ZIP_ENTRY, *budget, &mut spent);
+    *budget = budget.saturating_sub(spent);
+    let entries = entries?;
     let info = entries
         .iter()
         .find(|(n, _)| n.rsplit('/').next().is_some_and(|b| b.eq_ignore_ascii_case("PresetsInfo.plist")))
@@ -485,6 +511,19 @@ mod tests {
     use super::*;
     use crate::preset_import::read_presets;
     use serde_json::json;
+
+    #[test]
+    fn many_ampersands_before_one_semicolon_are_read_once() {
+        let hostile = format!("{};&amp;", "&".repeat(200_000));
+        assert_eq!(unescape(&hostile), format!("{};&", "&".repeat(200_000)));
+        assert_eq!(unescape("&lt;a&gt; &#x10FFFF; &unknownreference;"), "<a> \u{10FFFF} &unknownreference;");
+    }
+
+    #[test]
+    fn zero_padded_numeric_references_decode() {
+        assert_eq!(unescape("C&#0000000097;non &#x0000041; &#000000065;"), "Canon A A");
+        assert_eq!(unescape("&abc&#xyz;&;"), "&abc&#xyz;&;");
+    }
 
     #[test]
     fn unescape_rejects_signed_numeric_references() {

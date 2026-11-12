@@ -49,6 +49,17 @@ fn click_eye(h: &mut Headless, section: &str) {
 #[test]
 fn every_local_slider_sits_under_the_header_of_its_engine_section() {
     for s in LOCAL {
+        if s.id == "lens_blur" {
+            // Lens Blur has its own block and eye (`lens_blur_off`): no engine section switches it
+            assert_eq!(local_section(s.id), None);
+            let adjust: LocalAdjustments = serde_json::from_value(json!({ "lens_blur": 10.0 })).unwrap();
+            for other in Mask::SECTIONS {
+                let mut m = Mask { adjust, ..Mask::default() };
+                m.set_section_enabled(other, false);
+                assert_eq!(m.effective().adjust.lens_blur, 10.0, "section {other} off must leave Lens Blur to its own eye");
+            }
+            continue;
+        }
         let section = local_section(s.id).unwrap_or_else(|| panic!("slider {} is under no section header", s.id));
         assert!(Mask::SECTIONS.contains(&section), "{}: {section} is not an engine section", s.id);
         // the engine agrees: switching that section off neutralises the slider, switching any other leaves it alone
