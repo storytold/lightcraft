@@ -1378,7 +1378,7 @@ fn a7cr_enabled_distortion_agrees_in_header_full_and_dng() {
         let Some(mut bytes) = pinned_sony(&root, name) else { continue };
         let original = probe_info(&bytes).unwrap();
         assert!(original.opcodes.list3.is_empty(), "Off files must remain uncorrected");
-        let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+        let tiff = craft_tiff::Tiff::parse(&bytes).unwrap();
         let at = tiff.find(0x7036).unwrap().offset as usize;
         let mut enabled = Vec::new();
         tiff.order.put_u16(&mut enabled, 17);

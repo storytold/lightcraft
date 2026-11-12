@@ -47,7 +47,7 @@
 use super::fit_radial_warp;
 use crate::opcodes::max_radius;
 use crate::{Opcode, Rect};
-use lightcraft_tiff::Ifd;
+use craft_tiff::Ifd;
 use std::ops::RangeInclusive;
 
 pub(crate) const DISTORTION_PARAMS: u16 = 0x7037;
@@ -272,7 +272,7 @@ pub(crate) fn lens_opcodes(raw: &Ifd, model: &str, lens: Option<&str>, focal_mm:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{Entry, Value};
+    use craft_tiff::{Entry, Value};
 
     /// The FF 16–35 mm example (corpus `arw-sony-ilce7rm6-ff-land-lossless.arw`, docs/sony-ilce7rm6-lens-corrections.md).
     const FF_DISTORTION: [i16; 17] = [16, 0, 2, 7, 16, 28, 43, 61, 83, 109, 139, 175, 217, 267, 325, 395, 479];
