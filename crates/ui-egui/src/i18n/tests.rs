@@ -1493,3 +1493,43 @@ fn hebrew_keywords_smart_albums_and_search_workflows_are_translated() {
     assert_eq!(Locale::He.tr("Keyword"), "מילת מפתח");
     assert_eq!(Locale::He.tr("IMG_1234.ARW"), "IMG_1234.ARW");
 }
+
+/// Common photo develop, lens, masks and denoise commands must have Hebrew
+/// labels without translating camera file names or changing source English.
+#[test]
+fn hebrew_develop_masks_lens_denoise_and_export_are_translated() {
+    let hebrew = Locale::He.catalog();
+    for key in [
+        "AI Mask Model Status",
+        "Auto",
+        "Auto-Stack by Capture Time…",
+        "Automatically Write Changes into XMP",
+        "Color space",
+        "Crop, Rotate, Geometry",
+        "Find Dust Spots",
+        "Find Missing Photos…",
+        "Find Similar Photos",
+        "Lens Blur",
+        "Sharpen",
+        "White Balance Selector (W)",
+        "Denoise Settings",
+        "Denoise Photos",
+        "Find Subject",
+        "Mask Overlay",
+        "Mask Pins",
+        "Lens Profiles",
+        "Download Lens Database",
+        "Export Contact Sheet PDF",
+        "Save Mask Effect",
+        "Export Effect Presets…",
+    ] {
+        let translated = hebrew.get(key).unwrap_or_else(|| panic!("missing Hebrew source key: {key:?}"));
+        assert_ne!(translated, key, "unexpected English fallback: {key:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)), "not Hebrew: {key:?}");
+        assert_eq!(Locale::En.tr(key), key, "original English must not be mutated");
+    }
+    assert_eq!(Locale::He.tr("Lens Blur"), "טשטוש עדשה");
+    assert_eq!(Locale::He.tr("Denoise Settings"), "הגדרות הפחתת רעש");
+    assert_eq!(Locale::He.tr("Download Lens Database"), "הורדת מסד נתוני עדשות");
+    assert_eq!(Locale::He.tr("DSC_1249.NEF"), "DSC_1249.NEF");
+}
