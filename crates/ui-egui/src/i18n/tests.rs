@@ -1573,3 +1573,23 @@ fn hebrew_photo_library_controls_are_localized() {
         assert!(translated.chars().any(|c| ('א'..='ת').contains(&c)), "{source} is not localized in Hebrew");
     }
 }
+
+#[test]
+fn hebrew_photo_review_controls_are_localized() {
+    let catalog = Locale::He.catalog();
+    for source in [
+        "Aspect Ratio",
+        "Straighten",
+        "Straighten Tool",
+        "Set Crop",
+        "Swap Aspect (X)",
+        "Info Overlay: Exposure",
+        "Inspect Photo",
+        "Set as Reference Photo",
+        "Show/hide My Photos panel",
+        "Red Eye",
+    ] {
+        let translated = catalog.get(source).expect("missing Hebrew photo workflow label");
+        assert!(translated.chars().any(|c| ('א'..='ת').contains(&c)), "{source} is not localized in Hebrew");
+    }
+}

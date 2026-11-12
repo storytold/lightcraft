@@ -1016,5 +1016,15 @@
   "Relink Photo": "קישור מחדש של תמונה",
   "Locate Photo": "איתור תמונה",
   "Synchronize Folder": "סנכרון תיקייה",
-  "Synchronize Folder…": "סנכרון תיקייה…"
+  "Synchronize Folder…": "סנכרון תיקייה…",
+  "Aspect Ratio": "יחס גובה־רוחב",
+  "Straighten": "יישור",
+  "Straighten Tool": "כלי יישור",
+  "Set Crop": "הגדרת חיתוך",
+  "Swap Aspect (X)": "החלפת כיוון יחס הגובה־רוחב (X)",
+  "Info Overlay: Exposure": "שכבת מידע: חשיפה",
+  "Inspect Photo": "בדיקת תמונה",
+  "Set as Reference Photo": "הגדרה כתמונת ייחוס",
+  "Show/hide My Photos panel": "הצגת חלונית התמונות שלי או הסתרתה",
+  "Red Eye": "עיניים אדומות"
 }
