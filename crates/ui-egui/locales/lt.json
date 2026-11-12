@@ -3712,5 +3712,16 @@
   "areas such as a blown sky stay slightly below pure white until Exposure lifts them further. A DNG whose own tone": "sritys, pavyzdžiui, baltas dangus, išlieka šiek tiek tamsesnės už gryną baltą, kol ekspozicija jas dar labiau pašviesina. DNG failai, kurių tonų",
   "curve already reaches white at the sensor's white renders as before. This is rendering": "kreivė jau pasiekia baltą spalvą ties jutiklio balta riba, atvaizduojami kaip anksčiau. Tai yra atvaizdavimo",
   "process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update": "5-asis procesas: jis taikomas naujoms nuotraukoms (ir atkūrus pradinius nustatymus), o jau redaguotos nuotraukos išlaiko ankstesnę išvaizdą, kol pasirenkate Nuotrauka ▸ Atnaujinti",
-  "to Current Process. See [process versions](process-versions.md).": "pagal dabartinį procesą. Žr. [procesų versijos](process-versions.md)."
+  "to Current Process. See [process versions](process-versions.md).": "pagal dabartinį procesą. Žr. [procesų versijos](process-versions.md).",
+  "2026-11-02": "2026-11-02",
+  "The Windows title bar is readable from the moment the window opens": "„Windows“ lango antraštės juosta įskaitoma vos atvėrus langą",
+  "When LightCraft's appearance differs from the one set in Windows (the dark default on a light Windows, for one), the": "Kai „LightCraft“ išvaizda skiriasi nuo nustatytos „Windows“ sistemoje (pavyzdžiui, numatytoji tamsi tema naudojama šviesioje „Windows“ aplinkoje),",
+  "title bar kept the system's colour with the title in LightCraft's, so the title looked blank until focus moved to": "antraštės juosta išlaikydavo sistemos spalvą, o antraštės tekstas būdavo „LightCraft“ spalvos, todėl jis atrodydavo nematomas, kol aktyvus langas persijungdavo",
+  "another window. It now takes LightCraft's colours as soon as the window has focus.": "į kitą langą. Dabar, kai langas aktyvus, antraštės juosta iš karto naudoja „LightCraft“ spalvas.",
+  "2026-11-01": "2026-11-01",
+  "Korean and Vietnamese text in exports draws whole": "Eksportuojant korėjietiški ir vietnamietiški tekstai atvaizduojami taisyklingai",
+  "macOS often stores Korean file names decomposed (NFD), each syllable as its jamo. Contact-sheet captions, export": "„macOS“ dažnai išsaugo korėjietiškus failų pavadinimus išskaidytus (NFD) – kiekvieną skiemenį sudaro atskiros jamo raidės. Kontaktinių lapų antraštėse, eksporto",
+  "watermarks, slideshow overlays and print page text drew those as loose jamo (`ㅈㅔㅈㅜㄷㅗ` for `제주도`), and": "vandens ženkluose, skaidrių demonstravimo užrašuose ir spausdinamų puslapių tekste jos būdavo rodomos atskirai (`ㅈㅔㅈㅜㄷㅗ` vietoj `제주도`), o",
+  "decomposed Vietnamese letters lost their stacked marks. Text is now composed before it is laid out, so both draw as": "išskaidytos vietnamietiškos raidės prarasdavo virš jų esančius diakritinius ženklus. Dabar tekstas sukomponuojamas prieš išdėstant jį puslapyje, todėl abi kalbos atvaizduojamos taip,",
+  "they do in the app (issue #3480, #3277).": "kaip ir pačioje programoje (klaidos Nr. 3480 ir 3277)."
 }
