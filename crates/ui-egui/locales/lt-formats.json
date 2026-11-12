@@ -86,7 +86,7 @@
   "Lightroom inspection failed: {e}{warning}": "„Lightroom“ patikrinti nepavyko: {e}{warning}",
   "MIT OR Apache-2.0. Fonts: {} (OFL). Icons: original.": "MIT ARBA Apache-2.0. Šriftai: {} (OFL). Piktogramos: originalios.",
   "Matches: {}": "Atitikmenų: {}",
-  "Merging… {stage} {:.0}%": "Jungiama… {stage} {:.0} %",
+  "Merging… {stage} {:.0}%": "Jungiama… {stage} {:.0}%",
   "Move {what} to Recently Deleted?": "Perkelti {what} į „Neseniai ištrinta“?",
   "Named ({named_n})": "Atpažinti ({named_n})",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Priskiriamas raktažodis „{k}“: spustelėkite nuotraukas, kad jį pridėtumėte arba pašalintumėte · Esc baigia",
