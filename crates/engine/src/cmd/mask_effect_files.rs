@@ -453,11 +453,7 @@ fn effect_files(paths: &[String]) -> Vec<(String, Option<String>, bool)> {
 
 /// Read a file of at most [`MAX_FILE`] bytes.
 pub fn read_capped(path: &str) -> std::result::Result<Vec<u8>, String> {
-    let len = std::fs::metadata(path).map_err(|e| e.to_string())?.len();
-    if len > MAX_FILE {
-        return Err(format!("too large for a preset file ({} MB)", len >> 20));
-    }
-    std::fs::read(path).map_err(|e| e.to_string())
+    lightcraft_catalog::safe_file::read_regular(path, MAX_FILE).map_err(|e| e.to_string())
 }
 
 pub fn import_effects(s: &mut Session, p: &Value) -> Result<Value> {

@@ -6,6 +6,8 @@ use super::{
     Path, PathBuf, Photo, PoisonError, RunError, Source, SystemTime, denoise_bayer, product,
 };
 
+/// Most bytes of a raw file read for a denoise product.
+const MAX_RAW_BYTES: u64 = 8 << 30;
 /// Samples at or above this (white = 1) are clipped: the model leaves them as the camera recorded them.
 const CLIP: f32 = 0.99;
 
@@ -164,7 +166,13 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     }
     let bytes = match &spec.read {
         Some(r) => r(&spec.path).map_err(MakeError::Failed)?,
-        None => std::fs::read(&spec.path).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?,
+        None => {
+            // the file's size is held at the memory gate while it is read, as every decode does: a large file waits
+            // for the memory in use to drain before its bytes are allocated
+            let len = std::fs::metadata(&spec.path).map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
+            let _reading = crate::memory::work_gate().acquire(len);
+            lightcraft_catalog::safe_file::read_regular(&spec.path, MAX_RAW_BYTES).map_err(|e| MakeError::Failed(format!("{}: {e}", spec.path)))?
+        }
     };
     // the decode and the normalised mosaic wait their turn at the process-wide memory gate, as every decode does
     let (mosaic, layout) = {

@@ -793,6 +793,17 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn a_thumbnail_header_past_the_pixel_cap_is_refused_before_decoding() {
+    let img = Rgba8 { width: 8, height: 8, data: vec![[10, 20, 30, 255]; 64] };
+    let mut jpeg = encode_jpeg(&img).unwrap();
+    assert!(decode_jpeg(&jpeg).is_some());
+    // the frame header's height and width, patched to 65535 x 65535 (4 gigapixels)
+    let sof = jpeg.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    jpeg[sof + 5..sof + 9].copy_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF]);
+    assert!(decode_jpeg(&jpeg).is_none());
+}
+
 /// `put_at` says whether the image is kept where it lasts: not for a job made before the cache was cleared or
 /// retired, nor when the disk cache can't write it (CodeRabbit on #3077).
 #[test]
@@ -838,6 +849,46 @@ fn dims_finds_a_size_marker_past_the_first_few_kib() {
     padded.extend_from_slice(&jpeg[2..]);
     std::fs::write(&path, padded).unwrap();
     assert_eq!(d.dims(key), Some((40, 30)), "found past the first read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What is written, reported by `dims` and decoded share one pixel bound.
+#[test]
+fn the_pixel_bound_is_the_same_for_write_dims_and_read() {
+    use crate::disk::encode_jpeg;
+    // too big to write (the size is checked before any pixel is read)
+    assert!(encode_jpeg(&Rgba8 { width: 20_000, height: 20_000, data: Vec::new() }).is_none());
+    let dir = temp_dir("pixel-bound");
+    let d = DiskCache::new(&dir, 1 << 28);
+    let key = hash_bytes(b"bound");
+    assert!(d.put(key, &gradient(40, 30, 5)));
+    assert_eq!(d.dims(key), Some((40, 30)));
+    // a file whose header claims 20 000 x 20 000: not reported as kept, and not decoded
+    let file = files_under(&dir).into_iter().find(|f| f.ends_with(disk::EXT)).expect("the cached file");
+    let path = dir.join(file);
+    let mut jpeg = std::fs::read(&path).unwrap();
+    let sof = jpeg.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+    jpeg[sof + 5..sof + 9].copy_from_slice(&[0x4E, 0x20, 0x4E, 0x20]);
+    std::fs::write(&path, jpeg).unwrap();
+    assert_eq!(d.dims(key), None);
+    assert!(d.get(key).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `dims` does not report an entry that `get` refuses for its size.
+#[test]
+fn dims_skips_an_entry_past_the_byte_cap() {
+    let dir = temp_dir("dims-cap");
+    let d = DiskCache::new(&dir, 1 << 20);
+    let key = hash_bytes(b"cap");
+    assert!(d.put(key, &gradient(40, 30, 5)));
+    assert_eq!(d.dims(key), Some((40, 30)));
+    let file = files_under(&dir).into_iter().find(|f| f.ends_with(disk::EXT)).expect("the cached file");
+    // a sparse file: the valid JPEG start, then a length one past the cap (nothing is allocated)
+    let f = std::fs::OpenOptions::new().write(true).open(dir.join(file)).unwrap();
+    f.set_len((64 << 20) + 1).unwrap();
+    assert_eq!(d.dims(key), None);
+    assert!(d.get(key).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

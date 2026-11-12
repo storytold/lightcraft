@@ -80,6 +80,25 @@ pub struct DiskCache {
     read: Mutex<std::collections::HashSet<u128>>,
 }
 
+/// Most bytes of one cache entry read into memory (a thumbnail is a few hundred KB).
+const MAX_ENTRY_BYTES: u64 = 64 << 20;
+
+/// The entry at `path`: the OPENED file must be a regular file within [`MAX_ENTRY_BYTES`] (a link planted in the cache
+/// to an endless source or a FIFO is not read to EOF).
+fn read_regular(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let f = std::fs::File::open(path)?;
+    if !f.metadata()?.is_file() {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "not a regular file"));
+    }
+    let mut b = Vec::new();
+    f.take(MAX_ENTRY_BYTES + 1).read_to_end(&mut b)?;
+    if b.len() as u64 > MAX_ENTRY_BYTES {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "cache entry too large"));
+    }
+    Ok(b)
+}
+
 impl DiskCache {
     pub fn new(dir: &Path, budget: u64) -> DiskCache {
         DiskCache {
@@ -127,13 +146,13 @@ impl DiskCache {
         if !p.parent().is_some_and(is_real_dir) {
             return None;
         }
-        if let Ok(bytes) = std::fs::read(&p) {
+        if let Ok(bytes) = read_regular(&p) {
             return Some((p, bytes));
         }
         let old = self.named(key, OLD_EXT);
-        let Ok(bytes) = std::fs::read(&old) else {
+        let Ok(bytes) = read_regular(&old) else {
             // (taken over by the tidying between the two looks: it is under the new name now)
-            return std::fs::read(&p).ok().map(|bytes| (p, bytes));
+            return read_regular(&p).ok().map(|bytes| (p, bytes));
         };
         // (taken over; if that can't be done it is read where it is, and tried again next time)
         match std::fs::rename(&old, &p) {
@@ -182,13 +201,19 @@ impl DiskCache {
             return None;
         }
         let mut f = std::fs::File::open(&p).or_else(|_| std::fs::File::open(self.named(key, OLD_EXT))).ok()?;
+        // an entry `get` would refuse (not a regular file, or past the byte cap) is not reported as kept
+        let meta = f.metadata().ok()?;
+        if !meta.is_file() || meta.len() > MAX_ENTRY_BYTES {
+            return None;
+        }
         // the size is normally in the first few KiB: more is read only when that is not enough
         let mut head = Vec::new();
         for limit in [FIRST_HEADER_BYTES, HEADER_BYTES] {
             let more = limit.saturating_sub(head.len() as u64);
             (&mut f).take(more).read_to_end(&mut head).ok()?;
             if let Some(dims) = jpeg_dims(&head) {
-                return Some(dims);
+                // a picture past the decode bound is not one `get` would return: not reported as kept
+                return Some(dims).filter(|&(w, h)| w.checked_mul(h).is_some_and(|n| n <= MAX_THUMB_PIXELS));
             }
             if (head.len() as u64) < limit {
                 // the whole file was read
@@ -455,7 +480,12 @@ pub fn is_cache_file(shard: &str, name: &str) -> bool {
 
 /// Encode a thumbnail as the cache stores it (JPEG, RGB, 4:2:0).
 pub fn encode_jpeg(img: &Rgba8) -> Option<Vec<u8>> {
-    if img.width == 0 || img.height == 0 || img.width > u16::MAX as usize || img.height > u16::MAX as usize {
+    if img.width == 0
+        || img.height == 0
+        || img.width > u16::MAX as usize
+        || img.height > u16::MAX as usize
+        || img.width.checked_mul(img.height)? > MAX_THUMB_PIXELS
+    {
         return None;
     }
     let mut rgb = Vec::with_capacity(img.width * img.height * 3);
@@ -468,6 +498,11 @@ pub fn encode_jpeg(img: &Rgba8) -> Option<Vec<u8>> {
     enc.encode(&rgb, img.width as u16, img.height as u16, jpeg_encoder::ColorType::Rgb).ok()?;
     Some(out)
 }
+
+/// Most pixels of a cached picture, read or written (16384 x 16384: above a 150 MP medium-format full-size preview). The
+/// same bound applies to what is written, to what `dims` reports and to what `get` decodes, so a stored preview is
+/// always one that reads back.
+const MAX_THUMB_PIXELS: usize = 256 << 20;
 
 /// How much of a cached file [`DiskCache::dims`] reads: the JPEG headers this cache writes come
 /// first and are a few hundred bytes.
@@ -492,9 +527,14 @@ pub fn decode_jpeg(bytes: &[u8]) -> Option<Rgba8> {
     use zune_core::options::DecoderOptions;
     let opts = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGB);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), opts);
-    let px = d.decode().ok()?;
+    // (the size is read from the header and checked before any pixel is allocated)
+    d.decode_headers().ok()?;
     let info = d.info()?;
     let (w, h) = (info.width as usize, info.height as usize);
+    if w.checked_mul(h)? > MAX_THUMB_PIXELS {
+        return None;
+    }
+    let px = d.decode().ok()?;
     if px.len() < w * h * 3 {
         return None;
     }

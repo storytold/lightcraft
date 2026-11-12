@@ -113,7 +113,7 @@ impl LibraryLock {
         match file.try_lock() {
             Ok(()) => {}
             Err(TryLockError::WouldBlock) => {
-                let owner = std::fs::read(dir.join(OWNER)).ok().and_then(|b| serde_json::from_slice::<LockOwner>(&b).ok());
+                let owner = crate::safe_file::read_regular(dir.join(OWNER), 64 << 10).ok().and_then(|b| serde_json::from_slice::<LockOwner>(&b).ok());
                 return Err(LockError::InUse(owner));
             }
             Err(TryLockError::Error(e)) => return Ok(unlocked(e)),

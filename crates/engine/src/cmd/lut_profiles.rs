@@ -25,10 +25,19 @@ fn profiles_dir(s: &Session) -> Option<PathBuf> {
     s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join("Profiles"))
 }
 
+/// Most bytes of one `.cube` file.
+const MAX_CUBE_BYTES: u64 = 64 << 20;
+
+/// A `.cube` file's text; the opened file must be a regular file within [`MAX_CUBE_BYTES`].
+fn read_cube(path: &Path) -> std::io::Result<String> {
+    let b = lightcraft_catalog::safe_file::read_regular(path, MAX_CUBE_BYTES)?;
+    String::from_utf8(b).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
 /// Register every imported profile's LUT with the pipeline (missing files are skipped).
 pub fn register_all(s: &Session) {
     for p in &s.lut_profiles {
-        if let Some(l) = std::fs::read_to_string(&p.file).ok().and_then(|t| lightcraft_pipeline::lut::Lut3d::parse_cube(&t).ok()) {
+        if let Some(l) = read_cube(Path::new(&p.file)).ok().and_then(|t| lightcraft_pipeline::lut::Lut3d::parse_cube(&t).ok()) {
             lightcraft_pipeline::lut::register(&p.id, l);
         }
     }
@@ -46,7 +55,7 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
         if path.is_dir() {
             let cube = |f: &Path| f.extension().is_some_and(|x| x.eq_ignore_ascii_case("cube"));
             for ep in crate::walk::files_in(path, None, crate::walk::Limits::default(), cube).files {
-                match std::fs::read_to_string(&ep) {
+                match read_cube(&ep) {
                     Ok(t) => {
                         let group = ep.parent().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string());
                         out.push((stem(&ep), t, group));
@@ -55,7 +64,7 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
                 }
             }
         } else if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("zip")) {
-            let b = match std::fs::read(path) {
+            let b = match lightcraft_catalog::safe_file::read_regular(path, crate::preset_import::MAX_ZIP_TOTAL as u64) {
                 Ok(b) => b,
                 Err(e) => {
                     failed.push(json!([stem(path), e.to_string()]));
@@ -65,6 +74,10 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
             for (inner, data) in crate::preset_import::read_zip(&b).unwrap_or_default() {
                 if inner.to_ascii_lowercase().ends_with(".cube") {
                     let ip = Path::new(&inner);
+                    if data.len() as u64 > MAX_CUBE_BYTES {
+                        failed.push(json!([stem(ip), "file too large for one .cube file"]));
+                        continue;
+                    }
                     let group = ip
                         .parent()
                         .and_then(|d| d.file_name())
@@ -78,7 +91,7 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
                 }
             }
         } else if path.extension().is_some_and(|x| x.eq_ignore_ascii_case("cube")) {
-            match std::fs::read_to_string(path) {
+            match read_cube(path) {
                 Ok(t) => out.push((stem(path), t, None)),
                 Err(e) => failed.push(json!([stem(path), e.to_string()])),
             }
