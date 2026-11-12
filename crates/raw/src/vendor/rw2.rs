@@ -109,6 +109,25 @@ use craft_tiff::{ByteOrder, Ifd, Tiff, Value, tags as t};
 use lightcraft_geom::Orientation;
 use rayon::prelude::*;
 
+/// The IFD0 of an RW2 file, exposed for `has_usable_wb_presets`.
+pub(crate) struct Ifd0Ref<'a> {
+    ifd: &'a Ifd,
+}
+
+impl<'a> Ifd0Ref<'a> {
+    pub(crate) fn new(ifd: &'a Ifd) -> Self {
+        Self { ifd }
+    }
+
+    pub(crate) fn string(&self, tag: u16) -> Option<String> {
+        self.ifd.string(tag)
+    }
+
+    pub(crate) fn value(&self, tag: u16) -> Option<Value> {
+        self.ifd.value(tag)
+    }
+}
+
 const SENSOR_WIDTH: u16 = 0x0002;
 const SENSOR_HEIGHT: u16 = 0x0003;
 const BORDER_TOP: u16 = 0x0004;
@@ -581,6 +600,19 @@ fn wb_kelvin_presets(ifd: &Ifd) -> Option<crate::kelvin_presets::KelvinPresets> 
         }
     }
     crate::kelvin_presets::KelvinPresets::from_unordered(points)
+}
+
+/// Whether this RW2 file has usable white-balance presets that provide a Kelvin scale.
+/// Returns `true` when `wb_kelvin_presets` would produce a valid `KelvinPresets` (at least
+/// three usable preset points with recognised names and levels).
+pub(crate) fn has_usable_wb_presets(ifd: &Ifd) -> bool {
+    wb_kelvin_presets(ifd).is_some()
+}
+
+/// Whether this RW2 file has usable white-balance presets that provide a Kelvin scale.
+/// Uses the IFD0 reference to avoid exposing the full IFD.
+pub(crate) fn has_usable_wb_presets_from_ifd0(ifd0: &Ifd0Ref) -> bool {
+    wb_kelvin_presets(ifd0.ifd).is_some()
 }
 
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
