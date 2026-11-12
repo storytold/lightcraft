@@ -595,10 +595,10 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         if compare::culling(app) {
             return;
         }
-        if let Ok(result) = app.run(f, json!({}))
-            && all_rated_toast(&result)
-        {
-            app.toast(ctx, crate::i18n::tr("No unrated photos in this view"));
+        if let Ok(result) = app.run(f, json!({})) {
+            if all_rated_toast(&result) {
+                app.toast(ctx, crate::i18n::tr("No unrated photos in this view"));
+            }
         }
         return;
     }
