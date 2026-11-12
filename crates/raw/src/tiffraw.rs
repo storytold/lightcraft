@@ -2,8 +2,8 @@
 
 use crate::unpack::{f16_to_f32, f24_to_f32, inflate, read_u16s, undo_diff_u16, undo_float_predictor, unpack_lsb, unpack_msb, unpack_words32_msb};
 use crate::{MAX_SAMPLES, RawData, RawError, Result, ljpeg};
-use lightcraft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
-use lightcraft_tiff::{ByteOrder, tags::compression as comp};
+use craft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
+use craft_tiff::{ByteOrder, tags::compression as comp};
 use rayon::prelude::*;
 
 /// Bit packing for uncompressed integer data with bit depths other than 8/16.
@@ -51,8 +51,11 @@ pub fn check_image(data: &[u8], info: &ImageInfo) -> Result<usize> {
     let (across, down) = info.grid();
     let planes = if info.planar == 2 { cpp } else { 1 };
     let expected = (across as usize).saturating_mul(down as usize).saturating_mul(planes);
-    if chunks.len() < expected {
-        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", chunks.len())));
+    // the offsets table says how many chunks the image declares: craft-tiff builds at most one
+    // descriptor per byte of file (craft-libs#827), so `chunks` may be shorter on a grid of tiles
+    // sharing one payload, and the bytes behind it are what the bounds below count.
+    if info.offsets.len() < expected {
+        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", info.offsets.len())));
     }
     // Tile sizes don't depend on the image size, and every tile is decoded at its nominal size and held until the copy:
     // a grid of tiles no larger than the image covers less than twice its width and height, so more than four times
@@ -461,7 +464,7 @@ fn unpack_chunk(
 #[cfg(test)]
 mod lossy_tests {
     use super::*;
-    use lightcraft_tiff::image::Layout;
+    use craft_tiff::image::Layout;
 
     /// 65 536 tiles all pointing at the same 256 bytes: the image's samples can't come from them,
     /// and nothing of its size is allocated to find that out.
