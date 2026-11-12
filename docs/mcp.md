@@ -69,7 +69,8 @@ The rules:
   library, a watermark or identity plate graphic, a print or proof profile. A catalog or preset can name a file outside
   the roots: it counts as missing and isn't read, and nothing says whether it exists.
 - **The check comes before anything else a command looks at.** With roots in force, `photo.convertToDng` on a photo that
-  isn't raw and sits in a read-only place answers with an error, not a skip entry.
+  isn't raw and sits in a read-only place answers with an error, not a skip entry. `app.export` is the exception:
+  a preset is merged into the parameters first, and those merged parameters are what is checked.
 
 Refused while roots are in force: `export.addToPhotos` and `addToPhotos` on an export (hand files to another application) and `library.devices` (lists
 the mounted volumes).
@@ -98,7 +99,7 @@ Where the file-touching commands are checked, besides the check of their paramet
 | `photo.duplicate`, `photo.convertToDng`, `photo.editExternal` | Read the source, write the copy | `cmd/convert.rs`, `export/place.rs` |
 | `library.smartPreviewsLocation` | Write | `cmd/previews.rs` |
 | `photo.relink`, `photo.autoTagTracklog`, `keyword.import`, `curve.importPresets`, `preset.import`, `mask.importEffects`, `profile.import`, `print.template.import`, `slideshow.templates.import`, `denoise.models.install`, `faces.models.install` | Read | `file_access/commands.rs`, and the command's own file where it opens one |
-| `library.inspectLightroom`, `library.importLightroom` | Read, the `-wal` file too | `cmd/library/specs.rs`, `lightroom_catalog.rs` |
+| `library.inspectLightroom`, `library.importLightroom` | Read, the `-wal` file too | `lightroom_catalog.rs` (`read_source` and `read_file`) |
 | Watermark and identity plate graphics, print and proof profiles | Read | `export/watermark.rs`, `print_color.rs`, `proof.rs`, `display.rs` |
 
 ## Wiring it into a client

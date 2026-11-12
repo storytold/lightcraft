@@ -54,7 +54,7 @@ USAGE:
         --demo            headless: start with the procedurally generated demo library
         --library DIR     headless: open (or create) a persistent LightCraft library; edits are saved
         --compact         list only the helper tools (every command stays reachable via run_command)
-        --automation-read-root DIR   confine tool/engine file reads to DIR (in-process headless only)
+        --automation-read-root DIR   confine tool/engine file reads to DIR or the write root (in-process headless only)
         --automation-write-root DIR  confine tool/engine file writes to DIR (in-process headless only)
   lightcraft-cli render <IN> -o <OUT> [OPTIONS]
       Develop one file and export it (.jpg, .png, .tif, .webp, .avif, .jxl, .psd or .dng by extension) with the
