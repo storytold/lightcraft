@@ -1,14 +1,14 @@
 //! Synthetic DNG round trips: every storage variant we decode is written with our own TIFF writer (and LJ92
 //! encoder) and must decode bit-exactly.
 
+use craft_tiff::tags::{self as t, compression, photometric};
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use lightcraft_color::{D65, Mat3, Xy};
 use lightcraft_raw::opcodes::{Area, Opcode};
 use lightcraft_raw::{
     BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, Method, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect, decode,
     embedded_preview, probe, write_dng,
 };
-use lightcraft_tiff::tags::{self as t, compression, photometric};
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
 fn scene_value(x: usize, y: usize, c: u8, max: f32) -> f32 {
     let base = [0.55, 0.8, 0.4][c as usize];
@@ -120,7 +120,7 @@ fn writer_camera_identity_tags_roundtrip() {
         raw.metadata.model = model.map(str::to_owned);
         for order in [ByteOrder::Little, ByteOrder::Big] {
             let bytes = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, order, xmp: None }).unwrap();
-            let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+            let tiff = craft_tiff::Tiff::parse(&bytes).unwrap();
             let ifd = &tiff.ifds[0];
             assert_eq!(ifd.value(t::UNIQUE_CAMERA_MODEL), Some(&Value::Ascii(unique.into())), "{make:?} / {model:?}, {order:?}");
             for (tag, original) in [(t::MAKE, make), (t::MODEL, model)] {

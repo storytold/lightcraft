@@ -1223,6 +1223,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-tiff"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3b3104981bb3093904a12e44d6a3b41c6c4c39c8#3b3104981bb3093904a12e44d6a3b41c6c4c39c8"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-ui"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -3745,6 +3754,7 @@ dependencies = [
  "ab_glyph",
  "chrono",
  "craft-docpath",
+ "craft-tiff",
  "crc32fast",
  "fs4",
  "harfrust 0.13.3",
@@ -3773,7 +3783,6 @@ dependencies = [
  "lightcraft-segment",
  "lightcraft-slideshow",
  "lightcraft-testkit",
- "lightcraft-tiff",
  "log",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -3910,9 +3919,9 @@ name = "lightcraft-meta"
 version = "0.21.0"
 dependencies = [
  "chrono",
+ "craft-tiff",
  "lightcraft-geom",
  "lightcraft-heif",
- "lightcraft-tiff",
  "proptest",
  "quick-xml 0.41.0",
  "serde",
@@ -3968,6 +3977,7 @@ version = "0.21.0"
 dependencies = [
  "chrono",
  "craft-crw",
+ "craft-tiff",
  "dhat",
  "jpeg-encoder",
  "jxl-oxide",
@@ -3976,7 +3986,6 @@ dependencies = [
  "lightcraft-meta",
  "lightcraft-raster",
  "lightcraft-testkit",
- "lightcraft-tiff",
  "miniz_oxide 0.9.1",
  "proptest",
  "rayon",
@@ -4029,15 +4038,6 @@ version = "0.21.0"
 [[package]]
 name = "lightcraft-testkit"
 version = "0.21.0"
-
-[[package]]
-name = "lightcraft-tiff"
-version = "0.21.0"
-dependencies = [
- "proptest",
- "serde",
- "thiserror 2.0.21",
-]
 
 [[package]]
 name = "lightcraft-ui-egui"

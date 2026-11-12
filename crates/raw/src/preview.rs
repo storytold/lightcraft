@@ -3,9 +3,9 @@
 //! or a DNG 1.7 JPEG XL preview IFD stored as a single tile/strip (a standalone `.jxl` file, as the spec
 //! recommends for previews).
 
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::tags as t;
-use lightcraft_tiff::{Ifd, Tiff, makernote};
+use craft_tiff::image::chunk_bytes;
+use craft_tiff::tags as t;
+use craft_tiff::{Ifd, Tiff, makernote};
 
 /// Colour space of an embedded JPEG when the enclosing raw supplies it instead of the JPEG.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,7 +203,7 @@ fn jpeg_end(s: &[u8], budget: &mut usize) -> Option<usize> {
 fn candidates<'a>(data: &'a [u8], ifd: &Ifd, base: u64, out: &mut Vec<&'a [u8]>, budget: &mut usize) {
     // whole JPEG files stored as an undefined-type tag value (e.g. Panasonic `JpgFromRaw` 0x002e)
     for e in &ifd.entries {
-        if matches!(e.value, lightcraft_tiff::Value::Undefined(_))
+        if matches!(e.value, craft_tiff::Value::Undefined(_))
             && e.count() > 1024
             && let Some(s) = file_span(data, e.offset, e.count() as u64, budget)
             && s.starts_with(&[0xff, 0xd8])
@@ -310,7 +310,7 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         if let Some(mn) = makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make) {
             candidates(bytes, &mn.ifd, mn.base, &mut found, &mut budget);
             if let Some(off) = mn.ifd.u64(0x0011)
-                && let Ok((pifd, _)) = lightcraft_tiff::parse_ifd_at(bytes, mn.base + off, mn.order, mn.base, false, &Default::default())
+                && let Ok((pifd, _)) = craft_tiff::parse_ifd_at(bytes, mn.base + off, mn.order, mn.base, false, &Default::default())
             {
                 candidates(bytes, &pifd, mn.base, &mut found, &mut budget);
             }
