@@ -3723,5 +3723,16 @@
   "macOS often stores Korean file names decomposed (NFD), each syllable as its jamo. Contact-sheet captions, export": "„macOS“ dažnai išsaugo korėjietiškus failų pavadinimus išskaidytus (NFD) – kiekvieną skiemenį sudaro atskiros jamo raidės. Kontaktinių lapų antraštėse, eksporto",
   "watermarks, slideshow overlays and print page text drew those as loose jamo (`ㅈㅔㅈㅜㄷㅗ` for `제주도`), and": "vandens ženkluose, skaidrių demonstravimo užrašuose ir spausdinamų puslapių tekste jos būdavo rodomos atskirai (`ㅈㅔㅈㅜㄷㅗ` vietoj `제주도`), o",
   "decomposed Vietnamese letters lost their stacked marks. Text is now composed before it is laid out, so both draw as": "išskaidytos vietnamietiškos raidės prarasdavo virš jų esančius diakritinius ženklus. Dabar tekstas sukomponuojamas prieš išdėstant jį puslapyje, todėl abi kalbos atvaizduojamos taip,",
-  "they do in the app (issue #3480, #3277).": "kaip ir pačioje programoje (klaidos Nr. 3480 ir 3277)."
+  "they do in the app (issue #3480, #3277).": "kaip ir pačioje programoje (klaidos Nr. 3480 ir 3277).",
+  "2026-10-31": "2026-10-31",
+  "Find Similar Photos no longer freezes the window": "Panašių nuotraukų paieška nebeužstringa ir neužšaldo lango",
+  "The first search reads every photo in the library, and it did that on the thread that draws the window, so in a large": "Pirmosios paieškos metu nuskaitomos visos bibliotekoje esančios nuotraukos. Anksčiau tai buvo atliekama lange atvaizduojančioje gijoje, todėl didelėje",
+  "library the app stopped responding and Windows offered to close it (issue #3468). The photos are now read in the": "bibliotekoje programa nebeatsakydavo, o „Windows“ siūlydavo ją uždaryti (klaida Nr. 3468). Dabar nuotraukos nuskaitomos",
+  "background: a \"Find Similar Photos\" row in the activity stack counts them, you can keep working meanwhile, and its ✕": "fone: veiksmų sąraše rodoma eilutė „Rasti panašias nuotraukas“, kurioje skaičiuojamos nuotraukos. Tuo metu galite toliau dirbti, o paspaudus ✕ paieška",
+  "stops the search. A stopped search leaves the view as it was, and the next one goes on from what was read. The menu": "sustabdoma. Sustabdžius paiešką, rodinys lieka toks, koks buvo, o kitą kartą paieška tęsiama nuo jau nuskaitytų duomenų. Kol paieška vyksta, meniu",
+  "item is off while a search runs, and opening another library stops it. When a search ends the grid shows the photos it": "komanda neaktyvi, o atvėrus kitą biblioteką paieška sustabdoma. Paieškai pasibaigus, tinklelyje rodomos rastos nuotraukos",
+  "found, also from the Photo menu, and a message says how many. `library.findSimilar` from the control channel and": "– jas taip pat galima parodyti meniu Nuotrauka. Pranešime nurodoma, kiek nuotraukų rasta. Valdymo kanalo komanda `library.findSimilar` ir",
+  "`mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server": "`mcp --connect` vis dar grąžina `{photos}`, tačiau dabar – tik paieškai pasibaigus. Jei užklausos siuntėjas nustoja laukti atsakymo (valdymo serveris",
+  "gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already": "užklausai skiria 60 sek.), jis gali pakartoti užklausą paieškai pasibaigus. Kol paieška vyksta, nauja užklausa atmetama nurodant, kad ji jau",
+  "running), and what was read isn't read again.": "vykdoma. Jau nuskaitytos nuotraukos antrą kartą nenuskaitomos."
 }
