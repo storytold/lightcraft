@@ -51,8 +51,11 @@ pub fn check_image(data: &[u8], info: &ImageInfo) -> Result<usize> {
     let (across, down) = info.grid();
     let planes = if info.planar == 2 { cpp } else { 1 };
     let expected = (across as usize).saturating_mul(down as usize).saturating_mul(planes);
-    if chunks.len() < expected {
-        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", chunks.len())));
+    // the offsets table says how many chunks the image declares: craft-tiff builds at most one
+    // descriptor per byte of file (craft-libs#827), so `chunks` may be shorter on a grid of tiles
+    // sharing one payload, and the bytes behind it are what the bounds below count.
+    if info.offsets.len() < expected {
+        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", info.offsets.len())));
     }
     // Tile sizes don't depend on the image size, and every tile is decoded at its nominal size and held until the copy:
     // a grid of tiles no larger than the image covers less than twice its width and height, so more than four times
