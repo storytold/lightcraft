@@ -549,6 +549,12 @@
   noise looks like grain. Edges are as sharp as before. Thumbnails and previews that LightCraft rendered from a raw
   are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
 
+### Large libraries
+- Saving follows what changed, not the size of the library: the catalog file is rewritten when the changes since the
+  last rewrite have grown to a quarter of its size, where it used to be rewritten every 2000 changes. Importing 100,000
+  photos rewrote it 50 times (9.4 GB written); it is now 15 times (2.1 GB). Quitting no longer rewrites a large
+  catalog for a handful of changes. In the browser, where every save rewrites the whole log, the catalog is still
+  rewritten every 2000 changes. Numbers and the measurements behind them: `docs/catalog-persistence.md`.
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
