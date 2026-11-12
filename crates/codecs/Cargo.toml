@@ -12,6 +12,7 @@ workspace = true
 lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
+craft-gainmap = { workspace = true }
 craft-heif = { workspace = true, optional = true }
 serde = { workspace = true }
 bytemuck = { workspace = true }

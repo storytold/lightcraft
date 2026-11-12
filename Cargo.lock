@@ -1200,6 +1200,14 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
 
 [[package]]
+name = "craft-gainmap"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=430a908f68819bf23d14fe73ab9b18d8f4fd4e5d#430a908f68819bf23d14fe73ab9b18d8f4fd4e5d"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-heif"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=430a908f68819bf23d14fe73ab9b18d8f4fd4e5d#430a908f68819bf23d14fe73ab9b18d8f4fd4e5d"
@@ -3677,6 +3685,7 @@ version = "0.21.0"
 dependencies = [
  "avif-serialize",
  "bytemuck",
+ "craft-gainmap",
  "craft-heif",
  "dhat",
  "image",

@@ -17,6 +17,8 @@ craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "f3b62ec61f
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
+# HDR gain maps: ISO 21496-1 and hdrgm metadata, compute and apply (moved from crates/codecs; craft-libs#904).
+craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "430a908f68819bf23d14fe73ab9b18d8f4fd4e5d" }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }
