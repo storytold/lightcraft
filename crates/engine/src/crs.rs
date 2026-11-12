@@ -1,21 +1,24 @@
-//! Interchange: camera-raw-settings (`crs:`) develop fields from XMP → our develop settings.
+//! Mapping between LightCraft's develop settings and the `crs:` XMP namespace used by Adobe
+//! Camera Raw / Lightroom and other raw developers.
 //!
-//! Other raw developers store their edits as `crs:` properties in XMP sidecars, in DNG-embedded
-//! XMP and in XMP preset files. This module maps the commonly used, documented-by-observation
-//! fields to a *partial* [`DevelopSettings`](lightcraft_develop::DevelopSettings) JSON object
-//! (only the fields present in the packet), which is then merged like a preset. Our pipeline is
-//! not theirs, so the result is a best-effort approximation of the look, not a pixel match.
-//! The full table is in `docs/xmp-interop.md`.
+//! Reading `crs:` fields is best-effort: LightCraft's pipeline renders differently, so values
+//! carry over but the look is approximate. Only fields present in a packet are applied, and the
+//! result is a partial settings object merged like a preset, so everything else keeps its
+//! current or default value. Packets marked `crs:AlreadyApplied="True"` are skipped because the
+//! pixels already contain the edit.
 //!
-//! Implemented from the public XMP specification (ISO 16684-1) and black-box observation of what
-//! each field means; no third-party code or preset content was used.
+//! Writing `crs:` fields back updates an existing packet in place, adding only fields that
+//! differ from the previous settings (or from the defaults when there are none), so a foreign
+//! application's values are never overwritten or duplicated (issue #934).
+//!
+//! See `docs/xmp-interop.md` for the full interchange specification: the field mapping, spot
+//! removal, local corrections, preset files, and camera profiles.
 
 use std::collections::BTreeMap;
 
-use lightcraft_develop::{MIXER_BANDS, Preset};
+use lightcraft_develop::{DevelopSettings, MIXER_BANDS, Preset};
 use serde_json::{Map, Value, json};
 
-/// Properties keyed `prefix:name` (as produced by [`lightcraft_meta::parse_xmp`]).
 pub type Props = BTreeMap<String, Vec<String>>;
 
 /// What the mapped settings will develop. It decides how a `crs:` white balance is read: a raw
@@ -535,6 +538,123 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
     })
 }
 
+/// The `crs:` develop fields LightCraft writes back into another application's sidecar, so an
+/// edit made here (`light.exposure` → `crs:Exposure2012`, and so on) reaches the other
+/// application instead of being shadowed by our `lc:settings`. Only fields that differ from
+/// `previous` are written: a field at its default is not distinguished from an untouched one,
+/// so writing it would overwrite a foreign value or insert a field the packet never had.
+/// Fields not in this list are kept byte for byte, and the existing block is updated in place
+/// rather than duplicated.
+pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSettings>) -> Vec<(&'static str, String)> {
+    let light = &settings.light;
+    let effects = &settings.effects;
+    let color = &settings.color;
+    let detail = &settings.detail;
+    let vignette = &settings.vignette;
+    let grain = &settings.grain;
+    let optics = &settings.optics;
+    let calibration = &settings.calibration;
+    let curve = &settings.curve;
+    let grading = &settings.grading;
+    let prev_light = previous.map(|p| &p.light);
+    let prev_effects = previous.map(|p| &p.effects);
+    let prev_color = previous.map(|p| &p.color);
+    let prev_detail = previous.map(|p| &p.detail);
+    let prev_vignette = previous.map(|p| &p.vignette);
+    let prev_grain = previous.map(|p| &p.grain);
+    let prev_optics = previous.map(|p| &p.optics);
+    let prev_calibration = previous.map(|p| &p.calibration);
+    let prev_curve = previous.map(|p| &p.curve);
+    let prev_grading = previous.map(|p| &p.grading);
+    // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
+    const EPS: f64 = 1e-6;
+    let all = [
+        // Light (process version 2012+)
+        ("Exposure2012", light.exposure, prev_light.map(|l| l.exposure)),
+        ("Contrast2012", light.contrast, prev_light.map(|l| l.contrast)),
+        ("Highlights2012", light.highlights, prev_light.map(|l| l.highlights)),
+        ("Shadows2012", light.shadows, prev_light.map(|l| l.shadows)),
+        ("Whites2012", light.whites, prev_light.map(|l| l.whites)),
+        ("Blacks2012", light.blacks, prev_light.map(|l| l.blacks)),
+        // Presence
+        ("Texture", effects.texture, prev_effects.map(|e| e.texture)),
+        ("Clarity2012", effects.clarity, prev_effects.map(|e| e.clarity)),
+        ("Dehaze", effects.dehaze, prev_effects.map(|e| e.dehaze)),
+        ("Vibrance", color.vibrance, prev_color.map(|c| c.vibrance)),
+        ("Saturation", color.saturation, prev_color.map(|c| c.saturation)),
+        // Tone curve: parametric regions
+        ("ParametricShadows", curve.shadows, prev_curve.map(|c| c.shadows)),
+        ("ParametricDarks", curve.darks, prev_curve.map(|c| c.darks)),
+        ("ParametricLights", curve.lights, prev_curve.map(|c| c.lights)),
+        ("ParametricHighlights", curve.highlights, prev_curve.map(|c| c.highlights)),
+        ("ParametricShadowSplit", curve.split_shadows, prev_curve.map(|c| c.split_shadows)),
+        ("ParametricMidtoneSplit", curve.split_mid, prev_curve.map(|c| c.split_mid)),
+        ("ParametricHighlightSplit", curve.split_highlights, prev_curve.map(|c| c.split_highlights)),
+        ("CurveRefineSaturation", curve.refine_saturation, prev_curve.map(|c| c.refine_saturation)),
+        // Color grading (split toning fields are shared with the older split-toning panel)
+        ("SplitToningShadowHue", grading.shadows.hue, prev_grading.map(|g| g.shadows.hue)),
+        ("SplitToningShadowSaturation", grading.shadows.sat, prev_grading.map(|g| g.shadows.sat)),
+        ("ColorGradeShadowLum", grading.shadows.lum, prev_grading.map(|g| g.shadows.lum)),
+        ("SplitToningHighlightHue", grading.highlights.hue, prev_grading.map(|g| g.highlights.hue)),
+        ("SplitToningHighlightSaturation", grading.highlights.sat, prev_grading.map(|g| g.highlights.sat)),
+        ("ColorGradeHighlightLum", grading.highlights.lum, prev_grading.map(|g| g.highlights.lum)),
+        ("ColorGradeMidtoneHue", grading.midtones.hue, prev_grading.map(|g| g.midtones.hue)),
+        ("ColorGradeMidtoneSat", grading.midtones.sat, prev_grading.map(|g| g.midtones.sat)),
+        ("ColorGradeMidtoneLum", grading.midtones.lum, prev_grading.map(|g| g.midtones.lum)),
+        ("ColorGradeGlobalHue", grading.global.hue, prev_grading.map(|g| g.global.hue)),
+        ("ColorGradeGlobalSat", grading.global.sat, prev_grading.map(|g| g.global.sat)),
+        ("ColorGradeGlobalLum", grading.global.lum, prev_grading.map(|g| g.global.lum)),
+        ("ColorGradeBlending", grading.blending, prev_grading.map(|g| g.blending)),
+        ("SplitToningBalance", grading.balance, prev_grading.map(|g| g.balance)),
+        // Detail
+        ("Sharpness", detail.sharpen_amount, prev_detail.map(|d| d.sharpen_amount)),
+        ("SharpenRadius", detail.sharpen_radius, prev_detail.map(|d| d.sharpen_radius)),
+        ("SharpenDetail", detail.sharpen_detail, prev_detail.map(|d| d.sharpen_detail)),
+        ("SharpenEdgeMasking", detail.sharpen_masking, prev_detail.map(|d| d.sharpen_masking)),
+        ("LuminanceSmoothing", detail.nr_luminance, prev_detail.map(|d| d.nr_luminance)),
+        ("LuminanceNoiseReductionDetail", detail.nr_detail, prev_detail.map(|d| d.nr_detail)),
+        ("LuminanceNoiseReductionContrast", detail.nr_contrast, prev_detail.map(|d| d.nr_contrast)),
+        ("ColorNoiseReduction", detail.nr_color, prev_detail.map(|d| d.nr_color)),
+        ("ColorNoiseReductionDetail", detail.nr_color_detail, prev_detail.map(|d| d.nr_color_detail)),
+        ("ColorNoiseReductionSmoothness", detail.nr_color_smoothness, prev_detail.map(|d| d.nr_color_smoothness)),
+        // Effects: post-crop vignette + grain
+        ("PostCropVignetteAmount", vignette.amount, prev_vignette.map(|v| v.amount)),
+        ("PostCropVignetteMidpoint", vignette.midpoint, prev_vignette.map(|v| v.midpoint)),
+        ("PostCropVignetteRoundness", vignette.roundness, prev_vignette.map(|v| v.roundness)),
+        ("PostCropVignetteFeather", vignette.feather, prev_vignette.map(|v| v.feather)),
+        ("PostCropVignetteHighlightContrast", vignette.highlights, prev_vignette.map(|v| v.highlights)),
+        ("GrainAmount", grain.amount, prev_grain.map(|g| g.amount)),
+        ("GrainSize", grain.size, prev_grain.map(|g| g.size)),
+        ("GrainFrequency", grain.roughness, prev_grain.map(|g| g.roughness)),
+        // Optics (manual corrections; lens profiles are ours, only the switch carries over)
+        ("AutoLateralCA", if optics.remove_ca { 1.0 } else { 0.0 }, prev_optics.map(|o| if o.remove_ca { 1.0 } else { 0.0 })),
+        ("LensManualDistortionAmount", optics.distortion, prev_optics.map(|o| o.distortion)),
+        ("VignetteAmount", optics.vignetting, prev_optics.map(|o| o.vignetting)),
+        ("VignetteMidpoint", optics.vignetting_midpoint, prev_optics.map(|o| o.vignetting_midpoint)),
+        ("DefringePurpleAmount", optics.defringe_purple_amount, prev_optics.map(|o| o.defringe_purple_amount)),
+        ("DefringePurpleHueLo", optics.defringe_purple_hue_lo, prev_optics.map(|o| o.defringe_purple_hue_lo)),
+        ("DefringePurpleHueHi", optics.defringe_purple_hue_hi, prev_optics.map(|o| o.defringe_purple_hue_hi)),
+        ("DefringeGreenAmount", optics.defringe_green_amount, prev_optics.map(|o| o.defringe_green_amount)),
+        ("DefringeGreenHueLo", optics.defringe_green_hue_lo, prev_optics.map(|o| o.defringe_green_hue_lo)),
+        ("DefringeGreenHueHi", optics.defringe_green_hue_hi, prev_optics.map(|o| o.defringe_green_hue_hi)),
+        // Calibration
+        ("ShadowTint", calibration.shadows_tint, prev_calibration.map(|c| c.shadows_tint)),
+        ("RedHue", calibration.red_hue, prev_calibration.map(|c| c.red_hue)),
+        ("RedSaturation", calibration.red_sat, prev_calibration.map(|c| c.red_sat)),
+        ("GreenHue", calibration.green_hue, prev_calibration.map(|c| c.green_hue)),
+        ("GreenSaturation", calibration.green_sat, prev_calibration.map(|c| c.green_sat)),
+        ("BlueHue", calibration.blue_hue, prev_calibration.map(|c| c.blue_hue)),
+        ("BlueSaturation", calibration.blue_sat, prev_calibration.map(|c| c.blue_sat)),
+    ];
+    all.into_iter()
+        // Without a baseline, nothing distinguishes our edit from a foreign value: write nothing.
+        .filter_map(|(name, current, previous)| {
+            let p = previous?;
+            ((current - p).abs() >= EPS).then(|| (name, current.to_string()))
+        })
+        .collect()
+}
+
 /// Read an XMP preset (`crs:` fields + `crs:Name` / `crs:Group`) into one of our presets.
 /// Returns `None` when the packet has no adjustments we understand.
 pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
@@ -553,3 +673,179 @@ pub fn preset_from_xmp(xmp: &str, fallback_name: &str) -> Option<Preset> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod crs_write_tests {
+    use super::*;
+    use lightcraft_develop::DevelopSettings;
+
+    /// A develop edit must reach the other application's `crs:` fields: writing the sidecar
+    /// updates the existing `crs:` block in place, so the app that wrote it sees our edit
+    /// (issue #934).
+    #[test]
+    fn crs_write_updates_the_existing_block_in_place() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+
+        /// A sidecar as another raw developer writes it: its own develop settings in `crs:`.
+        const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/"
+            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5" lc:settings="{}"/>
+          </rdf:RDF></x:xmpmeta>"#;
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-write-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let sidecar = dir.join("IMG_1.xmp");
+        std::fs::write(&sidecar, FOREIGN).unwrap();
+
+        // our edit: the exposure the other application is told about
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.9;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = crate::Session::new();
+        s.xmp.write_crs = true;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.9), "the edit reaches the other application's field:\n{text}");
+        assert_eq!(text.matches("crs:Exposure2012").count(), 1, "the existing block is updated, not written twice:\n{text}");
+        assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An explicit reset to zero must be written to the `crs:` field so the other application
+    /// sees the reset instead of its stale value. The sidecar carries prior `lc:settings` so a
+    /// default-valued field has a baseline to differ from; without it, a default is
+    /// indistinguishable from an untouched field and is not written.
+    #[test]
+    fn crs_write_writes_explicit_zero_reset() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+
+        /// A sidecar with prior `lc:settings` (exposure 0.5) and a stale `crs:Exposure2012="0.5"`
+        /// from another application.
+        let mut prior = DevelopSettings::default();
+        prior.light.exposure = 0.5;
+        let settings = prior.to_json().to_string();
+        let escaped = settings.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
+        let foreign = format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/"
+            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5" lc:settings="{}"/>
+          </rdf:RDF></x:xmpmeta>"#,
+            escaped
+        );
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-write-zero-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let sidecar = dir.join("IMG_1.xmp");
+        std::fs::write(&sidecar, &foreign).unwrap();
+
+        // our edit: explicit reset to zero
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.0;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = crate::Session::new();
+        s.xmp.write_crs = true;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.0), "the explicit zero reset reaches the other application's field:\n{text}");
+        assert_eq!(text.matches("crs:Exposure2012").count(), 1, "the existing block is updated, not written twice:\n{text}");
+        assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A round-trip test: write zero, read it back, verify it's zero.
+    #[test]
+    fn crs_zero_round_trip() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-roundtrip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+
+        // First write: non-zero exposure
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.7;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = crate::Session::new();
+        s.xmp.write_crs = true;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let sidecar = dir.join("IMG_1.xmp");
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.7));
+
+        // Second write: explicit reset to zero
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.0;
+        let develop_arc = std::sync::Arc::new(develop);
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: develop_arc, label: "Reset".into(), edited: Some("now".into()) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.0), "zero is written and read back:\n{text}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without a baseline (`lc:settings`) in an existing foreign sidecar, `crs_settings` must not
+    /// emit any `crs:` fields: `previous == None` means there is nothing to differ from, so a
+    /// foreign value must not be overwritten with our default (issue #934).
+    #[test]
+    fn crs_write_updates_the_existing_block_in_place_review_regression_1() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+
+        /// A foreign sidecar with its own `crs:Exposure2012` and no `lc:settings` baseline.
+        const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5"/>
+          </rdf:RDF></x:xmpmeta>"#;
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-write-regression-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let sidecar = dir.join("IMG_1.xmp");
+        std::fs::write(&sidecar, FOREIGN).unwrap();
+
+        // our edit: exposure differs from the default, but there is no baseline to differ from
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.9;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = crate::Session::new();
+        s.xmp.write_crs = true;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.5), "without a baseline the foreign crs: value is kept:\n{text}");
+        assert_eq!(text.matches("crs:Exposure2012").count(), 1, "the existing block is updated, not written twice:\n{text}");
+        assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

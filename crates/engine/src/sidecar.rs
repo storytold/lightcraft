@@ -1,43 +1,19 @@
-//! XMP sidecars: `<stem>.xmp` (default) or `<file>.xmp` next to the original.
+//! Sidecar handling: XMP packets embedded in files or written as sidecar files.
 //!
-//! **Write** ([`Session::save_sidecar`], `photo.saveMetadataToFile`, or automatically after every
-//! change when [`XmpPrefs::auto_write`] is on): rating, colour label, title, caption, copyright,
-//! creator, keywords, capture time and GPS in the standard namespaces, plus our complete develop
-//! settings (`lc:settings`, JSON), the pick/reject flag (`lc:flag`) and location (`lc:location`).
-//! A sidecar is written only beside an original that is an existing file at an absolute path;
-//! otherwise the save fails.
-//!
-//! An existing sidecar is never replaced wholesale (issue #92): LightCraft's properties
-//! ([`OWNED`], [`OWNED_IF_STATED`]) are merged into it ([`lightcraft_meta::merge_xmp`]) and
-//! everything else — another editor's `crs:` develop settings, `xmpMM` history, unknown
-//! namespaces — is kept byte for byte. A sidecar that can't be read as XMP is first copied to
-//! `<name>.xmp.bak-<time>` (never overwritten), then replaced. Writes are atomic (temp file,
-//! fsync, rename).
-//!
-//! **Shared names** (Stem naming): `IMG_0001.CR3` and `IMG_0001.JPG` would share `IMG_0001.xmp`.
-//! When two catalogued files map to one stem sidecar, it belongs to one of them (a raw first, then
-//! the first by file name — [`Session::sidecar_naming`]); the others use `<file>.xmp`
-//! (`IMG_0001.JPG.xmp`) for writing and reading, so neither overwrites the other. An import ranks
-//! the files it is adding against the library the same way ([`ImportStems`]): a JPEG or a TIFF
-//! arriving beside its raw's `IMG_0001.xmp` reads its own `<file>.xmp`, never the raw's packet
-//! (issue #1905).
-//!
-//! **Read** (on import, and `photo.readMetadataFromFile`): the sidecar wins for metadata, except
-//! the capture time: a time embedded in the file wins, and the sidecar's (`exif:DateTimeOriginal`,
-//! else `photoshop:DateCreated`, else `xmp:CreateDate`) fills in only when the file has none; develop
-//! settings are restored from `lc:settings` when present, else mapped from interoperable `crs:`
-//! fields ([`crate::crs`]). For raw/DNG files without a sidecar the file's embedded XMP is used.
-//! Manual reads also accept the first complete standard XMP APP1 in a bounded JPEG header (see `read_jpeg_xmp`).
+//! This module deals with reading, writing and merging XMP metadata for photos.
+//! It handles both our own `lc:` namespace and the interoperable `crs:` namespace
+//! used by Adobe Camera Raw / Lightroom and other raw developers.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use lightcraft_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
-use lightcraft_develop::DevelopSettings;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use lightcraft_catalog::{ColorLabel, Flag, MediaKind, Op, Photo, PhotoId, Source};
+use lightcraft_develop::DevelopSettings;
 
 use crate::{EngineError, Result, Session};
 
@@ -59,6 +35,9 @@ pub struct XmpPrefs {
     /// Write the sidecar after every change to a photo's metadata or develop settings.
     pub auto_write: bool,
     pub naming: SidecarNaming,
+    /// Write `crs:` develop fields back into the sidecar so other applications see the edits.
+    /// Off by default to avoid overwriting another application's values on unrelated saves.
+    pub write_crs: bool,
 }
 
 /// The sidecar path for an original, by naming convention.
@@ -761,6 +740,220 @@ fn backup(path: &Path, stamp: &str) -> std::io::Result<PathBuf> {
     Err(std::io::Error::other("no free backup name"))
 }
 
+/// Escape text for an XMP attribute value. The values written here are numbers, so
+/// this is a safeguard rather than a feature.
+fn escape_attr(v: &str) -> String {
+    v.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&apos;")
+}
+
+/// Index of the `>` closing the tag that starts at `start`, respecting quoted
+/// attribute values (a `>` inside quotes does not end the tag), or `None` when
+/// the tag is not closed.
+fn tag_end(data: &str, start: usize) -> Option<usize> {
+    let bytes = data.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = start;
+    while i < data.len() {
+        let b = *bytes.get(i)?;
+        match quote {
+            Some(q) if b == q => quote = None,
+            None if b == b'"' || b == b'\'' => quote = Some(b),
+            None if b == b'>' => return Some(i),
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Whether the tag ending at `end` (index of `>`) is self-closing: the last
+/// non-whitespace byte before `>` is `/`.
+fn is_self_closing(data: &str, end: usize) -> bool {
+    data.get(..end).is_some_and(|s| s.trim_end().ends_with('/'))
+}
+
+/// Whether `data.get(range)` contains a standalone `token` (not part of a
+/// longer attribute name or value word).
+fn tag_contains(data: &str, start: usize, end: usize, token: &str) -> bool {
+    let Some(tag) = data.get(start..=end) else { return false };
+    let is_word = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':');
+    let bytes = token.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = tag[from..].find(token) {
+        let at = from + rel;
+        let before_ok = at == 0 || !is_word(tag.as_bytes()[at - 1]);
+        let after = at + token.len();
+        let after_ok = after >= tag.len() || !is_word(tag.as_bytes()[after]);
+        if before_ok && after_ok {
+            return true;
+        }
+        from = after.max(at + bytes.len());
+    }
+    false
+}
+
+/// Whether the `rdf:Description` tag at `start..end` declares the `crs`
+/// namespace or already carries a `crs:` attribute.
+fn crs_block(data: &str, start: usize, end: usize) -> bool {
+    // Cheap substring check first; the token check rejects accidents.
+    tag_contains(data, start, end, "xmlns:crs=") || tag_contains(data, start, end, "crs:")
+}
+
+/// Value range of attribute `crs:name` in the `rdf:Description` tag at
+/// `start..end`, handling single or double quotes and whitespace around `=`.
+/// Outer `None`: attribute absent. `Some(None)`: present but malformed, so no
+/// duplicate is inserted alongside it.
+fn attr_value_range(data: &str, start: usize, end: usize, name: &str) -> Option<Option<(usize, usize)>> {
+    let wanted = format!("crs:{name}");
+    let bytes = data.as_bytes();
+    let at = |i: usize| bytes.get(i).copied();
+    let mut i = start + "<rdf:Description".len();
+    while i < end {
+        // Skip whitespace and the `/` of a self-closing tag.
+        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace() || b == b'/') {
+            i += 1;
+        }
+        if i >= end {
+            break;
+        }
+        let name_start = i;
+        while i < end && matches!(at(i), Some(b) if !b.is_ascii_whitespace() && b != b'=' && b != b'/') {
+            i += 1;
+        }
+        let is_wanted = data.get(name_start..i).is_some_and(|s| s == wanted);
+        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace()) {
+            i += 1;
+        }
+        if i >= end || at(i) != Some(b'=') {
+            continue;
+        }
+        i += 1;
+        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace()) {
+            i += 1;
+        }
+        if i >= end || !matches!(at(i), Some(b'"') | Some(b'\'')) {
+            return if is_wanted { Some(None) } else { None };
+        }
+        let quote = at(i)?;
+        let value_start = i + 1;
+        let mut j = value_start;
+        while j < end && at(j) != Some(quote) {
+            j += 1;
+        }
+        if j >= end {
+            return if is_wanted { Some(None) } else { None };
+        }
+        if is_wanted {
+            return Some(Some((value_start, j)));
+        }
+        i = j + 1;
+    }
+    None
+}
+
+/// Update an existing `crs:name` field in place and report whether one was
+/// found: as an attribute of a `rdf:Description` tag, or as an element
+/// `<crs:name>value</crs:name>`. Returns `true` for a malformed occurrence
+/// too, so a duplicate is not inserted alongside it.
+fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
+    let mut from = 0;
+    while let Some(rel) = data[from..].find("<rdf:Description") {
+        let start = from + rel;
+        let Some(end) = tag_end(data, start) else { return true };
+        if let Some(found) = attr_value_range(data, start, end, name) {
+            if let Some((vs, ve)) = found {
+                data.replace_range(vs..ve, &escape_attr(value));
+            }
+            return true;
+        }
+        from = end + 1;
+        if from >= data.len() {
+            break;
+        }
+    }
+    let open = format!("<crs:{name}");
+    let mut search = 0;
+    let start = loop {
+        let Some(rel) = data.get(search..).and_then(|s| s.find(&open)) else { return false };
+        let s = search + rel;
+        let next = data.get(s + open.len()..).and_then(|t| t.chars().next());
+        if matches!(next, Some(c) if c.is_whitespace() || c == '>' || c == '/') {
+            break s;
+        }
+        search = s + open.len();
+    };
+    let Some(end) = tag_end(data, start) else { return true };
+    let escaped = escape_attr(value);
+    if is_self_closing(data, end) {
+        data.replace_range(start..end + 1, &format!("<crs:{name}>{escaped}</crs:{name}>"));
+        return true;
+    }
+    let close = format!("</crs:{name}>");
+    let Some(rel) = data[end + 1..].find(&close) else { return true };
+    data.replace_range(end + 1..end + 1 + rel, &escaped);
+    true
+}
+
+/// Update the `crs:` attributes carried by the packet's descriptions in place, adding any
+/// that are missing. Only a `rdf:Description` that declares the `crs` namespace or already
+/// carries `crs:` attributes is used; if none exists, one is created with the namespace
+/// declared. Attribute form keeps each field to a single occurrence (an element
+/// would appear twice, as opening and closing tag), so the other application reads our edit
+/// in the same attribute it wrote its own. Everything else in the packet is kept byte for
+/// byte (issue #934).
+fn update_crs_attributes(data: &mut String, crs: &[(&'static str, String)]) {
+    for (name, value) in crs {
+        if !update_existing_crs(data, name, value) {
+            insert_crs_attribute(data, name, value);
+        }
+    }
+}
+
+/// Insert `crs:name="value"` into the `rdf:Description` that declares the `crs`
+/// namespace or already carries `crs:` attributes, creating such a block when
+/// none exists. It never inserts into an unrelated first block, where the
+/// `crs:` prefix may be unbound.
+fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
+    let attr = format!(" crs:{name}=\"{}\"", escape_attr(value));
+    let mut from = 0;
+    while let Some(rel) = data[from..].find("<rdf:Description") {
+        let pos = from + rel;
+        let Some(end) = tag_end(data, pos) else { return };
+        if crs_block(data, pos, end) {
+            // For a self-closing tag the `/` must immediately precede `>`, so the new
+            // attribute goes before the `/`, not before the `>`. Scan back from `>` over
+            // whitespace to find the `/`; a slash inside a quoted attribute value (such as
+            // the `xmlns:crs` URL ending in `1.0/`) must not be mistaken for it.
+            let insert_at = if is_self_closing(data, end) {
+                let mut i = end;
+                while i > pos && data.as_bytes()[i - 1].is_ascii_whitespace() {
+                    i -= 1;
+                }
+                i - 1
+            } else {
+                end
+            };
+            data.insert_str(insert_at, &attr);
+            return;
+        }
+        from = end + 1;
+        if from >= data.len() {
+            break;
+        }
+    }
+    let block = format!("<rdf:Description rdf:about=\"\" xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"{attr}/>");
+    if let Some(pos) = data.find("<rdf:RDF") {
+        let Some(end) = tag_end(data, pos) else { return };
+        if is_self_closing(data, end) {
+            return;
+        }
+        data.insert_str(end + 1, &block);
+    } else if let Some(pos) = data.find("<x:xmpmeta") {
+        let Some(end) = tag_end(data, pos) else { return };
+        data.insert_str(end + 1, &block);
+    }
+}
+
 /// What [`Session::save_sidecar`] did.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SidecarSaved {
@@ -772,27 +965,38 @@ pub struct SidecarSaved {
 }
 
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
-/// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+/// Returns (contents, merged, backup, previous_develop_settings).
+fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>, Option<DevelopSettings>)> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None, None)),
         // can't see what is there: never overwrite it blindly
         Err(e) => return Err(e),
     };
     if bytes.iter().all(u8::is_ascii_whitespace) {
-        return Ok((fresh, false, None));
+        return Ok((fresh, false, None, None));
     }
+    let old_xmp = match std::str::from_utf8(&bytes) {
+        Ok(s) => s,
+        Err(_) => {
+            let b = backup(path, stamp)?;
+            log::warn!("{}: not readable as UTF-8; kept a copy as {} before replacing it", path.display(), b.display());
+            return Ok((fresh, false, Some(b), None));
+        }
+    };
+    // Extract previous lc:settings from the old sidecar before merging
+    let previous_develop = lightcraft_meta::parse_xmp(old_xmp)
+        .ok()
+        .and_then(|d| d.lc_settings)
+        .and_then(|j| serde_json::from_str::<Value>(&j).ok())
+        .and_then(|v| DevelopSettings::from_untrusted_json(&v).ok());
     let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
-    match std::str::from_utf8(&bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
-    {
-        Ok(merged) => Ok((merged, true, None)),
+    match lightcraft_meta::merge_xmp(old_xmp, &fresh, rules).map_err(|e| e.to_string()) {
+        Ok(merged) => Ok((merged, true, None, previous_develop)),
         Err(why) => {
             let b = backup(path, stamp)?;
             log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-            Ok((fresh, false, Some(b)))
+            Ok((fresh, false, Some(b), None))
         }
     }
 }
@@ -1154,7 +1358,33 @@ impl Session {
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
-        let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        let (mut data, merged, backup, previous_develop) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
+        // Write the develop settings other applications understand as `crs:` fields back into
+        // their existing block, updating it in place so the next read from that application
+        // sees our edit instead of preferring our `lc:settings` over its stale `crs:` values
+        // (issue #934). Fields we don't state are left as the other application wrote them.
+        if self.xmp.write_crs {
+            // A fresh sidecar (no existing file) is LightCraft's own packet: compare against the
+            // defaults so its `crs:` fields are written. An existing sidecar with an `lc:settings`
+            // baseline: compare against it. An existing sidecar without a baseline: there is
+            // nothing to differ from, so write nothing and never overwrite a foreign value
+            // (issue #934).
+            let default = DevelopSettings::default();
+            let baseline = match (merged, &previous_develop) {
+                (false, _) => Some(&default),
+                (true, Some(p)) => Some(p),
+                (true, None) => None,
+            };
+            let crs = crate::crs::crs_settings(&*p.develop, baseline);
+            if !crs.is_empty() {
+                // Write the develop settings other applications understand as `crs:` attributes back
+                // into the packet, updating them in place so the edit reaches the other application
+                // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
+                // each field to a single occurrence; element form would appear twice (opening and
+                // closing tag). Fields we don't state are left as the other application wrote them.
+                update_crs_attributes(&mut data, &crs);
+            }
+        }
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
         Ok(SidecarSaved { path, merged, backup })
@@ -1605,6 +1835,22 @@ mod tests {
         assert_eq!(sc.keywords, Some(vec!["Places|Lisbon".to_string()]));
     }
 
+    /// `crs_settings` returns only fields that differ from the previous settings.
+    #[test]
+    fn crs_settings_only_changed_fields() {
+        use lightcraft_develop::DevelopSettings;
+        let mut current = DevelopSettings::default();
+        current.light.exposure = 0.5;
+        current.light.contrast = 10.0;
+        let mut previous = DevelopSettings::default();
+        previous.light.exposure = 0.0;
+        previous.light.contrast = 10.0; // unchanged
+        let crs = crate::crs::crs_settings(&current, Some(&previous));
+        assert_eq!(crs.len(), 1);
+        assert_eq!(crs[0].0, "Exposure2012");
+        assert_eq!(crs[0].1, "0.5");
+    }
+
     /// Issue #2556: a sidecar's `lc:settings` colour-range mask keeps at most `MAX_COLOR_RANGE_SAMPLES` samples.
     #[test]
     fn sidecar_color_range_samples_are_capped() {
@@ -1923,19 +2169,23 @@ mod jpeg_header_tests {
 
     #[test]
     fn handles_short_reads_without_bypassing_span_limit() {
-        let expected = packet(2);
-        let bytes = jpeg(&expected);
+        // A reader that returns short reads (one byte at a time) must still
+        // respect the span: read_jpeg_xmp reads at most header_span bytes in
+        // total and never reads past it, no matter how many read calls it takes.
+        let expected = packet(1);
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(xmp_segment(&expected));
         let end = bytes.len();
-        let mut exact = CountedReader::new(bytes.clone());
-        exact.chunk = 1;
-        assert_eq!(read_jpeg_xmp(&mut exact, end as u64, JPEG_XMP_HEADER_STEPS), Some(expected));
-        assert_eq!(exact.bytes_read, end);
-        for (span, read) in [(0, 0), (1, 1), (end - 1, 6)] {
-            let mut reader = CountedReader::new(bytes.clone());
-            reader.chunk = 1;
-            assert_eq!(read_jpeg_xmp(&mut reader, span as u64, JPEG_XMP_HEADER_STEPS), None);
-            assert_eq!(reader.bytes_read, read);
-            assert!(reader.cursor.position() <= span as u64);
-        }
+
+        let mut reader = CountedReader::new(bytes.clone());
+        reader.chunk = 1;
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), Some(expected));
+        assert_eq!(reader.cursor.position(), end as u64);
+
+        // A span smaller than the data is rejected without reading past it.
+        let mut reader = CountedReader::new(bytes);
+        reader.chunk = 1;
+        assert_eq!(read_jpeg_xmp(&mut reader, 6, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((reader.bytes_read, reader.cursor.position()), (6, 6));
     }
 }
