@@ -150,6 +150,48 @@ pub struct UndoEntry {
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
     pub(crate) retry_sidecars: Vec<rename::SidecarMove>,
+    /// What a rename or merge of people did to their choices: moved back and forth with the catalog, since those
+    /// choices live in people.json, outside it.
+    pub(crate) people: Option<PeopleMove>,
+}
+
+/// One person's choices kept outside the catalog (people.json), as an undo step puts them back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PersonChoices {
+    /// The lower-cased name.
+    pub key: String,
+    /// The face that shows them in People; `None` for their largest one.
+    pub cover: Option<lightcraft_catalog::PersonCover>,
+    /// The faces set aside as "not them"; `None` for none.
+    pub dismissed: Option<Vec<lightcraft_catalog::FaceRef>>,
+}
+
+/// What a rename or merge of people did to the choices kept outside the catalog (people.json). An undo moves the
+/// choices back from where they are then, and a redo moves them again, so one made in between is kept, not lost to
+/// the state recorded when the step was made.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PeopleMove {
+    /// The lower-cased old name.
+    pub from: String,
+    /// The lower-cased new name.
+    pub to: String,
+    /// The new name was already someone's: the two people became one.
+    pub merged: bool,
+    /// What the new name, then the old one, had just before the step was last done (or redone).
+    pub before: [PersonChoices; 2],
+    /// What the new name had just after.
+    pub after: PersonChoices,
+}
+
+/// `a`'s choices, with `b`'s picture where `a` has none, and the faces either set aside.
+fn joined(a: PersonChoices, b: PersonChoices) -> PersonChoices {
+    let mut list = a.dismissed.unwrap_or_default();
+    for f in b.dismissed.unwrap_or_default() {
+        if !list.iter().any(|g| g.is(f.photo, &f.face)) {
+            list.push(f);
+        }
+    }
+    PersonChoices { key: a.key, cover: a.cover.or(b.cover), dismissed: Some(list) }
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -415,6 +457,14 @@ pub struct Session {
     pub cache_mb: u32,
     /// The once-per-session alert for a drive running low under the preview cache ([`disk_space`]).
     pub(crate) disk_alert: disk_space::DiskAlertState,
+    /// The face chosen to show each person by in the People view (lower-cased name → face), instead of their largest
+    /// one (`faces.setCover`; persisted in people.json, outside the catalog).
+    pub person_covers: std::collections::BTreeMap<String, lightcraft_catalog::PersonCover>,
+    /// The faces set aside as "not this person" on each person's page (lower-cased name → faces): never suggested for
+    /// them again (`faces.dismiss`; persisted in people.json beside [`Session::person_covers`]).
+    pub person_dismissed: std::collections::BTreeMap<String, Vec<lightcraft_catalog::FaceRef>>,
+    /// Bumped whenever [`Session::person_covers`] changes, which the catalog revision doesn't say.
+    pub people_gen: u64,
     /// Slideshow playback settings (`slideshow.playback`; persisted in prefs.json).
     pub slideshow: slideshow::PlaybackSettings,
     /// Slideshow slide layout: Layout, Options and Backdrop (`slideshow.layout`; persisted in
@@ -556,6 +606,9 @@ impl Session {
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
             disk_alert: Default::default(),
+            person_covers: Default::default(),
+            person_dismissed: Default::default(),
+            people_gen: 0,
             slideshow: slideshow::PlaybackSettings::default(),
             slide_layout: slide::SlideSettings::default(),
             slide_overlays: slide_overlay::OverlaySettings::default(),
@@ -664,7 +717,14 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_through(op, Catalog::apply_new)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            folder: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+            people: None,
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -784,7 +844,7 @@ impl Session {
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
         // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
+        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty() || e.people.is_some()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -795,6 +855,7 @@ impl Session {
             folder: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            people: None,
         });
     }
 
@@ -819,12 +880,14 @@ impl Session {
         };
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
+        let people = e.people.take().map(|m| self.undo_people(m));
         self.redo.push(UndoEntry {
             label: e.label.clone(),
             op: redo,
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            people,
         });
         Ok(e.label)
     }
@@ -844,14 +907,113 @@ impl Session {
         };
         self.show_undone(&e.op);
         self.pending_log.push(e.op);
+        let people = e.people.take().map(|m| self.redo_people(m));
         self.undo.push(UndoEntry {
             label: e.label.clone(),
             op: undo,
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            people,
         });
         Ok(e.label)
+    }
+
+    /// What the person whose lower-cased name is `key` has chosen.
+    pub(crate) fn person_choices(&self, key: &str) -> PersonChoices {
+        PersonChoices { key: key.to_string(), cover: self.person_covers.get(key).copied(), dismissed: self.person_dismissed.get(key).cloned() }
+    }
+
+    /// Give `c.key` exactly the choices `c` lists.
+    fn set_person_choices(&mut self, c: PersonChoices) {
+        match c.cover {
+            Some(v) => self.person_covers.insert(c.key.clone(), v),
+            None => self.person_covers.remove(&c.key),
+        };
+        // an empty list is no list, so the file never keeps one
+        match c.dismissed.filter(|v| !v.is_empty()) {
+            Some(v) => self.person_dismissed.insert(c.key, v),
+            None => self.person_dismissed.remove(&c.key),
+        };
+    }
+
+    /// Move what `from` chose to `to`, as a rename of people does, and say whether anything changed. Nothing stays
+    /// under `from`, so someone given that name later starts afresh. What `to` held counts only when `merged` (someone
+    /// bears that name): then their picture is kept and the faces set aside for both add up; otherwise it is left over
+    /// from an earlier rename and is replaced, or dropped when there is nothing to carry.
+    pub(crate) fn carry_person_choices(&mut self, from: &str, to: &str, merged: bool) -> bool {
+        if from == to {
+            return false;
+        }
+        let set_aside = self.person_dismissed.remove(from).unwrap_or_default();
+        let mut changed = !set_aside.is_empty();
+        if merged {
+            if !set_aside.is_empty() {
+                let list = self.person_dismissed.entry(to.to_string()).or_default();
+                for f in set_aside {
+                    if !list.iter().any(|g| g.is(f.photo, &f.face)) {
+                        list.push(f);
+                    }
+                }
+            }
+        } else if set_aside.is_empty() {
+            changed |= self.person_dismissed.remove(to).is_some();
+        } else {
+            self.person_dismissed.insert(to.to_string(), set_aside);
+        }
+        let cover = self.person_covers.remove(from);
+        changed |= cover.is_some();
+        if !(merged && self.person_covers.contains_key(to)) {
+            changed |= match cover {
+                Some(c) => self.person_covers.insert(to.to_string(), c) != Some(c),
+                None => self.person_covers.remove(to).is_some(),
+            };
+        }
+        changed
+    }
+
+    /// Undo `m`'s move of people's choices, from where they are now: a renamed person takes back to the old name
+    /// everything they have under the new one, including what was chosen since; two merged people part again, and
+    /// the one who kept the name keeps what was chosen for them since (a picture, faces set aside or brought back).
+    /// What was given meanwhile to someone new under the old name is kept too. Saved like a rename's: the step stands
+    /// even when people.json can't take it now.
+    fn undo_people(&mut self, m: PeopleMove) -> PeopleMove {
+        let (now_to, now_from) = (self.person_choices(&m.to), self.person_choices(&m.from));
+        let was = (now_to.clone(), now_from.clone());
+        let [before_to, before_from] = m.before.clone();
+        let (to, from) = if m.merged {
+            // only the changes made since the merge, on top of what they had before it
+            let after = m.after.dismissed.clone().unwrap_or_default();
+            let now = now_to.dismissed.clone().unwrap_or_default();
+            let has = |v: &[lightcraft_catalog::FaceRef], f: &lightcraft_catalog::FaceRef| v.iter().any(|g| g.is(f.photo, &f.face));
+            // theirs from before, but for those brought back since; and those set aside since
+            let mut list: Vec<_> = before_to.dismissed.unwrap_or_default().into_iter().filter(|f| !has(&after, f) || has(&now, f)).collect();
+            list.extend(now.iter().filter(|f| !has(&after, f)).copied());
+            let cover = if now_to.cover == m.after.cover { before_to.cover } else { now_to.cover };
+            (PersonChoices { key: m.to.clone(), cover, dismissed: Some(list) }, joined(before_from, now_from))
+        } else {
+            (before_to, joined(PersonChoices { key: m.from.clone(), ..now_to }, now_from))
+        };
+        self.set_person_choices(to);
+        self.set_person_choices(from);
+        // a move that changes nothing (no choices on either side) writes nothing, as a choice that changes nothing
+        if (self.person_choices(&m.to), self.person_choices(&m.from)) != was {
+            self.people_gen = self.people_gen.wrapping_add(1);
+            self.save_people_or_keep_unsaved();
+        }
+        m
+    }
+
+    /// Redo `m`'s move of people's choices from where they are now, and note what it moved for the next undo.
+    fn redo_people(&mut self, m: PeopleMove) -> PeopleMove {
+        let before = [self.person_choices(&m.to), self.person_choices(&m.from)];
+        let changed = self.carry_person_choices(&m.from, &m.to, m.merged);
+        let after = self.person_choices(&m.to);
+        if changed {
+            self.people_gen = self.people_gen.wrapping_add(1);
+            self.save_people_or_keep_unsaved();
+        }
+        PeopleMove { before, after, ..m }
     }
 
     /// After an undo or redo that changed one photo (its edit, rating, flag, label, metadata or
