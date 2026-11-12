@@ -73,6 +73,7 @@ pub mod print_color;
 pub mod print_pdf;
 pub mod profile_refs;
 pub mod proof;
+pub(crate) mod read_file;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
