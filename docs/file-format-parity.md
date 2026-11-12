@@ -27,7 +27,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | DNG (from raw) | ✅ | ✅ incl. lossy, embedded original | ✅ | ✅ uncompressed, LJ92, Deflate or lossy (JPEG tiles, optional long edge); ⬜ embedded original | `crates/raw/src/dngwrite.rs` |
 | Render to DNG (15.5) | — | ✅ | — | 🟡 export format "Rendered DNG" (linear float DNG, edit baked in); not yet added to the catalog | `crates/raw/src/dngwrite.rs` (`write_rendered_dng`) |
 | Original + sidecar | — | ✅ | — | ✅ | |
-| HDR gain map JPEG (ISO 21496-1) | ✅ | ✅ | ✅ (gain map read) | ✅ | `crates/codecs/src/gainmap.rs` |
+| HDR gain map JPEG (ISO 21496-1) | ✅ | ✅ | ✅ (gain map read) | ✅ | `crates/codecs/src/gainmap.rs` (JPEG layout), `craft-gainmap` (metadata, compute, apply) |
 | PQ / HLG HDR | ✅ | ✅ AVIF, JXL, TIFF | — | 🟡 PQ AVIF, PQ JPEG XL, float TIFF; no HLG | |
 | Contact sheet / print PDF | — | ✅ (Print module: PDF / JPEG / printer) | — | 🟡 paginated contact-sheet PDF (A4 / Letter, 150 dpi, sRGB) | `crates/engine/src/contact_sheet.rs` |
 | Video (MP4, MOV, AVCHD…) | ✅ playback, trim, edit | ✅ export | 🟡 catalogued (kind, duration) | ⬜ | see video gap |
