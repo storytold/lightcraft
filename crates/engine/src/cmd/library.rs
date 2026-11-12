@@ -52,7 +52,13 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
                     .or_else(|| vis.iter().enumerate().rev().find(|(pos, id)| *pos >= cur && is_unrated(id)).map(|(_, id)| *id))
             }
         })
-        .or_else(|| vis.iter().find(|id| is_unrated(id)).copied());
+        .or_else(|| {
+            if d >= 0 {
+                vis.iter().find(|id| is_unrated(id)).copied()
+            } else {
+                vis.iter().rev().find(|id| is_unrated(id)).copied()
+            }
+        });
     let Some(id) = next else {
         return Ok(json!({"allRated": true}));
     };
@@ -218,5 +224,21 @@ mod next_unrated_tests {
         assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(3)], "staying must preserve the multi-photo selection");
         assert_eq!(s.active_mask, Some(7), "staying must preserve the mask state");
         assert_eq!(s.active_spot, Some(2), "staying must preserve the spot state");
+    }
+
+    #[test]
+    fn next_unrated_jumps_to_next_unrated_photo_review_regression_1() {
+        let mut s = session().unwrap();
+        // The active photo is still in the catalog but no longer in the view (here: moved to
+        // Recently Deleted while it was the active photo), so there is no view position to step from.
+        s.catalog.apply(Op::SetDeleted { id: PhotoId(1), deleted: true }).unwrap();
+        assert_eq!(s.active(), Some(PhotoId(1)), "the photo stays active while it is in the catalog");
+        let result = s.execute("library.nextUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"active": 3}), "next enters the view at its first unrated photo");
+        // Stepping backwards from the same photo enters the view at its other end: the last unrated photo.
+        s.selection.ids = vec![PhotoId(1)];
+        s.selection.active = Some(PhotoId(1));
+        let result = s.execute("library.prevUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"active": 4}), "previous enters the view at its last unrated photo");
     }
 }
