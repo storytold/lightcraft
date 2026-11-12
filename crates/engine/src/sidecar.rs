@@ -1,4 +1,4 @@
-        //! Sidecar handling: XMP packets embedded in files or written as sidecar files.
+//! Sidecar handling: XMP packets embedded in files or written as sidecar files.
 //!
 //! This module deals with reading, writing and merging XMP metadata for photos.
 //! It handles both our own `lc:` namespace and the interoperable `crs:` namespace
@@ -882,8 +882,6 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
         }
         search = s + open.len();
     };
-    let after = start + open.len();
-    let _ = after;
     let Some(end) = tag_end(data, start) else { return true };
     let escaped = escape_attr(value);
     if is_self_closing(data, end) {
@@ -923,8 +921,18 @@ fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
         let Some(end) = tag_end(data, pos) else { return };
         if crs_block(data, pos, end) {
             // For a self-closing tag the `/` must immediately precede `>`, so the new
-            // attribute goes before the `/`, not before the `>`.
-            let insert_at = if is_self_closing(data, end) { data.get(..end).and_then(|s| s.rfind('/')).unwrap_or(end) } else { end };
+            // attribute goes before the `/`, not before the `>`. Scan back from `>` over
+            // whitespace to find the `/`; a slash inside a quoted attribute value (such as
+            // the `xmlns:crs` URL ending in `1.0/`) must not be mistaken for it.
+            let insert_at = if is_self_closing(data, end) {
+                let mut i = end;
+                while i > pos && data.as_bytes()[i - 1].is_ascii_whitespace() {
+                    i -= 1;
+                }
+                i - 1
+            } else {
+                end
+            };
             data.insert_str(insert_at, &attr);
             return;
         }
@@ -2163,10 +2171,7 @@ mod jpeg_header_tests {
 
         let mut reader = CountedReader::new(bytes.clone());
         reader.chunk = 1;
-        assert_eq!(
-            read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS),
-            Some(expected)
-        );
+        assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), Some(expected));
         assert_eq!(reader.cursor.position(), end as u64);
 
         // A span smaller than the data is rejected without reading past it.
