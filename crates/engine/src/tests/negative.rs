@@ -194,3 +194,14 @@ fn the_auto_commands_read_the_positive() {
     assert_ne!(raw.2, positive.2, "auto B&W mix");
     assert_ne!(raw.3, positive.3, "auto");
 }
+
+/// A recipe that resets a Convert Negative slider to its default is a recipe, as for any slider
+/// (the conversion is left out of stored settings at its defaults).
+#[test]
+fn a_recipe_can_reset_a_negative_slider() {
+    let mut s = Session::with_demo();
+    let r = s.execute("preset.saveRecipe", &json!({"name": "Neg reset", "recipe": [{"id": "negative.exposure", "value": 0}]}));
+    let id = r.expect("saved")["id"].as_str().unwrap().to_string();
+    let p = s.presets.iter().find(|p| p.id == id).unwrap();
+    assert_eq!(p.settings, json!({"negative": {"exposure": 0.0}}));
+}

@@ -61,6 +61,8 @@ fn full_json(s: &DevelopSettings) -> Value {
     let mut v = s.to_json();
     if let Some(obj) = v.as_object_mut() {
         obj.entry("hdr").or_insert_with(|| serde_json::to_value(s.hdr).unwrap_or(Value::Null));
+        // (as HDR, Convert Negative is left out of stored JSON at its defaults)
+        obj.entry("negative").or_insert_with(|| serde_json::to_value(&s.negative).unwrap_or(Value::Null));
     }
     v
 }
