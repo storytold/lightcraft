@@ -332,12 +332,6 @@ impl Negative {
         });
         n
     }
-
-    /// `self` without what belongs to one scan (the measurement and the picked film base and gray
-    /// point), for copying the conversion to another photo.
-    pub fn without_scan_data(&self) -> Negative {
-        Negative { base: None, gray: None, measured: None, ..self.clone() }
-    }
 }
 
 /// A scan's measurement for [`Negative`]: scan values in linear sRGB, 0..1, per channel.

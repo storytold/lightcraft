@@ -141,11 +141,6 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             if let Some(v) = full.get(*k) {
                 out.insert((*k).to_string(), v.clone());
             }
-            // (what the scan measured, or the user picked from it, is that photo's: a copy to
-            // another photo converts with that photo's own)
-            if *g == SettingsGroup::Negative {
-                out.insert("negative".to_string(), serde_json::to_value(s.negative.without_scan_data()).unwrap_or(Value::Null));
-            }
         }
     }
     Value::Object(out)

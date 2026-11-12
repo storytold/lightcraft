@@ -71,13 +71,12 @@ fn the_sanitized_ranges_are_the_controls_ranges() {
 }
 
 #[test]
-fn copying_the_group_leaves_the_scan_data_behind() {
+fn copying_the_group_carries_the_measurement_to_the_rest_of_a_roll() {
     let copied = extract_groups(&on(), &[SettingsGroup::Negative]);
     let n = &copied["negative"];
-    assert_eq!(n["enabled"], json!(true));
     assert_eq!(n["preset"], json!("Portra 400"));
     for k in ["base", "gray", "measured"] {
-        assert!(n.get(k).is_none(), "{k} stays with its scan");
+        assert!(n.get(k).is_some(), "{k} is copied");
     }
     assert!(SettingsGroup::default_copy().contains(&SettingsGroup::Negative));
     assert_eq!(SettingsGroup::Negative.keys(), &["negative"]);
