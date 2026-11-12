@@ -31,9 +31,10 @@ fn unit(v: f32) -> f32 {
     if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
 }
 
-/// Whether `s` converts a negative.
+/// Whether `s` converts a negative: switched on, and its section not switched off with its eye
+/// (`develop.sectionEnabled`), which keeps the settings for switching it on again.
 pub fn enabled(s: &DevelopSettings) -> bool {
-    s.negative.enabled
+    s.negative.enabled && s.section_enabled("negative")
 }
 
 /// The film preset `n` names (Standard for a name no preset has).
@@ -261,9 +262,8 @@ mod tests {
         let raw = scan(60, 40);
         let run = |advanced: bool| {
             let mut img = raw.clone();
-            let mut s = DevelopSettings::default();
-            s.negative = Negative { enabled: true, advanced, tone: "Linear".into(), blacks: 40.0, fade: 80.0, ..Negative::default() };
-            apply(&mut img, &s);
+            let negative = Negative { enabled: true, advanced, tone: "linear".into(), blacks: 40.0, fade: 80.0, ..Negative::default() };
+            apply(&mut img, &DevelopSettings { negative, ..DevelopSettings::default() });
             img
         };
         let plain = {
@@ -273,6 +273,21 @@ mod tests {
         };
         assert_eq!(run(false).data, plain.data);
         assert_ne!(run(true).data, plain.data);
+    }
+
+    #[test]
+    fn the_sections_eye_switches_the_conversion_off_and_keeps_it() {
+        let raw = scan(30, 20);
+        let mut s = DevelopSettings { negative: Negative { enabled: true, ..Negative::default() }, ..DevelopSettings::default() };
+        assert!(enabled(&s));
+        s.disabled_sections.push("negative".into());
+        assert!(!enabled(&s), "the eye is off");
+        assert!(matches!(positive(&raw, &s), std::borrow::Cow::Borrowed(_)), "the automatic adjustments see the scan");
+        let mut img = raw.clone();
+        apply(&mut img, &s);
+        assert_eq!(img.data, raw.data, "renders show the scan");
+        assert!(!crate::lin_needs_cpu_stage(&crate::SourceInfo::default(), &s));
+        assert!(s.negative.enabled, "the conversion is kept for switching the section on again");
     }
 
     #[test]
@@ -342,7 +357,6 @@ mod tests {
             base: Some([f64::NAN, -1.0, 1e30]),
             gray: Some([f64::NAN, 0.0, 9.0]),
             measured: Some(NegativeMeasurement { base: [0.0; 3], black: [f64::NAN; 3], white: [1.0; 3], balance: [f64::INFINITY; 3] }),
-            ..Negative::default()
         };
         apply(&mut img, &DevelopSettings { negative, ..DevelopSettings::default() });
         assert!(img.data.iter().flatten().all(|v| v.is_finite()), "{:?}", &img.data[..6]);

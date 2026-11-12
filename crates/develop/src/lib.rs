@@ -48,6 +48,17 @@ impl DevelopSettings {
         if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
             detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
         }
+        // (Convert Negative is omitted while it is off at its defaults, and its picks and
+        // measurement while unset: state them, so a copy from a photo that isn't a negative switches
+        // the conversion off, and one without picks clears the photo's own)
+        if let (Some(o), Ok(mut n)) = (v.as_object_mut(), serde_json::to_value(&self.negative)) {
+            if let Some(n) = n.as_object_mut() {
+                for k in ["base", "gray", "measured"] {
+                    n.entry(k).or_insert(Value::Null);
+                }
+            }
+            o.insert("negative".into(), n);
+        }
         v
     }
 
@@ -197,6 +208,9 @@ impl DevelopSettings {
             Section::Profile => {
                 self.profile = Profile::default();
             }
+            // the preset, the mode, the picks and the measurement are not controls: the whole
+            // conversion goes back to off
+            Section::Negative => self.negative = Negative::default(),
             _ => {}
         }
     }

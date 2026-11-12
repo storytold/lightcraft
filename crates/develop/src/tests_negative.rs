@@ -87,3 +87,28 @@ impl Negative {
         DevelopSettings { negative: self, ..DevelopSettings::default() }
     }
 }
+
+#[test]
+fn resetting_the_section_switches_the_whole_conversion_off() {
+    let mut s = on();
+    s.negative.exposure = 2.0;
+    s.reset_section(controls::Section::Negative);
+    assert_eq!(s.negative, Negative::default());
+}
+
+#[test]
+fn a_copy_states_the_conversion_even_when_it_is_off_or_has_no_picks() {
+    // from a photo that is not a negative: the destination's conversion goes off
+    let off = extract_groups(&DevelopSettings::default(), &[SettingsGroup::Negative]);
+    assert_eq!(on().merged(&off).unwrap().negative, Negative::default());
+    // from a conversion without picks: the destination's picks go
+    let mut plain = on();
+    plain.negative.base = None;
+    plain.negative.gray = None;
+    let copied = extract_groups(&plain, &[SettingsGroup::Negative]);
+    let pasted = on().merged(&copied).unwrap().negative;
+    assert_eq!((pasted.base, pasted.gray), (None, None));
+    assert_eq!(pasted.measured, plain.negative.measured);
+    // stored JSON stays compact
+    assert!(DevelopSettings::default().to_json().get("negative").is_none());
+}
