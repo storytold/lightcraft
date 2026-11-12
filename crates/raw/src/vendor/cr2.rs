@@ -27,9 +27,9 @@ mod sraw;
 
 use super::{active_rows, black_from_columns, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result, ljpeg};
+use craft_tiff::image::chunk_bytes;
+use craft_tiff::{ByteOrder, Ifd, Tiff, Value, makernote, tags as t};
 use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff, Value, makernote, tags as t};
 use std::ops::Range;
 
 const CR2_SLICE: u16 = 0xc640;
@@ -192,9 +192,9 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         Some(v) if v != 1 => return Err(RawError::Unsupported(format!("Canon raw type {v}"))),
         _ => {}
     }
-    let off = raw.u64(t::STRIP_OFFSETS).ok_or(RawError::Tiff(lightcraft_tiff::TiffError::MissingTag(t::STRIP_OFFSETS)))?;
+    let off = raw.u64(t::STRIP_OFFSETS).ok_or(RawError::Tiff(craft_tiff::TiffError::MissingTag(t::STRIP_OFFSETS)))?;
     let len = raw.u64(t::STRIP_BYTE_COUNTS).unwrap_or(bytes.len() as u64 - off.min(bytes.len() as u64));
-    let chunk = lightcraft_tiff::image::Chunk { index: 0, x: 0, y: 0, width: 0, height: 0, plane: 0, offset: off, len };
+    let chunk = craft_tiff::image::Chunk { index: 0, x: 0, y: 0, width: 0, height: 0, plane: 0, offset: off, len };
     let src = chunk_bytes(bytes, &chunk).ok_or_else(|| RawError::Corrupt("raw strip outside file".into()))?;
     let (fw, fh, nc, prec) = ljpeg::frame_info(src)?;
     let frame = match mode {
@@ -306,7 +306,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
     /// Build a synthetic CR2: IFD0..IFD2 placeholders + IFD3 holding a sliced 2-component LJ92 frame.
     pub(crate) fn synthetic_cr2(w: usize, h: usize, slices: Option<[u16; 3]>) -> (Vec<u8>, Vec<u16>) {

@@ -281,7 +281,7 @@ fn tiff_with_preview_strip(strip: &[u8], tail: usize, what: Fixture) -> Vec<u8> 
 /// [`tiff_with_preview_strip`] that also keeps the `smaller` JPEGs in sub-IFDs of IFD0, as an ARW keeps its
 /// 1616 px preview beside the full-size one.
 fn tiff_with_preview_strips(strip: &[u8], smaller: &[&[u8]], tail: usize, what: Fixture) -> Vec<u8> {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut preview = IfdBuilder::new();
     if what.dng {
         preview.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
@@ -662,7 +662,7 @@ fn corpus_a7cr_warp_keeps_coordinates_after_orientation_and_resizing() {
         let Ok(mut bytes) = std::fs::read(root.join("raw").join(name)) else { continue };
         let off = lightcraft_raw::probe_info(&bytes).unwrap();
         assert!(embedded_lens(&off).is_none());
-        let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+        let tiff = craft_tiff::Tiff::parse(&bytes).unwrap();
         let at = tiff.find(0x7036).unwrap().offset as usize;
         let mut enabled = Vec::new();
         tiff.order.put_u16(&mut enabled, 17);
@@ -1220,8 +1220,8 @@ fn corpus_clipped_sky_beside_a_tree_has_no_coloured_halo() {
 /// copy's samples are much brighter than the image's here, so a picture says which one it came from.
 #[test]
 fn exports_never_develop_a_dngs_reduced_copy() {
-    use lightcraft_tiff::tags::{self as t, photometric};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags::{self as t, photometric};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     use serde_json::json;
     let linear = |subfile: u32, w: u32, h: u32, sample: u16| {
         let mut ifd = IfdBuilder::new();
@@ -1298,10 +1298,10 @@ fn exports_never_develop_a_dngs_reduced_copy() {
 /// heuristic would never look) is used; a matte with an unknown name is ignored.
 #[test]
 fn dng_sky_matte_drives_the_sky_mask() {
+    use craft_tiff::tags::{self as t, photometric};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
     use lightcraft_pipeline::{RenderRequest, render};
-    use lightcraft_tiff::tags::{self as t, photometric};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     let (w, h) = (16u32, 8u32);
     let image = |ifd: &mut IfdBuilder, w: u32, h: u32, cpp: u16, bits: u16, data: Vec<u8>| {
         ifd.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
@@ -1536,7 +1536,7 @@ fn unsupported_raw_imports_as_preview_only_and_survives_reopen() {
 /// A raw whose TIFF shell holds only a small RGB image (IFD0) next to a private block, as Exif
 /// declares a picture 25x its size.
 fn tiff_shell(w: u32, h: u32, shell: bool) -> Vec<u8> {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut ifd0 = IfdBuilder::new();
     ifd0.set(t::IMAGE_WIDTH, Value::Long(vec![w]));
     ifd0.set(t::IMAGE_LENGTH, Value::Long(vec![h]));
@@ -1577,7 +1577,7 @@ fn thumbnail_only_tiff_raw_is_preview_only_not_a_plain_image() {
 
     // TIFFs preserving camera Make tags (SONY, NIKON, etc.) are ordinary images, not raws (#281)
     for make in ["SONY", "NIKON CORPORATION", "PENTAX", "RICOH", "SAMSUNG"] {
-        use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
         let mut ifd0 = IfdBuilder::new();
         ifd0.set(t::IMAGE_WIDTH, Value::Long(vec![24]));
         ifd0.set(t::IMAGE_LENGTH, Value::Long(vec![16]));
@@ -1621,7 +1621,7 @@ fn undecodable_container_with_a_preview_imports_as_preview_only() {
 /// holds the preview) imports as a raw shown from its preview, not as a greyscale image of the mosaic.
 #[test]
 fn uncompressed_leaf_mos_imports_as_a_preview_only_raw() {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let px: Vec<u8> = (0..40 * 30).flat_map(|i| [(i % 251) as u8, 128, 200]).collect();
     let jpeg = encode_jpeg(&EncodeImage::new(40, 30, 3, Samples::U8(&px)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
     let mos = |leaf_data: bool| {
@@ -1652,7 +1652,7 @@ fn uncompressed_leaf_mos_imports_as_a_preview_only_raw() {
 /// headers; loading it says what is wrong instead of naming a bare TIFF compression number.
 #[test]
 fn gopro_vc5_dng_imports_and_fails_to_load_with_a_clear_reason() {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut ifd = IfdBuilder::new();
     ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![32]));
@@ -1681,7 +1681,7 @@ fn decode_failures_of_recognised_raws_may_fall_back_to_the_preview() {
     assert_eq!(preview_reason(b"x", RawError::Unsupported("x".into())), Ok("x".to_string()));
     assert!(preview_reason(b"x", RawError::Corrupt("bad strip".into())).is_ok_and(|w| w.contains("bad strip")));
     assert!(preview_reason(b"x", RawError::Limit("too big")).is_ok());
-    assert!(preview_reason(b"x", RawError::Tiff(lightcraft_tiff::TiffError::MissingTag(256))).is_ok());
+    assert!(preview_reason(b"x", RawError::Tiff(craft_tiff::TiffError::MissingTag(256))).is_ok());
     assert!(preview_reason(b"x", RawError::NotRaw).is_err());
     assert!(preview_reason(cr3, RawError::Corrupt("bad".into())).is_ok_and(|w| w.starts_with("CR3 ")));
 }
@@ -1746,8 +1746,8 @@ fn a_quick_thumbnail_without_an_embedded_preview_renders_the_raw() {
 /// A Sony ARW of `model`: a 64 × 48 uncompressed 14-bit CFA strip in a SubIFD (as `crates/raw/tests/it/vendor_robust.rs`
 /// lays it out) whose IFD carries the full-frame 16–35 mm distortion table (tag 0x7037).
 fn sony_arw(model: &str) -> Vec<u8> {
-    use lightcraft_tiff::tags::{self as t, photometric};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags::{self as t, photometric};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     // 3:2, the aspect Sony's lens opcodes are limited to
     let (w, h) = (72u32, 48u32);
     let mut raw = IfdBuilder::new();

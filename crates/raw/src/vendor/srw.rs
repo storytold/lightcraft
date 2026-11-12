@@ -36,9 +36,9 @@
 use super::{black_from_columns, white_from_data};
 use crate::unpack::{read_u16s, unpack_lsb, unpack_msb};
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
+use craft_tiff::image::chunk_bytes;
+use craft_tiff::{ByteOrder, Ifd, Tiff, tags as t};
 use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff, tags as t};
 use rayon::prelude::*;
 
 const SENSOR_AREAS: u16 = 0xa010;
@@ -53,8 +53,8 @@ const COMPRESSIONS: std::ops::RangeInclusive<u16> = 32769..=32773;
 /// The maker-note IFD (offsets relative to the note's own start).
 fn maker_note(bytes: &[u8], tiff: &Tiff) -> Option<Ifd> {
     let e = tiff.exif()?.get(t::MAKER_NOTE)?;
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
-    lightcraft_tiff::parse_ifd_at(bytes, e.offset, tiff.order, e.offset, false, &opts).ok().map(|(i, _)| i)
+    let opts = craft_tiff::ParseOptions { max_ifds: 4, max_depth: 1, follow_children: false, ..Default::default() };
+    craft_tiff::parse_ifd_at(bytes, e.offset, tiff.order, e.offset, false, &opts).ok().map(|(i, _)| i)
 }
 
 /// A key-offset vector: the entries of `tag` shifted by the maker note's key (`sign` is +1 or -1 times the key).
@@ -281,7 +281,7 @@ fn masked_black(d: &[u16], w: usize, h: usize, a: Rect, white: f32) -> BlackLeve
 mod tests {
     use super::*;
     use crate::{decode, probe, probe_info};
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
 
     const KEY: [u32; 11] = [305, 72, 737, 456, 282, 307, 519, 724, 13, 505, 193];
 
@@ -362,7 +362,7 @@ mod tests {
         }
         ifd0.set_child(t::EXIF_IFD, exif);
         ifd0.add_sub_ifd(raw);
-        TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
+        TiffWriter::new(craft_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
     }
 
     /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.
