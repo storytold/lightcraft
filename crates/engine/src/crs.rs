@@ -691,6 +691,7 @@ mod crs_write_tests {
             Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
         photo.develop = std::sync::Arc::new(develop);
         let mut s = crate::Session::new();
+        s.xmp.write_crs = true;
         s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
         s.save_sidecar(PhotoId(1)).unwrap();
 
@@ -729,6 +730,7 @@ mod crs_write_tests {
             Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
         photo.develop = std::sync::Arc::new(develop);
         let mut s = crate::Session::new();
+        s.xmp.write_crs = true;
         s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
         s.save_sidecar(PhotoId(1)).unwrap();
 
@@ -758,6 +760,7 @@ mod crs_write_tests {
             Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
         photo.develop = std::sync::Arc::new(develop);
         let mut s = crate::Session::new();
+        s.xmp.write_crs = true;
         s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
         s.save_sidecar(PhotoId(1)).unwrap();
 
