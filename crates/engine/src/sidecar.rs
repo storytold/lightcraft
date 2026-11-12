@@ -851,6 +851,7 @@ fn file_path(p: &Photo) -> Option<&str> {
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
+        // Preserve the sidecar cap on the guarded handle; consent does not lift this limit.
         let file = crate::doc_path::open_original(&sc).ok()?;
         return crate::read_file::read_open(file, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
     }
@@ -1298,6 +1299,28 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
+    /// A discovered sidecar keeps the upstream byte cap when opened through the UNC guard.
+    #[test]
+    fn guarded_packet_read_keeps_the_sidecar_byte_cap() {
+        struct Fixture(std::path::PathBuf);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-cap-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let dir = Fixture(dir);
+        let original = dir.0.join("photo.png").to_string_lossy().into_owned();
+        let sidecar = dir.0.join("photo.xmp");
+        let lookup = super::SidecarLookup { naming: super::SidecarNaming::Stem, owns_stem: true };
+        std::fs::write(&sidecar, "small packet").unwrap();
+        assert_eq!(super::read_packet(&original, lightcraft_catalog::MediaKind::Image, lookup).unwrap().0, "small packet");
+        // Set only the length: the reader must reject it from metadata before allocating a buffer.
+        std::fs::File::create(&sidecar).unwrap().set_len(super::SIDECAR_READ_MAX + 1).unwrap();
+        assert!(super::read_packet(&original, lightcraft_catalog::MediaKind::Image, lookup).is_none());
+    }
+
     /// Issue #2674: a WebP keeps its EXIF and XMP chunks after the image data, a TIFF's first IFD can follow its strips
     /// and a JPEG's Exif other long segments, so the orientation can be past the first [`super::ORIENTATION_SPAN`] of
     /// the file. Every file gives what the import gives reading it whole: Exif over XMP wherever each is, a WebP's last
