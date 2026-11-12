@@ -433,3 +433,110 @@ fn the_albums_counts_followed_through_edits_are_the_counts_made_from_every_photo
         assert_eq!(shown(&tally), fresh(&s));
     }
 }
+
+/// In a big library, showing a small view (Picks) makes the order of the current sort in the background, so that
+/// All Photos, shown later, lists without sorting every photo on the thread that draws.
+#[test]
+fn a_small_view_makes_the_order_for_the_big_view_that_follows() {
+    let mut s = Session::new();
+    let ops: Vec<Op> = (0..50_000usize)
+        .map(|i| {
+            let id = s.catalog.alloc_photo_id();
+            let mut p = Photo::new(
+                id,
+                Source::File { path: format!("/pics/{}/{i}.jpg", i % 3) },
+                &format!("IMG_{i:05}.jpg"),
+                "JPEG",
+                60,
+                40,
+                "2026-01-01T10:00:00",
+            );
+            p.captured = Some(format!("2025-{:02}-{:02}T10:00:{:02}", 1 + i % 12, 1 + i % 28, i % 60));
+            Op::AddPhoto { photo: Box::new(p) }
+        })
+        .collect();
+    s.commit("Add", Op::Batch { ops }).unwrap();
+    s.execute("library.sort", &json!({"key": "captureDate", "ascending": true})).unwrap();
+    // (the id the next row gets tells whether a row was started meanwhile)
+    let before = s.activity.start("probe", "Probe", crate::activity::Cancel::No).id();
+    s.execute("library.source", &json!({"kind": "picks"})).unwrap();
+    assert!(s.visible().is_empty());
+    let after = s.activity.start("probe", "Probe", crate::activity::Cancel::No);
+    assert_eq!(after.id(), before + 2, "making the order started no activity row (one that is listed while it runs)");
+    drop(after);
+    let key = lightcraft_catalog::SortKey::CaptureDate;
+    let by = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !s.catalog.order_ready(key) || !s.activity.list().is_empty() {
+        assert!(std::time::Instant::now() < by, "the order was not made, or its row not removed, in a minute");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let before = s.catalog.full_sorts();
+    s.execute("library.source", &json!({"kind": "all"})).unwrap();
+    let all = s.visible().to_vec();
+    assert_eq!(all.len(), 50_000);
+    assert_eq!(s.catalog.full_sorts(), before, "All Photos sorted every photo");
+    let mut want: Vec<_> = s.catalog.photos().collect();
+    want.sort_by(|a, b| s.sort.order(a, b));
+    assert_eq!(all, want.iter().map(|p| p.id).collect::<Vec<_>>());
+}
+
+/// A photo of a big library for the Recently Added tests: imported on day `day` (500 photos to a day), tied names.
+fn imported_on(s: &mut Session, i: usize, day: usize) -> Op {
+    let id = s.catalog.alloc_photo_id();
+    let name = format!("IMG_{:05}.jpg", (i * 7919) % 100_000);
+    let imported = format!("2026-{:02}-{:02}T10:00:00", 1 + day / 28, 1 + day % 28);
+    let mut p = Photo::new(id, Source::File { path: format!("/pics/{}/{name}", i % 7) }, &name, "JPEG", 60, 40, &imported);
+    p.captured = Some(format!("2025-{:02}-{:02}T10:00:{:02}", 1 + i % 12, 1 + i % 28, i % 60));
+    Op::AddPhoto { photo: Box::new(p) }
+}
+
+/// Recently Added from every photo, as the grid shows it: newest import first, a batch in file order.
+fn recently_added_from_every_photo(s: &Session) -> Vec<PhotoId> {
+    let from = crate::LibrarySource::RecentlyAdded.to_filter(&Default::default(), &s.catalog).imported_from.unwrap();
+    let mut v: Vec<&Photo> = s.catalog.photos().map(|p| p.as_ref()).filter(|p| p.in_library() && p.imported.as_str() >= from.as_str()).collect();
+    v.sort_by(|a, b| b.imported.cmp(&a.imported).then_with(|| lightcraft_catalog::query::cmp_name(&a.file_name, &b.file_name)).then(a.id.cmp(&b.id)));
+    v.into_iter().map(|p| p.id).collect()
+}
+
+/// Recently Added in a big library is read off the end of the import-date order, when the order is kept: switching to it
+/// and following the batches of an import that is going on look at the photos of the last 30 days only, never at every
+/// photo (nor sort them). On a library of two million photos that was a second per click and per batch.
+#[test]
+fn recently_added_in_a_big_library_does_not_pass_over_every_photo() {
+    let mut s = Session::new();
+    let ops: Vec<Op> = (0..50_000usize).map(|i| imported_on(&mut s, i, i / 500)).collect();
+    s.commit("Add", Op::Batch { ops }).unwrap();
+    s.execute("library.source", &json!({"kind": "picks"})).unwrap();
+    // the first Recently Added asks for the import-date order to be made on another thread
+    s.execute("library.source", &json!({"kind": "recentlyAdded"})).unwrap();
+    let by = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !s.catalog.order_ready(lightcraft_catalog::SortKey::ImportDate) || !s.activity.list().is_empty() {
+        assert!(std::time::Instant::now() < by, "the order was not made in a minute");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    s.execute("library.source", &json!({"kind": "picks"})).unwrap();
+    let (scans, sorts, remakes) = (s.catalog.library_scans(), s.catalog.full_sorts(), s.catalog.order_remakes());
+    s.execute("library.source", &json!({"kind": "recentlyAdded"})).unwrap();
+    let shown = s.visible().to_vec();
+    assert!(shown.len() > 10_000, "{} shown", shown.len());
+    assert_eq!(shown, recently_added_from_every_photo(&s));
+    assert_eq!(s.source_total(), Some(shown.len()), "its count");
+    assert_eq!(
+        (s.catalog.library_scans(), s.catalog.full_sorts(), s.catalog.order_remakes()),
+        (scans, sorts, remakes),
+        "switching to it passed over every photo"
+    );
+    // an import going on: batches of 16, one after the other, each followed by the view
+    for batch in 0..5usize {
+        let ops: Vec<Op> = (0..16).map(|j| imported_on(&mut s, 50_000 + batch * 16 + j, 100 + batch)).collect();
+        s.commit("Import", Op::Batch { ops }).unwrap();
+        let shown = s.visible().to_vec();
+        assert_eq!(shown, recently_added_from_every_photo(&s), "after batch {batch}");
+        assert_eq!(s.source_total(), Some(shown.len()), "its count after batch {batch}");
+    }
+    assert_eq!(
+        (s.catalog.library_scans(), s.catalog.full_sorts(), s.catalog.order_remakes()),
+        (scans, sorts, remakes),
+        "following the import passed over every photo"
+    );
+}

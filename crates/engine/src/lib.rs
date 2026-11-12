@@ -1246,17 +1246,34 @@ impl Session {
                 Some(_) => self.view_followed += 1,
                 None => self.view_worked_out += 1,
             }
+            let recent = self.source == LibrarySource::RecentlyAdded;
             let mut visible = match (followed, &base, &within) {
                 (Some(ids), _, _) => ids,
+                // newest import first, whatever the sort direction (the grid groups by import day); a batch stays in
+                // file order (name, then id). Read off the end of the import-date order, not sorted
+                (None, Some((_, _, held)), Some(within)) if recent => {
+                    let keep: std::collections::HashSet<PhotoId> = held.iter().copied().collect();
+                    self.catalog.query_recent(&f, &keep, within)
+                }
+                _ if recent => self.catalog.query_recent(&f, &std::collections::HashSet::new(), &f),
                 (None, Some((_, _, held)), Some(within)) => {
                     let keep: std::collections::HashSet<PhotoId> = held.iter().copied().collect();
                     self.catalog.query_keeping(&f, &self.sort, &keep, within)
                 }
                 _ => self.catalog.query(&f, &self.sort),
             };
+            // after the query: a big view has just made the order it needed itself (and this does nothing); a small one
+            // has not, and the first big view in this sort later is then not sorted in a frame the user waits for
+            self.catalog.prebuild_order_holding(&self.sort, || self.activity.start("sort", "Sorting the library", activity::Cancel::No));
+            if recent {
+                // (Recently Added reads the import-date order, which the sort may not be)
+                let by_import_date = Sort { key: lightcraft_catalog::SortKey::ImportDate, ..self.sort };
+                self.catalog.prebuild_order_holding(&by_import_date, || self.activity.start("sort", "Sorting the library", activity::Cancel::No));
+            }
             // what the view shows now is what the next edit is followed from, and what it holds until it is
-            // refreshed (taken before stacks are arranged, so a photo folded into a stack is held with it)
-            self.base = (!whole || holds).then(|| (view, self.catalog.revision, visible.clone()));
+            // refreshed (taken before stacks are arranged, so a photo folded into a stack is held with it). Recently
+            // Added is not followed but is kept as well: its count is the length of the list, not another pass
+            self.base = (!whole || holds || recent).then(|| (view, self.catalog.revision, visible.clone()));
             if visible.is_empty() && self.source == LibrarySource::LibraryFolder && !self.folder_holds_photos() {
                 // the shown folder lost its last photo (deleted, moved, removed): everything, not
                 // an empty grid under the name of a folder that is gone from the sidebar
@@ -1280,20 +1297,6 @@ impl Session {
                 if !self.sort.ascending {
                     visible.reverse();
                 }
-            }
-            if self.source == LibrarySource::RecentlyAdded {
-                // newest import first, whatever the sort direction (the grid groups by import day);
-                // a batch stays in file order (name, then id)
-                let cat = &self.catalog;
-                visible.sort_by(|a, b| {
-                    let key = |id: &PhotoId| cat.photo(*id).map(|p| p.imported.clone()).unwrap_or_default();
-                    let name = |id: &PhotoId| cat.photo(*id).map(|p| p.file_name.as_str());
-                    let by_name = match (name(a), name(b)) {
-                        (Some(x), Some(y)) => lightcraft_catalog::query::cmp_name(x, y),
-                        _ => std::cmp::Ordering::Equal,
-                    };
-                    key(b).cmp(&key(a)).then(by_name).then(a.cmp(b))
-                });
             }
             if self.source == LibrarySource::Missing {
                 // only the photos the query kept (library photos, not Local browse records) are checked
