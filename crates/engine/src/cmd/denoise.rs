@@ -118,6 +118,9 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
         && let Some(bytes) = read_capped(&sibling, MAX_MANIFEST_BYTES)
     {
         let m = manifest::parse(&bytes).map_err(|e| bad(c, format!("{}: {e}", sibling.display())))?;
+        if m.id == lightcraft_denoise::builtin::ID {
+            return Err(bad(c, "the id `builtin` is LightCraft's own denoiser: give the model another id in its denoise-model.json"));
+        }
         return Ok(Source { manifest: m, entry: None, file_name });
     }
     Err(bad(
@@ -660,20 +663,20 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "denoise.models.downloadCancel", "Cancel Denoise Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "denoise.models.test", "Test Denoise Model", [], None, "{id} → {ok, result} — load an installed model and check it gives sensible pictures; needs the denoise runtime", always, test),
         cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model} — delete an installed model (its cached pictures stay until they are evicted)", always, remove),
-        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null} → {model} — null switches denoise off", always, select),
+        cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null} → {model} — null uses the built-in denoiser", always, select),
         cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed LightCraft", always, settings),
         cmd!(
             "denoise.toggle",
             "AI Denoise",
             [],
             None,
-            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo, independent of selection and Auto Sync; needs an installed model to turn on",
+            "{id?: photoId, enabled?: bool} → {id, enabled, amount} — turn AI Denoise on (50% initially) or off for one raw photo, independent of selection and Auto Sync; uses the built-in denoiser when no model is chosen",
             always,
             toggle
         ),
         cmd!(query "denoise.queue", "Denoise Photos", [], None, "{ids?: [photoId], scope?: selected | visible | withAmount, retry?: false} → {added, …status} — make the denoised pictures of raw photos that have none, in the background. `retry` tries photos that failed before", always, queue),
         cmd!(query "denoise.cancel", "Cancel Denoise", [], None, "{id?, all?} → {cancelled} — stop the photo being made and/or forget the ones waiting (all of them when `id` is omitted)", always, cancel),
-        cmd!(query "denoise.status", "Denoise Status", [], None, "{id?} → {enabled, model, runtime, productsDir, queued, running: {photo, done, total, seconds} | null, ready, made, auto, runOn, device: {kind: gpu | cpu | pending | none, adapter?, reason?, cardMs?, cpuMs?, fellBack?, remote?: {address, state: pending | unavailable | used | idle | slower | given up, device?, remoteMs?, localMs?, reason?, failures?, lastError?}}, cache: {files, bytes, limitBytes}, generation, photo?: {state: notApplicable | noModel | ready | queued | running | failed | idle, …}}", always, status),
+        cmd!(query "denoise.status", "Denoise Status", [], None, "{id?} → {enabled, model, runtime, productsDir, queued, running: {photo, done, total, seconds} | null, ready, made, auto, runOn, device: {kind: gpu | cpu | pending | none, adapter?, reason?, cardMs?, cpuMs?, fellBack?, remote?: {address, state: pending | unavailable | used | idle | slower | given up, device?, remoteMs?, localMs?, reason?, failures?, lastError?}}, cache: {files, bytes, limitBytes}, generation, photo?: {state: notApplicable | ready | queued | running | failed | idle, …}}", always, status),
         cmd!(query "denoise.pump", "Denoise Pump", [], None, "{pace?: pause | light | normal | full} → {active, running, queued, ready, generation, downloading} — called every frame by the app: takes in finished work and keeps one photo going", always, pump),
         cmd!(query "denoise.clear", "Clear Denoise Cache", [], None, "{} → {deleted, bytes} — delete every cached denoised picture of this library (they are made again when wanted)", always, clear),
     ]
