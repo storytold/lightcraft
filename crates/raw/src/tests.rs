@@ -120,7 +120,7 @@ fn black_levels() {
 
 // --- TIFF shells around a private raw block (thumbnail-only IFD0) ---
 
-use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
 
 /// An uncompressed 8-bit RGB image IFD.
 fn rgb_ifd(w: u32, h: u32) -> IfdBuilder {
@@ -408,7 +408,7 @@ fn uncompressed_leaf_mos_is_a_raw() {
         }
         ifd
     };
-    let bytes = TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[mosaic(true)]).unwrap();
+    let bytes = TiffWriter::new(craft_tiff::ByteOrder::Big, false).write(&[mosaic(true)]).unwrap();
     assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
     assert!(matches!(decode(&bytes), Err(RawError::Unsupported(_))));
     assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(_))));
