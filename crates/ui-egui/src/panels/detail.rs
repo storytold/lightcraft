@@ -18,6 +18,7 @@ mod crop;
 mod filmstrip;
 mod geometry;
 mod info;
+mod lens_blur;
 mod look_ahead;
 mod masks;
 mod retouch;
@@ -48,6 +49,7 @@ use info::{
     preview_only_pill, quick_name,
 };
 pub(crate) use info::{draw_focus_point, failed_pill, loupe_pill, rendering_overdue};
+use lens_blur::{lens_blur_brush_overlay, lens_blur_shape_overlay};
 use look_ahead::BEHIND;
 pub use look_ahead::LookAhead;
 pub(crate) use look_ahead::{Prepare, look_ahead};
@@ -59,6 +61,12 @@ use window::{WindowCtx, WindowView, draw_window, request_window};
 /// An in-progress on-canvas gesture.
 #[derive(Clone, Debug)]
 pub enum Gesture {
+    /// Lens Blur's fixed focus shape: moving it (`handle` 0) or stretching it sideways (1) or
+    /// up and down (2), from `original` (where it was when the drag began).
+    LensBlurArea {
+        handle: u8,
+        original: lightcraft_develop::FocusArea,
+    },
     Brush {
         points: Vec<Point>,
         /// Pen pressure (0..1) at each point; empty when no pen pressure was reported (a mouse) or the
@@ -758,6 +766,8 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
         RightPanel::Remove => remove_overlay(app, ui, resp, map, d),
         RightPanel::RedEye => eye_overlay(app, ui, resp, map, d),
+        RightPanel::Edit if app.ui.tool == "lensBlurShape" => lens_blur_shape_overlay(app, ui, resp, map, d),
+        RightPanel::Edit if app.ui.tool.starts_with("lensBlur") => lens_blur_brush_overlay(app, ui, resp, map),
         _ => {
             // side by side / stacked: Before shows the same frame, so a click in its view (white
             // balance, colour samples, targeted adjustment) means the same point of the photo.

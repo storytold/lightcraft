@@ -4,7 +4,7 @@
 //! binary blobs are summarised by size; of a maker note only the lens name is listed (the
 //! Panasonic one, as Panasonic writes no Exif LensModel).
 
-use lightcraft_tiff::{Ifd, Tiff, Value};
+use craft_tiff::{Ifd, Tiff, Value};
 
 /// One metadata row.
 #[derive(Clone, Debug, PartialEq)]
@@ -318,7 +318,7 @@ fn nikon_nef_compression(tiff: &Tiff, bytes: &[u8]) -> Option<&'static str> {
         return None;
     }
     let e = ifd0.exif.as_ref()?.get(0x927c)?;
-    let mn = lightcraft_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
+    let mn = craft_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
     nef_compression(mn.ifd.u32(0x0093)?)
 }
 
@@ -516,7 +516,7 @@ mod tests {
         let rw2 = crate::exif::tests::panasonic_rw2("LUMIX S 85/F1.8");
         assert_eq!(lens(&file_tag_rows(&rw2)), ["LUMIX S 85/F1.8"]);
         // a JPEG: the note is in its own Exif
-        let exif = crate::exif::tests::panasonic_exif(lightcraft_tiff::ByteOrder::Big, Some("LUMIX G 25/F1.7"), None);
+        let exif = crate::exif::tests::panasonic_exif(craft_tiff::ByteOrder::Big, Some("LUMIX G 25/F1.7"), None);
         let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
         jpg.extend_from_slice(&((exif.len() + 8) as u16).to_be_bytes());
         jpg.extend(b"Exif\0\0");

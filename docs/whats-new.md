@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Flatpak updates
+- Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
+  This permissions repair must first arrive through your existing host-side update method. Flatpaks
+  managed by a software repository continue to use its package manager, and launcher-pinned versions
+  keep their selected version.
+
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
+
 ### Film negative conversion
 - A new **Negative** section at the top of Edit turns a scanned colour negative, black-and-white negative or slide
   into a positive (Negative ▸ Color Negative, or Photo ▸ Convert Negative). It finds the film base on
@@ -95,6 +106,16 @@
   `mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server
   gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
   running), and what was read isn't read again.
+
+## 2026-11-01
+
+### Import a Lightroom catalog backup as it is
+- File ▸ Import Lightroom Catalog… also takes the `.zip` backups Lightroom Classic writes in its `Backups` folder
+  (issue #2592), for when Lightroom and its catalog are gone and only the backups and the photos are left. LightCraft
+  unpacks the catalog into a temporary folder in the library, imports it and deletes the copy; the zip is not
+  changed. Open Library given a `Backups` folder, or one of its dated folders, offers to import the backup.
+- Importing a backup of a catalog you already imported no longer adds every collection a second time: collections
+  are matched by the catalog's own id, which its backups keep, instead of by the catalog file's path.
 
 ## 2026-10-30
 

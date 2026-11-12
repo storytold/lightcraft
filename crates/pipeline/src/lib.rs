@@ -32,6 +32,7 @@ pub mod curve;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
 #[rustfmt::skip]
@@ -448,6 +449,8 @@ pub struct Plan<'a> {
     /// The film negative conversion, when the photo is a converted film scan ([`negative::resolve`]): measured on
     /// the whole source, so every window and size of a render converts alike.
     pub film: Option<negative::Film>,
+    /// The whole photo's subject estimate a lens blur focuses on ([`lens_blur::subject_estimate`]).
+    pub lens_subject: Option<Arc<lens_blur::SubjectEstimate>>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
 }
@@ -498,8 +501,10 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
                 fixed_air = Some(local::frame_airlight(src, info, s, film.as_ref(), &frame, pw, ph));
             }
-            // (spots grow the rendered window of 8-bit renders; a grown window is cut back to the request)
-            let mut work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
+            // (spots grow the rendered window of 8-bit renders, the lens blur that of every
+            // render; a grown window is cut back to the request)
+            let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
+            let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
             if local::joint_colour_nr(s)
                 && let Some(params) = local::nrc_params(s, detail_scale)
             {
@@ -535,6 +540,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         src_long,
         // and the film conversion (its analysis is of this source, which keys the cache)
         format!("{film:?}"),
+        // and the lens blur (after noise reduction, but a draft must not reuse planes without it)
+        lens_blur::key(s),
     ));
     let lin_key = hash_of((
         pre_nr_key,
@@ -543,6 +550,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // the process picks the colour filter (Update to Current Process, undo)
         local::joint_colour_nr(s),
     ));
+    let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
     let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
     Plan {
         settings,
@@ -562,6 +570,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         keep,
         mattes: info.mattes.clone(),
         film,
+        lens_subject,
         full,
     }
 }
@@ -601,6 +610,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 mattes: None,
                 // (converted below, once per tile)
                 film: None,
+                lens_subject: None,
                 full: p.full.clone(),
                 ..*p
             };
@@ -746,6 +756,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
                 colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
+            lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
             Arc::new(img)
         }
     };
