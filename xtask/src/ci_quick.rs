@@ -39,6 +39,7 @@ const EMBEDDED: &[(&str, &[&str])] = &[
     ("assets/fonts/", &["lightcraft-engine", "lightcraft-ui-egui"]),
     ("contributors/", &["lightcraft-ui-egui"]),
     ("docs/whats-new.md", &["lightcraft-ui-egui"]),
+    ("packaging/linux/flatpak/", &["lightcraft-ui-egui"]),
     ("docs/raw/coverage-sweep.tsv", &["lightcraft-raw"]),
     ("docs/raf-corpus.sha256", &["lightcraft-raw"]),
     ("xtask/src/raw_samples.rs", &["lightcraft-raw"]),
