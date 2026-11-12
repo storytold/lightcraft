@@ -2,10 +2,10 @@
 //! bit-exact decoder round-trip tests. The raw image is stored in IFD0 (allowed by DNG 1.7 §"File Structure").
 
 use crate::{RawData, RawError, RawImage, Result, ljpeg, opcodes};
+use craft_tiff::tags::{self as t, compression, photometric};
+use craft_tiff::writer::{rational, srational};
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use lightcraft_color::Mat3;
-use lightcraft_tiff::tags::{self as t, compression, photometric};
-use lightcraft_tiff::writer::{rational, srational};
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use rayon::prelude::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
