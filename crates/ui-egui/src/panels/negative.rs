@@ -95,8 +95,8 @@ fn picker_row(app: &mut LightcraftApp, ui: &mut egui::Ui, tool: &str, label: &st
                     let colour = Color32::from_rgb(enc(c[0]), enc(c[1]), enc(c[2]));
                     ui.painter().rect_filled(r, 4.0, colour);
                     ui.painter().rect_stroke(r, 4.0, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
-                    let rgb = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-                    resp.on_hover_text(format!("RGB {} {} {}", rgb[0], rgb[1], rgb[2]));
+                    // (the numbers of the colour shown, 0–255 sRGB, as a colour picker reports them)
+                    resp.on_hover_text(format!("RGB {} {} {}", enc(c[0]), enc(c[1]), enc(c[2])));
                 }
                 None => {
                     ui.painter().rect_stroke(r, 4.0, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
@@ -122,6 +122,20 @@ fn picker_row(app: &mut LightcraftApp, ui: &mut egui::Ui, tool: &str, label: &st
     });
 }
 
+/// Puts away an armed Film Base or Gray Point selector (its row is gone, or the conversion is off).
+fn put_selector_away(app: &mut LightcraftApp) {
+    if matches!(app.ui.tool.as_str(), "negBase" | "negGray") {
+        app.ui.tool.clear();
+    }
+}
+
+/// The Done button: as Return (`tool.done`), back to the Edit panel.
+fn done_button(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    if text_button(ui, "negative-done", "Done", false).clicked() {
+        let _ = app.run("tool.done", json!({}));
+    }
+}
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     let n = d.negative.clone();
@@ -132,6 +146,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let r = ui.checkbox(&mut on, crate::i18n::tr("Film negative"));
         register(ui, "check:negativeOn", r.rect);
         if r.changed() {
+            if !on {
+                put_selector_away(app);
+            }
             set(app, ui, json!({"on": on}));
         }
         ui.add_space(6.0);
@@ -139,7 +156,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             for (label, advanced) in [("Simple", false), ("Advanced", true)] {
                 let key = if advanced { "negativeMode-advanced" } else { "negativeMode-simple" };
                 if text_button(ui, key, label, n.advanced == advanced).clicked() && n.advanced != advanced {
-                    set(app, ui, json!({"advanced": advanced}));
+                    if !advanced {
+                        put_selector_away(app);
+                    }
+                    // (the mode alone: a conversion that is off stays off)
+                    set(app, ui, json!({"advanced": advanced, "on": n.enabled}));
                 }
             }
         });
@@ -147,6 +168,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if !n.enabled {
         padded(ui, |ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Switch on to render this scan of a film negative as a positive.")).color(t.text_dim));
+            ui.add_space(6.0);
+            done_button(app, ui);
         });
         return;
     }
@@ -187,9 +210,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if text_button(ui, "negative-measure", "Measure Again", false).clicked() {
                 set(app, ui, json!({"measure": true}));
             }
-            if text_button(ui, "negative-done", "Done", false).clicked() {
-                let _ = app.run("panel.negative", json!({}));
-            }
+            done_button(app, ui);
         });
         ui.add_space(6.0);
         ui.label(
@@ -211,14 +232,21 @@ mod tests {
     use super::*;
     use lightcraft_pipeline::negative::film::{Look, Tone, WbPreset};
 
-    /// The film model's names are what `develop.negative` takes; keep the menus in step with them.
+    use std::collections::BTreeSet;
+
+    /// The film model's names are what `develop.negative` takes: each menu lists every one of them,
+    /// once.
     #[test]
     fn menus_name_every_choice_of_the_film_model() {
-        assert_eq!(TONES.len(), Tone::ALL.len());
-        assert!(TONES.iter().all(|(k, _)| Tone::parse(k).is_some()));
-        assert_eq!(LOOKS.len(), Look::ALL.len());
-        assert!(LOOKS.iter().all(|(k, _)| Look::parse(k).is_some()));
-        assert_eq!(WBS.len(), WbPreset::ALL.len());
-        assert!(WBS.iter().all(|(k, _)| WbPreset::parse(k).is_some()));
+        let keys = |m: &[(&'static str, &'static str)]| m.iter().map(|(k, _)| *k).collect::<Vec<_>>();
+        let set = |v: Vec<&'static str>| v.into_iter().collect::<BTreeSet<_>>();
+        for (menu, model) in [
+            (keys(&TONES), Tone::ALL.iter().map(|(_, n)| *n).collect::<Vec<_>>()),
+            (keys(&LOOKS), Look::ALL.iter().map(|(_, n)| *n).collect()),
+            (keys(&WBS), WbPreset::ALL.iter().map(|(_, n)| *n).collect()),
+        ] {
+            assert_eq!(set(menu.clone()).len(), menu.len(), "no entry twice: {menu:?}");
+            assert_eq!(set(menu), set(model));
+        }
     }
 }
