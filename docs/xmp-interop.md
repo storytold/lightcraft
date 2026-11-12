@@ -224,6 +224,9 @@ sidecar written for a healed photo contains.
 
 A spot whose mask is any other kind is reported as `Spot: <kind>`. Sizes are clamped to our spot range. A sidecar's
 spots replace the photo's, as its masks do.
+A Lightroom Classic catalog keeps the same `RetouchAreas` / `RetouchInfo` in its develop settings (a Lua table);
+they are read the same way. Their points are on the stored image, so they turn with the photo's orientation, and the
+source offset with them, as the catalog's masks do.
 
 ## Local corrections (masks)
 
