@@ -171,7 +171,13 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     let mut key_guard = key_lock().lock().unwrap_or_else(PoisonError::into_inner);
     // The global key always describes dir(), not the directory this save wrote to.
     let global = crate::camera_profiles::dir();
-    *key_guard = Some(KeyState { key: cache_key_for(global.as_deref()), dir: global, scanned: Instant::now() });
+    let fresh = cache_key_for(global.as_deref());
+    // If the global key changed (e.g. an external tool added another profile), clear all cached
+    // lookups so they are refreshed on next access.
+    if key_guard.as_ref().map(|s| s.key) != Some(fresh) {
+        cache_guard.clear();
+    }
+    *key_guard = Some(KeyState { key: fresh, dir: global, scanned: Instant::now() });
     Ok(path)
 }
 
@@ -207,6 +213,9 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     // instead of falling back to the bundled profile.
     let model = canonical_model(model);
     let key = (directory.map(Path::to_path_buf), model.to_owned());
+
+    // Refresh the cache key to detect external profile additions/removals before consulting the cache.
+    cache_key_at(directory, Instant::now());
     let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(hit) = cache.get(&key) {
         return hit.clone();
@@ -270,6 +279,7 @@ pub fn cache_key() -> u64 {
 
 /// [`cache_key`] for `directory` as of `now`.
 fn cache_key_at(directory: Option<&Path>, now: Instant) -> u64 {
+    // Fast path: check if we can reuse the cached key without taking both locks.
     if let Some(state) = key_lock().lock().unwrap_or_else(PoisonError::into_inner).as_ref()
         && state.dir.as_deref() == directory
         && now.saturating_duration_since(state.scanned) < RESCAN_EVERY
@@ -280,6 +290,13 @@ fn cache_key_at(directory: Option<&Path>, now: Instant) -> u64 {
     // cannot land between the scan and the publishing of its result.
     let mut cache_guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
     let mut guard = key_lock().lock().unwrap_or_else(PoisonError::into_inner);
+    // Re-check under the locks: another caller may have refreshed the key while we waited.
+    if let Some(state) = guard.as_ref()
+        && state.dir.as_deref() == directory
+        && now.saturating_duration_since(state.scanned) < RESCAN_EVERY
+    {
+        return state.key;
+    }
     let fresh = cache_key_for(directory);
     if guard.as_ref().map(|s| s.key) != Some(fresh) {
         // The profile set changed outside save(): drop cached lookups (including
