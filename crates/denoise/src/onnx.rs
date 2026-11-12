@@ -383,11 +383,115 @@ fn channel_dim(v: &ValueInfoProto) -> Option<usize> {
 mod tests {
     use super::*;
     use crate::synthetic::unet_onnx;
+    use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
 
     fn temp_model(name: &str, bytes: &[u8]) -> std::path::PathBuf {
         let p = std::env::temp_dir().join(format!("lc-denoise-onnx-{name}-{}.onnx", std::process::id()));
         std::fs::write(&p, bytes).unwrap();
         p
+    }
+
+    fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
+        let mut n = Vec::new();
+        for i in inputs {
+            len_field(1, i.as_bytes(), &mut n);
+        }
+        len_field(2, output.as_bytes(), &mut n);
+        len_field(4, op.as_bytes(), &mut n);
+        for (name, value) in ints {
+            let mut a = Vec::new();
+            len_field(1, name.as_bytes(), &mut a);
+            varint_field(3, *value as u64, &mut a);
+            varint_field(20, 2, &mut a);
+            len_field(5, &a, &mut n);
+        }
+        n
+    }
+
+    fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
+        let mut t = Vec::new();
+        for d in dims {
+            varint_field(1, *d, &mut t);
+        }
+        varint_field(2, 1, &mut t);
+        len_field(8, name.as_bytes(), &mut t);
+        let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        len_field(9, &raw, &mut t);
+        t
+    }
+
+    fn model(nodes: &[Vec<u8>], in_channels: u64, out: &str) -> Vec<u8> {
+        let mut graph = Vec::new();
+        for n in nodes {
+            len_field(1, n, &mut graph);
+        }
+        len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(in_channels), Ok(8), Ok(8)]), &mut graph);
+        len_field(12, &value_info_bytes(out, 1, &[Ok(1), Ok(3), Ok(8), Ok(8)]), &mut graph);
+        let mut ops = Vec::new();
+        len_field(1, b"", &mut ops);
+        varint_field(2, 13, &mut ops);
+        let mut model = Vec::new();
+        varint_field(1, 8, &mut model);
+        len_field(7, &graph, &mut model);
+        len_field(8, &ops, &mut model);
+        model
+    }
+
+    fn varint(mut v: u64, out: &mut Vec<u8>) {
+        loop {
+            let b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                out.push(b);
+                return;
+            }
+            out.push(b | 0x80);
+        }
+    }
+
+    fn node_with_ints(op: &str, inputs: &[&str], output: &str, ints: &[(&str, &[i64])]) -> Vec<u8> {
+        let mut n = Vec::new();
+        for i in inputs {
+            len_field(1, i.as_bytes(), &mut n);
+        }
+        len_field(2, output.as_bytes(), &mut n);
+        len_field(4, op.as_bytes(), &mut n);
+        for &(name, values) in ints {
+            let mut a = Vec::new();
+            len_field(1, name.as_bytes(), &mut a);
+            // field 8: INTS (wire type 2) - varint-encoded list
+            varint(8 << 3 | 2, &mut a);
+            // length of the list in bytes (we'll compute after writing values)
+            let mut vals = Vec::new();
+            for &v in values {
+                varint(v as u64, &mut vals);
+            }
+            varint(vals.len() as u64, &mut a);
+            a.extend_from_slice(&vals);
+            // field 20: type = 7 (INTS)
+            varint_field(20, 7, &mut a);
+            len_field(5, &a, &mut n);
+        }
+        n
+    }
+
+    fn leaky_relu_node(inputs: &[&str], output: &str, alpha: f32) -> Vec<u8> {
+        let mut n = Vec::new();
+        for i in inputs {
+            len_field(1, i.as_bytes(), &mut n);
+        }
+        len_field(2, output.as_bytes(), &mut n);
+        len_field(4, b"LeakyRelu", &mut n);
+        // alpha attribute: field 1=name, field 2=float value (wire type 5), field 20=type=1 (FLOAT)
+        let mut a = Vec::new();
+        len_field(1, b"alpha", &mut a);
+        // field 2 with wire type 5 (fixed 4-byte float)
+        varint(2 << 3 | 5, &mut a);
+        a.extend_from_slice(&alpha.to_le_bytes());
+        // field 20: type = 1 (FLOAT)
+        varint_field(20, 1, &mut a);
+        len_field(5, &a, &mut n);
+        n
     }
 
     #[test]
@@ -412,36 +516,6 @@ mod tests {
 
     #[test]
     fn add_operator_model_is_accepted() {
-        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
-
-        fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            for (name, value) in ints {
-                let mut a = Vec::new();
-                len_field(1, name.as_bytes(), &mut a);
-                varint_field(3, *value as u64, &mut a);
-                varint_field(20, 2, &mut a);
-                len_field(5, &a, &mut n);
-            }
-            n
-        }
-
-        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
-            let mut t = Vec::new();
-            for d in dims {
-                varint_field(1, *d, &mut t);
-            }
-            varint_field(2, 1, &mut t);
-            len_field(8, name.as_bytes(), &mut t);
-            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-            len_field(9, &raw, &mut t);
-            t
-        }
 
         // the convolution output added back to the input, as a residual block does
         let mut graph = Vec::new();
@@ -542,41 +616,6 @@ mod tests {
 
     #[test]
     fn add_reading_concat_and_oversized_channels_are_unsupported() {
-        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
-
-        fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            for (name, value) in ints {
-                let mut a = Vec::new();
-                len_field(1, name.as_bytes(), &mut a);
-                varint_field(3, *value as u64, &mut a);
-                varint_field(20, 2, &mut a);
-                len_field(5, &a, &mut n);
-            }
-            n
-        }
-
-        fn model(nodes: &[Vec<u8>], in_channels: u64, out: &str) -> Vec<u8> {
-            let mut graph = Vec::new();
-            for n in nodes {
-                len_field(1, n, &mut graph);
-            }
-            len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(in_channels), Ok(8), Ok(8)]), &mut graph);
-            len_field(12, &value_info_bytes(out, 1, &[Ok(1), Ok(3), Ok(8), Ok(8)]), &mut graph);
-            let mut ops = Vec::new();
-            len_field(1, b"", &mut ops);
-            varint_field(2, 13, &mut ops);
-            let mut model = Vec::new();
-            varint_field(1, 8, &mut model);
-            len_field(7, &graph, &mut model);
-            len_field(8, &ops, &mut model);
-            model
-        }
 
         let concat_model =
             model(&[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])], 4, "a1");
@@ -597,41 +636,13 @@ mod tests {
 
     #[test]
     fn many_adds_on_a_wide_input_are_accepted_up_to_max_ops() {
-        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
-
-        fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            n
-        }
-
-        fn model(nodes: &[Vec<u8>], in_channels: u64, out: &str) -> Vec<u8> {
-            let mut graph = Vec::new();
-            for n in nodes {
-                len_field(1, n, &mut graph);
-            }
-            len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(in_channels), Ok(8), Ok(8)]), &mut graph);
-            len_field(12, &value_info_bytes(out, 1, &[Ok(1), Ok(3), Ok(8), Ok(8)]), &mut graph);
-            let mut ops = Vec::new();
-            len_field(1, b"", &mut ops);
-            varint_field(2, 13, &mut ops);
-            let mut model = Vec::new();
-            varint_field(1, 8, &mut model);
-            len_field(7, &graph, &mut model);
-            len_field(8, &ops, &mut model);
-            model
-        }
 
         // 32 Add nodes on 4096 channels should be accepted (32 < MAX_OPS=512, no weight allocation)
         let mut nodes = Vec::new();
         let mut prev = "data".to_string();
         for i in 0..32 {
             let out = format!("a{i}");
-            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out));
+            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out, &[]));
             prev = out;
         }
         let wide_model = model(&nodes, 4096, &prev);
@@ -642,7 +653,7 @@ mod tests {
         let mut prev = "data".to_string();
         for i in 0..=MAX_OPS {
             let out = format!("a{i}");
-            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out));
+            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out, &[]));
             prev = out;
         }
         let too_many_model = model(&nodes, 1, &prev);
@@ -651,36 +662,6 @@ mod tests {
 
     #[test]
     fn leaky_relu_with_an_add_residual_branch_is_accepted() {
-        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
-
-        fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            for (name, value) in ints {
-                let mut a = Vec::new();
-                len_field(1, name.as_bytes(), &mut a);
-                varint_field(3, *value as u64, &mut a);
-                varint_field(20, 2, &mut a);
-                len_field(5, &a, &mut n);
-            }
-            n
-        }
-
-        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
-            let mut t = Vec::new();
-            for d in dims {
-                varint_field(1, *d, &mut t);
-            }
-            varint_field(2, 1, &mut t);
-            len_field(8, name.as_bytes(), &mut t);
-            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-            len_field(9, &raw, &mut t);
-            t
-        }
 
         // the convolution output is read by both the LeakyRelu and the Add residual branch
         let mut graph = Vec::new();
@@ -715,95 +696,6 @@ mod tests {
 
     #[test]
     fn leaky_relu_fuses_across_interleaved_nodes() {
-        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
-
-        fn varint(mut v: u64, out: &mut Vec<u8>) {
-            loop {
-                let b = (v & 0x7f) as u8;
-                v >>= 7;
-                if v == 0 {
-                    out.push(b);
-                    return;
-                }
-                out.push(b | 0x80);
-            }
-        }
-
-        fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            for (name, value) in ints {
-                let mut a = Vec::new();
-                len_field(1, name.as_bytes(), &mut a);
-                varint_field(3, *value as u64, &mut a);
-                varint_field(20, 2, &mut a);
-                len_field(5, &a, &mut n);
-            }
-            n
-        }
-
-        /// Create a node with INTS attributes (for kernel_shape, strides, etc.).
-        fn node_with_ints(op: &str, inputs: &[&str], output: &str, ints: &[(&str, &[i64])]) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            for &(name, values) in ints {
-                let mut a = Vec::new();
-                len_field(1, name.as_bytes(), &mut a);
-                // field 8: INTS (wire type 2) - varint-encoded list
-                varint(8 << 3 | 2, &mut a);
-                // length of the list in bytes (we'll compute after writing values)
-                let mut vals = Vec::new();
-                for &v in values {
-                    varint(v as u64, &mut vals);
-                }
-                varint(vals.len() as u64, &mut a);
-                a.extend_from_slice(&vals);
-                // field 20: type = 7 (INTS)
-                varint_field(20, 7, &mut a);
-                len_field(5, &a, &mut n);
-            }
-            n
-        }
-
-        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
-            let mut t = Vec::new();
-            for d in dims {
-                varint_field(1, *d, &mut t);
-            }
-            varint_field(2, 1, &mut t);
-            len_field(8, name.as_bytes(), &mut t);
-            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-            len_field(9, &raw, &mut t);
-            t
-        }
-
-        /// Create a LeakyRelu node with a float `alpha` attribute (ONNX requires FLOAT type).
-        fn leaky_relu_node(inputs: &[&str], output: &str, alpha: f32) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, b"LeakyRelu", &mut n);
-            // alpha attribute: field 1=name, field 2=float value (wire type 5), field 20=type=1 (FLOAT)
-            let mut a = Vec::new();
-            len_field(1, b"alpha", &mut a);
-            // field 2 with wire type 5 (fixed 4-byte float)
-            varint(2 << 3 | 5, &mut a);
-            a.extend_from_slice(&alpha.to_le_bytes());
-            // field 20: type = 1 (FLOAT)
-            varint_field(20, 1, &mut a);
-            len_field(5, &a, &mut n);
-            n
-        }
 
         // Conv produces "c1", then an unrelated MaxPool (reading "data") comes between,
         // then a LeakyRelu consumes "c1". The fusion should still happen.
@@ -858,32 +750,9 @@ mod tests {
 
     #[test]
     fn add_with_initializer_operand_is_unsupported() {
-        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
-
-        fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            n
-        }
-
-        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
-            let mut t = Vec::new();
-            for d in dims {
-                varint_field(1, *d, &mut t);
-            }
-            varint_field(2, 1, &mut t);
-            len_field(8, name.as_bytes(), &mut t);
-            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-            len_field(9, &raw, &mut t);
-            t
-        }
 
         let mut graph = Vec::new();
-        len_field(1, &node("Add", &["data", "w1"], "a1"), &mut graph);
+        len_field(1, &node("Add", &["data", "w1"], "a1", &[]), &mut graph);
         len_field(5, &tensor("w1", &[4], &[0.1; 4]), &mut graph);
         len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
         len_field(12, &value_info_bytes("a1", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
@@ -900,32 +769,9 @@ mod tests {
 
     #[test]
     fn leaky_relu_with_initializer_operand_is_unsupported() {
-        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
-
-        fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            n
-        }
-
-        fn tensor(name: &str, dims: &[u64], values: &[f32]) -> Vec<u8> {
-            let mut t = Vec::new();
-            for d in dims {
-                varint_field(1, *d, &mut t);
-            }
-            varint_field(2, 1, &mut t);
-            len_field(8, name.as_bytes(), &mut t);
-            let raw: Vec<u8> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
-            len_field(9, &raw, &mut t);
-            t
-        }
 
         let mut graph = Vec::new();
-        len_field(1, &node("LeakyRelu", &["w1"], "l1"), &mut graph);
+        len_field(1, &node("LeakyRelu", &["w1"], "l1", &[]), &mut graph);
         len_field(5, &tensor("w1", &[4], &[0.1; 4]), &mut graph);
         len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
         len_field(12, &value_info_bytes("l1", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
@@ -942,40 +788,12 @@ mod tests {
 
     #[test]
     fn more_than_max_ops_small_adds_are_rejected_as_too_many_layers() {
-        use crate::synthetic_proto::{len_field, value_info_bytes, varint_field};
-
-        fn node(op: &str, inputs: &[&str], output: &str) -> Vec<u8> {
-            let mut n = Vec::new();
-            for i in inputs {
-                len_field(1, i.as_bytes(), &mut n);
-            }
-            len_field(2, output.as_bytes(), &mut n);
-            len_field(4, op.as_bytes(), &mut n);
-            n
-        }
-
-        fn model(nodes: &[Vec<u8>], in_channels: u64, out: &str) -> Vec<u8> {
-            let mut graph = Vec::new();
-            for n in nodes {
-                len_field(1, n, &mut graph);
-            }
-            len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(in_channels), Ok(8), Ok(8)]), &mut graph);
-            len_field(12, &value_info_bytes(out, 1, &[Ok(1), Ok(3), Ok(8), Ok(8)]), &mut graph);
-            let mut ops = Vec::new();
-            len_field(1, b"", &mut ops);
-            varint_field(2, 13, &mut ops);
-            let mut model = Vec::new();
-            varint_field(1, 8, &mut model);
-            len_field(7, &graph, &mut model);
-            len_field(8, &ops, &mut model);
-            model
-        }
 
         let mut nodes = Vec::new();
         let mut prev = "data".to_string();
         for i in 0..=MAX_OPS {
             let out = format!("a{i}");
-            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out));
+            nodes.push(node("Add", &[prev.as_str(), prev.as_str()], &out, &[]));
             prev = out;
         }
         let many_model = model(&nodes, 1, &prev);

@@ -403,6 +403,7 @@ fn add(a: &[f32], b: &[f32], side: usize, dest: &mut [f32]) -> Result<()> {
 }
 
 #[cfg(test)]
+#[test]
 fn add_op_produces_elementwise_sum() {
     use crate::net::{Conv, Net, Op, TensorId};
 
