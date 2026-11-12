@@ -20,9 +20,9 @@
 //! - The preview is the maker note's tag `0x0280`, a JPEG whose first byte is stored as `ee` (found by the
 //!   structural scan in `preview::scan_for_jpeg`).
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
+use craft_tiff::image::chunk_bytes;
+use craft_tiff::{Ifd, Tiff, tags as t};
 use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::{Ifd, Tiff, tags as t};
 
 /// Epson's private compression code for the 16-byte block layout.
 const BLOCKS16: u16 = 32769;
@@ -58,8 +58,8 @@ fn maker_note(bytes: &[u8], tiff: &Tiff) -> Option<Ifd> {
     if !bytes.get(start..)?.starts_with(b"EPSON\0") {
         return None;
     }
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
-    lightcraft_tiff::parse_ifd_at(bytes, e.offset.checked_add(8)?, tiff.order, 0, false, &opts).ok().map(|(i, _)| i)
+    let opts = craft_tiff::ParseOptions { max_ifds: 1, max_depth: 0, follow_children: false, ..Default::default() };
+    craft_tiff::parse_ifd_at(bytes, e.offset.checked_add(8)?, tiff.order, 0, false, &opts).ok().map(|(i, _)| i)
 }
 
 /// Unpack a strip of 16-byte blocks (15 bytes of ten MSB-first 12-bit samples, one pad byte).
@@ -137,7 +137,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
 
     /// Pack ten-sample groups into 16-byte blocks, MSB first, zero pad.
     fn pack(px: &[u16]) -> Vec<u8> {
@@ -168,7 +168,7 @@ mod tests {
         ifd0.set(t::MODEL, Value::Ascii("R-D1".into()));
         ifd0.set(t::ORIENTATION, Value::Short(vec![1]));
         ifd0.add_sub_ifd(raw);
-        TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
+        TiffWriter::new(craft_tiff::ByteOrder::Big, false).write(&[ifd0]).unwrap()
     }
 
     #[test]
