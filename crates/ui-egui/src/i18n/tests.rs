@@ -1376,3 +1376,41 @@ fn hebrew_photo_rating_filters_and_metadata_are_translated() {
     assert_eq!(Locale::He.tr("IMG_2026.CR3"), "IMG_2026.CR3");
     assert_eq!(Locale::En.tr("Search Photos"), "Search Photos");
 }
+
+/// Person/face recognition and slideshow/print controls are native Hebrew
+/// interface labels. Image metadata, filenames and unknown strings stay source-authentic.
+#[test]
+fn hebrew_people_slideshow_and_print_workflows_are_translated() {
+    let hebrew = Locale::He.catalog();
+    for key in [
+        "Detect Faces",
+        "Face recognition",
+        "Face Recognition On/Off",
+        "Faces of a Person",
+        "Face Models",
+        "Camera make and model",
+        "GPS Track Log",
+        "Contact Sheet PDF…",
+        "Edit in Other Editor",
+        "Edit in PhotoCraft",
+        "Copy Metadata",
+        "Slideshow paused",
+        "Slideshow resumed",
+        "Slideshow Playback Settings",
+        "Slideshow Export Status",
+        "Print Settings",
+        "Print to PDF",
+        "Watermark",
+        "Show Person",
+        "Face recognition is on",
+    ] {
+        let translated = hebrew.get(key).unwrap_or_else(|| panic!("missing Hebrew photo source key: {key:?}"));
+        assert_ne!(translated, key, "source key still English: {key:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)), "not Hebrew: {key:?}");
+        assert_eq!(Locale::En.tr(key), key, "English source mutated");
+    }
+    assert_eq!(Locale::He.tr("Detect Faces"), "זיהוי פנים");
+    assert_eq!(Locale::He.tr("Slideshow paused"), "המצגת הושהתה");
+    assert_eq!(Locale::He.tr("Print to PDF"), "הדפסה ל־PDF");
+    assert_eq!(Locale::He.tr("IMG_1234.JPG"), "IMG_1234.JPG");
+}
