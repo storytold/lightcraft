@@ -1066,5 +1066,15 @@
   "Subtract from this mask": "החסרה מהמסכה הזו",
   "Sharpness": "חדות",
   "Create Preset…": "יצירת ערכת הגדרות…",
-  "More preset options": "אפשרויות נוספות לערכת ההגדרות"
+  "More preset options": "אפשרויות נוספות לערכת ההגדרות",
+  "Flagged as Pick": "סומנה כנבחרת",
+  "Flagged as Reject": "סומנה לדחייה",
+  "Clear rating": "ניקוי הדירוג",
+  "Clear rating and advance": "ניקוי הדירוג ומעבר לתמונה הבאה",
+  "Drop to import": "שחררו כדי לייבא",
+  "Favorite": "מועדף",
+  "Flag": "סימון בדגל",
+  "Generated demo photo": "תמונת הדגמה שנוצרה",
+  "Increase Grid Thumbnail Size": "הגדלת התמונות הממוזערות ברשת",
+  "Decrease Grid Thumbnail Size": "הקטנת התמונות הממוזערות ברשת"
 }

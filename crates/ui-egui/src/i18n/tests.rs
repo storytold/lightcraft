@@ -1711,3 +1711,25 @@ fn hebrew_parallel_round6_masking_labels() {
         );
     }
 }
+
+#[test]
+fn hebrew_parallel_round6_culling_labels() {
+    for (source, expected) in [
+        ("Flagged as Pick", "סומנה כנבחרת"),
+        ("Flagged as Reject", "סומנה לדחייה"),
+        ("Clear rating", "ניקוי הדירוג"),
+        ("Clear rating and advance", "ניקוי הדירוג ומעבר לתמונה הבאה"),
+        ("Drop to import", "שחררו כדי לייבא"),
+        ("Favorite", "מועדף"),
+        ("Flag", "סימון בדגל"),
+        ("Generated demo photo", "תמונת הדגמה שנוצרה"),
+        ("Increase Grid Thumbnail Size", "הגדלת התמונות הממוזערות ברשת"),
+        ("Decrease Grid Thumbnail Size", "הקטנת התמונות הממוזערות ברשת"),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew source label regression: {source}"
+        );
+    }
+}
