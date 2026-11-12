@@ -215,8 +215,11 @@ fn creating_a_keyword_lists_it_and_can_tag_photos() {
 #[test]
 fn a_new_keyword_name_cannot_end_in_an_asterisk() {
     assert!(!valid_name("travel*") && !valid_name("places | rome* ") && valid_name("a*b"));
+    for name in ["a*", "a | b*", "*", "a *"] {
+        assert!(!valid_name(name), "{name}");
+    }
     let (mut c, ids) = lib(&[&["places|italy"], &[]]);
-    for name in ["travel*", "places|rome*", "travel *|rome"] {
+    for name in ["travel*", "places|rome*", "travel *|rome", "a*", "a | b*", "*", "a *"] {
         let err = c.create_keyword_ops(name, KeywordInfo::default(), &[ids[1]]).unwrap_err();
         assert!(err.to_string().contains("can't end in “*”"), "{name}: {err}");
     }
