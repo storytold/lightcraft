@@ -13,6 +13,7 @@ lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-develop = { workspace = true }
+lightcraft-film = { workspace = true }
 lightcraft-raw = { workspace = true }
 lightcraft-inpaint = { workspace = true }
 rayon = { workspace = true }
