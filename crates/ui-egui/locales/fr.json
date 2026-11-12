@@ -3638,4 +3638,16 @@
   "Welcome": "Bienvenue",
   "Next": "Suivant",
   "Get Started": "Commencer"
+,
+  "Use as Person's Picture": "Utiliser comme image de la personne",
+  "Use Their Largest Face": "Revenir au visage le plus grand",
+  "This face is now their picture in People": "Ce visage est maintenant son image dans Personnes",
+  "Suggestions sorted again after a face was set aside: check them, then confirm again": "Suggestions triées à nouveau après la mise de côté d'un visage : vérifiez-les, puis confirmez à nouveau",
+  "Their largest face is their picture again": "Son visage le plus grand redevient son image",
+  "Bring Back Set-Aside Faces": "Remettre les visages écartés",
+  "The faces you set aside with × are offered again": "Les visages écartés avec × sont de nouveau proposés",
+  "Open Photo": "Ouvrir la photo",
+  "Click to select (Shift-click for a range), then type a name; double-click or right-click to open the photo": "Cliquez pour sélectionner (Maj-clic pour une plage), puis tapez un nom ; double-cliquez ou faites un clic droit pour ouvrir la photo",
+  "Go to Suggestions": "Aller aux suggestions",
+  "The faces that look like them, below theirs": "Les visages qui lui ressemblent, sous les siens"
 }

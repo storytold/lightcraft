@@ -478,6 +478,29 @@ fn folder_identity_ignores_spelling() {
 
 /// People come from named *face* regions: counted once per photo, case-insensitive, most photos
 /// first; pets and unnamed faces are not people; the `person` filter and `person:` token match.
+/// A face chosen for a person stands for them even when a larger face of theirs is in the same photo (#3246).
+#[test]
+fn a_chosen_face_is_told_from_a_larger_one_in_the_same_photo() {
+    use crate::PersonCover;
+    use lightcraft_meta::{Rect, Region, RegionKind};
+    let face = |rect: Rect| Region { rect, kind: RegionKind::Face, name: Some("John Roe".into()), description: None };
+    let (small, big) = (Rect { x0: 0.1, y0: 0.1, x1: 0.2, y1: 0.2 }, Rect { x0: 0.4, y0: 0.4, x1: 0.9, y1: 0.9 });
+    // whichever comes first among the photo's regions
+    for regions in [vec![face(big), face(small)], vec![face(small), face(big)]] {
+        let mut c = Catalog::new();
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a.jpg", "JPEG", 6000, 4000, "2026-09-30T10:00:00");
+        p.meta.regions = regions;
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let picture = |covers: &std::collections::BTreeMap<String, PersonCover>| {
+            c.people_in_with(&Filter::default(), covers).into_iter().find(|p| p.name == "John Roe").map(|p| (p.photo, p.face))
+        };
+        assert_eq!(picture(&Default::default()), Some((id, big)), "the larger face by default");
+        let covers = std::iter::once(("john roe".to_string(), PersonCover { photo: id, face: small })).collect();
+        assert_eq!(picture(&covers), Some((id, small)), "the smaller one once chosen");
+    }
+}
+
 #[test]
 fn people_from_named_face_regions() {
     use lightcraft_meta::{Rect, Region, RegionKind};
@@ -537,6 +560,46 @@ fn people_from_named_face_regions() {
         "the person filter is ignored"
     );
     assert_eq!(names(Filter { rating: 5, ..Default::default() }), vec![], "nobody in the filtered photos");
+
+    // a face chosen for a person stands for them instead of their largest one (#3246)
+    use crate::PersonCover;
+    let small = Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 };
+    let picture = |covers: &std::collections::BTreeMap<String, PersonCover>, f: Filter, name: &str| {
+        c.people_in_with(&f, covers).into_iter().find(|p| p.name.eq_ignore_ascii_case(name)).map(|p| (p.photo, p.face))
+    };
+    let mut covers = std::collections::BTreeMap::new();
+    covers.insert("john roe".to_string(), PersonCover { photo: b, face: small });
+    assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((b, small)), "the chosen face, not the larger one");
+    // read back from a file, a box may differ in its last digit
+    covers.insert("john roe".to_string(), PersonCover { photo: b, face: Rect { x0: 0.4 + 1e-12, ..small } });
+    assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((b, small)));
+    // a chosen photo the filter hides, or a face that no longer bears the name, falls back to the largest face
+    let hides_b = Filter { rating: 1, rating_op: crate::RatingOp::AtMost, ..Default::default() };
+    assert_eq!(picture(&covers, hides_b, "John Roe"), Some((d, big)), "the chosen photo is filtered out: the largest face stands in");
+    assert_eq!(picture(&covers, Filter { rating: 5, ..Default::default() }, "John Roe"), None, "nobody left at all");
+    covers.insert("john roe".to_string(), PersonCover { photo: e, face: small });
+    assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((d, big)), "Sam's face is not John Roe's");
+    covers.insert("john roe".to_string(), PersonCover { photo: b, face: big });
+    assert_eq!(picture(&covers, Filter::default(), "John Roe"), Some((d, big)), "no such face in that photo");
+    // the very face, give or take the last digit: any coordinate further off, or another photo, is another face
+    let near = 1e-12;
+    let far = 1e-6;
+    assert!(
+        PersonCover { photo: b, face: small }.is(b, &Rect { x0: small.x0 + near, y0: small.y0 - near, x1: small.x1 + near, y1: small.y1 - near })
+    );
+    for off in [
+        Rect { x0: small.x0 + far, ..small },
+        Rect { y0: small.y0 + far, ..small },
+        Rect { x1: small.x1 - far, ..small },
+        Rect { y1: small.y1 - far, ..small },
+    ] {
+        assert!(!PersonCover { photo: b, face: small }.is(b, &off), "{off:?}");
+    }
+    assert!(!PersonCover { photo: b, face: small }.is(d, &small));
+    // the counts are the same either way
+    covers.insert("john roe".to_string(), PersonCover { photo: b, face: small });
+    let counts = |covers| c.people_in_with(&Filter::default(), covers).into_iter().map(|p| (p.name, p.count)).collect::<Vec<_>>();
+    assert_eq!(counts(&covers), counts(&Default::default()));
 }
 
 /// Most photos have no regions: the field is left out of the catalog JSON then, and a catalog written
