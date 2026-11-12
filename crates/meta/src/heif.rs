@@ -198,7 +198,7 @@ mod tests {
     use super::*;
     // the whole routing, not just this module: a HEIC must reach the HEIF branch of `embedded`
     use crate::embedded;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
 
     /// One box: its own size, its four-letter kind, then its payload.
     fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {

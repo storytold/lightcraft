@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 
 [workspace.package]
-version = "0.21.0"
+version = "0.21.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -26,7 +26,8 @@ lightcraft-sysmem = { path = "crates/sysmem" }
 lightcraft-wincolor = { path = "crates/wincolor" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
-lightcraft-tiff = { path = "crates/tiff" }
+# TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
+craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "3b3104981bb3093904a12e44d6a3b41c6c4c39c8" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }

@@ -2,8 +2,8 @@
 
 use crate::unpack::{f16_to_f32, f24_to_f32, inflate, read_u16s, undo_diff_u16, undo_float_predictor, unpack_lsb, unpack_msb, unpack_words32_msb};
 use crate::{MAX_SAMPLES, RawData, RawError, Result, ljpeg};
-use lightcraft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
-use lightcraft_tiff::{ByteOrder, tags::compression as comp};
+use craft_tiff::image::{Chunk, ImageInfo, chunk_bytes};
+use craft_tiff::{ByteOrder, tags::compression as comp};
 use rayon::prelude::*;
 
 /// Bit packing for uncompressed integer data with bit depths other than 8/16.
@@ -461,7 +461,7 @@ fn unpack_chunk(
 #[cfg(test)]
 mod lossy_tests {
     use super::*;
-    use lightcraft_tiff::image::Layout;
+    use craft_tiff::image::Layout;
 
     /// 65 536 tiles all pointing at the same 256 bytes: the image's samples can't come from them,
     /// and nothing of its size is allocated to find that out.
