@@ -155,7 +155,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "unsaved": app.session.unsaved().map(|(n, e)| json!({"ops": n, "error": e})),
         "libraryProblem": app.library_problem.as_ref().map(crate::panels::library_problem::LibraryProblem::to_json),
         "scan": app.scan.as_ref().map(crate::import::ScanTask::status),
-        "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "last": app.last_export_result},
+        "export": {"running": app.export.as_ref().map(crate::export_task::ExportTask::status), "queued": app.export_queue.len(), "last": app.last_export_result},
         "import": app.import.as_ref().map(crate::import::ImportTask::status),
         "tasks": app.tasks.labels(),
         // every long-running task in flight, as the activity stack shows them (`activity.list`)

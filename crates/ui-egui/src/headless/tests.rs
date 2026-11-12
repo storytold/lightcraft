@@ -2001,6 +2001,53 @@ fn export_dialog_runs_in_the_background() {
     assert!(last["files"][0]["width"].as_u64().is_some_and(|w| w <= 64));
 }
 
+/// Issue #2965: an export asked for while another runs waits its turn instead of being refused ("an export is
+/// already running"); it shows as a waiting row in the activity stack and runs when the first ends, and ✕ on a
+/// waiting export drops it.
+#[test]
+fn a_second_export_waits_for_the_first() {
+    let mut h = demo([1200.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let w = written.clone();
+    h.app.services.write_shared = Some(std::sync::Arc::new(move |p: &str, _: &[u8]| {
+        std::thread::sleep(Duration::from_millis(150)); // slow enough that the first is still running
+        w.lock().unwrap().push(p.to_string());
+        Ok(())
+    }));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
+    let export =
+        |h: &mut Headless, ids: &[u64], dir: &str| h.app.run("app.export", json!({"ids": ids, "dir": dir, "background": true, "longEdge": 64}));
+    export(&mut h, &ids[..2], "/lc-queue-a").unwrap();
+    assert!(h.app.export.is_some(), "the first runs in the background");
+    let second = export(&mut h, &ids[2..], "/lc-queue-b").unwrap();
+    assert_eq!((second["queued"].clone(), second["total"].clone()), (json!(1), json!(1)), "{second}");
+    let third = export(&mut h, &ids[..1], "/lc-queue-c").unwrap();
+    assert_eq!(third["queued"], 2, "{third}");
+    let seen = h.request("ui.inspect", json!({}), t)["result"].clone();
+    assert_eq!(seen["export"]["queued"], 2, "{}", seen["export"]);
+    let rows = seen["activity"].as_array().cloned().unwrap_or_default();
+    assert_eq!(rows.len(), 3, "the running export and the two waiting: {rows:?}");
+    // ✕ on the last waiting one drops it
+    let last = rows.iter().rev().find(|r| r["label"].as_str().is_some_and(|l| l.starts_with("Waiting to export"))).expect("a waiting row");
+    h.app.run("activity.cancel", json!({"id": last["id"]})).unwrap();
+    let t0 = Instant::now();
+    while (h.app.export.is_some() || !h.app.export_queue.is_empty()) && t0.elapsed() < Duration::from_secs(90) {
+        h.step();
+    }
+    assert!(h.app.export.is_none() && h.app.export_queue.is_empty(), "all done");
+    let w = written.lock().unwrap().clone();
+    let (a, b, c) = (
+        w.iter().filter(|p| p.starts_with("/lc-queue-a/")).count(),
+        w.iter().filter(|p| p.starts_with("/lc-queue-b/")).count(),
+        w.iter().filter(|p| p.starts_with("/lc-queue-c/")).count(),
+    );
+    assert_eq!((a, b, c), (2, 1, 0), "the first, then the waiting one; the dropped one never ran: {w:?}");
+    let first_b = w.iter().position(|p| p.starts_with("/lc-queue-b/")).unwrap();
+    assert!(w[..first_b].iter().filter(|p| p.starts_with("/lc-queue-a/")).count() == 2, "in turn: {w:?}");
+    assert_eq!(h.request("ui.inspect", json!({}), t)["result"]["activity"], json!([]), "no rows left");
+}
+
 /// Issue #236: the Export dialog's Add to Apple Photos is there on macOS only; there the
 /// background export hands the files it wrote to Photos (a fake runner: tests never start
 /// osascript or Photos) and the toast says how it went.
