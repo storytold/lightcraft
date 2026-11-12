@@ -32,6 +32,15 @@ fn choice(p: &Value, key: &str, c: &str, known: impl Fn(&str) -> bool) -> Result
     }
 }
 
+/// A boolean parameter: `None` when absent, an error when present and not a boolean.
+fn flag(p: &Value, key: &str, c: &str) -> Result<Option<bool>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(v) => Err(bad(c, format!("`{key}` must be true or false, not {v}"))),
+    }
+}
+
 /// Measures photo `id` inside its crop (the crop's box, straightening left aside), `border` in
 /// from each edge.
 fn measure(s: &mut Session, id: crate::PhotoId, border: f64, c: &str) -> Result<lightcraft_develop::NegativeMeasurement> {
@@ -53,7 +62,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert Negative",
             [],
             None,
-            "{on?: bool (default true), advanced?: bool, preset?: film preset name, tone?, look?, wb?: names (\"\" = the preset's), measure?: bool (measure the scan again), border?: 0..45 (% of each edge the measurement leaves out, default 8), clearBase?: bool, clearGray?: bool} — the photo is a film negative, converted to a positive; switching it on measures the scan → the conversion",
+            "{on?: bool (default true; false changes the other choices and leaves the conversion off), advanced?: bool, preset?: film preset name, tone?, look?, wb?: names (\"\" = the preset's), measure?: bool (measure the scan again, also while off), border?: 0..45 (% of each edge the measurement leaves out, default 8; the result's `border` is the one used), clearBase?: bool, clearGray?: bool} — the photo is a film negative, converted to a positive; switching it on measures the scan → the conversion",
             has_active,
             |s, p| {
                 let c = "develop.negative";
@@ -74,15 +83,19 @@ pub fn specs() -> Vec<CommandSpec> {
                     },
                 };
                 let current = s.develop_of(id).unwrap_or_default().negative.clone();
-                let on = p.get("on").and_then(Value::as_bool).unwrap_or(true);
-                let remeasure = p.get("measure").and_then(Value::as_bool).unwrap_or(false);
+                let on = flag(p, "on", c)?.unwrap_or(true);
+                let advanced = flag(p, "advanced", c)?;
+                let remeasure = flag(p, "measure", c)?.unwrap_or(false);
+                let clear_base = flag(p, "clearBase", c)?.unwrap_or(false);
+                let clear_gray = flag(p, "clearGray", c)?.unwrap_or(false);
                 // Measured when the conversion goes on without a measurement, or on request.
-                let measured = if on && (remeasure || current.measured.is_none()) { Some(measure(s, id, border, c)?) } else { None };
+                let measuring = remeasure || (on && current.measured.is_none());
+                let measured = if measuring { Some(measure(s, id, border, c)?) } else { None };
                 let mut out = Value::Null;
                 super::develop::edit(s, c, "Convert Negative", |d: &mut DevelopSettings| {
                     let n = &mut d.negative;
                     n.enabled = on;
-                    if let Some(a) = p.get("advanced").and_then(Value::as_bool) {
+                    if let Some(a) = advanced {
                         n.advanced = a;
                     }
                     if let Some(name) = preset {
@@ -97,16 +110,19 @@ pub fn specs() -> Vec<CommandSpec> {
                     if let Some(w) = wb {
                         n.wb = w;
                     }
-                    if p.get("clearBase").and_then(Value::as_bool).unwrap_or(false) {
+                    if clear_base {
                         n.base = None;
                     }
-                    if p.get("clearGray").and_then(Value::as_bool).unwrap_or(false) {
+                    if clear_gray {
                         n.gray = None;
                     }
                     if measured.is_some() {
                         n.measured = measured;
                     }
                     out = state(n);
+                    if measuring {
+                        out["border"] = json!(border * 100.0);
+                    }
                     Ok(())
                 })?;
                 Ok(out)
@@ -117,7 +133,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Film Base Selector",
             [],
             None,
-            "{x, y: normalized image point, target?: base|gray (default base)} — the colour of the scan there is the film base (the unexposed border) or a gray point; switches the conversion on and to Advanced",
+            "{x, y: normalized image point (outside 0..1 is the nearest edge), target?: base|gray (default base)} — the colour of the scan there is the film base (the unexposed border) or a gray point; switches the conversion on and to Advanced",
             has_active,
             |s, p| {
                 let c = "develop.negativePick";
@@ -125,10 +141,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !(x.is_finite() && y.is_finite()) {
                     return Err(bad(c, "`x` and `y` must be numbers"));
                 }
-                let gray = match str_param(p, "target") {
-                    None | Some("base") => false,
-                    Some("gray") => true,
-                    Some(t) => return Err(bad(c, format!("unknown target `{t}` (base or gray)"))),
+                let gray = match p.get("target") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::String(t)) if t == "base" => false,
+                    Some(Value::String(t)) if t == "gray" => true,
+                    Some(t) => return Err(bad(c, format!("unknown target {t} (base or gray)"))),
                 };
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(c, e))?;

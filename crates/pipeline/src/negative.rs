@@ -125,6 +125,23 @@ pub fn apply(img: &mut Rgb32f, s: &DevelopSettings) {
     });
 }
 
+/// The conversion of one source pixel (linear Rec.2020) to the positive the pipeline sees, for a
+/// few samples (a picker): the identity while the settings convert no negative.
+pub fn pixel_converter(s: &DevelopSettings) -> impl Fn([f32; 3]) -> [f32; 3] {
+    let on = enabled(s).then(|| {
+        let c = converter(&s.negative);
+        let mut tables = Box::new(Tables::blank());
+        c.tables(&mut tables);
+        (c, tables)
+    });
+    let (into, back) = (to_srgb().to_f32(), to_rec2020().to_f32());
+    move |px| {
+        let Some((c, tables)) = &on else { return px };
+        let mul = |m: &[[f32; 3]; 3], v: [f32; 3]| m.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2]);
+        mul(&back, c.convert_with(tables, mul(&into, px).map(unit)))
+    }
+}
+
 /// `src` as the rest of the pipeline sees it: converted to a positive when the settings convert a
 /// negative. For the automatic adjustments (Auto, auto white balance and its selector, the B&W
 /// mix), which measure the source directly.
@@ -305,6 +322,19 @@ mod tests {
         let mut applied = raw.clone();
         apply(&mut applied, &s);
         assert_eq!(positive(&raw, &s).data, applied.data);
+    }
+
+    #[test]
+    fn a_pixel_converts_as_the_image_does() {
+        let raw = scan(30, 20);
+        let mut s = DevelopSettings::default();
+        let off = pixel_converter(&s);
+        assert_eq!(off(raw.data[40]), raw.data[40]);
+        s.negative.enabled = true;
+        let mut img = raw.clone();
+        apply(&mut img, &s);
+        let on = pixel_converter(&s);
+        assert_eq!(on(raw.data[40]), img.data[40]);
     }
 
     #[test]

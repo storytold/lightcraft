@@ -753,12 +753,13 @@ pub fn specs() -> Vec<CommandSpec> {
             let info = s.source_info(id);
             let d = s.develop_of(id).unwrap_or_default();
             // Sample a small neighbourhood in the oriented source (the positive, of a negative).
-            let o = lightcraft_pipeline::negative::positive(&src, &d).oriented(d.orientation);
+            let o = src.oriented(d.orientation);
+            let positive = lightcraft_pipeline::negative::pixel_converter(&d);
             let (cx, cy) = ((x.clamp(0.0, 1.0) * o.width as f64) as isize, (y.clamp(0.0, 1.0) * o.height as f64) as isize);
             let mut acc = [0.0f32; 3];
             for dy in -2..=2 {
                 for dx in -2..=2 {
-                    let c = o.get_clamped(cx + dx, cy + dy);
+                    let c = positive(o.get_clamped(cx + dx, cy + dy));
                     for i in 0..3 {
                         acc[i] += c[i] / 25.0;
                     }

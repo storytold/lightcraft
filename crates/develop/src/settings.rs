@@ -293,6 +293,12 @@ impl Default for Negative {
     }
 }
 
+impl Default for NegativeMeasurement {
+    fn default() -> Self {
+        Self { base: [0.0; 3], black: [0.0; 3], white: [0.0; 3], balance: [1.0; 3] }
+    }
+}
+
 impl Negative {
     pub fn is_default(&self) -> bool {
         *self == Negative::default()
@@ -335,7 +341,7 @@ impl Negative {
 }
 
 /// A scan's measurement for [`Negative`]: scan values in linear sRGB, 0..1, per channel.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct NegativeMeasurement {
     /// The film base (unexposed film): scene black.
