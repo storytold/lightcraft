@@ -1217,7 +1217,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "colorRange" | "pointColor" | "negBase" | "negGray" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
@@ -1250,6 +1250,22 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         {
             let n = map.norm(q);
             let _ = app.run("develop.wbPick", json!({"x": n.x, "y": n.y}));
+            app.ui.tool.clear();
+        }
+        return;
+    }
+    if let Some(target) = match app.ui.tool.as_str() {
+        "negBase" => Some("base"),
+        "negGray" => Some("gray"),
+        _ => None,
+    } {
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            if let Err(e) = app.run("develop.negativePick", json!({"x": n.x, "y": n.y, "target": target})) {
+                app.toast(ui.ctx(), e);
+            }
             app.ui.tool.clear();
         }
         return;

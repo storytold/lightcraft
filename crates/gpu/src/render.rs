@@ -1026,9 +1026,9 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
-    let img = if lightcraft_pipeline::local_tone::enabled(info, s) {
-        // the camera's local tone mapping (ProRAW gain table, off by default): the whole
-        // scene-linear stage on the CPU
+    let img = if lightcraft_pipeline::lin_needs_cpu_stage(info, s) {
+        // the camera's local tone mapping (ProRAW gain table, off by default) or Convert Negative:
+        // the whole scene-linear stage on the CPU
         let mut img = match host.sampled.take() {
             Some(i) => i,
             None => cx.read_rgb(sampled, w, h),

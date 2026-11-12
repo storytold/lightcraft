@@ -86,6 +86,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Remove => remove(app, ui, id),
                 RightPanel::Masking => super::masking::show(app, ui, id),
                 RightPanel::RedEye => red_eye(app, ui, id),
+                RightPanel::Negative => super::negative::show(app, ui, id),
                 RightPanel::Info => info(app, ui, id),
                 RightPanel::Keywords => keywords(app, ui, id),
                 RightPanel::Versions => versions(app, ui, id),

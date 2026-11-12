@@ -146,6 +146,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.remove", "Remove", Some("H"), "Window"),
     ("panel.masking", "Masking", Some("M"), "Window"),
     ("panel.redeye", "Red Eye", None, "Window"),
+    ("panel.negative", "Convert Negative", None, ""),
     ("panel.presets", "Presets", Some("Shift+P"), "Window"),
     ("panel.info", "Info", Some("I"), "Window"),
     ("panel.keywords", "Keywords", Some("K"), "Window"),
@@ -170,6 +171,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("tool.linear", "Linear Gradient", Some("L"), "Window>Tools"),
     ("tool.radial", "Radial Gradient", Some("R"), "Window>Tools"),
     ("tool.wbPicker", "White Balance Selector", Some("W"), "Window>Tools"),
+    ("tool.negBase", "Film Base Selector", None, ""),
+    ("tool.negGray", "Gray Point Selector", None, ""),
     ("tool.none", "No Tool", None, ""),
     // brush size / feather of the active brush (Masking brush, Remove tool and its selected spot)
     ("brush.smaller", "Decrease Brush Size", Some("["), "Window>Tools"),
@@ -281,6 +284,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.rename", "Rename Photos…", Some("F2"), "Photo"),
     ("dialog.labelNames", "Edit Color Label Names…", None, ""),
     ("dialog.captureTime", "Edit Capture Time…", None, "Photo"),
+    // the active photo is a film negative: switch the conversion on and open its panel
+    ("photo.convertNegative", "Convert Negative", None, "Photo"),
     ("photo.tagFromTracklog", "Auto-Tag from Tracklog…", None, "Photo"),
     ("app.exportPrevious", "Export with Previous", Some("Cmd+Alt+Shift+E"), "File"),
 ];

@@ -4710,6 +4710,8 @@ fn trackpad_navigation_keeps_the_image_cursor_between_events() {
         ("wbPicker", egui::CursorIcon::Crosshair),
         ("colorRange", egui::CursorIcon::Crosshair),
         ("pointColor", egui::CursorIcon::Crosshair),
+        ("negBase", egui::CursorIcon::Crosshair),
+        ("negGray", egui::CursorIcon::Crosshair),
         ("tat:curve", egui::CursorIcon::ResizeVertical),
     ] {
         h.app.ui.tool = tool.into();
