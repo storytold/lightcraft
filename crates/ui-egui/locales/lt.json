@@ -4324,5 +4324,21 @@
   "Date templates take the month by name: `%B` gives January, `%b` gives Jan. Import ▸ Folders ▸ Custom template…": "Datos šablonuose mėnuo gali būti pateikiamas pavadinimu: `%B` pateikia „January“, o `%b` – „Jan“. Importuoti ▸ Aplankai ▸ Pasirinktinis šablonas…",
   "`{date:%Y}/{date:%B}` files photos into 2026/January, 2026/February…, the layout many existing libraries already": "šablonas `{date:%Y}/{date:%B}` išsaugo nuotraukas aplankuose `2026/January`, `2026/February` ir t. t. Tokia struktūra jau naudojama daugelyje bibliotekų.",
   "use. The names are English in every interface language, so folders don't change when the language does. Rename": "Mėnesių pavadinimai visomis sąsajos kalbomis pateikiami anglų kalba, todėl pakeitus programos kalbą aplankų pavadinimai nesikeičia. Šie šablonai taip pat naudojami",
-  "Photos and export file names take them too.": "pervadinant nuotraukas ir sudarant eksportuojamų failų pavadinimus."
+  "Photos and export file names take them too.": "pervadinant nuotraukas ir sudarant eksportuojamų failų pavadinimus.",
+  "2026-10-20": "2026-10-20",
+  "Windows: photos follow the monitor's colour profile": "„Windows“: nuotraukoms taikomas monitoriaus spalvų profilis",
+  "On Windows, photos are now shown through the colour profile Windows assigns to the monitor the window is on": "„Windows“ sistemoje nuotraukos dabar rodomos naudojant spalvų profilį, kurį „Windows“ priskiria monitoriui, kuriame yra programos langas",
+  "(Settings ▸ System ▸ Display ▸ Color profile, Color Management, or a calibrator's profile), while no monitor profile": "(Nustatymai ▸ Sistema ▸ Ekranas ▸ Spalvų profilis, spalvų valdymo įrankis arba kalibravimo įrenginio profilis), jei nustatymuose ▸ Ekranas nėra pasirinktas",
+  "is chosen in Settings ▸ Display. Before, they were shown as sRGB, so a wide-gamut monitor showed them oversaturated": "joks monitoriaus profilis. Anksčiau jos būdavo rodomos kaip sRGB, todėl plačios spalvų gamos monitoriuje spalvos atrodydavo pernelyg sodrios,",
+  "and a calibration was ignored unless you picked the profile by hand. Moving the window to another monitor, or": "o kalibravimas būdavo ignoruojamas, jei profilio nepasirinkdavote rankiniu būdu. Perkėlus langą į kitą monitorių arba",
+  "changing the profile in Windows, is followed within about a second.": "pakeitus profilį „Windows“ sistemoje, pakeitimas pritaikomas maždaug per sekundę.",
+  "While Windows manages colour itself (HDR on, or Auto Color Management on Windows 11), photos stay sRGB: Windows": "Kai spalvas tvarko pati „Windows“ (įjungtas HDR arba „Windows 11“ automatinis spalvų valdymas), nuotraukos lieka sRGB: „Windows“",
+  "converts them for the monitor then. Settings ▸ Display ▸ **Use Screen Profile** goes back to this after choosing a": "tuomet pati jas konvertuoja pagal monitorių. Pasirinkus profilį rankiniu būdu, Nustatymai ▸ Ekranas ▸ **Naudoti ekrano profilį** grąžina šį",
+  "profile by hand. See [display profiles](display-profiles.md).": "režimą. Žr. [Ekrano profiliai](display-profiles.md).",
+  "Smart albums check File Path rules faster": "Išmanieji albumai greičiau tikrina failo kelio taisykles",
+  "A smart album rule on File Path (contains, doesn't contain, is, isn't, starts with, ends with, is empty, isn't": "Išmaniojo albumo taisyklė „Failo kelias“ (yra, nėra, lygus, nelygus, prasideda, baigiasi, tuščias, netuščias) dabar",
+  "empty) no longer builds new text for every photo. On a synthetic library of 312,000 photos, a File Path \"contains\"": "nebekuria naujo teksto kiekvienai nuotraukai. Bandomojoje bibliotekoje su 312 000 nuotraukų failo kelio taisyklė „yra“",
+  "or \"doesn't contain\" rule took about 17 ms per pass instead of about 62 ms, around 3.5 times faster, with the same": "arba „nėra“ buvo įvykdoma maždaug per 17 ms vietoj 62 ms – apie 3,5 karto greičiau, o",
+  "photos matched; about 6 ms of that is only reading the paths. Paths and rule text with letters beyond A–Z are": "randamų nuotraukų skaičius liko toks pats. Apie 6 ms iš šio laiko sudaro vien kelių nuskaitymas. Keliai ir taisyklių tekstas, kuriame yra ne A–Z raidžių,",
+  "compared as before.": "lyginami kaip anksčiau."
 }
