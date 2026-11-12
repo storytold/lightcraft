@@ -27,9 +27,31 @@ fn profiles_dir(s: &Session) -> Option<PathBuf> {
 
 /// Register every imported profile's LUT with the pipeline (missing files are skipped).
 pub fn register_all(s: &Session) {
-    for p in &s.lut_profiles {
-        if let Some(l) = std::fs::read_to_string(&p.file).ok().and_then(|t| lightcraft_pipeline::lut::Lut3d::parse_cube(&t).ok()) {
-            lightcraft_pipeline::lut::register(&p.id, l);
+    register_profiles(&s.lut_profiles, MAX_REGISTERED_LUT_BYTES);
+}
+
+/// Most bytes of table data held for one library's profiles (about ten 256-point tables).
+const MAX_REGISTERED_LUT_BYTES: usize = 2 << 30;
+
+/// Register `profiles`: profiles naming one file share one parsed table, and tables are registered
+/// while their distinct data fits `budget` bytes (a profile past it is skipped and logged).
+fn register_profiles(profiles: &[LutProfile], budget: usize) {
+    use std::collections::HashMap;
+    let mut by_file: HashMap<&str, Option<std::sync::Arc<lightcraft_pipeline::lut::Lut3d>>> = HashMap::new();
+    let mut held = 0usize;
+    for p in profiles {
+        let lut = by_file.entry(p.file.as_str()).or_insert_with(|| {
+            let l = std::fs::read_to_string(&p.file).ok().and_then(|t| lightcraft_pipeline::lut::Lut3d::parse_cube(&t).ok())?;
+            let bytes = l.data.len().saturating_mul(12);
+            if held.saturating_add(bytes) > budget {
+                log::warn!("LUT profile {}: the profiles' tables together pass {} MiB; this one is not loaded", p.id, budget >> 20);
+                return None;
+            }
+            held += bytes;
+            Some(std::sync::Arc::new(l))
+        });
+        if let Some(l) = lut {
+            lightcraft_pipeline::lut::register_shared(&p.id, l.clone());
         }
     }
 }
@@ -175,4 +197,33 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"deleted": id}))
         }),
     ]
+}
+
+#[cfg(test)]
+mod register_tests {
+    use super::*;
+
+    fn profile(id: &str, file: &Path) -> LutProfile {
+        LutProfile { id: id.into(), name: id.into(), group: String::new(), file: file.to_string_lossy().into_owned() }
+    }
+
+    #[test]
+    fn profiles_naming_one_file_share_a_table_and_the_total_is_bounded() {
+        let dir = std::env::temp_dir().join(format!("lc-lut-share-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cube = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+        let (a, b) = (dir.join("a.cube"), dir.join("b.cube"));
+        std::fs::write(&a, cube).unwrap();
+        std::fs::write(&b, cube).unwrap();
+        let ps = [profile("lut:share-1", &a), profile("lut:share-2", &a), profile("lut:share-3", &b)];
+        // room for one 2x2x2 table (96 bytes): the alias of `a` shares it, the second file does not fit
+        register_profiles(&ps, 100);
+        let (one, two) = (lightcraft_pipeline::lut::get("lut:share-1").unwrap(), lightcraft_pipeline::lut::get("lut:share-2").unwrap());
+        assert!(std::sync::Arc::ptr_eq(&one, &two));
+        assert!(lightcraft_pipeline::lut::get("lut:share-3").is_none());
+        for p in &ps {
+            lightcraft_pipeline::lut::unregister(&p.id);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
