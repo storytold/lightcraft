@@ -1644,3 +1644,21 @@ fn hebrew_round2_edit_labels_translate_exactly() {
         assert_eq!(Locale::He.tr(source), expected, "Hebrew translation mismatch: {source}");
     }
 }
+
+#[test]
+fn hebrew_round2_import_labels_translate_exactly() {
+    for (source, expected) in [
+        ("In library", "בספרייה"),
+        ("All Photos", "כל התמונות"),
+        ("All the photos imported from this disk are included.", "כל התמונות שיובאו מהדיסק הזה נכללות."),
+        ("Into one folder", "לתיקייה אחת"),
+        ("Use Library Folder", "שימוש בתיקיית הספרייה"),
+        ("Clear Recent Libraries", "ניקוי רשימת הספריות האחרונות"),
+        ("Optimize Library", "מיטוב הספרייה"),
+        ("Open Log Folder", "פתיחת תיקיית יומני הרישום"),
+        ("Reading photos…", "קורא תמונות…"),
+        ("Adding photos…", "מוסיף תמונות…"),
+    ] {
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew translation mismatch: {source}");
+    }
+}
