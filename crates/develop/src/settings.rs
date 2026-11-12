@@ -133,7 +133,7 @@ pub struct DevelopSettings {
     /// value that isn't a process number.
     #[serde(default = "ProcessVersion::legacy", skip_serializing_if = "ProcessVersion::is_legacy")]
     pub process: ProcessVersion,
-    /// Convert Negative: a scanned film negative rendered as a positive, before the white balance and every stage after it.
+    /// Convert Negative: a scanned film negative rendered as a positive, before every other stage.
     /// Not written while it is the default, so settings of ordinary photos keep their JSON and
     /// `hash64` (and every cached preview stays valid).
     #[serde(skip_serializing_if = "Negative::is_default")]
@@ -211,7 +211,7 @@ impl Default for DevelopSettings {
 
 /// Convert Negative (Photo ▸ Convert Negative): the photo is a scan of a film negative (a camera or
 /// scanner capture of colour or black-and-white film), rendered as a positive by the film model of
-/// `lightcraft-film` before the white balance and every stage after it, which then edit the positive as usual.
+/// `lightcraft-film` before every other develop stage, which then edit the positive as usual.
 ///
 /// What belongs to the scan (the film base, each channel's black and white point, the neutral
 /// balance) is measured once on the whole image when the conversion is switched on and kept in
@@ -296,6 +296,47 @@ impl Default for Negative {
 impl Negative {
     pub fn is_default(&self) -> bool {
         *self == Negative::default()
+    }
+
+    /// `self` with every number finite and inside its control's range, and every scan colour in
+    /// 0..1 (a value that is not a number becomes the default, as [`controls::ControlSpec::clamp`]
+    /// does). Settings read from a file or a client are untrusted until they pass here.
+    pub fn sanitized(&self) -> Negative {
+        let fit = |v: f64, lo: f64, hi: f64, d: f64| if v.is_finite() { v.clamp(lo, hi) } else { d };
+        let unit = |c: [f64; 3]| c.map(|v| fit(v, 0.0, 1.0, 0.0));
+        let mut n = self.clone();
+        n.exposure = fit(n.exposure, -5.0, 5.0, 0.0);
+        for v in [
+            &mut n.brightness,
+            &mut n.contrast,
+            &mut n.temp,
+            &mut n.tint,
+            &mut n.saturation,
+            &mut n.highlights,
+            &mut n.shadows,
+            &mut n.whites,
+            &mut n.blacks,
+        ] {
+            *v = fit(*v, -50.0, 50.0, 0.0);
+        }
+        n.fade = fit(n.fade, -100.0, 100.0, 0.0);
+        n.glow = fit(n.glow, -100.0, 100.0, 0.0);
+        n.range = fit(n.range, 1.0, 10.0, 3.0);
+        n.base = n.base.map(unit);
+        n.gray = n.gray.map(unit);
+        n.measured = n.measured.map(|m| NegativeMeasurement {
+            base: unit(m.base),
+            black: unit(m.black),
+            white: unit(m.white),
+            balance: m.balance.map(|v| fit(v, 0.4, 2.5, 1.0)),
+        });
+        n
+    }
+
+    /// `self` without what belongs to one scan (the measurement and the picked film base and gray
+    /// point), for copying the conversion to another photo.
+    pub fn without_scan_data(&self) -> Negative {
+        Negative { base: None, gray: None, measured: None, ..self.clone() }
     }
 }
 

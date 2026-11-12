@@ -88,6 +88,7 @@ impl DevelopSettings {
                 controls::set(self, c.id, v);
             }
         }
+        self.negative = self.negative.sanitized();
         let c = &mut self.curve;
         for p in [&mut c.master, &mut c.red, &mut c.green, &mut c.blue].into_iter().flatten() {
             *p = lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0));
@@ -225,6 +226,8 @@ impl DevelopSettings {
     }
 }
 
+#[cfg(test)]
+mod tests_negative;
 #[cfg(test)]
 mod tests_process;
 

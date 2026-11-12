@@ -7,7 +7,7 @@
 //! Stage order (see `docs/pipeline.md`):
 //! 1. geometry — user orientation, lens corrections (distortion, CA, vignetting), perspective, crop +
 //!    straighten, flips; one resample at output resolution; then defringe
-//! 2. scene-linear — Convert Negative (a film scan to a positive, [`negative`], after the camera's local tone mapping), white balance, exposure, dehaze, local tone (highlights/shadows), texture,
+//! 2. scene-linear — Convert Negative (a film scan to a positive, [`negative`]), white balance, exposure, dehaze, local tone (highlights/shadows), texture,
 //!    clarity, local adjustments (masks)
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
 //! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
@@ -622,8 +622,8 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 full: p.full.clone(),
                 ..*p
             };
-            local_tone::apply(&mut img, info, &tile);
             negative::apply(&mut img, s);
+            local_tone::apply(&mut img, info, &tile);
             local::white_balance(&mut img, info, s);
             local::apply_nr(&mut img, lum, None);
             img
@@ -654,10 +654,10 @@ pub fn lin_needs_cpu_stage(info: &SourceInfo, s: &DevelopSettings) -> bool {
 /// scene-linear stage, in place.
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
+    // (the negative becomes a positive before anything edits it)
+    negative::apply(img, s);
     // (before the white balance: the gain's input is the as-shot development, as in the file)
     local_tone::apply(img, info, p);
-    // (and the negative becomes a positive before the white balance and everything after it)
-    negative::apply(img, s);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
     spots::apply(img, &s.spots, &p.frame, p.px_per_long);
