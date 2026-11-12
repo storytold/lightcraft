@@ -1829,7 +1829,7 @@ mod tests {
         let mut previous = DevelopSettings::default();
         previous.light.exposure = 0.0;
         previous.light.contrast = 10.0; // unchanged
-        let crs = super::crs_settings(&current, Some(&previous));
+        let crs = crate::crs::crs_settings(&current, Some(&previous));
         assert_eq!(crs.len(), 1);
         assert_eq!(crs[0].0, "Exposure2012");
         assert_eq!(crs[0].1, "0.5");
@@ -2149,5 +2149,30 @@ mod jpeg_header_tests {
         reader.seek_error = true;
         assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), None);
         assert_eq!((reader.bytes_read, reader.seeks), (6, 1));
+    }
+
+    #[test]
+    fn handles_short_reads_without_bypassing_span_limit() {
+        // A reader that returns short reads (one byte at a time) must still
+        // respect the span: read_jpeg_xmp reads at most header_span bytes in
+        // total and never reads past it, no matter how many read calls it takes.
+        let expected = packet(1);
+        let mut bytes = vec![0xff, 0xd8];
+        bytes.extend(xmp_segment(&expected));
+        let end = bytes.len();
+
+        let mut reader = CountedReader::new(bytes.clone());
+        reader.chunk = 1;
+        assert_eq!(
+            read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS),
+            Some(expected)
+        );
+        assert_eq!(reader.cursor.position(), end as u64);
+
+        // A span smaller than the data is rejected without reading past it.
+        let mut reader = CountedReader::new(bytes);
+        reader.chunk = 1;
+        assert_eq!(read_jpeg_xmp(&mut reader, 6, JPEG_XMP_HEADER_STEPS), None);
+        assert_eq!((reader.bytes_read, reader.cursor.position()), (6, 6));
     }
 }
