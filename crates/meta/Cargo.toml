@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 craft-tiff = { workspace = true }
+craft-psd = { workspace = true }
 lightcraft-geom = { workspace = true }
 serde = { workspace = true }
 quick-xml = { workspace = true }
@@ -17,6 +18,6 @@ chrono = { workspace = true }
 
 [dev-dependencies]
 # Lossless synthetic HEIC files: the HEIF item reader is proved against a real container writer.
-lightcraft-heif = { workspace = true, features = ["testdata"] }
+craft-heif = { workspace = true, features = ["testdata"] }
 proptest = { workspace = true }
 serde_json = { workspace = true }
