@@ -386,9 +386,12 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
     let (w, h) = (img.width, img.height);
-    // Every spot reads source and target from the image as it was before any spot
-    // was applied, so a spot never copies pixels another spot already wrote and the
-    // result does not depend on spot order. Writes still accumulate in `img`.
+    // Every spot reads its source patch and target tone from the image as it was before
+    // any spot was applied (`original`), so a spot never copies pixels another spot
+    // already wrote and its source does not depend on spot order. Each spot's correction
+    // is blended against the current output pixel, so overlapping spots preserve earlier
+    // corrections instead of resetting the pixel to the original. Writes still accumulate
+    // in `img`.
     let original = img.clone();
     for spot in spots {
         let Some(SpotLayout { r, pts, offset, bx: bx0, by: by0, bw, bh, inner, opacity, heal, fill }) = layout(spot, frame, w, h, ppl) else {
@@ -452,7 +455,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
                     let d = l.data[i];
                     v = [v[0] + d[0], v[1] + d[1], v[2] + d[2]];
                 }
-                let t = tgt[i];
+                let t = img.get(bx0 + x, by0 + y);
                 img.set(bx0 + x, by0 + y, [t[0] + (v[0] - t[0]) * a, t[1] + (v[1] - t[1]) * a, t[2] + (v[2] - t[2]) * a].map(|c| c.max(0.0)));
             }
         }
@@ -741,5 +744,42 @@ mod tests {
         // a spot that doesn't touch the window is no business of it, however far it reads
         let elsewhere = with_spots(vec![spot_at(0.9, 0.9, 0.01, Some(Point::new(-0.8, 0.0)))]);
         assert_eq!(window_for_reads_checked(&elsewhere, &frame, 40_000, 30_000, ppl, win), Some(win));
+    }
+
+    #[test]
+    fn overlapping_spots_preserve_earlier_correction() {
+        // Two overlapping clone spots at the same target: the first paints it
+        // bright, the second paints it half-dark. Blending against the pre-spot
+        // snapshot resets the pixel to the original (the last spot wins); blending
+        // against the current output preserves the earlier correction.
+        let mut img = Rgb32f::from_fn(100, 100, |_, _| [0.1; 3]);
+        for y in 60..62 {
+            for x in 60..62 {
+                img.set(x, y, [0.9; 3]);
+            }
+        }
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.5, 0.5)],
+            size: 10.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.1, 0.1)),
+            ..Default::default()
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.5, 0.5)],
+            size: 10.0 / 100.0,
+            feather: 0.0,
+            opacity: 50.0,
+            source_offset: Some(Point::new(0.0, 0.0)),
+            ..Default::default()
+        };
+        apply(&mut img, &[spot1, spot2], &frame, ppl);
+        let c = img.get(50, 50);
+        assert!(c[0] > 0.4, "second spot should blend against the current output, preserving the first correction: {c:?}");
     }
 }
