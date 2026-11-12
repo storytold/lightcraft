@@ -369,6 +369,29 @@ fn translated_catalogs_do_not_use_missing_menu_triangles() {
     }
 }
 
+/// German addresses the reader as "du" (`docs/localization-de.md`). A capitalised "Sie", "Ihr…" or
+/// "Ihnen" inside a sentence is the formal address; at the start of a sentence it can be "they" or
+/// "their", so only words after other text are checked.
+#[test]
+fn german_addresses_the_reader_as_du() {
+    const FORMAL: [&str; 7] = ["Sie", "Ihr", "Ihre", "Ihrem", "Ihren", "Ihrer", "Ihnen"];
+    const SENTENCE_STARTS: [char; 11] = ['.', ':', '!', '?', '(', '„', '“', '"', '…', '›', '·'];
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+    for file in ["de.json", "de-formats.json"] {
+        let messages: BTreeMap<String, String> = serde_json::from_str(&std::fs::read_to_string(dir.join(file)).unwrap()).unwrap();
+        for (source, text) in messages {
+            let mut before = String::new();
+            for word in text.split_whitespace() {
+                let bare = word.trim_matches(|c: char| !c.is_alphabetic());
+                let starts_sentence = before.chars().last().is_none_or(|c| SENTENCE_STARTS.contains(&c))
+                    || word.chars().next().is_some_and(|c| SENTENCE_STARTS.contains(&c));
+                assert!(starts_sentence || !FORMAL.contains(&bare), "{file}: {source:?} uses the formal address in {text:?}");
+                before = word.to_string();
+            }
+        }
+    }
+}
+
 /// The language menu covers every language, and a language's own command selects it.
 #[test]
 fn language_commands_cover_every_language() {
