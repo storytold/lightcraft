@@ -1608,3 +1608,21 @@ fn hebrew_photo_review_controls_are_localized() {
         );
     }
 }
+
+#[test]
+fn hebrew_round2_errors_labels_translate_exactly() {
+    for (source, expected) in [
+        ("Your library is empty", "ספריית התמונות ריקה"),
+        ("Your library couldn't be opened", "לא ניתן לפתוח את ספריית התמונות"),
+        ("This photo can't be opened", "לא ניתן לפתוח את התמונה"),
+        ("There is no LightCraft library in this folder any more.", "בתיקייה הזו כבר אין ספריית LightCraft."),
+        ("This folder can't be read:", "לא ניתן לקרוא את התיקייה:"),
+        ("The download didn't work:", "ההורדה נכשלה:"),
+        ("Wait for the import to finish", "יש להמתין לסיום הייבוא"),
+        ("A folder is already being synchronized", "כבר מתבצע סנכרון של תיקייה"),
+        ("A folder is being synchronized", "מתבצע סנכרון של תיקייה"),
+        ("Looking for photos…", "מחפש תמונות…"),
+    ] {
+        assert_eq!(Locale::He.tr(source), expected, "Hebrew translation mismatch: {source}");
+    }
+}
