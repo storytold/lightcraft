@@ -1,5 +1,5 @@
 //! Convert Negative: a scan of a film negative rendered as a positive ([`lightcraft_film`]), the
-//! first thing the scene-linear stage does, so every later stage (white balance, tone, colour,
+//! first step of the scene-linear stage after the camera's local tone mapping (off by default), so every later stage (white balance, tone, colour,
 //! masks) edits the positive.
 //!
 //! The film model works per channel on what the scanner saw, in the channels of the scan's own

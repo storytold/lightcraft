@@ -133,7 +133,7 @@ pub struct DevelopSettings {
     /// value that isn't a process number.
     #[serde(default = "ProcessVersion::legacy", skip_serializing_if = "ProcessVersion::is_legacy")]
     pub process: ProcessVersion,
-    /// Convert Negative: a scanned film negative rendered as a positive, before every other stage.
+    /// Convert Negative: a scanned film negative rendered as a positive, before the white balance and every stage after it.
     /// Not written while it is the default, so settings of ordinary photos keep their JSON and
     /// `hash64` (and every cached preview stays valid).
     #[serde(skip_serializing_if = "Negative::is_default")]
@@ -211,7 +211,7 @@ impl Default for DevelopSettings {
 
 /// Convert Negative (Photo ▸ Convert Negative): the photo is a scan of a film negative (a camera or
 /// scanner capture of colour or black-and-white film), rendered as a positive by the film model of
-/// `lightcraft-film` before every other develop stage, which then edit the positive as usual.
+/// `lightcraft-film` before the white balance and every stage after it, which then edit the positive as usual.
 ///
 /// What belongs to the scan (the film base, each channel's black and white point, the neutral
 /// balance) is measured once on the whole image when the conversion is switched on and kept in
