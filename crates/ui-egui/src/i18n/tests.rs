@@ -1694,10 +1694,16 @@ fn hebrew_round2_import_labels_translate_exactly() {
 fn hebrew_parallel_round6_masking_labels() {
     for (source, expected) in [
         ("All Mask Overlays", "כל שכבות־העל של המסכות"),
-        ("Cycle Mask Overlay Color", "מעבר בין צבעי שכבת־העל של המסכה"),
+        (
+            "Cycle Mask Overlay Color",
+            "מעבר בין צבעי שכבת־העל של המסכה",
+        ),
         ("Cycle Mask Overlay Mode", "מעבר בין מצבי שכבת־העל של המסכה"),
         ("Overlay color", "צבע שכבת־העל"),
-        ("Analyzing the photo for AI masks…", "מנתח את התמונה לזיהוי מסכות באמצעות בינה מלאכותית…"),
+        (
+            "Analyzing the photo for AI masks…",
+            "מנתח את התמונה לזיהוי מסכות באמצעות בינה מלאכותית…",
+        ),
         ("Refining the mask's detail…", "משפר את פרטי המסכה…"),
         ("Subtract from this mask", "החסרה מהמסכה הזו"),
         ("Sharpness", "חדות"),
@@ -1723,8 +1729,14 @@ fn hebrew_parallel_round6_culling_labels() {
         ("Favorite", "מועדף"),
         ("Flag", "סימון בדגל"),
         ("Generated demo photo", "תמונת הדגמה שנוצרה"),
-        ("Increase Grid Thumbnail Size", "הגדלת התמונות הממוזערות ברשת"),
-        ("Decrease Grid Thumbnail Size", "הקטנת התמונות הממוזערות ברשת"),
+        (
+            "Increase Grid Thumbnail Size",
+            "הגדלת התמונות הממוזערות ברשת",
+        ),
+        (
+            "Decrease Grid Thumbnail Size",
+            "הקטנת התמונות הממוזערות ברשת",
+        ),
     ] {
         assert_eq!(
             Locale::He.tr(source),
@@ -1739,13 +1751,22 @@ fn hebrew_parallel_round6_export_labels() {
     for (source, expected) in [
         ("Quality", "איכות"),
         ("Resolution (ppi)", "רזולוציה (ppi)"),
-        ("Limit file size (KB, 0 = off)", "מגבלת גודל קובץ (KB, 0 = ללא הגבלה)"),
+        (
+            "Limit file size (KB, 0 = off)",
+            "מגבלת גודל קובץ (KB, 0 = ללא הגבלה)",
+        ),
         ("If file exists", "אם הקובץ קיים"),
         ("Include on Export", "הכללה בייצוא"),
         ("Will Export", "ייכלל בייצוא"),
         ("HDR output", "פלט HDR"),
-        ("HDR TIFF needs 32-bit float.", "TIFF ב־HDR מחייב נקודה צפה של 32 סיביות."),
-        ("Managed by Printer (Adobe RGB)", "ניהול צבע בידי המדפסת (Adobe RGB)"),
+        (
+            "HDR TIFF needs 32-bit float.",
+            "TIFF ב־HDR מחייב נקודה צפה של 32 סיביות.",
+        ),
+        (
+            "Managed by Printer (Adobe RGB)",
+            "ניהול צבע בידי המדפסת (Adobe RGB)",
+        ),
         ("Managed by Printer (sRGB)", "ניהול צבע בידי המדפסת (sRGB)"),
     ] {
         assert_eq!(
