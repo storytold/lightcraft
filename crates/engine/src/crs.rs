@@ -93,8 +93,6 @@ const NON_ADJUSTMENT: &[&str] = &[
     "crs:CropConstrainToUnitSquare",
 ];
 
-
-
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
 pub fn has_adjustments(props: &Props) -> bool {
     if props.get("crs:AlreadyApplied").and_then(|v| v.first()).is_some_and(|s| s.eq_ignore_ascii_case("true")) {
@@ -663,7 +661,6 @@ mod tests;
 #[cfg(test)]
 mod crs_write_tests {
     use super::*;
-    use lightcraft_catalog::{Op, Photo, PhotoId, Source};
     use lightcraft_develop::DevelopSettings;
 
     /// A develop edit must reach the other application's `crs:` fields: writing the sidecar
