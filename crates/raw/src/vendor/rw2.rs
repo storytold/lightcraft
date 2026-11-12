@@ -109,25 +109,6 @@ use craft_tiff::{ByteOrder, Ifd, Tiff, Value, tags as t};
 use lightcraft_geom::Orientation;
 use rayon::prelude::*;
 
-/// The IFD0 of an RW2 file, exposed for `has_usable_wb_presets`.
-pub(crate) struct Ifd0Ref<'a> {
-    ifd: &'a Ifd,
-}
-
-impl<'a> Ifd0Ref<'a> {
-    pub(crate) fn new(ifd: &'a Ifd) -> Self {
-        Self { ifd }
-    }
-
-    pub(crate) fn string(&self, tag: u16) -> Option<String> {
-        self.ifd.string(tag)
-    }
-
-    pub(crate) fn value(&self, tag: u16) -> Option<Value> {
-        self.ifd.value(tag).cloned()
-    }
-}
-
 const SENSOR_WIDTH: u16 = 0x0002;
 const SENSOR_HEIGHT: u16 = 0x0003;
 const BORDER_TOP: u16 = 0x0004;
@@ -141,8 +122,6 @@ const LINEARITY_LIMIT: [u16; 3] = [0x000e, 0x000f, 0x0010];
 const ISO: u16 = 0x0017;
 const BLACK_RGB: [u16; 3] = [0x001c, 0x001d, 0x001e];
 const WB_RGB: [u16; 3] = [0x0024, 0x0025, 0x0026];
-/// `ColorTempKelvin`: the shot's absolute colour temperature, in kelvin.
-const COLOR_TEMP_KELVIN: u16 = 0x0027;
 /// `WBType1`..`WBType7`: the names of the seven in-camera white-balance presets.
 const WB_TYPE: [u16; 7] = [0x0028, 0x0029, 0x002a, 0x002b, 0x002c, 0x0033, 0x0034];
 /// `WB_RGBLevels1`..`WB_RGBLevels7`: each preset's R/G/B levels, as three `u16`.
@@ -602,19 +581,6 @@ fn wb_kelvin_presets(ifd: &Ifd) -> Option<crate::kelvin_presets::KelvinPresets> 
     crate::kelvin_presets::KelvinPresets::from_unordered(points)
 }
 
-/// Whether this RW2 file has usable white-balance presets that provide a Kelvin scale.
-/// Returns `true` when `wb_kelvin_presets` would produce a valid `KelvinPresets` (at least
-/// three usable preset points with recognised names and levels).
-pub(crate) fn has_usable_wb_presets(ifd: &Ifd) -> bool {
-    wb_kelvin_presets(ifd).is_some()
-}
-
-/// Whether this RW2 file has usable white-balance presets that provide a Kelvin scale.
-/// Uses the IFD0 reference to avoid exposing the full IFD.
-pub(crate) fn has_usable_wb_presets_from_ifd0(ifd0: &Ifd0Ref) -> bool {
-    wb_kelvin_presets(ifd0.ifd).is_some()
-}
-
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = tiff.ifds.first().ok_or_else(|| RawError::Corrupt("RW2 without IFD0".into()))?;
@@ -703,9 +669,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         [Some(r), Some(g), Some(b)] if r > 0.0 && g > 0.0 && b > 0.0 => Some([(r / g) as f32, 1.0, (b / g) as f32]),
         _ => None,
     };
-    // `ColorTempKelvin`, the shot's absolute colour temperature, is read for the record; the
-    // Kelvin scale the WB panel edits comes from the seven presets below.
-    let _shot_kelvin = ifd0.u16(COLOR_TEMP_KELVIN).map(|k| k as f32);
     let mut metadata = lightcraft_meta::from_tiff(&tiff);
     metadata.width = Some(crop.width as u32);
     metadata.height = Some(crop.height as u32);
@@ -1433,5 +1396,27 @@ mod tests {
         let (t, tint) = presets.unwrap().temp_tint(r.wb_multipliers.unwrap()).unwrap();
         assert!((t - 5600.0).abs() < 1.0, "as-shot white reads {t} K, want 5600 K");
         assert!(tint.abs() < 1.0, "tint {tint}");
+    }
+
+    /// A file that names no white-balance preset, or names them without their levels, has no Kelvin
+    /// scale: the decode keeps the as-shot multipliers and leaves `kelvin_presets` empty, which is
+    /// the file the relative scale is used for.
+    #[test]
+    fn rw2_without_wb_presets_has_no_kelvin_scale() {
+        let (w, h) = (40usize, 30usize);
+        let px: Vec<u16> = (0..w * h).map(|i| (i % 4000) as u16 + 1).collect();
+        let names = ["Tungsten", "Warm White", "White Fluorescent", "Daylight", "Sunlight", "Cloudy", "Shade"];
+        for named in [false, true] {
+            let mut tags = vec![short(CFA_PATTERN, 1), short(BITS, 12), short(RAW_FORMAT, 5)];
+            tags.extend(BLACK_RGB.iter().enumerate().map(|(i, &tag)| short(tag, 128 + i as u16)));
+            tags.extend(WB_RGB.iter().zip([2000u16, 1024, 1500]).map(|(&tag, v)| short(tag, v)));
+            if named {
+                tags.extend(WB_TYPE.iter().zip(names).map(|(&tag, name)| (tag, Value::Ascii(name.into()))));
+            }
+            let bytes = file(w as u16, h as u16, &tags, &rotate(pack(&px, 12)), &|off| vec![(RAW_OFFSET, Value::Long(vec![off]))]);
+            let r = crate::decode(&bytes).unwrap();
+            assert_eq!(r.wb_multipliers, Some([2000.0 / 1024.0, 1.0, 1500.0 / 1024.0]), "named: {named}");
+            assert!(r.color.kelvin_presets.is_none(), "no usable presets, so no Kelvin scale (named: {named})");
+        }
     }
 }
