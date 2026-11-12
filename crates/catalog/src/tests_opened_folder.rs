@@ -222,12 +222,12 @@ fn a_log_that_is_not_the_one_the_thread_wrote_is_not_appended_to() {
     store.append(LOG, b"4\n").expect("later records are taken: retrying can't heal this, only a replace of the log does");
     assert_eq!(files_in(&dir), theirs, "and not written either");
 
-    store.write_atomic(LOG, b"tail\n").unwrap();
+    store.write_atomic(LOG, b"tail\n3\n4\n").unwrap();
     assert_eq!(store.unwritten(), None, "the snapshot's log holds what was held");
-    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"tail\n");
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"tail\n3\n4\n", "the replacement preserves both held records");
     store.append(LOG, b"5\n").unwrap();
     store.flush().unwrap();
-    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"tail\n5\n", "and appending goes on");
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"tail\n3\n4\n5\n", "and appending goes on");
     let _ = std::fs::remove_dir_all(&base);
 }
 
@@ -342,6 +342,32 @@ fn a_snapshot_swap_during_fill_cannot_remove_another_librarys_staging_file() {
     assert_eq!(std::fs::read(dir.join(format!("{SNAPSHOT}.tmp"))).unwrap(), b"their pending snapshot");
     let _ = std::fs::remove_dir_all(away.unwrap());
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_caller_append_reopens_the_file_after_a_note_bearing_copy_replaces_the_folder() {
+    let base = scratch("caller-append-copy");
+    let dir = base.join("lib");
+    let note = b"the note this session's lock wrote";
+    crate::fault::write_on_caller(&dir, true);
+    let mut store = FsStore::open(&dir).unwrap();
+    store.folder().vouch(note);
+    std::fs::write(dir.join(OWNER), note).unwrap();
+    store.append(LOG, b"1\n").unwrap();
+    let copy = base.join("copy");
+    std::fs::create_dir(&copy).unwrap();
+    for (name, bytes) in files_in(&dir) {
+        std::fs::write(copy.join(name), bytes).unwrap();
+    }
+    let away = base.join("away");
+    std::fs::rename(&dir, &away).unwrap();
+    std::fs::rename(&copy, &dir).unwrap();
+    store.append(LOG, b"2\n").unwrap();
+    crate::fault::write_on_caller(&dir, false);
+    assert_eq!(store.read(LOG).unwrap().unwrap(), b"1\n2\n", "the accepted folder must receive the append");
+    assert_eq!(std::fs::read(away.join(LOG)).unwrap(), b"1\n", "the moved-away folder must not receive it");
+    let _ = std::fs::remove_dir_all(base);
 }
 
 #[cfg(unix)]

@@ -79,9 +79,6 @@ pub struct FsStore {
     /// The folder `dir` named when the store was opened. Every write asks it first and is refused
     /// when `dir` leads somewhere else now (issue #3240); so does the log's thread.
     folder: OpenedFolder,
-    /// Open append handle (kept between appends; dropped on rewrite/truncate). Used when no thread
-    /// writes the log (the browser build, or one that couldn't start).
-    appender: Option<(String, std::fs::File)>,
     /// The thread that writes the log (natively; started by the first append).
     #[cfg(not(target_arch = "wasm32"))]
     log: Option<crate::log_writer::LogWriter>,
@@ -100,7 +97,6 @@ impl FsStore {
         FsStore {
             dir: folder.path().to_path_buf(),
             folder,
-            appender: None,
             #[cfg(not(target_arch = "wasm32"))]
             log: None,
         }
@@ -194,9 +190,6 @@ impl Store for FsStore {
             return Ok(());
         }
         self.folder.check()?;
-        if self.appender.as_ref().is_some_and(|(n, _)| n == name) {
-            self.appender = None;
-        }
         let tmp = self.path(&format!("{name}.tmp"));
         let mut f = create_staging(&tmp)?;
         f.write_all(data)?;
@@ -219,9 +212,6 @@ impl Store for FsStore {
             return Ok(buf.len() as u64);
         }
         self.folder.check()?;
-        if self.appender.as_ref().is_some_and(|(n, _)| n == name) {
-            self.appender = None;
-        }
         let tmp = self.path(&format!("{name}.tmp"));
         let mut file = create_staging(&tmp)?;
         let written = (|| {
@@ -260,7 +250,6 @@ impl Store for FsStore {
                     std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
                     self.sync_dir();
                 }
-                self.appender = None;
                 self.log = crate::log_writer::LogWriter::start(self.folder.clone(), name);
             }
             // (another name than the log's is written here, as without a thread)
@@ -269,16 +258,14 @@ impl Store for FsStore {
             }
         }
         self.folder.check()?;
-        if self.appender.as_ref().is_none_or(|(n, _)| n != name) {
-            check_regular_directory_entry(&self.path(name))?;
-            let existed = self.path(name).exists();
-            let f = std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
-            if !existed {
-                self.sync_dir();
-            }
-            self.appender = Some((name.to_string(), f));
+        // A note-bearing copy can pass the folder check while an old handle still names the
+        // moved-away folder. As the log thread does, reopen the current path for every batch.
+        check_regular_directory_entry(&self.path(name))?;
+        let existed = self.path(name).exists();
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
+        if !existed {
+            self.sync_dir();
         }
-        let Some((_, f)) = self.appender.as_mut() else { return Err(io::Error::other("appender not open")) };
         #[cfg(not(target_arch = "wasm32"))]
         let written = crate::fault::check(&self.dir, crate::fault::Step::Write)
             .and_then(|()| f.write_all(data))
@@ -286,12 +273,8 @@ impl Store for FsStore {
             .and_then(|()| f.sync_data());
         #[cfg(target_arch = "wasm32")]
         let written = f.write_all(data).and_then(|()| f.sync_data());
-        if written.is_err() {
-            // The handle may be dead (a network share that reconnected, a removed volume): the next
-            // attempt reopens the file. Part of `data` may be in the file; the caller cuts it back
-            // ([`Store::truncate`]) before appending again.
-            self.appender = None;
-        }
+        // A failed write can leave part of `data`; the caller cuts it back with `truncate`
+        // before retrying. The file is reopened for that retry too.
         written
     }
 
@@ -301,9 +284,6 @@ impl Store for FsStore {
             return w.truncate(len);
         }
         self.folder.check()?;
-        if self.appender.as_ref().is_some_and(|(n, _)| n == name) {
-            self.appender = None;
-        }
         check_regular_directory_entry(&self.path(name))?;
         let f = match std::fs::OpenOptions::new().write(true).open(self.path(name)) {
             Ok(f) => f,
@@ -321,7 +301,7 @@ impl Store for FsStore {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn background_writer(&self) -> Option<Box<dyn Store>> {
-        Some(Box::new(FsStore { dir: self.dir.clone(), folder: self.folder.clone(), appender: None, log: None }))
+        Some(Box::new(FsStore { dir: self.dir.clone(), folder: self.folder.clone(), log: None }))
     }
 
     fn flush(&mut self) -> io::Result<()> {
