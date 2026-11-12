@@ -555,7 +555,7 @@ mod tests {
                 j.extend(payload);
             };
             // orientation 6, 6000 × 4000 as stored
-            seg([b"Exif\0\0".as_slice(), &crate::exif::tests::sample_exif(lightcraft_tiff::ByteOrder::Little)].concat());
+            seg([b"Exif\0\0".as_slice(), &crate::exif::tests::sample_exif(craft_tiff::ByteOrder::Little)].concat());
             seg([b"http://ns.adobe.com/xap/1.0/\0".as_slice(), packet.as_bytes()].concat());
             j.extend([0xff, 0xd9]);
             j
@@ -600,10 +600,10 @@ mod tests {
         assert!(near(m.regions[0].rect, DRAWN), "{:?}", m.regions[0].rect);
         assert_eq!(try_extract(&j).unwrap().regions, m.regions);
         // a TIFF-based file: the whole file is the Exif block, with the XMP in its first IFD
-        let mut ifd0 = lightcraft_tiff::IfdBuilder::new();
-        ifd0.set(lightcraft_tiff::tags::ORIENTATION, lightcraft_tiff::Value::Short(vec![6]));
-        ifd0.set(lightcraft_tiff::tags::XMP, lightcraft_tiff::Value::Byte(packet.into_bytes()));
-        let m = extract(&lightcraft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
+        let mut ifd0 = craft_tiff::IfdBuilder::new();
+        ifd0.set(craft_tiff::tags::ORIENTATION, craft_tiff::Value::Short(vec![6]));
+        ifd0.set(craft_tiff::tags::XMP, craft_tiff::Value::Byte(packet.into_bytes()));
+        let m = extract(&craft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
         assert_eq!((m.orientation, m.width, m.height), (Some(Orientation::Rotate90), Some(4000), Some(6000)));
         assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
     }
@@ -615,14 +615,14 @@ mod tests {
     fn an_orientation_only_the_xmp_states_turns_no_regions() {
         // 6000 × 4000 in the Exif, and no orientation
         let size_ifd = || {
-            let mut sub = lightcraft_tiff::IfdBuilder::new();
-            sub.set(lightcraft_tiff::tags::PIXEL_X_DIMENSION, lightcraft_tiff::Value::Long(vec![6000]));
-            sub.set(lightcraft_tiff::tags::PIXEL_Y_DIMENSION, lightcraft_tiff::Value::Long(vec![4000]));
+            let mut sub = craft_tiff::IfdBuilder::new();
+            sub.set(craft_tiff::tags::PIXEL_X_DIMENSION, craft_tiff::Value::Long(vec![6000]));
+            sub.set(craft_tiff::tags::PIXEL_Y_DIMENSION, craft_tiff::Value::Long(vec![4000]));
             sub
         };
-        let mut exif_ifd0 = lightcraft_tiff::IfdBuilder::new();
-        exif_ifd0.set_child(lightcraft_tiff::tags::EXIF_IFD, size_ifd());
-        let exif = lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[exif_ifd0]).unwrap();
+        let mut exif_ifd0 = craft_tiff::IfdBuilder::new();
+        exif_ifd0.set_child(craft_tiff::tags::EXIF_IFD, size_ifd());
+        let exif = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[exif_ifd0]).unwrap();
         let packet = regions_packet(6000, 4000, "")
             .replace(r#"rdf:about="""#, r#"rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6""#);
         let mut j = vec![0xff, 0xd8];
@@ -641,10 +641,10 @@ mod tests {
         assert!(near(m.regions[0].rect, DRAWN), "turned by an orientation the Exif doesn't state: {:?}", m.regions[0].rect);
         assert_eq!(try_extract(&j).unwrap().regions, m.regions);
         // a TIFF-based file: the first IFD has no orientation, its XMP (tag 700) has
-        let mut ifd0 = lightcraft_tiff::IfdBuilder::new();
-        ifd0.set(lightcraft_tiff::tags::XMP, lightcraft_tiff::Value::Byte(packet.into_bytes()));
-        ifd0.set_child(lightcraft_tiff::tags::EXIF_IFD, size_ifd());
-        let m = extract(&lightcraft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
+        let mut ifd0 = craft_tiff::IfdBuilder::new();
+        ifd0.set(craft_tiff::tags::XMP, craft_tiff::Value::Byte(packet.into_bytes()));
+        ifd0.set_child(craft_tiff::tags::EXIF_IFD, size_ifd());
+        let m = extract(&craft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
         assert_eq!(m.orientation, Some(Orientation::Rotate90));
         assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
     }

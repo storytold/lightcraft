@@ -1,5 +1,5 @@
 use super::*;
-use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
 
 fn fake_jpeg(n: usize) -> Vec<u8> {
     let mut j = vec![0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 8, 0, 1, 0, 1, 1, 1, 0x11, 0];
@@ -394,10 +394,9 @@ fn cr3_with_color_space(exif: Option<u16>, note: Option<u16>) -> Vec<u8> {
     let block = |tag: u16, v: Option<u16>| {
         let ifd =
             v.map_or_else(|| IfdBuilder::new().with(t::ISO_SPEED, Value::Short(vec![100])), |v| IfdBuilder::new().with(tag, Value::Short(vec![v])));
-        TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap()
+        TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap()
     };
-    let cmt1 =
-        TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[IfdBuilder::new().with(t::MAKE, Value::Ascii("Canon".into()))]).unwrap();
+    let cmt1 = TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[IfdBuilder::new().with(t::MAKE, Value::Ascii("Canon".into()))]).unwrap();
     let canon_uuid = [0x85, 0xc0, 0xb6, 0x87, 0x82, 0x0f, 0x11, 0xe0, 0x81, 0x11, 0xf4, 0xce, 0x46, 0x2b, 0x6a, 0x48];
     let boxes = [bx(b"CMT1", &cmt1), bx(b"CMT2", &block(0xA001, exif)), bx(b"CMT3", &block(0x00b4, note))].concat();
     let mut file = bx(b"ftyp", b"crx \0\0\0\x01crx isom");
@@ -444,7 +443,7 @@ fn cr2_preview_colour_space_comes_from_the_canon_maker_note() {
         }
         let mut ifd0 = IfdBuilder::new().with(t::MAKE, Value::Ascii(make.into()));
         ifd0.set_child(t::EXIF_IFD, exif);
-        TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd0]).unwrap()
     };
     assert_eq!(embedded_preview_color_space(&cr2("Canon", 0xFFFF, Some(2))), Some(AdobeRgb));
     assert_eq!(embedded_preview_color_space(&cr2("Canon", 1, Some(1))), Some(Srgb));
