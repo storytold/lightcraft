@@ -1111,5 +1111,14 @@
   "State / Province": "מדינה / מחוז",
   "Target Photo": "תמונת היעד",
   "Title": "כותרת",
-  "latitude, longitude": "קו רוחב, קו אורך"
+  "latitude, longitude": "קו רוחב, קו אורך",
+  "Suggestions": "הצעות",
+  "Delete “{current}”": "מחיקת „{current}”",
+  "On {have} of {of} selected photos": "ב־{have} מתוך {of} התמונות שנבחרו",
+  "Remove “{name}”": "הסרת „{name}”",
+  "Removed “{name}” from {n} photos. Edit ▸ Undo puts it back.": "מילת המפתח „{name}” הוסרה מ־{n} תמונות. עריכה ▸ ביטול תחזיר אותה.",
+  "Keywords of {n} selected photos": "מילות המפתח של {n} תמונות שנבחרו",
+  "+{n} more": "עוד {n}+",
+  "Create the keyword “{name}”": "יצירת מילת המפתח „{name}”",
+  "new, inside {parent}": "חדשה, בתוך {parent}"
 }
