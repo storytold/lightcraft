@@ -40,144 +40,34 @@
 //! `MapPointsV` / `MapPointsH` is below 256 (their product is at most [`MAX_TABLES`]), so swapped
 //! it is at least 2^24 and the size checks reject it. We write in the file's byte order.
 
-use craft_tiff::ByteOrder;
+pub use craft_raw::gaintable::GainTableMap;
 use serde::{Deserialize, Serialize};
 
-/// Upper bound on `MapPointsV × MapPointsH` (Apple uses 6 × 8).
-const MAX_TABLES: usize = 1 << 12;
-/// Upper bound on the total number of gains (Apple: 6 × 8 × 257 = 12 336).
-const MAX_GAINS: usize = 1 << 22;
 
-/// A parsed `ProfileGainTableMap` / `ProfileGainTableMap2`.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct GainTableMap {
-    /// Tables vertically (`MapPointsV`) and horizontally (`MapPointsH`), and points per table (`MapPointsN`).
-    pub points_v: usize,
-    pub points_h: usize,
-    pub points_n: usize,
-    /// Grid spacing and origin, relative to the active area's height (`_v`) and width (`_h`).
-    pub spacing_v: f64,
-    pub spacing_h: f64,
-    pub origin_v: f64,
-    pub origin_h: f64,
-    /// Weights of (R, G, B, min, max) for the table input.
-    pub weights: [f32; 5],
-    /// Exponent for the table input (1.0 for the version-1 tag).
-    pub gamma: f32,
-    /// `points_v × points_h × points_n` gains, row-major with the table points innermost. Integer
-    /// storage has already been mapped onto `GainMin..=GainMax`. Mapping before interpolating is
-    /// the same as mapping after, because the mapping is linear.
-    pub gains: Vec<f32>,
-}
 
-impl GainTableMap {
-    /// Parse the tag's bytes from a file in byte order `order` (`version2`: `ProfileGainTableMap2`):
-    /// in that order, else big-endian (see the module docs). `None` when malformed.
-    pub fn parse(b: &[u8], order: ByteOrder, version2: bool) -> Option<GainTableMap> {
-        Self::parse_in(b, order, version2).or_else(|| if order == ByteOrder::Big { None } else { Self::parse_in(b, ByteOrder::Big, version2) })
-    }
-
-    /// Parse the tag's bytes with every multi-byte field in `order`.
-    fn parse_in(b: &[u8], order: ByteOrder, version2: bool) -> Option<GainTableMap> {
-        let take = |o: usize, n: usize| b.get(o..o.checked_add(n)?);
-        let u32_at = |o: usize| take(o, 4).and_then(|s| s.try_into().ok()).map(|a: [u8; 4]| order.u32(a));
-        let f32_at = |o: usize| u32_at(o).map(f32::from_bits);
-        let f64_at = |o: usize| take(o, 8).and_then(|s| s.try_into().ok()).map(|a: [u8; 8]| f64::from_bits(order.u64(a)));
-        let (points_v, points_h) = (u32_at(0)? as usize, u32_at(4)? as usize);
-        let (spacing_v, spacing_h, origin_v, origin_h) = (f64_at(8)?, f64_at(16)?, f64_at(24)?, f64_at(32)?);
-        let points_n = u32_at(40)? as usize;
-        let mut weights = [0f32; 5];
-        for (i, w) in weights.iter_mut().enumerate() {
-            *w = f32_at(44 + 4 * i)?;
-        }
-        let tables = points_v.checked_mul(points_h).filter(|&t| t > 0 && t <= MAX_TABLES)?;
-        let count = tables.checked_mul(points_n).filter(|&c| c > 0 && c <= MAX_GAINS)?;
-        let spacing_ok = |s: f64, points: usize| s.is_finite() && (s > 0.0 || points == 1);
-        if !spacing_ok(spacing_v, points_v)
-            || !spacing_ok(spacing_h, points_h)
-            || !origin_v.is_finite()
-            || !origin_h.is_finite()
-            || !weights.iter().all(|w| w.is_finite())
-        {
-            return None;
-        }
-        let (header, data_type, gamma, gain_min, gain_max) =
-            if version2 { (80, u32_at(64)?, f32_at(68)?, f32_at(72)?, f32_at(76)?) } else { (64, 3, 1.0, 0.0, 1.0) };
-        if !(0.25..=4.0).contains(&gamma) {
-            return None;
-        }
-        let width = match data_type {
-            0 => 1,
-            1 | 2 => 2,
-            3 => 4,
-            _ => return None,
-        };
-        if b.len() != count.checked_mul(width)?.checked_add(header)? {
-            return None;
-        }
-        let data = b.get(header..)?;
-        let scaled = |q: f32, max: f32| gain_min + q / max * (gain_max - gain_min);
-        let gains: Vec<f32> = match data_type {
-            0 => data.iter().map(|&q| scaled(q as f32, 255.0)).collect(),
-            1 => data.as_chunks::<2>().0.iter().map(|c| scaled(order.u16(*c) as f32, 65535.0)).collect(),
-            2 => data.as_chunks::<2>().0.iter().map(|c| crate::unpack::f16_to_f32(order.u16(*c))).collect(),
-            _ => data.as_chunks::<4>().0.iter().map(|c| f32::from_bits(order.u32(*c))).collect(),
-        };
-        if gains.len() != count || !gains.iter().all(|g| g.is_finite() && *g >= 0.0) {
-            return None;
-        }
-        Some(GainTableMap { points_v, points_h, points_n, spacing_v, spacing_h, origin_v, origin_h, weights, gamma, gains })
-    }
-
-    /// The tag's bytes in `order`: version 1 (DNG 1.6, f32 gains) when the gamma is 1, else
-    /// version 2 with f32 gains. Returns `(version2, bytes)`.
-    pub fn to_bytes(&self, order: ByteOrder) -> (bool, Vec<u8>) {
-        let version2 = self.gamma != 1.0;
-        let mut out = Vec::with_capacity(80 + 4 * self.gains.len());
-        let u32b = |v: u32| match order {
-            ByteOrder::Big => v.to_be_bytes(),
-            ByteOrder::Little => v.to_le_bytes(),
-        };
-        let f64b = |v: f64| match order {
-            ByteOrder::Big => v.to_be_bytes(),
-            ByteOrder::Little => v.to_le_bytes(),
-        };
-        let dim = |v: usize| u32b(u32::try_from(v).unwrap_or(u32::MAX));
-        out.extend_from_slice(&dim(self.points_v));
-        out.extend_from_slice(&dim(self.points_h));
-        for v in [self.spacing_v, self.spacing_h, self.origin_v, self.origin_h] {
-            out.extend_from_slice(&f64b(v));
-        }
-        out.extend_from_slice(&dim(self.points_n));
-        for w in self.weights {
-            out.extend_from_slice(&u32b(w.to_bits()));
-        }
-        if version2 {
-            // DataType 3 (f32); GainMin/GainMax are ignored for float data
-            for v in [3, self.gamma.to_bits(), 0f32.to_bits(), 1f32.to_bits()] {
-                out.extend_from_slice(&u32b(v));
-            }
-        }
-        for g in &self.gains {
-            out.extend_from_slice(&u32b(g.to_bits()));
-        }
-        (version2, out)
-    }
+/// Applying a gain table map (the map, and reading and writing its tag, is `craft-raw`'s).
+pub trait GainTableMapApply {
+    /// The gain at relative active-area position (`x`, `y`) for `p`, a linear ProPhoto (RIMM)
+    /// colour after the baseline exposure. 1.0 for a map that can't be evaluated. For many pixels,
+    /// [`Self::evaluator`] once and [`GainEval::gain`] per pixel.
+    fn gain(&self, p: [f32; 3], x: f64, y: f64) -> f32;
+    /// The map ready to evaluate per pixel, or `None` when it can't be (inconsistent sizes).
+    fn evaluator(&self) -> Option<GainEval<'_>>;
 }
 
 /// Applying the map (see the module docs). Index arithmetic saturates and every lookup is
 /// checked: the fields are public and the struct is deserializable, so a hand-built or damaged map
 /// must not overflow or panic, whatever it holds.
-impl GainTableMap {
+impl GainTableMapApply for GainTableMap {
     /// The gain at relative active-area position (`x`, `y`) for `p`, a linear ProPhoto (RIMM)
     /// colour after the baseline exposure. 1.0 for a map that can't be evaluated. For many pixels,
     /// [`Self::evaluator`] once and [`GainEval::gain`] per pixel.
-    pub fn gain(&self, p: [f32; 3], x: f64, y: f64) -> f32 {
+    fn gain(&self, p: [f32; 3], x: f64, y: f64) -> f32 {
         self.evaluator().map_or(1.0, |e| e.gain(p, x, y))
     }
 
     /// The map ready to evaluate per pixel, or `None` when it can't be (inconsistent sizes).
-    pub fn evaluator(&self) -> Option<GainEval<'_>> {
+    fn evaluator(&self) -> Option<GainEval<'_>> {
         let n = self.points_n;
         let tables = self.points_v.saturating_mul(self.points_h);
         if n == 0 || tables == 0 || tables.saturating_mul(n) != self.gains.len() {
@@ -234,7 +124,7 @@ pub struct GainEval<'a> {
 }
 
 impl GainEval<'_> {
-    /// [`GainTableMap::gain`].
+    /// [`GainTableMapApply::gain`].
     #[inline]
     pub fn gain(&self, p: [f32; 3], x: f64, y: f64) -> f32 {
         let m = self.map;
@@ -274,7 +164,7 @@ fn input(m: &GainTableMap, p: [f32; 3]) -> f32 {
     if m.gamma == 1.0 { x } else { x.powf(m.gamma) }
 }
 
-/// Where the pixels of a developed source sit in the raw's active area, for [`GainTableMap::gain`].
+/// Where the pixels of a developed source sit in the raw's active area, for [`GainTableMapApply::gain`].
 /// The source is the default crop of the active area (`rect`, relative to the active area),
 /// then EXIF-`orientation`ed. Resolution independent.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

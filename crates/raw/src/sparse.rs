@@ -296,7 +296,7 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
         Some(RawFormat::Nef | RawFormat::Nrw | RawFormat::Orf | RawFormat::Pef | RawFormat::Erf | RawFormat::Mef) => {
             HeaderPlan::Whole("its header probe reads samples")
         }
-        Some(f) if f.is_supported() => HeaderPlan::Ready,
+        Some(f) if crate::is_supported(f) => HeaderPlan::Ready,
         _ => HeaderPlan::Whole("not a supported raw"),
     })
 }

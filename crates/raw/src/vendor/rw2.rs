@@ -102,7 +102,7 @@
 //! Not supported ([`RawError::Unsupported`], the embedded preview is shown instead): compression 34826, raw formats
 //! 1 and 3, and bit depths other than the ones above (no samples of any of them).
 
-use super::pef::{Bits, Huffman, diff};
+use super::huffman::{Bits, Huffman, diff};
 use super::{active_rows, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, MAX_SAMPLES, Mode, Opcode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
 use craft_tiff::{ByteOrder, Ifd, Tiff, Value, tags as t};
@@ -535,7 +535,7 @@ fn fill_defects(data: &mut [u16], w: usize, area: Rect) {
 }
 
 fn cfa(code: u16) -> Cfa {
-    Cfa::bayer_static(match code {
+    crate::bayer(match code {
         2 => "GRBG",
         3 => "GBRG",
         4 => "BGGR",

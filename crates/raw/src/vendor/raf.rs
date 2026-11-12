@@ -103,7 +103,7 @@ fn camera_name(b: &[u8]) -> String {
 fn cfa(h: &Header) -> Cfa {
     match record(h, XTRANS_LAYOUT) {
         Some(l) if l.len() == 36 && l.iter().all(|&c| c <= 2) => Cfa { width: 6, height: 6, pattern: l.iter().rev().copied().collect() },
-        _ => Cfa::bayer_static("RGGB"),
+        _ => crate::bayer("RGGB"),
     }
 }
 
