@@ -1300,3 +1300,46 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     assert_polish_glyphs(&ctx);
     set_language(Locale::En);
 }
+
+
+/// The Hebrew catalog must expose actual photo workflows instead of silently falling back
+/// to English, while file names and the English source language remain unchanged.
+#[test]
+fn hebrew_photo_workflows_and_navigation_are_translated() {
+    let hebrew = Locale::He.catalog();
+    for key in [
+        "Import Photos…",
+        "Export…",
+        "Open Library…",
+        "New Library…",
+        "Remove from Album",
+        "Delete Permanently",
+        "Save as…",
+        "Next Photo",
+        "Previous Photo",
+        "Zoom In",
+        "Zoom Out",
+        "Show Original",
+        "Rotate Left",
+        "Rotate Right",
+        "Slideshow",
+        "Next Slide",
+        "Previous Slide",
+        "Photo Grid (G)",
+    ] {
+        let translated = hebrew
+            .get(key)
+            .unwrap_or_else(|| panic!("missing Hebrew photo workflow translation for {key:?}"));
+        assert_ne!(translated, key, "{key:?} still falls back to English");
+        assert!(
+            translated.chars().any(|ch| ('\u{05d0}'..='\u{05ea}').contains(&ch)),
+            "{key:?} has no Hebrew letters: {translated:?}"
+        );
+    }
+    assert_eq!(Locale::He.tr("Import Photos…"), "ייבוא תמונות…");
+    assert_eq!(Locale::He.tr("Delete Permanently"), "מחיקה לצמיתות");
+    assert_eq!(Locale::He.tr("Next Photo"), "התמונה הבאה");
+    assert_eq!(Locale::He.tr("Photo Grid (G)"), "רשת תמונות (G)");
+    assert_eq!(Locale::He.tr("IMG_1234.CR3"), "IMG_1234.CR3");
+    assert_eq!(Locale::En.tr("Next Photo"), "Next Photo");
+}
