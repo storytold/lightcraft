@@ -30,7 +30,7 @@ mod sr2;
 pub mod srw;
 
 use crate::{BlackLevel, Cfa, Rect};
-use lightcraft_tiff::{Ifd, Tiff};
+use craft_tiff::{Ifd, Tiff};
 use std::ops::Range;
 
 /// Exif `CFAPattern`.
@@ -264,7 +264,7 @@ pub(crate) fn declare_strip_len(file: &mut [u8], len: u32, declared: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::tags as t;
+    use craft_tiff::tags as t;
 
     /// `file`, whose image IFD holds one strip, as two strips at the same offset whose StripByteCounts are LONG8 (which
     /// classic TIFF readers accept) `[u64::MAX, 1]`: their sum is past `u64::MAX`.
