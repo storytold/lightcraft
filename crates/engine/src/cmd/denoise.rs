@@ -41,6 +41,7 @@ fn row(m: &DenoiserManifest, download_host: Option<String>, installed: bool, sel
         "sizeBytes": m.size_bytes,
         "sha256": m.sha256,
         "tile": m.tile,
+        "domain": m.domain,
         "known": known::find(&m.id).is_some(),
         // a pinned address LightCraft can fetch it from (the user presses Download), and which site that is
         "downloadHost": download_host,
@@ -91,7 +92,9 @@ struct Source {
     file_name: String,
 }
 
-fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
+/// Read `path` as a model. `expected` is the model id a download was started for: one archive can hold several models, and
+/// the hash alone cannot say which of them the user asked for.
+fn identify(path: &Path, c: &str, sha_known: Option<&str>, expected: Option<&str>) -> Result<Source> {
     let meta = std::fs::metadata(path).map_err(|e| bad(c, format!("cannot read `{}`: {e}", path.display())))?;
     if !meta.is_file() {
         return Err(bad(c, format!("`{}` is not a file", path.display())));
@@ -104,8 +107,9 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
         None => sha256_file(path).map_err(|e| fail(&format!("could not read {}", path.display()), e))?,
     };
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    // an archive LightCraft knows (the file darktable publishes the model in)
-    if let Some(k) = known::all().into_iter().find(|k| k.download.as_ref().is_some_and(|d| d.sha256 == sha256)) {
+    // an archive LightCraft knows (the file darktable publishes the models in); `expected` picks the model the download
+    // was started for when the archive holds several
+    if let Some(k) = known::by_download_sha256(&sha256, expected) {
         return Ok(Source { manifest: k.manifest, entry: k.entry, file_name });
     }
     // the `.onnx` of a known model
@@ -131,7 +135,9 @@ fn identify(path: &Path, c: &str, sha_known: Option<&str>) -> Result<Source> {
 }
 
 /// Install the model in `src`. A model that passes its self-test becomes the one in use (`activate`, the default): installing
-/// a model is how someone says they want it. `verified` is for a download whose hash was already checked.
+/// a model is how someone says they want it. `verified` is for a download whose hash was already checked (`sha_known`, so a
+/// finished download is not hashed a second time); `expected` is the model that download was started for, since one archive
+/// can hold several.
 struct InstallFile<'a> {
     dir: &'a Path,
     run_on: RunOn,
@@ -140,11 +146,13 @@ struct InstallFile<'a> {
     src: &'a Path,
     acknowledged: bool,
     verified: bool,
+    sha_known: Option<&'a str>,
+    expected: Option<&'a str>,
 }
 
 fn install_file(loader: &crate::denoise::Loader, request: InstallFile<'_>) -> Result<(Value, Arc<dyn crate::denoise::Model>)> {
-    let InstallFile { dir, run_on, accepted_at, command: c, src, acknowledged, verified } = request;
-    let ident = identify(src, c, None)?;
+    let InstallFile { dir, run_on, accepted_at, command: c, src, acknowledged, verified, sha_known, expected } = request;
+    let ident = identify(src, c, sha_known, expected)?;
     let m = ident.manifest.clone();
     manifest::validate(&m).map_err(|e| bad(c, e.to_string()))?;
     if !acknowledged {
@@ -251,7 +259,9 @@ fn activate_install(s: &mut Session, result: &Value, model: Arc<dyn crate::denoi
     Ok(v)
 }
 
-fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, verified: bool) -> Result<Value> {
+/// Install the model at `src` on a worker thread. `sha` is the hash a finished download was checked against: it saves
+/// hashing the file again, and `id` says which of an archive's models was asked for.
+fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, verified: bool, sha: Option<String>) -> Result<Value> {
     const C: &str = "denoise.models.install";
     if s.denoise.install.is_some() {
         return Err(bad(C, "another model is being installed"));
@@ -260,6 +270,8 @@ fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, veri
     let loader = s.denoise.loader.clone();
     let run_on = s.denoise.settings.run_on();
     let at = (s.clock)();
+    // a download knows which model it was started for: the archive may hold more than one
+    let expected = known::find(&id).map(|k| k.manifest.id);
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
         .name("denoise-model-install".into())
@@ -267,8 +279,18 @@ fn start_install(s: &mut Session, src: PathBuf, id: String, activate: bool, veri
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _held = crate::memory::work_gate().acquire(512 * 1024 * 1024);
-                install_file(&loader, InstallFile { dir: &dir, run_on, accepted_at: at, command: C, src: &src, acknowledged: true, verified })
-                    .map_err(|e| plain(&e))
+                let request = InstallFile {
+                    dir: &dir,
+                    run_on,
+                    accepted_at: at,
+                    command: C,
+                    src: &src,
+                    acknowledged: true,
+                    verified,
+                    sha_known: sha.as_deref(),
+                    expected: expected.as_deref(),
+                };
+                install_file(&loader, request).map_err(|e| plain(&e))
             }))
             .unwrap_or_else(|_| Err("the model installation stopped unexpectedly".into()));
             if verified {
@@ -291,7 +313,7 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "the licence has not been accepted: show its terms first"));
     }
     if bool_or(p, "background", false) {
-        return start_install(s, PathBuf::from(path), "local-install".into(), activate, false);
+        return start_install(s, PathBuf::from(path), "local-install".into(), activate, false, None);
     }
     if s.denoise.install.is_some() {
         return Err(bad(C, "another model is being installed"));
@@ -306,6 +328,8 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
             src: Path::new(path),
             acknowledged,
             verified: false,
+            sha_known: None,
+            expected: None,
         },
     )?;
     activate_install(s, &result, model, activate)
@@ -369,8 +393,8 @@ pub(crate) fn finish_downloads(s: &mut Session) {
         }
     }
     if s.denoise.install.is_none()
-        && let Some((id, path, _sha)) = s.denoise.downloads.finished().into_iter().next()
-        && let Err(e) = start_install(s, path, id.clone(), true, true)
+        && let Some((id, path, sha)) = s.denoise.downloads.finished().into_iter().next()
+        && let Err(e) = start_install(s, path, id.clone(), true, true, Some(sha))
     {
         s.denoise.downloads.set_outcome(&id, State::Failed(plain(&e)));
     }
@@ -655,7 +679,7 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
+        cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, tile, domain, known, downloadHost, installed, selected, accepted}]}", always, list),
         cmd!(query "denoise.models.inspect", "Inspect Denoise Model", [], None, "{path} → model terms from an adjacent manifest; never executes the file", always, inspect),
         cmd!(query "denoise.models.install", "Install Denoise Model", [], None, "{path, acknowledged: true, activate?: true, background?: false} → {installed, model} or {started} — install a denoise model from a file: an .onnx with a denoise-model.json beside it, or an archive LightCraft knows (the darktable `.dtmodel`). `acknowledged` must be true: the user has been shown the model's licence and accepted it. Unless `activate` is false it becomes the model in use", always, install),
         cmd!(query "denoise.models.download", "Download Denoise Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a model LightCraft has a pinned address for (see `downloadHost` in the list) in the background over HTTPS with lightcraft-fetch. `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, installed and chosen by itself; `denoise.models.downloads` shows how far it is", always, download),

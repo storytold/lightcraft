@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
+use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain, LinearSpace};
 use lightcraft_denoise::run::TileRunner;
 use serde_json::{Value, json};
 
@@ -66,6 +66,7 @@ fn manifest(id: &str) -> DenoiserManifest {
         size_bytes: None,
         provenance: "made up for a test".into(),
         domain: Domain::BayerToRgb,
+        space: LinearSpace::CameraRgb,
         tile: 64,
         overlap: 16,
         gain: Gain::None,
@@ -139,6 +140,94 @@ fn failed_model_replacement_preserves_the_installed_model() {
     assert_eq!(x.s.execute("denoise.models.list", &json!({})).unwrap()["model"], "stand-in");
     drop(x.s);
     let _ = std::fs::remove_dir_all(x.dir);
+}
+
+/// A zip with the given stored entries, written by hand: the shape a finished download is staged in.
+fn stored_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut table = [0u32; 256];
+        for (i, t) in table.iter_mut().enumerate() {
+            let mut c = i as u32;
+            for _ in 0..8 {
+                c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+            }
+            *t = c;
+        }
+        !bytes.iter().fold(!0u32, |c, &b| table[((c ^ u32::from(b)) & 0xff) as usize] ^ (c >> 8))
+    }
+    let mut out = Vec::new();
+    let mut dir = Vec::new();
+    for (name, data) in files {
+        let offset = out.len() as u32;
+        out.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        out.extend_from_slice(&[20, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        out.extend_from_slice(&crc32(data).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        out.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&[0, 0]);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        dir.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        dir.extend_from_slice(&[20, 0, 20, 0, 0, 0]);
+        dir.extend_from_slice(&[0, 0]);
+        dir.extend_from_slice(&[0, 0, 0, 0]);
+        dir.extend_from_slice(&crc32(data).to_le_bytes());
+        dir.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        dir.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        dir.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        dir.extend_from_slice(&[0; 12]);
+        dir.extend_from_slice(&offset.to_le_bytes());
+        dir.extend_from_slice(name.as_bytes());
+    }
+    let at = out.len() as u32;
+    out.extend_from_slice(&dir);
+    out.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    out.extend_from_slice(&[0, 0, 0, 0]);
+    out.extend_from_slice(&(files.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(files.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(dir.len() as u32).to_le_bytes());
+    out.extend_from_slice(&at.to_le_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out
+}
+
+/// The RawNIND archive holds a Bayer and a linear model under the same hash. A finished download must install the
+/// one it was started for, so the id has to reach `identify` along with the hash the transfer verified: the stand-in
+/// archive here holds only the linear entry, so taking the Bayer one fails to find its file.
+#[test]
+fn a_finished_linear_download_installs_the_linear_model_of_the_archive() {
+    use crate::model_download::{STAGING, State};
+    let Some(known) = lightcraft_denoise::known::find("rawnind-linear") else {
+        panic!("the test build needs the pinned model catalog (lightcraft-denoise-core/rawnind-model)");
+    };
+    let download = known.download.expect("rawnind-linear has a download");
+    let dir = temp_dir("download-linear");
+    let models = dir.join("models");
+    let staging = models.join(STAGING);
+    std::fs::create_dir_all(&staging).unwrap();
+    let archive = staging.join(&download.file_name);
+    std::fs::write(&archive, stored_zip(&[("model_linear.onnx", b"stand-in weights")])).unwrap();
+    let mut s = Session::new().with_fs();
+    s.set_denoise_models_dir(Some(models));
+    s.denoise.downloads.set_outcome("rawnind-linear", State::Done { path: archive, sha256: download.sha256 });
+    let mut why = String::new();
+    for _ in 0..600 {
+        let v = s.execute("denoise.models.downloads", &json!({})).unwrap();
+        let row = v["downloads"].as_array().and_then(|a| a.iter().find(|d| d["id"] == "rawnind-linear")).cloned();
+        match row.as_ref().and_then(|d| d["state"].as_str()) {
+            Some("failed") => {
+                why = row.as_ref().and_then(|d| d["error"].as_str()).unwrap_or_default().to_string();
+                break;
+            }
+            Some("installed") => panic!("the stand-in weights cannot pass the model's own hash"),
+            _ => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+    // it got as far as hashing the extracted linear model: the archive entry was found, and the id was not dropped
+    assert!(why.contains("SHA-256 differs"), "the linear entry was not taken: {why:?}");
+    assert!(!why.contains("could not take the model out of the archive"), "the Bayer entry was taken: {why:?}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A Bayer DNG that is a smooth ramp, big enough for a 64-cell tile and a second one.
@@ -906,4 +995,246 @@ fn without_a_models_folder_the_cache_still_obeys_the_default_limit() {
         assert_eq!(x.s.denoise_photo_state(photo(&x.s)), PhotoState::Ready, "the photo's own picture stays");
     }
     let _ = std::fs::remove_dir_all(&x.dir);
+}
+
+struct DimLinear {
+    runs: Arc<AtomicUsize>,
+}
+
+impl TileRunner for DimLinear {
+    /// Test linear model runner that counts executions and scales samples by 0.5.
+    fn run(&self, input: &[f32]) -> Result<Vec<f32>, lightcraft_denoise::Error> {
+        self.runs.fetch_add(1, Ordering::Relaxed);
+        Ok(input.iter().map(|&v| v * 0.5).collect())
+    }
+}
+
+impl Model for DimLinear {
+    /// Returns reference to self as TileRunner with requested concurrency.
+    fn runner(&self, _: RunOn, threads: usize) -> (&dyn TileRunner, usize) {
+        (self, threads)
+    }
+
+    /// Self-test stub reporting success.
+    fn self_test(&self, _: RunOn) -> Result<Value, String> {
+        Ok(json!({"ok": true}))
+    }
+}
+
+/// Creates a mock model loader providing DimLinear instances tracking invocation count.
+fn dim_linear_loader(runs: &Arc<AtomicUsize>) -> Loader {
+    let runs = runs.clone();
+    Arc::new(move |_, _| Ok(Arc::new(DimLinear { runs: runs.clone() }) as Arc<dyn Model>))
+}
+
+/// Generates a test DenoiserManifest for a linear RGB model.
+fn linear_manifest(id: &str) -> DenoiserManifest {
+    DenoiserManifest {
+        id: id.into(),
+        name: "Stand-in Linear".into(),
+        version: "1".into(),
+        licence: Default::default(),
+        source: None,
+        sha256: None,
+        size_bytes: None,
+        provenance: "made up for a linear test".into(),
+        domain: Domain::LinearRgb,
+        space: LinearSpace::CameraRgb,
+        tile: 64,
+        overlap: 16,
+        gain: Gain::None,
+    }
+}
+
+/// Writes placeholder model files (manifest + stand-in weights) for linear RGB model installation testing.
+fn linear_model_files(dir: &Path, id: &str) -> PathBuf {
+    let src = dir.join(format!("src-{id}"));
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("denoise-model.json"), serde_json::to_vec(&linear_manifest(id)).unwrap()).unwrap();
+    std::fs::write(src.join("model.onnx"), format!("not an onnx file, only a stand-in for {id}")).unwrap();
+    src.join("model.onnx")
+}
+
+/// Creates a synthetic Fujifilm X-Trans pattern DNG with valid camera color matrices for testing.
+fn synthetic_xtrans_dng_of(w: usize, h: usize, data: Vec<u16>) -> Vec<u8> {
+    use lightcraft_raw::*;
+    let cfa = Cfa::xtrans();
+    let raw = RawImage {
+        format: RawFormat::Dng,
+        width: w,
+        height: h,
+        cpp: 1,
+        data: RawData::U16(data),
+        cfa: Some(cfa),
+        bits: 14,
+        black: BlackLevel::uniform(256.0),
+        white: vec![16000.0],
+        active_area: Rect::new(0, 0, w, h),
+        crop: Rect::new(0, 0, w, h),
+        orientation: Orientation::Normal,
+        color: ColorData {
+            illuminant: [17, 21],
+            color_matrix: [
+                Some(lightcraft_color::Mat3([[0.9, 0.2, -0.15], [-0.3, 1.25, 0.08], [0.02, -0.12, 0.85]])),
+                Some(lightcraft_color::Mat3([[0.7, 0.3, -0.1], [-0.35, 1.3, 0.1], [0.05, -0.2, 1.0]])),
+            ],
+            as_shot_neutral: Some([0.5, 1.0, 0.7]),
+            ..Default::default()
+        },
+        wb_multipliers: None,
+        linearized: false,
+        pixel_aspect: 1.0,
+        opcodes: OpcodeLists::default(),
+        metadata: Default::default(),
+        lens_metadata: Default::default(),
+    };
+    write_dng(&raw, &DngWriteOptions::default()).unwrap()
+}
+
+/// Verifies that an X-Trans raw photo is rejected by Bayer-only models with an informative error,
+/// but succeeds and denoises properly when processed with a LinearRgb model.
+#[test]
+fn an_xtrans_photo_is_rejected_by_bayer_model_but_denoised_by_linear_rgb_model() {
+    let dir = temp_dir("xtrans-denoise");
+    let originals = dir.join("originals");
+    std::fs::create_dir_all(&originals).unwrap();
+    let data: Vec<u16> = (0..192 * 160).map(|i| 600 + ((i % 192) * 30 + (i / 192) * 35) as u16).collect();
+    let xtrans_path = originals.join("xtrans.dng");
+    std::fs::write(&xtrans_path, synthetic_xtrans_dng_of(192, 160, data)).unwrap();
+
+    let runs_bayer = Arc::new(AtomicUsize::new(0));
+    let runs_linear = Arc::new(AtomicUsize::new(0));
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("library"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [xtrans_path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.set_denoise_models_dir(Some(dir.join("denoise-models")));
+
+    // First install Bayer model
+    s.denoise.loader = dim_loader(&runs_bayer);
+    let bayer_onnx = model_files(&dir, "stand-in-bayer");
+    s.execute("denoise.models.install", &json!({"path": bayer_onnx.to_string_lossy(), "acknowledged": true})).unwrap();
+
+    set_amount(&mut s, 100.0);
+    for _ in 0..200 {
+        let _ = s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
+        if matches!(s.denoise_photo_state(id), PhotoState::Failed { .. }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    match s.denoise_photo_state(id) {
+        PhotoState::Failed { why, unsupported } => {
+            assert!(unsupported, "X-Trans on Bayer model must report unsupported");
+            assert!(why.contains("only Bayer raw files can be denoised with a Bayer model"), "{why}");
+        }
+        other => panic!("expected PhotoState::Failed for X-Trans on Bayer model, got: {:?}", other),
+    }
+
+    // Now switch to Linear-RGB model
+    s.denoise.loader = dim_linear_loader(&runs_linear);
+    let linear_onnx = linear_model_files(&dir, "stand-in-linear");
+    s.execute("denoise.models.install", &json!({"path": linear_onnx.to_string_lossy(), "acknowledged": true})).unwrap();
+
+    // Pump until ready
+    let r = pump_until_ready(&mut s, 1);
+    assert_eq!(r["ready"], 1);
+    assert_eq!(s.denoise_photo_state(id), PhotoState::Ready);
+    assert!(runs_linear.load(Ordering::Relaxed) >= 4);
+
+    let plain = {
+        set_amount(&mut s, 0.0);
+        rendered_mean(&mut s, id)
+    };
+    set_amount(&mut s, 100.0);
+    let denoised = rendered_mean(&mut s, id);
+    assert!(denoised < plain - 3.0, "denoised {denoised} vs plain {plain}");
+
+    // Test export with Linear-RGB denoise on X-Trans
+    let o = ExportOptions::from_json(&json!({"format": "png", "width": 160, "height": 160}));
+    let export_res = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!export_res.bytes.is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Verifies that an X-Trans raw photo denoised via LinRec2020 space color transformation
+/// transforms correctly back into camera space and exports successfully.
+#[test]
+fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_cleanly() {
+    let dir = temp_dir("xtrans-rec2020-denoise");
+    let originals = dir.join("originals");
+    std::fs::create_dir_all(&originals).unwrap();
+    // a different level per colour filter, so a swapped channel or a missing white-balance division cannot pass
+    let cfa = lightcraft_raw::Cfa::xtrans();
+    let data: Vec<u16> = (0..192 * 160)
+        .map(|i| {
+            let (x, y) = (i % 192, i / 192);
+            let tint = match cfa.color_at(x, y) {
+                0 => 4000,
+                1 => 6500,
+                _ => 5200,
+            };
+            600 + (x * 4 + y * 5) as u16 + tint
+        })
+        .collect();
+    let xtrans_path = originals.join("xtrans.dng");
+    std::fs::write(&xtrans_path, synthetic_xtrans_dng_of(192, 160, data)).unwrap();
+
+    let runs_linear = Arc::new(AtomicUsize::new(0));
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("library"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [xtrans_path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.set_denoise_models_dir(Some(dir.join("denoise-models")));
+
+    s.denoise.loader = dim_linear_loader(&runs_linear);
+    let mut manifest = linear_manifest("stand-in-rec2020");
+    manifest.space = LinearSpace::LinRec2020;
+    let src = dir.join("src-stand-in-rec2020");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("denoise-model.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    std::fs::write(src.join("model.onnx"), "stand-in for rec2020").unwrap();
+    let linear_onnx = src.join("model.onnx");
+
+    s.execute("denoise.models.install", &json!({"path": linear_onnx.to_string_lossy(), "acknowledged": true})).unwrap();
+
+    set_amount(&mut s, 100.0);
+    // Pump until ready
+    let r = pump_until_ready(&mut s, 1);
+    assert_eq!(r["ready"], 1);
+    assert_eq!(s.denoise_photo_state(id), PhotoState::Ready);
+    assert!(runs_linear.load(Ordering::Relaxed) >= 4);
+
+    let plain = {
+        set_amount(&mut s, 0.0);
+        rendered_mean(&mut s, id)
+    };
+    set_amount(&mut s, 100.0);
+    let denoised = rendered_mean(&mut s, id);
+    assert!(denoised < plain - 3.0, "denoised {denoised} vs plain {plain}");
+
+    // The stand-in model halves every Rec.2020 sample, so the product is half the demosaiced camera RGB: compare each
+    // channel against the values the sensor recorded, which a wrong inverse matrix or a missing white-balance step fails.
+    let spec = s.media.denoise.spec(id).unwrap().clone();
+    let product = lightcraft_denoise::product::read(&spec.product, &spec.key, 1).unwrap();
+    let decoded = lightcraft_raw::decode(&std::fs::read(&xtrans_path).unwrap()).unwrap();
+    let normalized = decoded.normalized().unwrap();
+    let expected = lightcraft_raw::demosaic(&normalized, lightcraft_raw::Method::Ahd);
+    assert_eq!((product.width, product.height), (expected.width, expected.height));
+    let channel_mean =
+        |img: &lightcraft_raster::Rgb32f, c: usize| -> f64 { img.data.iter().map(|p| f64::from(p[c])).sum::<f64>() / img.data.len() as f64 };
+    for c in 0..3 {
+        let got = channel_mean(&product, c);
+        let want = 0.5 * channel_mean(&expected, c);
+        assert!((got - want).abs() <= 0.01 * want, "channel {c}: {got} vs {want}");
+    }
+
+    let o = ExportOptions::from_json(&json!({"format": "png", "width": 160, "height": 160}));
+    let export_res = export_photo(&mut s, id, &o, 1).unwrap();
+    assert!(!export_res.bytes.is_empty());
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
