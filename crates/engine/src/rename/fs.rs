@@ -34,6 +34,9 @@ pub(crate) trait MoveFs {
     /// case-insensitive volume `a.XMP` "exists" when only `a.xmp` is there; this tells the two
     /// apart. When the folder can't be listed: `true`, so nothing is skipped.
     fn listed(&self, p: &Path) -> bool {
+        if crate::file_access::check_read(p).is_err() {
+            return true;
+        }
         let (Some(dir), Some(name)) = (p.parent(), p.file_name()) else { return true };
         let dir = if dir.as_os_str().is_empty() { Path::new(".") } else { dir };
         match std::fs::read_dir(dir) {
@@ -83,6 +86,9 @@ impl MoveFs for RealFs {
     fn same_file(&self, a: &Path, b: &Path) -> bool {
         if a == b {
             return true;
+        }
+        if crate::file_access::check_read(a).is_err() || crate::file_access::check_read(b).is_err() {
+            return false;
         }
         let (Ok(ma), Ok(mb)) = (std::fs::metadata(a), std::fs::metadata(b)) else { return false };
         #[cfg(unix)]
@@ -185,6 +191,7 @@ impl MoveFs for RealFs {
 /// `symlink_metadata` of `a` taken before): the path check alone can be outrun by a swap for a
 /// link, whose target the open would follow.
 fn open_regular(a: &Path, checked: &std::fs::Metadata) -> std::io::Result<std::fs::File> {
+    crate::file_access::check_read(a).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     // FILE_FLAG_OPEN_REPARSE_POINT: a symbolic link is opened itself, and then refused below
@@ -211,6 +218,8 @@ fn open_regular(a: &Path, checked: &std::fs::Metadata) -> std::io::Result<std::f
 /// Move `a` to `b` on another volume: copy (never replacing), compare the copy with the original
 /// byte for byte, and only then remove the original. A copy that doesn't match is removed.
 fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
+    crate::file_access::check_read(a).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+    crate::file_access::check_write(b).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
     fs.copy_no_replace(a, b)?;
     if !same_contents(a, b).unwrap_or(false) {
         let _ = std::fs::remove_file(b);
@@ -225,6 +234,8 @@ fn move_across_volumes(fs: &RealFs, a: &Path, b: &Path) -> std::io::Result<()> {
 /// Whether files `a` and `b` hold the same bytes: lengths first, then 1 MiB chunks at a time, so
 /// a large raw or video is never read into memory whole.
 pub(super) fn same_contents(a: &Path, b: &Path) -> std::io::Result<bool> {
+    crate::file_access::check_read(a).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+    crate::file_access::check_read(b).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
     const CHUNK: usize = 1 << 20;
     let (mut fa, mut fb) = (std::fs::File::open(a)?, std::fs::File::open(b)?);
     if fa.metadata()?.len() != fb.metadata()?.len() {

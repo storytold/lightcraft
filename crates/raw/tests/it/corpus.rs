@@ -17,6 +17,8 @@ fn corpus_root() -> PathBuf {
 
 /// Variants known not to decode yet (see the crate docs): matched against the lower-case file name.
 const KNOWN_UNSUPPORTED: &[&str] = &[
+    "orf-olympus-em1.orf", // Compressed Olympus sensor decoding withdrawn pending provenance resolution.
+    "orf-olympus-em10iii.orf",
     "cr3-",                       // Unverified CRX coding variants; exact supported cases live in cr3_corpus.rs.
     "-he.nef",                    // Nikon High Efficiency (HE / HE★) NEF, issue #193
     "sraw",                       // Canon sRAW / mRAW
@@ -1376,7 +1378,7 @@ fn a7cr_enabled_distortion_agrees_in_header_full_and_dng() {
         let Some(mut bytes) = pinned_sony(&root, name) else { continue };
         let original = probe_info(&bytes).unwrap();
         assert!(original.opcodes.list3.is_empty(), "Off files must remain uncorrected");
-        let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+        let tiff = craft_tiff::Tiff::parse(&bytes).unwrap();
         let at = tiff.find(0x7036).unwrap().offset as usize;
         let mut enabled = Vec::new();
         tiff.order.put_u16(&mut enabled, 17);

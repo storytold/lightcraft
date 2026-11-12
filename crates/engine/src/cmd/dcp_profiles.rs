@@ -76,13 +76,20 @@ pub(super) fn library_owned(dir: Option<&Path>, file: &Path) -> bool {
 
 /// Whether the profile file `file` may be written or removed, with `dir` the library's profiles folder.
 pub(super) fn write_allowed(dir: Option<&Path>, file: &Path) -> std::result::Result<(), String> {
-    if library_owned(dir, file) { Ok(()) } else { crate::file_access::check_write(file) }
+    if library_owned(dir, file) {
+        // The folder is the operator's. A second name of the file may still lie outside the roots.
+        crate::file_access::reject_other_names(file)
+    } else {
+        crate::file_access::check_write(file)
+    }
 }
 
 /// The bytes of the profile file `file`, with `dir` the library's profiles folder; outside the automation roots a file
 /// that isn't the library's own counts as missing.
 fn read_allowed(dir: Option<&Path>, file: &Path) -> std::io::Result<Vec<u8>> {
-    if !library_owned(dir, file) {
+    if library_owned(dir, file) {
+        crate::file_access::reject_other_names(file).map_err(std::io::Error::other)?;
+    } else {
         crate::file_access::check_read(file).map_err(std::io::Error::other)?;
     }
     lightcraft_raw::dcp::read_dcp(file)

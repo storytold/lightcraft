@@ -390,9 +390,9 @@ fn mcp(args: &[String]) -> Result<(), String> {
             let mut h = match &library {
                 Some(dir) => {
                     let mut h = Headless::default();
-                    // The operator's own choice, outside the roots or not, and its Lightroom guard has to
-                    // see the folder. Only this call: worker threads it starts keep the process's roots.
-                    let r = lightcraft_engine::file_access::unconfined(|| h.session.open_library(dir, demo)).map_err(|e| library_error(dir, e))?;
+                    // The operator's own choice, outside the roots or not. Only this open: worker
+                    // threads it starts keep the process's roots.
+                    let r = h.session.open_operator_library(dir, demo).map_err(|e| library_error(dir, e))?;
                     eprintln!("lightcraft-cli mcp: opened library {dir} ({r:?})");
                     library_warnings(&mut h.session, "lightcraft-cli mcp");
                     h

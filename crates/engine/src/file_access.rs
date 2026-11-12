@@ -128,6 +128,10 @@ impl AutomationRoots {
     }
 
     /// Check root membership and link-entry location without applying the multiple-name rule.
+    ///
+    /// A path that is not inside answers with one error, whether or not it exists. The root
+    /// folders are logged, not returned: the client must not learn the server's layout, nor
+    /// whether an outside folder is there.
     fn check_location(&self, path: &Path, access: Access) -> Result<(), String> {
         let roots: Vec<&Root> = match access {
             Access::Read => self.read.iter().chain(self.write.iter()).collect(),
@@ -140,23 +144,23 @@ impl AutomationRoots {
             };
         }
         let in_roots = |p: &Path| roots.iter().any(|r| inside(p, &r.resolved));
-        let mut allowed = in_roots(&resolve(path)?);
+        let resolved = match resolve(path) {
+            Ok(found) => found,
+            Err(e) if kept_refusal(&e) || dangling_link_inside(path, &in_roots) => return Err(e),
+            Err(_) => return Err(outside_error(access, path)),
+        };
+        let mut allowed = in_roots(&resolved);
         // Writing to a link replaces, renames or removes the link where it stands, whatever it points to.
         if allowed
             && access == Access::Write
             && let Some(folder) = folder_of_link(path)
         {
-            allowed = in_roots(&resolve(folder)?);
+            allowed = resolve(folder).is_ok_and(|found| in_roots(&found));
         }
         if allowed {
             return Ok(());
         }
-        let shown: Vec<String> = roots.iter().map(|r| r.shown.display().to_string()).collect();
-        let kind = match access {
-            Access::Read => "read",
-            Access::Write => "write",
-        };
-        Err(format!("automation path rejected: outside the {kind} root {}: {}", shown.join(", "), path.display()))
+        Err(outside_error(access, path))
     }
 
     /// May a new file be created inside this folder, following a folder link to its target?
@@ -166,12 +170,38 @@ impl AutomationRoots {
         let Some(root) = &self.write else {
             return Err(format!("automation filesystem access is not granted: write authority is absent: {}", path.display()));
         };
-        if inside(&resolve(path)?, &root.resolved) {
+        let resolved = match resolve(path) {
+            Ok(found) => found,
+            Err(e) if kept_refusal(&e) => return Err(e),
+            Err(_) => return Err(outside_error(Access::Write, path)),
+        };
+        if inside(&resolved, &root.resolved) {
             // The destination is a folder; its link count is not an extra file name.
             return one_name(path);
         }
-        Err(format!("automation path rejected: outside the write root {}: {}", root.shown.display(), path.display()))
+        Err(outside_error(Access::Write, path))
     }
+}
+
+/// One rejection for every path that is not inside a root. The configured folders are not in it.
+fn outside_error(access: Access, path: &Path) -> String {
+    let kind = match access {
+        Access::Read => "read",
+        Access::Write => "write",
+    };
+    log::debug!("automation path outside the {kind} root: {}", path.display());
+    format!("automation path rejected: outside the {kind} root: {}", path.display())
+}
+
+/// Refusals that do not depend on whether a folder exists (an empty path, a device name).
+fn kept_refusal(error: &str) -> bool {
+    error.contains("path is empty") || error.contains("reserved device names") || error.contains("network and device paths")
+}
+
+/// `path` is a symlink standing in a root, so "a link that leads nowhere" does not describe an outside path.
+fn dangling_link_inside(path: &Path, in_roots: &impl Fn(&Path) -> bool) -> bool {
+    let Some(folder) = folder_of_link(path) else { return false };
+    resolve(folder).is_ok_and(|found| in_roots(&found))
 }
 
 /// Where the roots are in force on a thread ([`confine`], [`unconfined`]).
@@ -213,16 +243,25 @@ fn with_scope<T>(scope: Option<Scope>, f: impl FnOnce() -> T) -> T {
 }
 
 /// Run `f` with `roots` in force on this thread (`None`: as things stand).
+///
+/// Process roots, once set, cannot be replaced by a different set on this thread. A caller that
+/// passes other roots still runs under the process roots.
 pub fn confine<T>(roots: Option<&Arc<AutomationRoots>>, f: impl FnOnce() -> T) -> T {
+    let roots = match (roots, PROCESS.get()) {
+        (Some(asked), Some(process)) if !Arc::ptr_eq(asked, process) => Some(process),
+        (asked, _) => asked,
+    };
     match roots {
         Some(r) => with_scope(Some(Scope::Confined(r.clone())), f),
         None => f(),
     }
 }
 
-/// Run `f` with no roots in force on this thread: what the person at the keyboard does, and the
-/// app's own folders.
-pub fn unconfined<T>(f: impl FnOnce() -> T) -> T {
+/// Run `f` with no roots in force on this thread.
+///
+/// Crate-private: a host must not wrap arbitrary work in it. The operator's library is opened
+/// through [`crate::Session::open_operator_library`], which is the one public use.
+pub(crate) fn unconfined<T>(f: impl FnOnce() -> T) -> T {
     with_scope(Some(Scope::Unconfined), f)
 }
 
@@ -277,6 +316,14 @@ pub fn check_write_pair(path: impl AsRef<Path>, placed: impl AsRef<Path>) -> Res
 ///
 /// `Ok(())` when the path has one name, names a directory, or does not exist yet. A directory is
 /// not counted: its link count includes `.`, `..` and child directories.
+/// Refuse `path` when it is a file with another name, even if its folder is the library's own.
+///
+/// Location is not checked: a library copy outside the automation roots is still the operator's
+/// file, but a second name of it may not be.
+pub(crate) fn reject_other_names(path: &Path) -> Result<(), String> {
+    one_name(path)
+}
+
 fn one_name(path: &Path) -> Result<(), String> {
     match has_other_names(path) {
         Ok(false) => Ok(()),
@@ -372,10 +419,7 @@ fn reject_unsafe_prefix(path: &Path) -> Result<(), String> {
     let _ = path;
     #[cfg(windows)]
     if let Some(Component::Prefix(prefix)) = path.components().next()
-        && matches!(
-            prefix.kind(),
-            std::path::Prefix::UNC(..) | std::path::Prefix::VerbatimUNC(..) | std::path::Prefix::DeviceNS(..) | std::path::Prefix::Device(..)
-        )
+        && matches!(prefix.kind(), std::path::Prefix::UNC(..) | std::path::Prefix::VerbatimUNC(..) | std::path::Prefix::DeviceNS(..))
     {
         return Err(format!("automation path rejected: network and device paths are not allowed: {}", path.display()));
     }
@@ -525,6 +569,12 @@ mod tests {
         let e = roots.check(s(base.join("in/a.jpg")), Access::Write).unwrap_err();
         assert!(e.contains("outside the write root"), "{e}");
         assert_eq!(roots.check(s(base.join("out/x.png")), Access::Read), Ok(()), "reads are permitted under write root");
+        let there = roots.check(s(base.join("outside/secret.jpg")), Access::Read).unwrap_err();
+        let gone = roots.check(s(base.join("outside/no-such.jpg")), Access::Read).unwrap_err();
+        assert!(there.contains("outside the read root") && gone.contains("outside the read root"), "{there} / {gone}");
+        assert!(!there.contains("doesn't exist") && !gone.contains("doesn't exist"), "{there} / {gone}");
+        let root = roots.read_root().unwrap().display().to_string();
+        assert!(!there.contains(&root) && !gone.contains(&root), "the configured root is not in the error");
         let _ = std::fs::remove_dir_all(base);
     }
 
@@ -549,7 +599,8 @@ mod tests {
         assert_eq!(roots.check(&back, Access::Read), Ok(()), "`..` that stays inside");
         let missing = format!("{}{sep}nope{sep}..{sep}..{sep}outside{sep}x.jpg", s(base.join("out")));
         let e = roots.check(&missing, Access::Write).unwrap_err();
-        assert!(e.contains("parent traversal below a folder that doesn't exist") || e.contains("outside the write root"), "{e}");
+        // The missing component must not be reported: that would say whether `nope` exists.
+        assert!(e.contains("outside the write root") && !e.contains("doesn't exist"), "{e}");
         let _ = std::fs::remove_dir_all(base);
     }
 

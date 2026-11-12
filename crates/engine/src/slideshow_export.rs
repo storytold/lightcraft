@@ -399,6 +399,7 @@ impl PartFile {
     }
 
     fn commit(mut self, guard: &OriginalGuard) -> Result<(), String> {
+        crate::file_access::check_write(&self.target)?;
         guard.check(&self.target)?;
         std::fs::rename(&self.part, &self.target).map_err(|e| format!("{}: {e}", self.target.display()))?;
         self.done = true;

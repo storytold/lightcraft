@@ -484,7 +484,24 @@ impl Session {
     /// created ([`crate::lightroom_folder`]); a LightCraft library always opens, whatever else
     /// its folder holds.
     pub fn open_library(&mut self, dir: impl AsRef<Path>, seed_demo: bool) -> Result<&LoadReport> {
+        self.open_library_work(dir.as_ref(), seed_demo)?;
+        self.loaded_report()
+    }
+
+    /// Open the library the operator named at startup.
+    ///
+    /// The automation roots do not apply to this folder: the operator chose it, and the guard that
+    /// refuses a Lightroom catalog folder has to see it. This is not a way to turn the roots off.
+    /// It only opens a library. Agent file access stays confined.
+    pub fn open_operator_library(&mut self, dir: impl AsRef<Path>, seed_demo: bool) -> Result<&LoadReport> {
         let dir = dir.as_ref().to_path_buf();
+        crate::file_access::unconfined(|| self.open_library_work(&dir, seed_demo))?;
+        self.loaded_report()
+    }
+
+    /// Open (or create) the library at `dir`. See [`Self::open_library`].
+    fn open_library_work(&mut self, dir: &Path, seed_demo: bool) -> Result<()> {
+        let dir = dir.to_path_buf();
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
             return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
         }
@@ -504,7 +521,7 @@ impl Session {
             }
             return Err(e);
         }
-        self.loaded_report()
+        Ok(())
     }
 
     /// Open (or create) a library whose files live in `stores` (e.g. browser storage), replacing

@@ -4,7 +4,7 @@
 //! `UniqueCameraModel`, `ProfileName`, the colour/forward matrices and calibration illuminants, the
 //! hue/saturation map, look table and tone curve. Nothing here ships a profile.
 
-use lightcraft_tiff::{Ifd, ParseOptions, Tiff, tags as t};
+use craft_tiff::{Ifd, ParseOptions, Tiff, tags as t};
 
 use crate::ColorData;
 use crate::dng::color_data;
@@ -118,8 +118,8 @@ pub fn parse_dcp(bytes: &[u8]) -> Result<DcpProfile, DcpError> {
 /// Write `p` as a `.dcp` file (little-endian): its name, camera, illuminants, matrices, hue/saturation
 /// map, look table, tone curve and baseline exposure offset.
 pub fn write_dcp(p: &DcpProfile) -> Result<Vec<u8>, DcpError> {
-    use lightcraft_tiff::writer::srational;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use craft_tiff::writer::srational;
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
     let c = &p.color;
     let mut ifd = IfdBuilder::new();
     ifd.set(t::UNIQUE_CAMERA_MODEL, Value::Ascii(p.camera_model.clone()));

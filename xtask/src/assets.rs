@@ -21,15 +21,24 @@ pub fn glob(pat: &str, path: &str) -> bool {
     if let Some(dir) = pat.strip_suffix('/') {
         return path.starts_with(dir) && path[dir.len()..].starts_with('/');
     }
-    fn rec(p: &[u8], s: &[u8]) -> bool {
-        match (p.first(), s.first()) {
-            (None, None) => true,
-            (Some(b'*'), _) => rec(&p[1..], s) || (!s.is_empty() && s[0] != b'/' && rec(p, &s[1..])),
-            (Some(a), Some(b)) if a == b => rec(&p[1..], &s[1..]),
-            _ => false,
+    // (pattern, path) positions already found not to match: each is tried once, so overlapping
+    // `*`s can't make the search exponential
+    fn rec(p: &[u8], s: &[u8], failed: &mut std::collections::HashSet<(usize, usize)>) -> bool {
+        if failed.contains(&(p.len(), s.len())) {
+            return false;
         }
+        let ok = match (p.first(), s.first()) {
+            (None, None) => true,
+            (Some(b'*'), _) => rec(&p[1..], s, failed) || (!s.is_empty() && s[0] != b'/' && rec(p, &s[1..], failed)),
+            (Some(a), Some(b)) if a == b => rec(&p[1..], &s[1..], failed),
+            _ => false,
+        };
+        if !ok {
+            failed.insert((p.len(), s.len()));
+        }
+        ok
     }
-    rec(pat.as_bytes(), path.as_bytes())
+    rec(pat.as_bytes(), path.as_bytes(), &mut std::collections::HashSet::new())
 }
 
 fn backticked(cell: &str) -> impl Iterator<Item = &str> {
@@ -117,6 +126,13 @@ mod tests {
         assert!(glob("docs/images/*-tetons.jpg", "docs/images/ba-tetons.jpg"));
         assert!(!glob("docs/images/*.jpg", "docs/images/sub/x.jpg"));
         assert!(glob("crates/scenes/", "crates/scenes/a/b.png"));
+        // forty `*` against a long name that fails at its very end: exponential without the memo
+        let pat = format!("{}x", "*a".repeat(40));
+        let name = "a".repeat(200);
+        let t = std::time::Instant::now();
+        assert!(!glob(&pat, &name));
+        assert!(t.elapsed().as_secs() < 5, "took {:?}", t.elapsed());
+        assert!(glob("*a*b*", "xaybz") && !glob("*a*b*", "xa/b"));
         assert!(!glob("crates/scenes/", "crates/scenesx/b.png"));
     }
 

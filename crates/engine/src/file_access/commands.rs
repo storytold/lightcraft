@@ -231,6 +231,9 @@ const NO_PATHS: &[&str] = &[
     "label.saveSet",
     "label.setNames",
     "label.sets",
+    "lensBlur.brushReset",
+    "lensBlur.brushStroke",
+    "lensBlur.findSubject",
     "lens.databaseStatus",
     "lens.downloadDatabase",
     "library.buildPreviews",
@@ -473,9 +476,12 @@ fn check_value(value: &Value, access: Access, depth: usize) -> Result<(), String
             let trimmed = path.trim();
             if trimmed != path && !trimmed.is_empty() { check(trimmed) } else { Ok(()) }
         }
-        Value::Array(_) if depth == 0 => Err("automation command refused: a path parameter nests too deep".into()),
+        Value::Array(_) | Value::Object(_) if depth == 0 => Err("automation command refused: a path parameter nests too deep".into()),
         Value::Array(items) => items.iter().try_for_each(|v| check_value(v, access, depth - 1)),
-        _ => Ok(()),
+        // A path can sit in an object inside the parameter (`[{"path": "..."}]`).
+        Value::Object(map) => map.values().try_for_each(|v| check_value(v, access, depth - 1)),
+        Value::Null => Ok(()),
+        _ => Err("automation command refused: a path must be a string".into()),
     }
 }
 
@@ -611,7 +617,6 @@ mod tests {
         "cmd/denoise.rs",
         "cmd/face_detect.rs",
         "cmd/face_models.rs",
-        "cmd/face_recognize.rs",
         "cmd/geocode.rs",
         "config.rs",
         "denoise/builtin.rs",
@@ -624,10 +629,8 @@ mod tests {
         "faces_index.rs",
         "guard.rs",
         "import/commit.rs",
-        "import/files.rs",
         "lens_profiles.rs",
         "lensfun_download.rs",
-        "library.rs",
         "lightroom_archive.rs",
         "lightroom_job.rs",
         "lightroom_sqlite.rs",
@@ -637,9 +640,93 @@ mod tests {
         "slide_template.rs",
     ];
 
-    /// Does this line of source open a file?
+    /// A call that opens, creates, removes or renames a filesystem entry.
     fn opens_files(code: &str) -> bool {
-        ["std::fs::", "File::open", "File::create", "OpenOptions::new", "safe_file::write"].iter().any(|api| code.contains(api))
+        const APIS: &[&str] = &[
+            "std::fs::read(",
+            "std::fs::read_to_string(",
+            "std::fs::write(",
+            "std::fs::remove_file(",
+            "std::fs::remove_dir(",
+            "std::fs::rename(",
+            "std::fs::copy(",
+            "std::fs::create_dir(",
+            "std::fs::create_dir_all(",
+            "std::fs::read_dir(",
+            "std::fs::OpenOptions",
+            "std::fs::File::",
+            "fs::read(",
+            "fs::read_to_string(",
+            "fs::write(",
+            "fs::remove_file(",
+            "fs::remove_dir(",
+            "fs::rename(",
+            "fs::copy(",
+            "fs::create_dir(",
+            "fs::create_dir_all(",
+            "fs::read_dir(",
+            "fs::OpenOptions",
+            "fs::File::",
+            "File::open(",
+            "File::create(",
+            "OpenOptions::new(",
+            "safe_file::write",
+        ];
+        APIS.iter().any(|api| code.contains(api))
+    }
+
+    /// A check that holds a path to the automation roots, including the helpers that check first.
+    fn holds_a_check(code: &str) -> bool {
+        const CHECKS: &[&str] = &[
+            "file_access::",
+            "check_read(",
+            "check_write(",
+            "check_command(",
+            "check_write_target(",
+            "reject_other_names(",
+            "merge::read_file(",
+            "read_file::read_regular(",
+            "read_file::open_for_read(",
+            "open_for_read(",
+            "read_regular(",
+            "read_allowed(",
+            "write_allowed(",
+            "cube_files(",
+            "copy_no_replace(",
+            "rename_no_replace(",
+        ];
+        CHECKS.iter().any(|api| code.contains(api))
+    }
+
+    /// Functions in `code`, each as `(name, body)`. One check in a file does not cover another function.
+    /// `#[test]` functions and a `#[cfg(test)]` module are left out.
+    fn functions(code: &str) -> Vec<(String, String)> {
+        let code = code.split("\n#[cfg(test)]").next().unwrap_or(code);
+        let mut marks: Vec<(usize, String)> = Vec::new();
+        let mut at = 0usize;
+        let mut prev = "";
+        for line in code.split('\n') {
+            let trimmed = line.trim_start();
+            let is_fn = trimmed.starts_with("fn ")
+                || trimmed.starts_with("pub fn ")
+                || trimmed.starts_with("pub(crate) fn ")
+                || trimmed.starts_with("pub(super) fn ");
+            let is_test = prev.trim() == "#[test]" || prev.trim().starts_with("#[tokio::test]");
+            if is_fn && !is_test {
+                let name = trimmed.split("fn ").nth(1).unwrap_or(trimmed).split('(').next().unwrap_or("fn").trim().to_string();
+                marks.push((at, name));
+            }
+            prev = line;
+            at = at.saturating_add(line.len()).saturating_add(1);
+        }
+        marks
+            .iter()
+            .enumerate()
+            .map(|(i, (from, name))| {
+                let to = marks.get(i + 1).map(|(n, _)| *n).unwrap_or(code.len());
+                (name.clone(), code.get(*from..to).unwrap_or("").to_string())
+            })
+            .collect()
     }
 
     /// Every Rust source file under `dir`.
@@ -663,18 +750,59 @@ mod tests {
         let mut files = Vec::new();
         sources(&src, &mut files);
         let mut unchecked = Vec::new();
+        let mut stale_own = Vec::new();
         for file in files {
             // (a Windows checkout may have CRLF line ends)
             let text = std::fs::read_to_string(&file).unwrap().replace("\r\n", "\n");
             let code = text.split("\n#[cfg(test)]\nmod ").next().unwrap_or_default();
             let name = file.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
-            let checked = code.contains("file_access::") || name.starts_with("file_access");
-            match (opens_files(code) && !checked, OWN_FOLDERS.contains(&name.as_str())) {
-                (true, false) => unchecked.push(name),
-                (false, true) => panic!("{name} is listed in OWN_FOLDERS but needs no line there"),
-                _ => {}
+            if name.starts_with("file_access") {
+                continue;
+            }
+            if OWN_FOLDERS.contains(&name.as_str()) {
+                if !opens_files(code) {
+                    stale_own.push(name);
+                }
+                continue;
+            }
+            for (func, body) in functions(code) {
+                let qualified = format!("{name}::{func}");
+                // Library smart previews, a private backup unpack, and a staging file this process created.
+                const LIBRARY_OR_PRIVATE: &[&str] = &[
+                    "lightroom_catalog.rs::bytes",
+                    "lightroom_backup.rs::sweep",
+                    "slideshow_export.rs::drop",
+                    "smart.rs::check_writable",
+                    "smart.rs::files",
+                    "smart.rs::is_valid",
+                    "smart.rs::is_stale_for",
+                    "smart.rs::look_checked",
+                    "smart.rs::mark_look_checked",
+                    "smart.rs::load",
+                ];
+                if LIBRARY_OR_PRIVATE.contains(&qualified.as_str()) {
+                    continue;
+                }
+                if opens_files(&body) && !holds_a_check(&body) {
+                    unchecked.push(qualified);
+                }
             }
         }
-        assert!(unchecked.is_empty(), "these open files with no automation root check: {unchecked:?}");
+        assert!(stale_own.is_empty(), "OWN_FOLDERS lists files that do not open files: {stale_own:?}");
+        assert!(unchecked.is_empty(), "these functions open files with no automation root check: {unchecked:?}");
+    }
+
+    /// A path inside an object, and a path that is not a string, are both checked.
+    #[test]
+    fn a_path_inside_an_object_is_checked_and_a_non_string_is_refused() {
+        let (base, roots) = roots("object");
+        let outside = base.join("outside/x").to_string_lossy().into_owned();
+        confine(Some(&roots), || {
+            let nested = json!({"paths": [{"path": outside}]});
+            // `paths` is the declared parameter; the object inside the list is still a path.
+            assert!(check_command("library.import", &nested).unwrap_err().contains("automation"));
+            assert!(check_command("library.import", &json!({"paths": [1]})).unwrap_err().contains("must be a string"));
+        });
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

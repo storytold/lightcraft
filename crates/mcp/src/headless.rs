@@ -58,11 +58,12 @@ impl Headless {
         Ok(self.with_scoped_automation_roots(roots))
     }
 
-    /// The roots of this backend's calls on the calling thread only, leaving worker threads as they
-    /// are. For tests that try several sets of roots in one process; anything that hosts agents
-    /// uses [`with_automation_roots`](Self::with_automation_roots).
-    #[doc(hidden)]
-    pub fn with_scoped_automation_roots(mut self, roots: impl Into<Option<Arc<AutomationRoots>>>) -> Self {
+    /// The roots of this backend's calls on the calling thread only.
+    ///
+    /// Not part of the public API. Production hosting uses [`Self::with_automation_roots`], which
+    /// confines the whole process. Tests in this crate use this so several sets of roots can run
+    /// in one process; a different set cannot replace roots already set for the process.
+    pub(crate) fn with_scoped_automation_roots(mut self, roots: impl Into<Option<Arc<AutomationRoots>>>) -> Self {
         self.roots = roots.into();
         self
     }

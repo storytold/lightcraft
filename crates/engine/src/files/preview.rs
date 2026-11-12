@@ -181,6 +181,7 @@ impl PreviewRead {
 pub fn preview_window(path: &str, max_edge: usize) -> Result<Option<(Vec<u8>, Vec<u8>, PreviewRead)>, String> {
     use std::io::{Read, Seek, SeekFrom};
 
+    crate::file_access::check_read(path)?;
     let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
     let total = file.metadata().map_err(|e| format!("{path}: {e}"))?.len();
     let mut prefix = read_prefix(&mut file, path, total)?;

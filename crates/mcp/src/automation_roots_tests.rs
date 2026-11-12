@@ -3,15 +3,16 @@
 //! goes inside the write root. Paths that leave a root (`..`, another folder, a sibling with the
 //! same prefix, a link) are refused, nothing from a refused file reaches the library, and nothing
 //! is written outside.
-// Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+//!
+//! Lives in the crate so it can use the test-only thread-local roots. Those are not a public API.
 
 use std::path::{Path, PathBuf};
 
 use lightcraft_engine::Session;
 use lightcraft_engine::file_access::AutomationRoots;
-use lightcraft_mcp::{Headless, Server};
 use serde_json::{Value, json};
+
+use crate::{Headless, Server};
 
 const SECRET: &str = "TOP SECRET PHOTO CONTENT";
 
@@ -267,7 +268,7 @@ fn render_photo_in_memory_succeeds_under_confinement() {
     let (error, text, reply) = call(&mut server, "render_photo", json!({}));
     assert!(!error, "render_photo in memory must succeed under confinement: {text}");
     let image = reply["result"]["content"].as_array().unwrap().iter().find(|c| c["type"] == "image").expect("an image block");
-    let png = lightcraft_mcp::base64_decode(image["data"].as_str().unwrap()).unwrap();
+    let png = crate::base64_decode(image["data"].as_str().unwrap()).unwrap();
     assert!(lightcraft_codecs::decode(&png, Default::default()).is_ok(), "the image decodes");
     assert!(!text.contains("\"data\""), "the text doesn't repeat the image: {text}");
 

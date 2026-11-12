@@ -21,15 +21,17 @@ use crate::import::{ImportMode, ImportOptions, import_with, is_supported};
 use crate::{Browse, LibrarySource, Result, Session};
 
 /// Browse a folder and return its visible photos and child folders.
-/// Browse photos or folders using the supplied command parameters.
 fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.browse";
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
-    let dir = std::path::absolute(Path::new(path)).map_err(|e| bad(C, e.to_string()))?;
-    if !dir.is_dir() {
+    let dir = match std::path::absolute(Path::new(path)) {
+        Ok(dir) => dir,
+        Err(_) => return Err(bad(C, format!("{path}: not a folder"))),
+    };
+    // Asked before the disk: a missing path and a folder outside the roots are the same answer.
+    if crate::file_access::check_read(&dir).is_err() || !dir.is_dir() {
         return Err(bad(C, format!("{path}: not a folder")));
     }
-    crate::file_access::check_read(&dir).map_err(|e| bad(C, e))?;
     let dir_s = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
     let subfolders = bool_or(p, "subfolders", s.browse.as_ref().is_some_and(|b| b.subfolders));
     let files: Vec<String> = if subfolders {

@@ -47,6 +47,11 @@ The rules:
 
 - **A root grants its own kind only.** Reads are allowed inside either root, writes only inside the write root. With only
   a read root nothing can be written; with neither option nothing is confined.
+- **A file has one name.** An existing file with any other name is refused, even when the name that was
+  checked is inside a root, because another name may lie outside. A name count that cannot be read is refused too.
+  A directory is judged only by where it is.
+- **A path outside the roots looks the same whether or not it is there.** The error does not say the configured
+  folders, and it does not say that an outside folder is missing.
 - **Links are followed before a path is judged.** Both the roots and every path are resolved first, so `..`, a link to a
   file or folder outside, and a link that leads nowhere are refused before anything is opened. A file that doesn't exist
   yet is judged by its nearest existing folder. Comparison is by whole path components (`/work2` isn't inside `/work`)
