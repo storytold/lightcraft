@@ -136,11 +136,25 @@ impl LoadedCameraProfile {
         Ok(LoadedCameraProfile { profile: Arc::new(profile), fingerprint: Hasher128::new().update(bytes).finish().0 as u64 | 1 })
     }
 }
-    }
-}
 
 #[cfg(test)]
 mod thumbnail_hash_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod compiles_without_syntax_error_test {
+    #[test]
+    fn compiles_without_syntax_error() {
+        // Verify decoder_cache_version returns format-specific versions for cache invalidation
+        let arw_version = super::decoder_cache_version("ARW");
+        let cr2_version = super::decoder_cache_version("CR2");
+        let base_version = super::RENDER_CACHE_VERSION;
+
+        // Different formats must have different decoder versions
+        assert_ne!(arw_version, cr2_version, "ARW and CR2 decoder versions must differ");
+        // Decoder version adds per-format offset to base RENDER_CACHE_VERSION
+        assert_ne!(arw_version, base_version, "Decoder version must differ from base RENDER_CACHE_VERSION");
+    }
+}
