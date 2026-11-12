@@ -469,7 +469,8 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let set = std::process::Command::new("fsutil").args(["file", "setCaseSensitiveInfo"]).arg(&base).arg("enable").output().unwrap();
         if !set.status.success() {
-            println!("CASE-SENSITIVE-FOLDER-UNAVAILABLE: {set:?}");
+            let _ = std::fs::remove_dir_all(&base);
+            lightcraft_testkit::skip!(System, "fsutil could not make a case-sensitive folder: {set:?}");
             return;
         }
         println!("CASE-SENSITIVE-FOLDER-USED");
@@ -492,7 +493,11 @@ mod tests {
         std::fs::create_dir_all(&outside).unwrap();
         let junction = outside.join("backdir");
         let made = std::process::Command::new("cmd").arg("/c").arg("mklink").arg("/J").arg(&junction).arg(root.join("sub")).output().unwrap();
-        assert!(made.status.success(), "{made:?}");
+        if !made.status.success() {
+            let _ = std::fs::remove_dir_all(&base);
+            lightcraft_testkit::skip!(System, "mklink /J could not make a junction: {made:?}");
+            return;
+        }
         let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
         let e = roots.check(&junction, Access::Write).unwrap_err();
         assert!(e.contains("outside the write root"), "{e}");
@@ -649,8 +654,8 @@ mod tests {
         #[cfg(not(any(unix, windows)))]
         let made = |_: &Path, _: &Path| false;
         if !made(&base.join("outside/secret.jpg"), &base.join("in/leak.jpg")) {
-            eprintln!("skipped: symbolic links can't be made here");
-            let _ = std::fs::remove_dir_all(base);
+            let _ = std::fs::remove_dir_all(&base);
+            lightcraft_testkit::skip!(System, "symbolic links can't be made here");
             return;
         }
         assert!(roots.check(s(base.join("in/leak.jpg")), Access::Read).unwrap_err().contains("outside the read root"), "a file link out");

@@ -354,7 +354,6 @@ fn template_export(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Import a print template from a file into the library.
-/// Import print templates from the supplied files.
 fn template_import(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "print.template.import";
     let path = std::path::Path::new(template_path(p, ID)?);

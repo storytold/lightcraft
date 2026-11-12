@@ -254,8 +254,7 @@ fn add_to_library(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"added": n}))
 }
 
-/// Describe the library browsing commands and their parameters.
-/// Describe the parameters accepted by the browse command.
+/// The library browsing commands: browse, and rename, move and create a folder on disk.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(

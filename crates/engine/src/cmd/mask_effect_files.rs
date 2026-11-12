@@ -469,8 +469,7 @@ pub fn read_capped(path: &str) -> std::result::Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| e.to_string())
 }
 
-/// Import mask effect files into the selected library.
-/// Import effect files into the local effect library.
+/// Import mask effect files into the library.
 pub fn import_effects(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.importEffects";
     let mut paths: Vec<String> =
@@ -506,7 +505,6 @@ pub fn import_effects(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Export the selected mask effects to a file.
-/// Export selected effect files to the requested folder.
 pub fn export_effects(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.exportEffects";
     let path = str_param(p, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;

@@ -14,3 +14,7 @@ lightcraft-codecs = { workspace = true }
 lightcraft-raster = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+
+[dev-dependencies]
+# tests record why they skip (`cargo xtask ci` lists the skips)
+lightcraft-testkit = { workspace = true }

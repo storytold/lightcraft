@@ -162,6 +162,7 @@ fn folders(tag: &str) -> PathBuf {
         std::fs::create_dir_all(base.join(d)).unwrap();
     }
     png(&base.join("in/photo.png"));
+    png(&base.join("out/photo.png"));
     png(&base.join(format!("outside/{SECRET}.png")));
     png(&base.join(format!("outside/sub/{SECRET}2.png")));
     std::fs::write(base.join(format!("outside/{SECRET}.png.xmp")), format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">{SECRET}</x:xmpmeta>")).unwrap();
@@ -230,8 +231,62 @@ fn path_params(names: &[&str], target: &str) -> Value {
     }
     o.insert("identityPlate".to_string(), json!({"image": target}));
     o.insert("watermark".to_string(), json!({"image": target}));
+    // `print.set` checks this nested profile path; a flat `image` is the page image, not a file.
+    o.insert("job".to_string(), json!({"color": {"profile": {"path": target}}}));
     o.insert("name".to_string(), json!("escape"));
     Value::Object(o)
+}
+
+/// Help text names a path-like word, but that word is not a file the roots check. These commands
+/// refuse for another reason (a missing id, an album or keyword, an enum, a template token)
+/// and never reach the path check. Each one is `Policy::NoPaths`; the walk asserts that, so a
+/// command that grows a real path parameter cannot stay on this list.
+const REFUSES_EARLIER: &[&str] = &[
+    "album.create",
+    "album.move",
+    "album.reorder",
+    "album.sort",
+    "beforeAfter.setBefore",
+    "keyword.create",
+    "keyword.merge",
+    "keyword.move",
+    "photo.rename",
+    "photo.renamePreview",
+    "spot.add",
+    "spot.update",
+];
+
+/// Whether `name` (`job.color.profile.path`) is present in `params`.
+fn param_is_set(params: &Value, name: &str) -> bool {
+    let mut at = Some(params);
+    for part in name.split('.') {
+        at = at.and_then(|v| v.get(part));
+    }
+    at.is_some()
+}
+
+/// A read the roots allow. `in/new.png` sits in the read root. `outside/back.png` and
+/// `outside/backdir` are links that stand outside and point into the write root, and a read
+/// follows the link. A write to either is refused, because a write acts on the link where it stands.
+fn escape_is_allowed(access: lightcraft_engine::file_access::Access, target: &str, base: &Path, read: bool, write: bool) -> bool {
+    if !matches!(access, lightcraft_engine::file_access::Access::Read) {
+        return false;
+    }
+    let path = Path::new(target.trim());
+    (read && path == base.join("in/new.png")) || (write && (path == base.join("outside/back.png") || path == base.join("outside/backdir")))
+}
+
+/// The roots check a parameter this call set, and the target is not one that check allows.
+fn reaches_path_check(id: &str, params: &Value, base: &Path, target: &str, read: bool, write: bool) -> bool {
+    if REFUSES_EARLIER.contains(&id) {
+        return false;
+    }
+    match lightcraft_engine::file_access::commands::policy(id) {
+        Some(lightcraft_engine::file_access::commands::Policy::Paths(spec)) => {
+            spec.iter().any(|(name, access)| param_is_set(params, name) && !escape_is_allowed(*access, target, base, read, write))
+        }
+        _ => false,
+    }
 }
 
 /// Replies may name the path they refuse, never what's in that folder or file.
@@ -248,30 +303,40 @@ fn walk(tag: &str, read: bool, write: bool) -> Vec<String> {
     let mut before = BTreeMap::new();
     snapshot(&outside, &mut before);
     let mut mcp = Mcp::start(&base, read, write);
-    if read || !write {
-        mcp.ok("import", json!({"paths": [base.join("in/photo.png").to_string_lossy()]}));
-    }
+    // The photo has to already sit inside a root. `confine_process` is set before any tool call
+    // and cannot be turned off, so this process cannot import a file from outside and then enable
+    // the roots. Reads are allowed in the write root, so a write-only server imports from `out`.
+    let photo = if read || !write { base.join("in/photo.png") } else { base.join("out/photo.png") };
+    mcp.ok("import", json!({"paths": [photo.to_string_lossy()]}));
     let listed = mcp.ok("command_list", json!({}));
     let text = listed["result"]["content"][0]["text"].as_str().unwrap().to_string();
     let commands: Value = serde_json::from_str(&text).unwrap();
-    let mut ids: Vec<String> = commands
-        .as_array()
-        .or(commands["commands"].as_array())
-        .unwrap()
-        .iter()
-        .filter_map(|c| c["id"].as_str().map(str::to_string))
-        .filter(|id| !NOT_WALKED.contains(&id.as_str()))
-        .collect();
+    let listed_commands = commands.as_array().or(commands["commands"].as_array()).unwrap();
+    let mut ids: Vec<String> =
+        listed_commands.iter().filter_map(|c| c["id"].as_str().map(str::to_string)).filter(|id| !NOT_WALKED.contains(&id.as_str())).collect();
     assert!(ids.len() > 300, "the registry: {}", ids.len());
     // those that take the photo away last, so the others have one to work on
     ids.sort_by_key(|id| ["delete", "remove", "forget", "empty"].iter().any(|w| id.to_lowercase().contains(w)));
+    for id in REFUSES_EARLIER {
+        assert!(
+            !matches!(lightcraft_engine::file_access::commands::policy(id), Some(lightcraft_engine::file_access::commands::Policy::Paths(_))),
+            "{id} is listed as refusing before the path check, but the roots do check a path of it"
+        );
+    }
     let (reads, writes) = escapes(&base);
     let targets = reads.iter().map(|t| (READ_NAMES, t)).chain(writes.iter().map(|t| (WRITE_NAMES, t)));
     for (names, target) in targets {
         for id in &ids {
-            let r = mcp.tool("run_command", json!({"command": id, "params": path_params(names, target)}));
+            let params = path_params(names, target);
+            let r = mcp.tool("run_command", json!({"command": id, "params": params}));
             if leaks(&r) {
                 found.push(format!("{id} {target}: {r}"));
+            }
+            // A command that reaches the path check has to be refused by the roots, so a missing
+            // path and an existing one outside get the same answer. Commands in `REFUSES_EARLIER`
+            // fail on a missing id or a non-file parameter first.
+            if (read || write) && reaches_path_check(id, &params, &base, target, read, write) && !r.to_string().contains("automation") {
+                found.push(format!("{id} {target}: expected an automation refusal: {r}"));
             }
         }
     }

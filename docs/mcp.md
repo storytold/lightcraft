@@ -43,6 +43,19 @@ other unattended use:
 - `--automation-read-root DIR`: reads stay inside `DIR` (or the write root).
 - `--automation-write-root DIR`: writes stay inside `DIR`.
 
+```sh
+lightcraft-cli mcp --automation-read-root /srv/inbox --automation-write-root /srv/out --library /srv/library
+```
+
+Either flag also accepts `--flag=DIR`. A folder whose name starts with `-` has to use that form (`--automation-read-root=-folder`). The flags are rejected when:
+
+- one of them is given twice (the space form and the `=` form count as the same flag)
+- the folder operand is missing
+- the folder text is empty (`--automation-read-root=`)
+- the next argument starts with `-` and was not passed with `=`
+- `--connect` is set as well (a running app is not confined by these flags)
+- the folder does not exist, or exists and is not a directory (`cannot open the automation read root` / `cannot open the automation write root`)
+
 The rules:
 
 - **A root grants its own kind only.** Reads are allowed inside either root, writes only inside the write root. With only

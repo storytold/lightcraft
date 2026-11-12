@@ -110,7 +110,6 @@ fn cube_files(paths: &[String]) -> (Vec<(String, String, Option<String>)>, Vec<V
 }
 
 /// Import LUT profiles from the supplied files into the library.
-/// Import LUT profiles from the supplied files.
 fn import(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "profile.import";
     let paths: Vec<String> =
@@ -176,8 +175,7 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"imported": imported, "failed": failed}))
 }
 
-/// Describe the LUT profile commands and their parameter schemas.
-/// Describe the parameters accepted by LUT profile commands.
+/// The LUT profile commands and their parameter schemas.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(

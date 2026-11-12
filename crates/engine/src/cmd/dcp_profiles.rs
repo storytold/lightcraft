@@ -187,8 +187,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
     Ok((imported, failed))
 }
 
-/// Delete a camera profile from the selected library.
-/// Delete the selected DCP profile.
+/// Delete one imported camera profile from the library, including its file when that file is the library's copy.
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "profile.deleteCamera";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing id"))?.to_string();

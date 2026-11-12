@@ -290,13 +290,16 @@ fn symlink_directory_outside_read_root_is_not_traversed() {
     let made = std::os::unix::fs::symlink(base.join("outside"), base.join("in/link_outside")).is_ok();
     #[cfg(windows)]
     let made = std::os::windows::fs::symlink_dir(base.join("outside"), base.join("in/link_outside")).is_ok();
-    if made {
-        let in_dir = s(&base.join("in"));
-        let (error, text, reply) = call(&mut server, "import", json!({"paths": [in_dir]}));
-        assert!(!error, "import {in_dir}: {text}");
-        let imported = reply["result"]["structuredContent"]["imported"].as_array().expect("import response must contain imported photo ids");
-        assert_eq!(imported.len(), 1, "Must not import photo through symlink directory: {reply}");
+    if !made {
+        let _ = std::fs::remove_dir_all(&base);
+        lightcraft_testkit::skip!(System, "symbolic links can't be made here");
+        return;
     }
+    let in_dir = s(&base.join("in"));
+    let (error, text, reply) = call(&mut server, "import", json!({"paths": [in_dir]}));
+    assert!(!error, "import {in_dir}: {text}");
+    let imported = reply["result"]["structuredContent"]["imported"].as_array().expect("import response must contain imported photo ids");
+    assert_eq!(imported.len(), 1, "Must not import photo through symlink directory: {reply}");
     let _ = std::fs::remove_dir_all(base);
 }
 
@@ -310,13 +313,16 @@ fn mask_import_effects_symlink_directory_outside_read_root_is_not_traversed() {
     let made = std::os::unix::fs::symlink(base.join("outside"), base.join("in/sub/link_outside")).is_ok();
     #[cfg(windows)]
     let made = std::os::windows::fs::symlink_dir(base.join("outside"), base.join("in/sub/link_outside")).is_ok();
-    if made {
-        let in_dir = s(&base.join("in"));
-        let (error, text, reply) = call(&mut server, "cmd_mask_importEffects", json!({"paths": [in_dir]}));
-        assert!(!error, "mask.importEffects {in_dir}: {text}");
-        let full_response = reply.to_string();
-        assert!(!full_response.contains("secret.lceffect"), "Must not disclose outside directory entries through nested symlink: {reply}");
+    if !made {
+        let _ = std::fs::remove_dir_all(&base);
+        lightcraft_testkit::skip!(System, "symbolic links can't be made here");
+        return;
     }
+    let in_dir = s(&base.join("in"));
+    let (error, text, reply) = call(&mut server, "cmd_mask_importEffects", json!({"paths": [in_dir]}));
+    assert!(!error, "mask.importEffects {in_dir}: {text}");
+    let full_response = reply.to_string();
+    assert!(!full_response.contains("secret.lceffect"), "Must not disclose outside directory entries through nested symlink: {reply}");
     let _ = std::fs::remove_dir_all(base);
 }
 
@@ -486,15 +492,13 @@ fn lightroom_wal_symlink_outside_read_root_is_refused() {
     #[cfg(windows)]
     let made = std::os::windows::fs::symlink_file(&outside_secret, &wal_in).is_ok();
 
-    if made {
-        refused(
-            &mut server,
-            "run_command",
-            json!({"command": "library.inspectLightroom", "params": {"path": s(&lrcat_in)}}),
-            "outside the read root",
-        );
-        refused(&mut server, "run_command", json!({"command": "library.importLightroom", "params": {"path": s(&lrcat_in)}}), "outside the read root");
+    if !made {
+        let _ = std::fs::remove_dir_all(&base);
+        lightcraft_testkit::skip!(System, "symbolic links can't be made here");
+        return;
     }
+    refused(&mut server, "run_command", json!({"command": "library.inspectLightroom", "params": {"path": s(&lrcat_in)}}), "outside the read root");
+    refused(&mut server, "run_command", json!({"command": "library.importLightroom", "params": {"path": s(&lrcat_in)}}), "outside the read root");
     let _ = std::fs::remove_dir_all(base);
 }
 

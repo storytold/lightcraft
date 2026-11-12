@@ -301,7 +301,6 @@ pub fn to_file(presets: &[CurvePreset]) -> String {
 }
 
 /// Import curve presets from the named preset files.
-/// Import curve presets from the supplied files.
 fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "curve.importPresets";
     let mut paths: Vec<String> =
