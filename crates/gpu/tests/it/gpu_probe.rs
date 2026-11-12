@@ -84,3 +84,48 @@ fn json_str(s: &str) -> String {
     out.push('"');
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_without_a_marker_starts_with_glow() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let gl = backend::WindowRenderer::Wgpu(Backends::GL);
+        let vk = backend::WindowRenderer::Wgpu(Backends::VULKAN);
+        
+        // Test glow_without_marker returns true for Linux without marker
+        assert!(backend::glow_without_marker(None, false, "linux", true));
+        assert!(!backend::glow_without_marker(None, true, "linux", true));
+        assert!(!backend::glow_without_marker(Some(vk), false, "linux", true));
+        assert!(!backend::glow_without_marker(None, false, "linux", false));
+        assert!(!backend::glow_without_marker(None, false, "windows", true));
+        
+        // Test initial_window_renderer returns Glow for Linux without marker
+        assert_eq!(backend::initial_window_renderer(None, None, None, false, "linux", all, true), Some(backend::WindowRenderer::Glow));
+        
+        // A glow the last start died in is not retried first without a marker
+        assert_eq!(backend::initial_window_renderer(None, None, Some(backend::WindowRenderer::Glow), false, "linux", all, true), Some(gl));
+        assert_eq!(backend::initial_window_renderer(None, Some(vk), Some(backend::WindowRenderer::Glow), false, "linux", all, true), Some(gl));
+        
+        // A remembered wgpu renderer that worked is kept even without a marker
+        assert_eq!(backend::initial_window_renderer(None, Some(gl), None, false, "linux", all, true), Some(gl));
+        
+        // A remembered renderer that is also the failed one is not retried first without a marker
+        assert_eq!(backend::initial_window_renderer(None, Some(gl), Some(gl), false, "linux", all, true), Some(vk));
+        assert_eq!(backend::initial_window_renderer(None, Some(backend::WindowRenderer::Glow), Some(backend::WindowRenderer::Glow), false, "linux", all, true), Some(gl));
+        
+        // A remembered Vulkan renderer is not kept without a marker
+        assert_eq!(backend::initial_window_renderer(None, Some(vk), None, false, "linux", all, true), Some(backend::WindowRenderer::Glow));
+        
+        // With a marker available the existing order is kept
+        assert_eq!(backend::initial_window_renderer(None, None, None, true, "linux", all, true), Some(gl));
+        assert_eq!(backend::initial_window_renderer(Some(vk), None, None, false, "linux", all, true), Some(vk));
+        assert_eq!(backend::initial_window_renderer(None, None, None, false, "linux", all, false), Some(gl));
+        
+        // The marker-less order should start with glow when no marker is available (regression test for #3885)
+        let order = backend::window_renderer_order(None, None, None, "linux", all, true);
+        assert_eq!(order.first(), Some(&backend::WindowRenderer::Glow));
+    }
+}
