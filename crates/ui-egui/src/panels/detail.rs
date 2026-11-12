@@ -942,6 +942,10 @@ fn camera_jpeg_shown(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, sho
 /// shortcut must not let a small cached image satisfy a large request.
 /// Uses the engine's 1% reuse tolerance so a cached edge slightly below the request
 /// is still accepted, avoiding an unnecessary render.
+///
+/// Rejection excludes the undersized view from cache reads only: `view_cache` is kept
+/// as the write destination, so `RenderJob::run_photo` still stores the larger render
+/// there instead of rendering from the source on every return to the photo.
 fn reject_undersized_cached_view(job: &mut lightcraft_engine::media::RenderJob) {
     if let Some(cached) = job.cached_view() {
         let cached_long = cached.width.max(cached.height);
@@ -949,7 +953,11 @@ fn reject_undersized_cached_view(job: &mut lightcraft_engine::media::RenderJob) 
         // Apply the same 1% tolerance that `fit_cached` uses for reuse decisions.
         // This avoids rejecting a cached view that the engine would accept.
         if cached_long < requested_long && (requested_long as f32 / cached_long as f32 - 1.0) > 0.01 {
-            job.view_cache = None;
+            // The undersized view only satisfies the request via the display-fit shortcut
+            // (an image larger than the size it is drawn at). Drop that shortcut so
+            // `cached_view()` reads `None`, but keep `view_cache`: the larger render the
+            // worker produces is stored back into it for the next visit.
+            job.display_fit = None;
         }
     }
 }
