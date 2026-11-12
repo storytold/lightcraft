@@ -277,6 +277,15 @@ fn pan_and_zoom_paths_change_each_pass_and_hold_in_a_manual_slideshow() {
         m.start.zoom.max(m.end.zoom)
     };
     assert!(close(1.0) > close(0.0));
+    // the playback view follows the path for its amount
+    let view = |amount: f64| {
+        let p = Playback::new(ids(1), None, PlaybackSettings { pan_and_zoom_amount: amount, ..s.clone() }, 9, 0.0).unwrap();
+        let m = Motion::new(p.motion_key(ph(1)).unwrap(), amount);
+        let (a, b) = (p.pan_zoom(0.0).current.unwrap(), p.pan_zoom(100.0).current.unwrap());
+        assert_eq!((a, b), (m.at(0.0), m.at(1.0)), "the view at amount {amount} starts and ends on its path");
+        a.zoom.max(b.zoom)
+    };
+    assert!(view(1.0) > view(0.5) && view(0.5) > view(0.0), "the amount sets the zoom of the playback view");
     // a manual slideshow holds each photo at its start view; ← / → start the next one there
     let mut p = Playback::new(ids(3), None, PlaybackSettings { manual: true, ..s }, 9, 0.0).unwrap();
     let start = Motion::new(p.motion_key(ph(1)).unwrap(), 0.5).start;
