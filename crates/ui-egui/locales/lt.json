@@ -4392,5 +4392,16 @@
   "Short Epson and Mamiya raws are refused": "Atmetami nepilni „Epson“ ir „Mamiya“ RAW failai",
   "An Epson ERF or Mamiya MEF whose raw strip runs past the end of the file is now an error on import (issue #2119).": "Importuojant „Epson ERF“ arba „Mamiya MEF“ RAW failą, kurio duomenų juosta tęsiasi už failo pabaigos, dabar pateikiama klaida (klaida Nr. 2119).",
   "Before, the header probe trusted the declared strip length and sized its sample buffer from it, so a few KB of file": "Anksčiau antraštės tikrinimo funkcija pasitikėdavo nurodytu duomenų juostos ilgiu ir pagal jį parinkdavo atminties buferio dydį, todėl vos kelių KB failas",
-  "could make it allocate gigabytes.": "galėdavo priversti rezervuoti gigabaitus atminties."
+  "could make it allocate gigabytes.": "galėdavo priversti rezervuoti gigabaitus atminties.",
+  "2026-10-16": "2026-10-16",
+  "Synchronize Folder shows that it is listing the folder": "Sinchronizuojant aplanką rodoma, kad jis nuskaitomas",
+  "A folder with tens of thousands of photos, above all on a network share, can take minutes to list before": "Aplanko, kuriame yra dešimtys tūkstančių nuotraukų, ypač esančio tinklo ištekliuje, sąrašo sudarymas gali užtrukti kelias minutes, kol",
+  "Synchronize Folder checks a single photo. Its row in the activity stack used to sit at \"0 of 64085\" with an empty": "komanda „Sinchronizuoti aplanką“ pradeda tikrinti pirmą nuotrauką. Anksčiau veiksmų sąraše visą tą laiką būdavo rodoma „0 iš 64085“ ir tuščia",
+  "bar all that time, as if it had stopped. It now says how many folders and files it has listed so far, with a bar": "juosta, tarsi procesas būtų sustojęs. Dabar rodoma, kiek aplankų ir failų jau įtraukta į sąrašą, o juosta",
+  "that moves on its own, and then counts the photos it checks. The dialog says the same.": "juda savaime. Vėliau skaičiuojamos tikrinamos nuotraukos. Tą pačią informaciją rodo ir dialogo langas.",
+  "✕ on the row stops the listing too, not only the checks after it.": "Eilutėje paspaudus ✕, sustabdomas ir sąrašo sudarymas, ne tik po jo vykstantis tikrinimas.",
+  "The photo grid keeps up with imports into a large library": "Nuotraukų tinklelis sklandžiai veikia importuojant į didelę biblioteką",
+  "While photos are imported into a large library, the grid takes in each batch as it arrives instead of reading": "Importuojant nuotraukas į didelę biblioteką, tinklelis dabar įtraukia kiekvieną naują jų paketą vos jam pasirodžius, užuot iš naujo nuskaitęs",
+  "every photo of the view again: at about 180,000 photos a batch cost the window a tenth of a second, over and over": "visas rodinio nuotraukas. Bibliotekoje, kurioje yra apie 180 000 nuotraukų, anksčiau kiekvienas paketas langui kainuodavo dešimtadalį sekundės – ir taip nuolat",
+  "for as long as the import ran. Changing one photo's capture time or crop is quicker too.": "visą importavimo laiką. Taip pat greičiau pakeičiamas vienos nuotraukos fotografavimo laikas arba apkirpimas."
 }
