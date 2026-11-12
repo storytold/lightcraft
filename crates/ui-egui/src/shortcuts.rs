@@ -591,10 +591,14 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         return;
     }
     if matches!(f, "library.nextUnrated" | "library.prevUnrated") {
+        use crate::panels::compare;
+        if compare::culling(app) {
+            return;
+        }
         if let Ok(result) = app.run(f, json!({}))
             && all_rated_toast(&result)
         {
-            app.toast(ctx, crate::i18n::tr("All photos are rated"));
+            app.toast(ctx, crate::i18n::tr("No unrated photos in this view"));
         }
         return;
     }
@@ -932,7 +936,7 @@ mod next_unrated_shortcut_tests {
         for f in ["library.nextUnrated", "library.prevUnrated"] {
             let mut app = app_with(&[(1, 5), (2, 5)]);
             fire_command(&mut app, &ctx, f, false);
-            assert_eq!(app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("All photos are rated"), "{f}");
+            assert_eq!(app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("No unrated photos in this view"), "{f}");
             assert_eq!(app.session.active(), Some(lightcraft_catalog::PhotoId(1)), "{f}");
         }
     }

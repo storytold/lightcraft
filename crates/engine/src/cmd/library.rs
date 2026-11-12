@@ -52,13 +52,7 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
                     .or_else(|| vis.iter().enumerate().rev().find(|(pos, id)| *pos >= cur && is_unrated(id)).map(|(_, id)| *id))
             }
         })
-        .or_else(|| {
-            if d >= 0 {
-                vis.iter().find(|id| is_unrated(id)).copied()
-            } else {
-                vis.iter().rev().find(|id| is_unrated(id)).copied()
-            }
-        });
+        .or_else(|| if d >= 0 { vis.iter().find(|id| is_unrated(id)).copied() } else { vis.iter().rev().find(|id| is_unrated(id)).copied() });
     let Some(id) = next else {
         return Ok(json!({"allRated": true}));
     };
@@ -67,9 +61,6 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
     }
     s.end_interaction()?;
     if s.selection.ids.len() > 1 {
-        if !s.selection.contains(id) {
-            s.selection.ids.push(id);
-        }
         s.selection.active = Some(id);
     } else {
         s.selection = Selection::single(id);
@@ -156,7 +147,7 @@ mod next_unrated_tests {
         let result = s.execute("library.nextUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4), PhotoId(3)]);
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
     }
 
     #[test]
@@ -208,7 +199,7 @@ mod next_unrated_tests {
         let result = s.execute("library.prevUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4), PhotoId(3)]);
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
     }
 
     #[test]
