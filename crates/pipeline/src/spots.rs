@@ -403,7 +403,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
             continue;
         };
         let Some(&first) = pts.first() else { continue };
-        let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
+        let offset = offset.unwrap_or_else(|| auto_source(&original, first, r));
         // alpha of the stroke and source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];
         let mut src = vec![[0.0f32; 3]; bw * bh];
@@ -657,7 +657,43 @@ mod tests {
         let mut second = base.clone();
         apply(&mut second, &[spot2.clone(), spot1.clone()], &frame, ppl);
         assert!(first.get(30, 50)[0] > 0.5, "spot 1 copied the bright columns");
-        assert_eq!(first.data, second.data, "spot 2 read spot 1's output when spot 1 ran first");
+    assert_eq!(first.data, second.data, "spot 2 read spot 1's output when spot 1 ran first");
+    }
+
+    #[test]
+    fn auto_source_reads_the_pre_spot_snapshot() {
+        // spot 1 copies bright columns onto the left side; spot 2's auto source
+        // must choose from the original image, not from pixels spot 1 wrote, so
+        // the result must not depend on spot order.
+        let mut base = Rgb32f::from_fn(100, 100, |_, _| [0.1; 3]);
+        for x in 68..72 {
+            for y in 0..100 {
+                base.set(x, y, [0.9; 3]);
+            }
+        }
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.30, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.40, 0.0)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Remove,
+            points: vec![Point::new(0.60, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: None,
+        };
+        let mut first = base.clone();
+        apply(&mut first, &[spot1.clone(), spot2.clone()], &frame, ppl);
+        let mut second = base.clone();
+        apply(&mut second, &[spot2.clone(), spot1.clone()], &frame, ppl);
+        assert_eq!(first.data, second.data, "auto source read spot 1's output when spot 1 ran first");
     }
 
     fn with_spots(spots: Vec<Spot>) -> DevelopSettings {
