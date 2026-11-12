@@ -61,6 +61,9 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
     }
     s.end_interaction()?;
     if s.selection.ids.len() > 1 {
+        if !s.selection.ids.contains(&id) {
+            s.selection.ids.push(id);
+        }
         s.selection.active = Some(id);
     } else {
         s.selection = Selection::single(id);
@@ -147,7 +150,7 @@ mod next_unrated_tests {
         let result = s.execute("library.nextUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4), PhotoId(3)]);
     }
 
     #[test]
@@ -199,7 +202,7 @@ mod next_unrated_tests {
         let result = s.execute("library.prevUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4), PhotoId(3)]);
     }
 
     #[test]
@@ -231,5 +234,17 @@ mod next_unrated_tests {
         s.selection.active = Some(PhotoId(1));
         let result = s.execute("library.prevUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 4}), "previous enters the view at its last unrated photo");
+    }
+
+    #[test]
+    fn next_unrated_rates_jumped_photo_without_explicit_ids() {
+        let mut s = session().unwrap();
+        s.execute("library.select", &json!({"ids": [1, 2, 4], "active": 1})).unwrap();
+        let result = s.execute("library.nextUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"active": 3}));
+        assert_eq!(s.active(), Some(PhotoId(3)));
+        // A rating command with no explicit ids rates the active (jumped-to) photo.
+        s.execute("photo.rate", &json!({"rating": 5})).unwrap();
+        assert_eq!(s.catalog.photo(PhotoId(3)).unwrap().rating, 5);
     }
 }
