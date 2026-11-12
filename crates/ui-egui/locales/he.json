@@ -1056,5 +1056,15 @@
   "Optimize Library": "מיטוב הספרייה",
   "Open Log Folder": "פתיחת תיקיית יומני הרישום",
   "Reading photos…": "קורא תמונות…",
-  "Adding photos…": "מוסיף תמונות…"
+  "Adding photos…": "מוסיף תמונות…",
+  "All Mask Overlays": "כל שכבות־העל של המסכות",
+  "Cycle Mask Overlay Color": "מעבר בין צבעי שכבת־העל של המסכה",
+  "Cycle Mask Overlay Mode": "מעבר בין מצבי שכבת־העל של המסכה",
+  "Overlay color": "צבע שכבת־העל",
+  "Analyzing the photo for AI masks…": "מנתח את התמונה לזיהוי מסכות באמצעות בינה מלאכותית…",
+  "Refining the mask's detail…": "משפר את פרטי המסכה…",
+  "Subtract from this mask": "החסרה מהמסכה הזו",
+  "Sharpness": "חדות",
+  "Create Preset…": "יצירת ערכת הגדרות…",
+  "More preset options": "אפשרויות נוספות לערכת ההגדרות"
 }

@@ -1689,3 +1689,25 @@ fn hebrew_round2_import_labels_translate_exactly() {
         );
     }
 }
+
+#[test]
+fn hebrew_parallel_round6_masking_labels() {
+    for (source, expected) in [
+        ("All Mask Overlays", "כל שכבות־העל של המסכות"),
+        ("Cycle Mask Overlay Color", "מעבר בין צבעי שכבת־העל של המסכה"),
+        ("Cycle Mask Overlay Mode", "מעבר בין מצבי שכבת־העל של המסכה"),
+        ("Overlay color", "צבע שכבת־העל"),
+        ("Analyzing the photo for AI masks…", "מנתח את התמונה לזיהוי מסכות באמצעות בינה מלאכותית…"),
+        ("Refining the mask's detail…", "משפר את פרטי המסכה…"),
+        ("Subtract from this mask", "החסרה מהמסכה הזו"),
+        ("Sharpness", "חדות"),
+        ("Create Preset…", "יצירת ערכת הגדרות…"),
+        ("More preset options", "אפשרויות נוספות לערכת ההגדרות"),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew source label regression: {source}"
+        );
+    }
+}
