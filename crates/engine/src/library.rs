@@ -1089,6 +1089,29 @@ mod resolve_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Opening a library session with a settings file path (`presets.json`, `view.json`, `prefs.json`)
+    /// opens the library folder that holds them, the same as opening its catalog files do.
+    #[test]
+    fn opening_a_library_via_a_settings_file_opens_the_library_folder() {
+        let dir = std::env::temp_dir().join(format!("lc-open-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Session::new().with_fs();
+        s.open_library(&dir, false).unwrap();
+        s.close_library().unwrap();
+        drop(s);
+        assert!(is_library(&dir));
+        for name in ["presets.json", "view.json", "prefs.json", "PREFS.JSON"] {
+            std::fs::write(dir.join(name), b"{}").unwrap();
+            let mut s = Session::new().with_fs();
+            s.open_library(dir.join(name), false).unwrap();
+            assert_eq!(s.library.as_ref().map(|l| l.dir.clone()), Some(dir.clone()), "{name}");
+            s.close_library().unwrap();
+            drop(s);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A host that ends the process without destructors releases the lock by hand: the owner note
     /// goes and another opener is let in, while the session keeps its library.
     #[test]
