@@ -1364,10 +1364,18 @@ impl Session {
         // sees our edit instead of preferring our `lc:settings` over its stale `crs:` values
         // (issue #934). Fields we don't state are left as the other application wrote them.
         if self.xmp.write_crs {
-            // Use the previous develop settings extracted from the old sidecar (if any) to compute
-            // which `crs:` fields actually changed. For merged saves, `previous_develop` contains the
-            // old `lc:settings`; for new/replaced sidecars it is `None`.
-            let crs = crate::crs::crs_settings(&*p.develop, previous_develop.as_ref());
+            // A fresh sidecar (no existing file) is LightCraft's own packet: compare against the
+            // defaults so its `crs:` fields are written. An existing sidecar with an `lc:settings`
+            // baseline: compare against it. An existing sidecar without a baseline: there is
+            // nothing to differ from, so write nothing and never overwrite a foreign value
+            // (issue #934).
+            let default = DevelopSettings::default();
+            let baseline = match (merged, &previous_develop) {
+                (false, _) => Some(&default),
+                (true, Some(p)) => Some(p),
+                (true, None) => None,
+            };
+            let crs = crate::crs::crs_settings(&*p.develop, baseline);
             if !crs.is_empty() {
                 // Write the develop settings other applications understand as `crs:` attributes back
                 // into the packet, updating them in place so the edit reaches the other application

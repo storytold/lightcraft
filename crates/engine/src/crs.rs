@@ -556,17 +556,16 @@ pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSetting
     let calibration = &settings.calibration;
     let curve = &settings.curve;
     let grading = &settings.grading;
-    let default = DevelopSettings::default();
-    let prev_light = previous.map(|p| &p.light).or(Some(&default.light));
-    let prev_effects = previous.map(|p| &p.effects).or(Some(&default.effects));
-    let prev_color = previous.map(|p| &p.color).or(Some(&default.color));
-    let prev_detail = previous.map(|p| &p.detail).or(Some(&default.detail));
-    let prev_vignette = previous.map(|p| &p.vignette).or(Some(&default.vignette));
-    let prev_grain = previous.map(|p| &p.grain).or(Some(&default.grain));
-    let prev_optics = previous.map(|p| &p.optics).or(Some(&default.optics));
-    let prev_calibration = previous.map(|p| &p.calibration).or(Some(&default.calibration));
-    let prev_curve = previous.map(|p| &p.curve).or(Some(&default.curve));
-    let prev_grading = previous.map(|p| &p.grading).or(Some(&default.grading));
+    let prev_light = previous.map(|p| &p.light);
+    let prev_effects = previous.map(|p| &p.effects);
+    let prev_color = previous.map(|p| &p.color);
+    let prev_detail = previous.map(|p| &p.detail);
+    let prev_vignette = previous.map(|p| &p.vignette);
+    let prev_grain = previous.map(|p| &p.grain);
+    let prev_optics = previous.map(|p| &p.optics);
+    let prev_calibration = previous.map(|p| &p.calibration);
+    let prev_curve = previous.map(|p| &p.curve);
+    let prev_grading = previous.map(|p| &p.grading);
     // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
     const EPS: f64 = 1e-6;
     let all = [
@@ -648,11 +647,11 @@ pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSetting
         ("BlueSaturation", calibration.blue_sat, prev_calibration.map(|c| c.blue_sat)),
     ];
     all.into_iter()
-        .filter_map(
-            |(name, current, previous)| {
-                if previous.is_some_and(|p| (current - p).abs() < EPS) { None } else { Some((name, current.to_string())) }
-            },
-        )
+        // Without a baseline, nothing distinguishes our edit from a foreign value: write nothing.
+        .filter_map(|(name, current, previous)| {
+            let p = previous?;
+            ((current - p).abs() >= EPS).then(|| (name, current.to_string()))
+        })
         .collect()
 }
 
@@ -689,8 +688,8 @@ mod crs_write_tests {
 
         /// A sidecar as another raw developer writes it: its own develop settings in `crs:`.
         const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5"/>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/"
+            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5" lc:settings="{}"/>
           </rdf:RDF></x:xmpmeta>"#;
 
         let dir = std::env::temp_dir().join(format!("lightcraft-crs-write-{}", std::process::id()));
@@ -807,6 +806,46 @@ mod crs_write_tests {
         let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
         assert_eq!(num(&props, "crs:Exposure2012"), Some(0.0), "zero is written and read back:\n{text}");
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without a baseline (`lc:settings`) in an existing foreign sidecar, `crs_settings` must not
+    /// emit any `crs:` fields: `previous == None` means there is nothing to differ from, so a
+    /// foreign value must not be overwritten with our default (issue #934).
+    #[test]
+    fn crs_write_updates_the_existing_block_in_place_review_regression_1() {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+
+        /// A foreign sidecar with its own `crs:Exposure2012` and no `lc:settings` baseline.
+        const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            xmp:CreatorTool="Other App" crs:Version="15.0" crs:Exposure2012="0.5"/>
+          </rdf:RDF></x:xmpmeta>"#;
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-write-regression-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let sidecar = dir.join("IMG_1.xmp");
+        std::fs::write(&sidecar, FOREIGN).unwrap();
+
+        // our edit: exposure differs from the default, but there is no baseline to differ from
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.9;
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = crate::Session::new();
+        s.xmp.write_crs = true;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        let props = lightcraft_meta::parse_xmp(&text).unwrap().properties;
+        assert_eq!(num(&props, "crs:Exposure2012"), Some(0.5), "without a baseline the foreign crs: value is kept:\n{text}");
+        assert_eq!(text.matches("crs:Exposure2012").count(), 1, "the existing block is updated, not written twice:\n{text}");
+        assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
