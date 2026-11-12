@@ -1414,3 +1414,42 @@ fn hebrew_people_slideshow_and_print_workflows_are_translated() {
     assert_eq!(Locale::He.tr("Print to PDF"), "הדפסה ל־PDF");
     assert_eq!(Locale::He.tr("IMG_1234.JPG"), "IMG_1234.JPG");
 }
+
+/// Native photo library's empty/error states and smart-preview workflow need
+/// actual Hebrew labels, while original metadata and unknown keys are unchanged.
+#[test]
+fn hebrew_library_empty_states_preview_and_export_are_translated() {
+    let he = Locale::He.catalog();
+    for source in [
+        "No photo selected",
+        "No matching photos",
+        "No metadata found",
+        "No masks yet. Choose a mask type above.",
+        "No photos match the active filters",
+        "No albums yet",
+        "No photos in this folder",
+        "Original offline · no smart preview",
+        "Smart Preview Status",
+        "Missing Photos",
+        "Restore Library from Backup…",
+        "Preview unavailable",
+        "Settings file problem",
+        "No usable GPU found: rendering on the CPU",
+        "No Camera or Card Found",
+        "Importing Lightroom Catalog",
+        "Export Slideshow…",
+        "Try Saving Again",
+        "New Folder on Disk…",
+        "Scanning folder",
+        "Checking free disk space",
+    ] {
+        let translated = he.get(source).unwrap_or_else(|| panic!("missing native Hebrew key: {source:?}"));
+        assert_ne!(translated, source, "English fallback for known source: {source:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)));
+        assert_eq!(Locale::En.tr(source), source, "English source must be preserved");
+    }
+    assert_eq!(Locale::He.tr("No photo selected"), "לא נבחרה תמונה");
+    assert_eq!(Locale::He.tr("No albums yet"), "עדיין אין אלבומים");
+    assert_eq!(Locale::He.tr("Preview unavailable"), "תצוגה מקדימה אינה זמינה");
+    assert_eq!(Locale::He.tr("IMG_001.CR3"), "IMG_001.CR3");
+}
