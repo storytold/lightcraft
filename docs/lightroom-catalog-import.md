@@ -265,12 +265,13 @@ folder listing does not authorize a later read. Synchronize Folder reads sidecar
 checked handle, rejects an already oversized file before buffering it, and rejects content beyond 16 MiB while reading, even if a writer grows the file
 after metadata was inspected. Image/preview loaders retain one original handle
 for metadata and bytes, including whole-file preview fallback. Source discovery itself still
-performs no original-file I/O.
+performs no original-file I/O. Manual metadata packet reads also retain the whole-sidecar
+limit of 256 MiB on the checked handle; selecting a share does not lift that limit.
 
 This protection covers the import, preview, region-orientation and Synchronize Folder read
 paths described above. Saving a sidecar is a separate operation: its read of an existing
-sidecar uses `std::fs::read`, not the checked-handle path. Sidecar-save reads and writes are
-not covered by this import guard.
+sidecar uses the bounded regular-file reader, without the UNC component-by-component guard.
+Sidecar-save reads and writes are not covered by this import guard.
 
 The grant is to the **logical SMB share**, not to a physical directory on the server or a fixed
 IP address. The selected server and Windows' SMB transport remain trusted to serve that share:

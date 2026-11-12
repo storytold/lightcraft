@@ -191,6 +191,25 @@ fn unc_import_reads_original_and_sidecar_without_an_unchecked_probe() {
     assert_eq!(std::fs::read(photo).unwrap(), png);
 }
 
+/// A selected UNC sidecar retains the same byte cap as a local metadata packet.
+#[test]
+fn unc_sidecar_packet_keeps_the_read_limit() {
+    use crate::sidecar::{SidecarLookup, SidecarNaming};
+    let f = Fixture::new();
+    let Some(unc) = f.unc().filter(|p| std::fs::metadata(p).is_ok()) else {
+        lightcraft_testkit::skip!(System, "loopback administrative share unavailable");
+        return;
+    };
+    let sidecar = f.0.join("selected/safe/photo.xmp");
+    let original = unc.join("selected/safe/photo.png").to_string_lossy().into_owned();
+    let lookup = SidecarLookup { naming: SidecarNaming::Stem, owns_stem: true };
+    std::fs::write(&sidecar, "small packet").unwrap();
+    assert_eq!(crate::sidecar::read_packet(&original, lightcraft_catalog::MediaKind::Image, lookup).unwrap().0, "small packet");
+    // The upstream whole-sidecar limit is 256 MiB, even for an authorized UNC file.
+    std::fs::File::create(&sidecar).unwrap().set_len((256 << 20) + 1).unwrap();
+    assert!(crate::sidecar::read_packet(&original, lightcraft_catalog::MediaKind::Image, lookup).is_none());
+}
+
 /// A region packet already read from a sidecar cannot authorize a redirected orientation reread.
 #[test]
 fn region_orientation_reread_refuses_replaced_directory() {
