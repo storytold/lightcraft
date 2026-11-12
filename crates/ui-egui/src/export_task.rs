@@ -45,16 +45,25 @@ pub struct Queued {
     items: Vec<PreparedExport>,
     opts: ExportOptions,
     to: Destination,
-    after: AfterExport,
+    /// What to do with the files; `None`: decided when it starts ([`start_now`]), so a running export
+    /// that holds the Apple Photos import doesn't stop this one from waiting for it.
+    after: Option<AfterExport>,
     cancel: Arc<AtomicBool>,
     /// The waiting row; dropped (gone from the stack) when the export starts or is dropped.
     _guard: TaskGuard,
 }
 
 /// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
-/// Photos). Errors per photo are collected, not fatal. While another export runs, it is queued behind
-/// it ([`Queued`]) and `{queued: n}` says how many are waiting with it.
-pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
+/// Photos; `None`: work it out from `opts` when the export starts). Errors per photo are collected, not
+/// fatal. While another export runs, it is queued behind it ([`Queued`]) and `{queued: n}` says how many
+/// are waiting with it.
+pub fn start(
+    app: &mut LightcraftApp,
+    items: Vec<PreparedExport>,
+    opts: ExportOptions,
+    to: Destination,
+    after: Option<AfterExport>,
+) -> Result<Value, String> {
     if app.export.is_some() {
         app.services.write_shared.as_ref().ok_or("no background writer")?;
         let total = items.len();
@@ -83,7 +92,18 @@ fn start_next(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 }
 
-fn start_now(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOptions, to: Destination, after: AfterExport) -> Result<Value, String> {
+fn start_now(
+    app: &mut LightcraftApp,
+    items: Vec<PreparedExport>,
+    opts: ExportOptions,
+    to: Destination,
+    after: Option<AfterExport>,
+) -> Result<Value, String> {
+    // a queued export reserves Apple Photos now, when the one before it has let go of it
+    let after = match after {
+        Some(after) => after,
+        None => app.session.after_export(&opts)?,
+    };
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
     let total = items.len();
     let progress = Arc::new(Mutex::new((0, String::new())));

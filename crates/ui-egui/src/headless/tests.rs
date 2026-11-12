@@ -2010,14 +2010,27 @@ fn a_second_export_waits_for_the_first() {
     let t = Duration::from_secs(10);
     let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let w = written.clone();
+    // the first export's files wait at this gate, so it is surely still running while the others are asked for
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let g = gate.clone();
     h.app.services.write_shared = Some(std::sync::Arc::new(move |p: &str, _: &[u8]| {
-        std::thread::sleep(Duration::from_millis(150)); // slow enough that the first is still running
+        let t0 = Instant::now();
+        while p.starts_with("/lc-queue-a/") && !g.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         w.lock().unwrap().push(p.to_string());
         Ok(())
     }));
+    // where Photos is, every export also adds to it: the running one holds the Photos import, and the waiting
+    // ones must still be queued, reserving Photos only when they start
+    let photos = cfg!(target_os = "macos");
+    h.app.session.apple_photos = Some(Arc::new(|_: &[String], _| {
+        Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: String::new(), stderr: String::new() })
+    }));
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(3).map(|p| p.0).collect();
-    let export =
-        |h: &mut Headless, ids: &[u64], dir: &str| h.app.run("app.export", json!({"ids": ids, "dir": dir, "background": true, "longEdge": 64}));
+    let export = |h: &mut Headless, ids: &[u64], dir: &str| {
+        h.app.run("app.export", json!({"ids": ids, "dir": dir, "background": true, "longEdge": 64, "addToPhotos": photos}))
+    };
     export(&mut h, &ids[..2], "/lc-queue-a").unwrap();
     assert!(h.app.export.is_some(), "the first runs in the background");
     let second = export(&mut h, &ids[2..], "/lc-queue-b").unwrap();
@@ -2031,6 +2044,7 @@ fn a_second_export_waits_for_the_first() {
     // ✕ on the last waiting one drops it
     let last = rows.iter().rev().find(|r| r["label"].as_str().is_some_and(|l| l.starts_with("Waiting to export"))).expect("a waiting row");
     h.app.run("activity.cancel", json!({"id": last["id"]})).unwrap();
+    gate.store(true, std::sync::atomic::Ordering::SeqCst);
     let t0 = Instant::now();
     while (h.app.export.is_some() || !h.app.export_queue.is_empty()) && t0.elapsed() < Duration::from_secs(90) {
         h.step();
