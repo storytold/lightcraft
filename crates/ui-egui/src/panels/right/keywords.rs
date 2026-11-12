@@ -205,14 +205,16 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     });
 }
 
-/// An edit of the Enter Keywords box: its text, and the selection it was started on.
+/// An edit of the Enter Keywords box: its text, and the selection it was started on. It is made
+/// only once the box is edited, and the selection-sized parts are shared, so the box's data is not
+/// copied on every frame.
 #[derive(Clone)]
 struct EnterEdit {
     text: String,
-    /// The selection's keywords when the edit started.
-    start: Vec<crate::panels::keywording::Chip>,
+    /// The selection's keywords when the edit started (shared with `Caches::keyword_chips`).
+    start: std::sync::Arc<Vec<crate::panels::keywording::Chip>>,
     /// The photos the edit is for (`photo.setMeta` `ids`).
-    ids: Vec<u64>,
+    ids: std::sync::Arc<[u64]>,
     /// The selection the edit was started on (`key_of`).
     selection: u64,
     /// [`LightcraftApp::selection_changes`] when the edit started: the same photos selected again
@@ -226,11 +228,18 @@ struct EnterEdit {
 }
 
 impl EnterEdit {
-    fn new(chips: &[crate::panels::keywording::Chip], selection: &[PhotoId], key: u64, changes: u64, library: u64) -> Self {
+    fn new(
+        text: String,
+        chips: std::sync::Arc<Vec<crate::panels::keywording::Chip>>,
+        selection: &[PhotoId],
+        key: u64,
+        changes: u64,
+        library: u64,
+    ) -> Self {
         let mut seen = std::collections::HashSet::new();
         EnterEdit {
-            text: crate::panels::keywording::entered_text(chips),
-            start: chips.to_vec(),
+            text,
+            start: chips,
             ids: selection.iter().filter(|id| seen.insert(**id)).map(|id| id.0).collect(),
             selection: key,
             changes,
@@ -259,7 +268,7 @@ fn enter_id() -> egui::Id {
 fn apply_enter(app: &mut LightcraftApp, ctx: &egui::Context, edit: &EnterEdit) -> bool {
     match crate::panels::keywording::entered(&app.session.catalog, &edit.start, &edit.text) {
         Ok(change) if change.is_empty() => true,
-        Ok(change) => match app.run("photo.setMeta", json!({"ids": edit.ids, "addKeywords": change.add, "removeKeywords": change.remove})) {
+        Ok(change) => match app.run("photo.setMeta", json!({"ids": &*edit.ids, "addKeywords": change.add, "removeKeywords": change.remove})) {
             Ok(_) => true,
             Err(e) => {
                 app.toast_error(ctx, e);
@@ -325,9 +334,17 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
     if kept.as_ref().is_some_and(|e| !e.is_for(app, key)) && focused {
         ui.memory_mut(|m| m.surrender_focus(fid));
     }
+    let kept = kept.filter(|e| e.is_for(app, key));
     // (an edit kept without the cursor lost it while the box was not drawn, its panel hidden)
-    let left_undrawn = !focused && kept.as_ref().is_some_and(|e| e.is_for(app, key) && !e.refused);
-    let mut edit = kept.filter(|e| e.is_for(app, key)).unwrap_or_else(|| EnterEdit::new(&chips, selection, key, changes, library));
+    let left_undrawn = !focused && kept.as_ref().is_some_and(|e| !e.refused);
+    // (no edit held: only the shown text is made, and the edit itself once the box is edited)
+    let (kept, mut text) = match kept {
+        Some(mut e) => {
+            let text = std::mem::take(&mut e.text);
+            (Some(e), text)
+        }
+        None => (None, crate::panels::keywording::entered_text(&chips)),
+    };
     // Return applies the edit (Shift+Return or a pasted line break separates keywords as a comma does)
     let returned = focused
         && ui.input_mut(|i| {
@@ -337,7 +354,7 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
             i.events.retain(|e| !plain(e));
             found
         });
-    let r = crate::text_field::TextField::multiline(ENTER_FIELD, &mut edit.text)
+    let r = crate::text_field::TextField::multiline(ENTER_FIELD, &mut text)
         .hint(crate::i18n::tr("Keywords, separated by commas"))
         .label(crate::i18n::tr("Enter Keywords"))
         .rows(2)
@@ -350,9 +367,21 @@ fn enter_keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, selection: &[Photo
         ui.data_mut(|d| d.remove::<EnterEdit>(id));
         return;
     }
-    let mut done = false;
     // (applied as leaving the box applies it)
-    if returned || r.committed() || (left_undrawn && !r.editing) {
+    let apply = returned || r.committed() || (left_undrawn && !r.editing);
+    if !apply && !r.editing && !returned && !kept.as_ref().is_some_and(|e| e.refused) {
+        ui.data_mut(|d| d.remove::<EnterEdit>(id));
+        return;
+    }
+    let mut edit = match kept {
+        Some(mut e) => {
+            e.text = text;
+            e
+        }
+        None => EnterEdit::new(text, chips, selection, key, changes, library),
+    };
+    let mut done = false;
+    if apply {
         let applied = apply_enter(app, ui.ctx(), &edit);
         edit.refused = !applied;
         done = applied;

@@ -752,8 +752,9 @@ pub(crate) fn chips(catalog: &Catalog, photos: &[PhotoId]) -> Vec<Chip> {
 
 /// The Enter Keywords text of the selection's keywords `chips`: each keyword's path, with commas
 /// between them and an asterisk after a keyword only some of the selected photos have. A keyword
-/// whose name holds a comma, a new line or a double quote is written in double quotes (before its
-/// asterisk), each double quote inside written twice, so that it reads as one name. A keyword every
+/// whose name holds a comma, a new line, a double quote, `>` or `<` is written in double quotes
+/// (before its asterisk), each double quote inside written twice, so that it reads as one name as
+/// written, in this selection or another one. A keyword every
 /// photo has whose name ends in an asterisk is also written in double quotes, so that it reads
 /// differently from a partial keyword marked with the asterisk.
 pub(crate) fn entered_text(chips: &[Chip]) -> String {
@@ -761,7 +762,7 @@ pub(crate) fn entered_text(chips: &[Chip]) -> String {
         .iter()
         .map(|c| {
             let in_quotes = || format!("\"{}\"", c.path.replace('"', "\"\""));
-            let held = c.path.contains([',', '\n', '"']);
+            let held = c.path.contains([',', '\n', '"', '>', '<']);
             if !c.on_all() && held {
                 format!("{}*", in_quotes())
             } else if !c.on_all() {
@@ -1484,6 +1485,8 @@ mod tests {
         assert_eq!(entered(&c, &start, "beach, Places > Lisbon"), Ok(edit(&["Places|Lisbon"], &[])), "made common");
         assert_eq!(entered(&c, &start, "beach, a > b > c, z < y < x"), Ok(edit(&["a|b|c", "x|y|z"], &["Places|Lisbon"])), "deeper levels");
         assert_eq!(entered(&c, &start, "beach, \"a > b\""), Ok(edit(&["a > b"], &["Places|Lisbon"])), "in quotes, as written");
+        assert_eq!(entered(&c, &start, "beach, Places|Lisbon*, animal >"), Ok(edit(&["animal"], &[])), "an empty level after a mark");
+        assert_eq!(entered(&c, &start, "beach, Places|Lisbon*, < animal"), Ok(edit(&["animal"], &[])), "an empty level before a mark");
         // a keyword whose name holds a comma is one name written with `>` too
         let (c, ids) = library(&[&["Places|Paris, France", "beach"], &["beach"]]);
         let start = chips(&c, &ids);
@@ -1493,5 +1496,11 @@ mod tests {
         let start = chips(&c, &ids);
         assert_eq!(entered(&c, &start, &entered_text(&start)), Ok(Entered::default()), "a name holding > reads back");
         assert_eq!(entered(&c, &start, "x>y, beach*"), Ok(edit(&["x>y"], &[])), "made common as written");
+        // the text of a keyword holding `>` or `<`, pasted into the box of photos without it
+        let (c, ids) = library(&[&["x>y", "y<z"], &["beach"]]);
+        let text = entered_text(&chips(&c, &ids[..1]));
+        assert_eq!(text, "\"x>y\", \"y<z\"");
+        let other = chips(&c, &ids[1..]);
+        assert_eq!(entered(&c, &other, &format!("beach, {text}")), Ok(edit(&["x>y", "y<z"], &[])), "read as written in another selection");
     }
 }
