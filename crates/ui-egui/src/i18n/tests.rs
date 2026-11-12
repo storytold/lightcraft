@@ -1453,3 +1453,43 @@ fn hebrew_library_empty_states_preview_and_export_are_translated() {
     assert_eq!(Locale::He.tr("Preview unavailable"), "תצוגה מקדימה אינה זמינה");
     assert_eq!(Locale::He.tr("IMG_001.CR3"), "IMG_001.CR3");
 }
+
+/// Editing keyword hierarchies, smart albums and searches must not silently
+/// fall back to English; filenames, original captions and unknown keys do.
+#[test]
+fn hebrew_keywords_smart_albums_and_search_workflows_are_translated() {
+    let he = Locale::He.catalog();
+    for key in [
+        "Advanced search…",
+        "Album",
+        "Albums",
+        "Any Searchable Text",
+        "Clear Filters",
+        "Create Smart Album from Filter…",
+        "Date Groups",
+        "Keyword",
+        "Keyword Painter",
+        "Keyword Set",
+        "Keyword Suggestions",
+        "Keywords",
+        "Merge Keywords",
+        "Set as Target Album",
+        "Some rules need fixing (Edit Smart Album…):",
+        "Search albums",
+        "Keyword Count",
+        "Filter Keywords",
+        "Purge Unused Keywords",
+        "Import Keywords…",
+        "Export Keywords…",
+        "Sort Albums by Name",
+    ] {
+        let translated = he.get(key).unwrap_or_else(|| panic!("missing native Hebrew key: {key:?}"));
+        assert_ne!(translated, key, "English fallback: {key:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)));
+        assert_eq!(Locale::En.tr(key), key, "English original must stay unchanged");
+    }
+    assert_eq!(Locale::He.tr("Clear Filters"), "ניקוי מסננים");
+    assert_eq!(Locale::He.tr("Create Smart Album from Filter…"), "יצירת אלבום חכם מהמסנן…");
+    assert_eq!(Locale::He.tr("Keyword"), "מילת מפתח");
+    assert_eq!(Locale::He.tr("IMG_1234.ARW"), "IMG_1234.ARW");
+}
