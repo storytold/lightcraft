@@ -951,7 +951,7 @@ fn a_persons_page_shows_their_faces_and_back_returns_to_everyone() {
     h.request("ui.clickWidget", json!({"id": format!("person-face:{}:0", ids[1].0)}), t);
     h.step();
     h.step();
-    assert_eq!((h.app.ui.view, h.app.session.active()), (ViewMode::Detail, Some(ids[1])));
+    assert_eq!((h.app.ui.view, h.app.session.active()), (crate::state::ViewMode::Detail, Some(ids[1])));
     // Escape from that photo goes back to the page, not to the grid
     h.request("ui.key", json!({"key": "escape"}), t);
     h.step();
@@ -993,6 +993,253 @@ fn a_persons_page_shows_their_faces_and_back_returns_to_everyone() {
     assert_eq!(h.request("engine.execute", json!({"command": "view.person", "params": {"name": "  "}}), t)["ok"], false);
 }
 
+/// #3246: a right-click on one of a person's faces makes it their picture in People (and back to their largest face),
+/// with a star on that face on their page.
+#[test]
+fn a_persons_face_becomes_their_picture_from_its_menu() {
+    use lightcraft_catalog::Op;
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(2).collect();
+    let face = |x1: f64| lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: 0.25, y0: 0.2, x1, y1: 0.6 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: Some("Jane Doe".into()),
+        description: None,
+    };
+    // a second, smaller face of hers in the first photo: the star is told by the face, not the photo
+    let second = lightcraft_meta::Region { rect: lightcraft_geom::Rect { x0: 0.65, y0: 0.2, x1: 0.72, y1: 0.4 }, ..face(0.35) };
+    for (id, regions) in ids.iter().zip([vec![face(0.35), second], vec![face(0.75)]]) {
+        let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
+        meta.regions = regions;
+        h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+    }
+    let picture = |h: &mut Headless| h.app.caches.people(&h.app.session).iter().find(|p| p.name == "Jane Doe").map(|p| p.photo);
+    assert_eq!(picture(&mut h), Some(ids[1]), "their largest face");
+    h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+    h.settle(SETTLE);
+    let menu = |h: &mut Headless, item: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": format!("person-face:{}:0", ids[0].0), "button": "right"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        let r = h.request("ui.clickWidget", json!({"id": item}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    let stars = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "person-face-star:"}), t)["result"].to_string();
+    assert!(!stars(&mut h).contains("person-face-star:"), "no star before a choice");
+    let asked_at = h.app.caches.person_page.as_ref().map(|p| p.3);
+    menu(&mut h, "person-face-menu:cover");
+    assert_eq!(h.app.session.person_covers.get("jane doe").map(|c| c.photo), Some(ids[0]));
+    // drawn on that face, and on no other
+    let drawn = stars(&mut h);
+    assert!(drawn.contains(&format!("person-face-star:{}:0", ids[0].0)), "{drawn}");
+    assert!(h.app.widgets.iter().any(|(w, _)| *w == format!("person-face:{}:1", ids[0].0)), "her other face in that photo is shown");
+    assert!(!drawn.contains(&format!("person-face-star:{}:1", ids[0].0)) && !drawn.contains(&format!("person-face-star:{}:", ids[1].0)), "{drawn}");
+    // the star moves on the page as shown, without asking for the page (and its slow "More" faces) again
+    let cached = h.app.caches.person_page.as_ref().map(|p| (p.3, p.4.cover));
+    assert_eq!(cached, Some((asked_at.unwrap(), Some((ids[0].0, 0)))));
+    assert_eq!(picture(&mut h), Some(ids[0]), "the People view shows the chosen face");
+    let page = h.app.session.execute("faces.person", &json!({"name": "Jane Doe"})).unwrap();
+    assert_eq!((&page["cover"]["photo"], &page["cover"]["index"]), (&json!(ids[0].0), &json!(0)), "{page}");
+    menu(&mut h, "person-face-menu:autoCover");
+    assert!(h.app.session.person_covers.is_empty());
+    assert_eq!(picture(&mut h), Some(ids[1]));
+    assert!(!stars(&mut h).contains("person-face-star:"), "the star goes with the choice");
+    // chosen elsewhere (a script, an agent) while the page is open: the page shows it too
+    h.request("engine.execute", json!({"command": "faces.setCover", "params": {"name": "Jane Doe", "photo": ids[0].0, "index": 0}}), t);
+    h.settle(SETTLE);
+    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.cover), Some(Some((ids[0].0, 0))));
+}
+
+/// #3249: × on a face a person's page offers sets it aside as "not them" for good, and the button at the top brings
+/// the set-aside faces back.
+#[test]
+fn a_face_set_aside_on_a_persons_page_is_kept_and_can_be_brought_back() {
+    use lightcraft_catalog::Op;
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(3).collect();
+    let region = |name: Option<&str>| lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: 0.25, y0: 0.2, x1: 0.55, y1: 0.6 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: name.map(str::to_string),
+        description: None,
+    };
+    for (id, name) in ids.iter().zip([Some("Jane Doe"), None, None]) {
+        let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
+        meta.regions = vec![region(name)];
+        h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+    }
+    h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+    h.settle(SETTLE);
+    // the demo has no recognition: the page is given two look-alikes
+    let page = crate::panels::person::PersonPage {
+        name: "Jane Doe".into(),
+        total: 1,
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
+        more: vec![
+            crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 },
+            crate::panels::person::Face { photo: ids[2].0, index: 0, rect: region(None).rect, score: 0.8 },
+        ],
+        ready: true,
+        pending: 0,
+        cover: None,
+        dismissed: 0,
+        like_set_aside: Default::default(),
+    };
+    h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));
+    h.step();
+    let x = format!("more-face-x:{}:0", ids[1].0);
+    let r = h.request("ui.clickWidget", json!({"id": x}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.person_dismissed.get("jane doe").map(|v| v[0].photo), Some(ids[1]), "kept as not her");
+    assert!(h.app.ui.dismissed_faces.contains(&("jane doe".into(), ids[1].0, 0)), "and hidden at once, for her only");
+    assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].name, None, "the face itself is not touched");
+    assert!(h.app.widgets.iter().any(|(w, _)| w == "person:restoreDismissed"), "the button that brings it back");
+    assert!(h.app.caches.person_page_reorder, "the order may have changed: All above waits for the page made again");
+    // set aside for her, not for someone else: the same face offered on another person's page is shown there, while
+    // it is still hidden on hers
+    let jane = h.app.caches.person_page.clone();
+    let other = crate::panels::person::PersonPage {
+        name: "John Roe".into(),
+        total: 1,
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
+        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 }],
+        ready: true,
+        pending: 0,
+        cover: None,
+        dismissed: 0,
+        like_set_aside: Default::default(),
+    };
+    h.app.caches.person_page = Some(("John Roe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(other)));
+    h.app.ui.person_page = Some("John Roe".into());
+    h.step();
+    assert!(h.app.widgets.iter().any(|(w, _)| *w == x), "offered to John Roe all the same");
+    assert!(h.app.ui.dismissed_faces.contains(&("jane doe".into(), ids[1].0, 0)), "still hidden for her");
+    h.app.caches.person_page = jane;
+    h.app.ui.person_page = Some("Jane Doe".into());
+    h.step();
+    assert!(!h.app.widgets.iter().any(|(w, _)| *w == x), "and not shown on her page");
+    // the last face offered set aside too: the page is asked for again, for the next ones (none in the demo)
+    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.more.len()), Some(2), "not asked for again while one is left");
+    let r = h.request("ui.clickWidget", json!({"id": format!("more-face-x:{}:0", ids[2].0)}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.person_dismissed.get("jane doe").map(Vec::len), Some(2));
+    assert_eq!(h.app.caches.person_page.as_ref().map(|p| p.4.more.len()), Some(0), "the next ones are looked for");
+    assert!(!h.app.caches.person_page_reorder);
+    let r = h.request("ui.clickWidget", json!({"id": "person:restoreDismissed"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.session.person_dismissed.is_empty());
+    assert!(h.app.ui.dismissed_faces.is_empty());
+    // set aside again, then brought back by an agent while the page is open: hidden here no longer either
+    let set_page = |h: &mut Headless| {
+        h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));
+        h.app.caches.person_page_gen = h.app.session.people_gen;
+        h.step();
+    };
+    set_page(&mut h);
+    let r = h.request("ui.clickWidget", json!({"id": x}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.dismissed_faces.contains(&("jane doe".into(), ids[1].0, 0)));
+    h.request("engine.execute", json!({"command": "faces.dismiss", "params": {"name": "Jane Doe", "restore": true}}), t);
+    h.settle(SETTLE);
+    assert!(h.app.ui.dismissed_faces.is_empty(), "{:?}", h.app.ui.dismissed_faces);
+    // All above just after a face is set aside: the page is made again first (the set-aside face may move others down),
+    // and nothing is named from the old order
+    set_page(&mut h);
+    let r = h.request("ui.clickWidget", json!({"id": x}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": format!("more-face-above:{}:0", ids[2].0)}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let named = |h: &Headless, i: usize| h.app.session.catalog.photo(ids[i]).unwrap().meta.regions[0].name.clone();
+    assert_eq!(named(&h, 2), None, "not named from the old order");
+    assert!(!h.app.caches.person_page_reorder, "the page is made again");
+    h.request("engine.execute", json!({"command": "faces.dismiss", "params": {"name": "Jane Doe", "restore": true}}), t);
+    h.settle(SETTLE);
+    // set aside by an agent while the page is open, just before A: the key waits for the page made again rather than
+    // naming from this one (which still offers the face set aside)
+    set_page(&mut h);
+    let tile = format!("more-face:{}:0", ids[2].0);
+    let rect = h.app.widgets.iter().find(|(id, _)| *id == tile).unwrap().1;
+    h.request("ui.move", json!({"x": rect.center().x, "y": rect.center().y}), t);
+    h.step();
+    // the key reaches the very next frame, before the page could be made again (`ui.key` would lay a frame out first)
+    h.app.session.execute("faces.dismiss", &json!({"name": "Jane Doe", "photo": ids[1].0, "index": 0})).unwrap();
+    for pressed in [true, false] {
+        h.app.synthetic.push(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+    }
+    h.step();
+    h.step();
+    assert_eq!((named(&h, 1), named(&h, 2)), (None, None), "nothing named from the page made before");
+}
+
+/// A right click on an unnamed face, or on a face a person's page offers, opens its photo.
+#[test]
+fn a_right_click_on_a_face_tile_opens_its_photo() {
+    use lightcraft_catalog::Op;
+    let mut h = demo([1400.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(2).collect();
+    let region = |name: Option<&str>| lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect { x0: 0.25, y0: 0.2, x1: 0.55, y1: 0.6 },
+        kind: lightcraft_meta::RegionKind::Face,
+        name: name.map(str::to_string),
+        description: None,
+    };
+    for (id, name) in ids.iter().zip([Some("Jane Doe"), None]) {
+        let mut meta = h.app.session.catalog.photo(*id).unwrap().meta.clone();
+        meta.regions = vec![region(name)];
+        h.app.session.commit("setup", Op::SetMeta { id: *id, meta: Box::new(meta) }).unwrap();
+    }
+    let open = |h: &mut Headless, tile: String, item: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": tile, "button": "right"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        let r = h.request("ui.clickWidget", json!({"id": item}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    // the unnamed faces, below everyone in People
+    h.request("engine.execute", json!({"command": "view.people"}), t);
+    h.settle(SETTLE);
+    open(&mut h, format!("unnamed-face:{}:0", ids[1].0), "unnamed-face-menu:open");
+    assert_eq!((h.app.ui.view, h.app.session.selection.active), (crate::state::ViewMode::Detail, Some(ids[1])));
+    // Escape comes back to People, to no one's page
+    h.request("ui.key", json!({"key": "escape"}), t);
+    h.step();
+    assert_eq!((h.app.ui.view, h.app.ui.person_page.as_deref()), (crate::state::ViewMode::People, None));
+    // a face offered on a person's page
+    h.request("engine.execute", json!({"command": "view.person", "params": {"name": "Jane Doe"}}), t);
+    h.settle(SETTLE);
+    let page = crate::panels::person::PersonPage {
+        name: "Jane Doe".into(),
+        total: 1,
+        confirmed: vec![crate::panels::person::Face { photo: ids[0].0, index: 0, rect: region(None).rect, score: 0.0 }],
+        more: vec![crate::panels::person::Face { photo: ids[1].0, index: 0, rect: region(None).rect, score: 0.9 }],
+        ready: true,
+        pending: 0,
+        cover: None,
+        dismissed: 0,
+        like_set_aside: Default::default(),
+    };
+    h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page)));
+    h.step();
+    open(&mut h, format!("more-face:{}:0", ids[1].0), "more-face-menu:open");
+    assert_eq!((h.app.ui.view, h.app.session.selection.active), (crate::state::ViewMode::Detail, Some(ids[1])));
+    assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].name, None, "opened, not confirmed");
+    // and Escape comes back to her page
+    h.request("ui.key", json!({"key": "escape"}), t);
+    h.step();
+    assert_eq!((h.app.ui.view, h.app.ui.person_page.as_deref()), (crate::state::ViewMode::People, Some("Jane Doe")));
+}
+
 /// A person's More grid confirms a score-bounded batch through either ↑ or the focused tile's A key. Both
 /// routes use one undo step and leave hidden, lower-score and already named faces alone.
 #[test]
@@ -1026,12 +1273,16 @@ fn person_more_confirms_all_above_with_one_undo_step() {
             .collect(),
         ready: true,
         pending: 0,
+        cover: None,
+        dismissed: 0,
+        like_set_aside: Default::default(),
     };
+    // a face just set aside, hidden until the page is asked for again (which then leaves it out itself)
     let set_page = |h: &mut Headless| {
         h.app.caches.person_page = Some(("Jane Doe".into(), h.app.session.catalog.revision, h.app.caches.faces_indexed, 0.0, Arc::new(page.clone())));
+        h.app.ui.dismissed_faces.insert(("jane doe".into(), ids[4].0, 0));
         h.step();
     };
-    h.app.ui.dismissed_faces.insert((ids[4].0, 0));
     set_page(&mut h);
     let bulk_id = format!("more-face-above:{}:0", ids[2].0);
     assert!(h.request("ui.widgets", json!({"filter": "more-face-above:"}), t).to_string().contains(&bulk_id));
@@ -1210,7 +1461,7 @@ fn double_clicking_an_unnamed_face_opens_its_photo() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert_eq!((h.app.ui.view, h.app.session.active()), (ViewMode::Detail, Some(ids[1])));
+    assert_eq!((h.app.ui.view, h.app.session.active()), (crate::state::ViewMode::Detail, Some(ids[1])));
     assert_eq!(h.app.session.catalog.photo(ids[1]).unwrap().meta.regions[0].name, None, "nothing is named");
     // Escape goes back to the faces, not to the grid
     h.request("ui.key", json!({"key": "escape"}), t);
