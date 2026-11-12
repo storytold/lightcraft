@@ -32,6 +32,7 @@ mod empty_library;
 mod error_kinds;
 mod filmstrip;
 mod filmstrip_drag;
+mod filmstrip_height;
 mod find_similar;
 mod focus_point;
 mod folder_drop;

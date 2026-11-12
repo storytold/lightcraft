@@ -13,9 +13,9 @@ pub use settings::{
     STANDARD_PREVIEW_EDGE, StartupView, WINDOW_FRAME_CEILING,
 };
 pub use view::{
-    BRIEF_INFO_SECS, BeforeAfter, BriefInfo, CLICK_ZOOMS, CropOverlay, FOCUS_KEYWORDS_PASSES, InfoOverlay, KeywordingView, LEFT_WIDTH, LayoutImage,
-    LightsOut, LoupeInfo, LoupeInfoField, MIN_PHOTO_WIDTH, PanelWidth, RIGHT_WIDTH, RightPanel, THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP,
-    ToolOverlay, ViewMode, Zoom,
+    BRIEF_INFO_SECS, BeforeAfter, BriefInfo, CLICK_ZOOMS, CropOverlay, FILM_HEIGHT_MAX, FILM_HEIGHT_MIN, FOCUS_KEYWORDS_PASSES, InfoOverlay,
+    KeywordingView, LEFT_WIDTH, LayoutImage, LightsOut, LoupeInfo, LoupeInfoField, MIN_PHOTO_WIDTH, PanelWidth, RIGHT_WIDTH, RightPanel,
+    THUMB_SIZE_MAX, THUMB_SIZE_MIN, THUMB_SIZE_STEP, ToolOverlay, ViewMode, Zoom, film_height,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,6 +59,8 @@ pub struct UiState {
     /// Presets column: show a live thumbnail of the photo with each preset.
     pub preset_thumbs: bool,
     pub filmstrip: bool,
+    /// The filmstrip's height in points, set by dragging its top edge ([`film_height`]; issue #4110).
+    pub film_height: f32,
     pub zoom: Zoom,
     /// Pan offset of the loupe when zoomed (image-normalized centre).
     pub pan: (f32, f32),
@@ -408,6 +410,7 @@ impl Default for UiState {
             presets: false,
             preset_thumbs: false,
             filmstrip: true,
+            film_height: FILM_HEIGHT_MIN,
             zoom: Zoom::Fit,
             pan: (0.5, 0.5),
             click_zoom: 100,
@@ -612,6 +615,7 @@ impl UiState {
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
+        self.film_height = film_height(self.film_height, f32::INFINITY);
         self.import_thumb_size = crate::import::thumb_size(self.import_thumb_size);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
