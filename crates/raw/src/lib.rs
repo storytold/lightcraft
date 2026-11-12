@@ -70,8 +70,8 @@ pub use preview::{
 };
 pub use semantic::{SemanticMask, semantic_masks};
 
+use craft_tiff::{Tiff, TiffError};
 use lightcraft_color::Xy;
-use lightcraft_tiff::{Tiff, TiffError};
 use serde::{Deserialize, Serialize};
 
 /// Upper bound on decoded samples (guards allocations driven by header values).
@@ -189,28 +189,28 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
         return Some(RawFormat::Cr2);
     }
     let (_, _) = Tiff::sniff(bytes)?;
-    let opts = lightcraft_tiff::ParseOptions { max_ifds: 256, ..Default::default() };
+    let opts = craft_tiff::ParseOptions { max_ifds: 256, ..Default::default() };
     let t = Tiff::parse_with(bytes, &opts).ok()?;
     let ifd0 = t.ifds.first()?;
-    if ifd0.contains(lightcraft_tiff::tags::DNG_VERSION) {
+    if ifd0.contains(craft_tiff::tags::DNG_VERSION) {
         return Some(RawFormat::Dng);
     }
-    let make = t.find(lightcraft_tiff::tags::MAKE).and_then(|e| e.value.as_str()).unwrap_or_default().to_ascii_uppercase();
+    let make = t.find(craft_tiff::tags::MAKE).and_then(|e| e.value.as_str()).unwrap_or_default().to_ascii_uppercase();
     let has_cfa = has_raw_ifd(&t);
     // Pentax's reader takes the layout from the Exif `CFAPattern` when no IFD has a CFA photometric (uncompressed
     // and PackBits PEFs), so for the Pentax family that tag counts as raw evidence too
     let pentax_raw = has_cfa || t.exif().is_some_and(|e| e.contains(vendor::EXIF_CFA_PATTERN));
     // Samsung's raw IFD uses private compressions 32769..=32773 (`vendor::srw`), 32773 being PackBits elsewhere
-    let samsung_raw = has_cfa || t.all_ifds().iter().any(|i| i.u16(lightcraft_tiff::tags::COMPRESSION).is_some_and(|c| (32769..=32773).contains(&c)));
+    let samsung_raw = has_cfa || t.all_ifds().iter().any(|i| i.u16(craft_tiff::tags::COMPRESSION).is_some_and(|c| (32769..=32773).contains(&c)));
     // Sony raws without a CFA IFD (#702): SRF (DSC-F828), whose IFD0 looks like RGB but holds 14-bit samples (12 or
     // 14 count: raw sensor depths; the raw is in Sony's SRF blocks), and the DSLR-A100, whose IFD0 is an old-style
     // JPEG thumbnail (compression 6, which today's TIFF writers don't produce) and whose `SubIFDs` tag addresses its
     // raw data. A camera-authored or exported TIFF has 8- or 16-bit samples, and its SubIFDs hold ordinary images
-    let model = t.find(lightcraft_tiff::tags::MODEL).and_then(|e| e.value.as_str()).unwrap_or_default().trim().to_ascii_uppercase();
+    let model = t.find(craft_tiff::tags::MODEL).and_then(|e| e.value.as_str()).unwrap_or_default().trim().to_ascii_uppercase();
     let sony_raw = has_cfa
-        || ifd0.u64s(lightcraft_tiff::tags::BITS_PER_SAMPLE).is_some_and(|b| b.iter().any(|v| matches!(v, 12 | 14)))
-        || (model == "DSLR-A100" && ifd0.u16(lightcraft_tiff::tags::COMPRESSION) == Some(6) && ifd0.contains(lightcraft_tiff::tags::SUB_IFDS));
-    if make.starts_with("CANON") && t.ifds.len() >= 4 && t.ifds[3].u16(lightcraft_tiff::tags::COMPRESSION) == Some(6) {
+        || ifd0.u64s(craft_tiff::tags::BITS_PER_SAMPLE).is_some_and(|b| b.iter().any(|v| matches!(v, 12 | 14)))
+        || (model == "DSLR-A100" && ifd0.u16(craft_tiff::tags::COMPRESSION) == Some(6) && ifd0.contains(craft_tiff::tags::SUB_IFDS));
+    if make.starts_with("CANON") && t.ifds.len() >= 4 && t.ifds[3].u16(craft_tiff::tags::COMPRESSION) == Some(6) {
         return Some(RawFormat::Cr2);
     }
     if make.starts_with("NIKON") && has_cfa {
@@ -218,7 +218,7 @@ pub fn probe(bytes: &[u8]) -> Option<RawFormat> {
     }
     // Hasselblad's Sony-built bodies (the Lunar is a NEX-7 inside) write a Sony ARW under their own Make. Sony's
     // raw coding gives them away: compression 32767 or the raw IFD's tone-curve tag 0x7010, which no 3FR / FFF has
-    let sony_coded = || t.all_ifds().iter().any(|i| i.u16(lightcraft_tiff::tags::COMPRESSION) == Some(32767) || i.contains(0x7010));
+    let sony_coded = || t.all_ifds().iter().any(|i| i.u16(craft_tiff::tags::COMPRESSION) == Some(32767) || i.contains(0x7010));
     if (make.starts_with("SONY") && sony_raw) || (make.starts_with("HASSELBLAD") && sony_coded()) {
         return Some(RawFormat::Arw);
     }
@@ -257,13 +257,13 @@ const LEAF_DATA: u16 = 0x8606;
 /// An uncompressed Leaf MOS: IFD0 is the 16-bit mosaic itself (compression 1, BlackIsZero, one sample per pixel),
 /// with no Make tag and no CFA photometric, so only Leaf's data block marks it as a raw (issue #1275). A rendered
 /// RGB image that kept the block stays an ordinary image.
-fn is_leaf_mosaic(ifd0: &lightcraft_tiff::Ifd) -> bool {
-    ifd0.contains(LEAF_DATA) && ifd0.u16(lightcraft_tiff::tags::SAMPLES_PER_PIXEL).unwrap_or(1) == 1
+fn is_leaf_mosaic(ifd0: &craft_tiff::Ifd) -> bool {
+    ifd0.contains(LEAF_DATA) && ifd0.u16(craft_tiff::tags::SAMPLES_PER_PIXEL).unwrap_or(1) == 1
 }
 
 /// Whether the Exif maker note starts with the signature of the Pentax layouts (`AOC\0` or `PENTAX \0`).
 fn has_pentax_maker_note(t: &Tiff, bytes: &[u8]) -> bool {
-    let Some(e) = t.exif().and_then(|e| e.get(lightcraft_tiff::tags::MAKER_NOTE)) else { return false };
+    let Some(e) = t.exif().and_then(|e| e.get(craft_tiff::tags::MAKER_NOTE)) else { return false };
     bytes.get(e.offset as usize..).is_some_and(|n| n.starts_with(b"AOC\0") || n.starts_with(b"PENTAX \0"))
 }
 
@@ -272,19 +272,19 @@ fn has_pentax_maker_note(t: &Tiff, bytes: &[u8]) -> bool {
 /// or vendor-specific raw tags (Sony tone curve, CFA pattern, or Pentax compression 65535).
 fn has_raw_ifd(t: &Tiff) -> bool {
     t.all_ifds().iter().any(|i| {
-        i.u16(lightcraft_tiff::tags::PHOTOMETRIC) == Some(lightcraft_tiff::tags::photometric::CFA)
-            || i.u16(lightcraft_tiff::tags::COMPRESSION).is_some_and(|c| matches!(c, 34713 | 32767 | 32769 | 32770 | 99 | 65535))
+        i.u16(craft_tiff::tags::PHOTOMETRIC) == Some(craft_tiff::tags::photometric::CFA)
+            || i.u16(craft_tiff::tags::COMPRESSION).is_some_and(|c| matches!(c, 34713 | 32767 | 32769 | 32770 | 99 | 65535))
             || i.contains(0x7010)
-            || i.contains(lightcraft_tiff::tags::CFA_PATTERN_EP)
-            || i.contains(lightcraft_tiff::tags::CFA_REPEAT_PATTERN_DIM)
+            || i.contains(craft_tiff::tags::CFA_PATTERN_EP)
+            || i.contains(craft_tiff::tags::CFA_REPEAT_PATTERN_DIM)
     })
 }
 
 /// IFD0 that is not an image at all: no `ImageWidth` / `ImageLength`, but a JPEG preview pointer or
 /// `SubIFDs` (the layout of Kodak KDC files, whose pictures sit in private tags). A plain TIFF reader
 /// rejects such a file as malformed even though it carries a preview.
-fn is_preview_container(ifd0: &lightcraft_tiff::Ifd) -> bool {
-    use lightcraft_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, JPEG_INTERCHANGE_FORMAT, SUB_IFDS};
+fn is_preview_container(ifd0: &craft_tiff::Ifd) -> bool {
+    use craft_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, JPEG_INTERCHANGE_FORMAT, SUB_IFDS};
     !ifd0.contains(IMAGE_WIDTH) && !ifd0.contains(IMAGE_LENGTH) && (ifd0.contains(JPEG_INTERCHANGE_FORMAT) || ifd0.contains(SUB_IFDS))
 }
 
@@ -309,7 +309,7 @@ pub(crate) struct ThumbnailShell {
 /// A multi-page TIFF is not caught (its pages are the IFD chain, not `SubIFDs`), nor a pyramid whose
 /// IFD0 is the full image.
 fn thumbnail_shell(t: &Tiff, len: usize) -> Option<ThumbnailShell> {
-    use lightcraft_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, PIXEL_X_DIMENSION, PIXEL_Y_DIMENSION};
+    use craft_tiff::tags::{IMAGE_LENGTH, IMAGE_WIDTH, PIXEL_X_DIMENSION, PIXEL_Y_DIMENSION};
     let ifd0 = t.ifds.first()?;
     let (w0, h0) = (ifd0.u32(IMAGE_WIDTH)?, ifd0.u32(IMAGE_LENGTH)?);
     if w0 == 0 || h0 == 0 {
@@ -352,12 +352,12 @@ fn thumbnail_shell(t: &Tiff, len: usize) -> Option<ThumbnailShell> {
 
 /// Why [`decode`] gives up on a file [`probe`] called [`RawFormat::OtherTiff`].
 fn other_tiff_reason(bytes: &[u8]) -> String {
-    let t = Tiff::parse_with(bytes, &lightcraft_tiff::ParseOptions { max_ifds: 256, ..Default::default() }).ok();
+    let t = Tiff::parse_with(bytes, &craft_tiff::ParseOptions { max_ifds: 256, ..Default::default() }).ok();
     // a DNG-style CFA IFD whose lossless JPEG the lossless decoder rejects: say why
     if let Some(t) = &t
         && let Some(info) = dng::raw_ifd(t).and_then(|i| i.image().ok())
-        && info.compression == lightcraft_tiff::tags::compression::JPEG
-        && let Some(src) = info.chunks(bytes.len() as u64).first().and_then(|c| lightcraft_tiff::image::chunk_bytes(bytes, c))
+        && info.compression == craft_tiff::tags::compression::JPEG
+        && let Some(src) = info.chunks(bytes.len() as u64).first().and_then(|c| craft_tiff::image::chunk_bytes(bytes, c))
         && let Err(e) = ljpeg::frame_info(src)
     {
         return format!("raw image coded as lossless JPEG that is not decoded yet ({e})");
