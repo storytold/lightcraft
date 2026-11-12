@@ -1553,3 +1553,23 @@ fn hebrew_photo_mask_controls_are_localized() {
         assert!(translated.chars().any(|c| ('א'..='ת').contains(&c)), "{source} is not localized in Hebrew");
     }
 }
+
+#[test]
+fn hebrew_photo_library_controls_are_localized() {
+    let catalog = Locale::He.catalog();
+    for source in [
+        "Move Photos",
+        "Move Folder",
+        "Move Folder To…",
+        "Move Selected Photos Here",
+        "Move to Folder",
+        "Move to Folder…",
+        "Relink Photo",
+        "Locate Photo",
+        "Synchronize Folder",
+        "Synchronize Folder…",
+    ] {
+        let translated = catalog.get(source).expect("missing Hebrew photo workflow label");
+        assert!(translated.chars().any(|c| ('א'..='ת').contains(&c)), "{source} is not localized in Hebrew");
+    }
+}

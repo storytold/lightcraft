@@ -1006,5 +1006,15 @@
   "Decrease Brush Feather": "הקטנת ריכוך שולי המברשת",
   "Linear Gradient": "מעבר צבע ליניארי",
   "Radial Gradient": "מעבר צבע רדיאלי",
-  "Show/Hide Mask": "הצגת מסכה או הסתרתה"
+  "Show/Hide Mask": "הצגת מסכה או הסתרתה",
+  "Move Photos": "העברת תמונות",
+  "Move Folder": "העברת תיקייה",
+  "Move Folder To…": "העברת תיקייה אל…",
+  "Move Selected Photos Here": "העברת התמונות שנבחרו לכאן",
+  "Move to Folder": "העברה לתיקייה",
+  "Move to Folder…": "העברה לתיקייה…",
+  "Relink Photo": "קישור מחדש של תמונה",
+  "Locate Photo": "איתור תמונה",
+  "Synchronize Folder": "סנכרון תיקייה",
+  "Synchronize Folder…": "סנכרון תיקייה…"
 }
