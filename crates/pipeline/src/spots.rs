@@ -385,6 +385,11 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
 
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
+    // Nothing to do without spots: skip the full-image snapshot so a spotless render
+    // pays no allocation or copy.
+    if spots.is_empty() {
+        return;
+    }
     let (w, h) = (img.width, img.height);
     // Every spot reads its source patch and target tone from the image as it was before
     // any spot was applied (`original`), so a spot never copies pixels another spot
