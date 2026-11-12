@@ -21,6 +21,8 @@ craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbf
 craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "430a908f68819bf23d14fe73ab9b18d8f4fd4e5d" }
 # PSD/PSB: the header, colour mode data and image resources (craft-libs#885).
 craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "430a908f68819bf23d14fe73ab9b18d8f4fd4e5d" }
+# XML: the bounded tree reader (craft-libs#816), for lensfun-format databases.
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "430a908f68819bf23d14fe73ab9b18d8f4fd4e5d" }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }

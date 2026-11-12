@@ -1318,6 +1318,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-xml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=430a908f68819bf23d14fe73ab9b18d8f4fd4e5d#430a908f68819bf23d14fe73ab9b18d8f4fd4e5d"
+dependencies = [
+ "quick-xml 0.41.0",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3917,9 +3926,9 @@ dependencies = [
 name = "lightcraft-lensdb"
 version = "0.21.0"
 dependencies = [
+ "craft-xml",
  "lightcraft-develop",
  "lightcraft-geom",
- "quick-xml 0.41.0",
 ]
 
 [[package]]
