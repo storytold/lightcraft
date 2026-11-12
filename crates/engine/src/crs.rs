@@ -776,50 +776,6 @@ mod crs_write_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
-    "crs:Version",
-    "crs:ProcessVersion",
-    "crs:Name",
-    "crs:ShortName",
-    "crs:Group",
-    "crs:UUID",
-    "crs:PresetType",
-    "crs:SupportsAmount",
-    "crs:SupportsColor",
-    "crs:SupportsMonochrome",
-    "crs:SupportsHighDynamicRange",
-    "crs:SupportsNormalDynamicRange",
-    "crs:SupportsSceneReferred",
-    "crs:SupportsOutputReferred",
-    "crs:CameraModelRestriction",
-    "crs:Copyright",
-    "crs:ContactInfo",
-    "crs:HasSettings",
-    "crs:AlreadyApplied",
-    "crs:RawFileName",
-    "crs:HasCrop",
-    // preset/library bookkeeping and tool options that don't change the rendering
-    "crs:Cluster",
-    "crs:SupportsAmount2",
-    "crs:RequiresRGBTables",
-    "crs:SortName",
-    "crs:Description",
-    "crs:CropConstrainToWarp",
-    "crs:OverrideLookVignette",
-    // the file's as-shot white, recorded next to the edit (ours comes from the file itself)
-    "crs:AsShotTemperature",
-    "crs:AsShotTint",
-    // which Lightroom version may read the edit, and checksums of the profiles it names
-    "crs:CompatibleVersion",
-    "crs:CameraProfileDigest",
-    "crs:LensProfileDigest",
-    // the lens profile Lightroom picked: ours is the file's own, only `LensProfileEnable` carries over
-    "crs:LensProfileName",
-    "crs:LensProfileFilename",
-    "crs:LensProfileIsEmbedded",
-    "crs:LensProfileSetup",
-    // a crop tool option (keep the crop inside the photo), not the crop itself
-    "crs:CropConstrainToUnitSquare",
-];
 
 /// True if the packet carries any `crs:` adjustment (not just bookkeeping fields).
 pub fn has_adjustments(props: &Props) -> bool {
