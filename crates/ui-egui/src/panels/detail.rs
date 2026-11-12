@@ -964,9 +964,9 @@ fn loupe_request_job(
 ) -> lightcraft_engine::media::RenderJob {
     // editing: the photo is rendered from its source, which stays decoded for the first slider
     // draft (a cached view render would show at once but leave the source unread until then)
-    // an explicit Preview size asks for that source edge: a kept view of a smaller render would
-    // be taken for it, since the display fit accepts any view that covers the drawn size
-    if prep_mode(app) == lightcraft_engine::prep::Mode::Develop || app.ui.settings.preview_limit != 0 {
+    // an explicit Preview size keeps the view cache at rest: a warmed view that covers the
+    // requested edge is reused, and an undersized one is rejected below
+    if prep_mode(app) == lightcraft_engine::prep::Mode::Develop {
         job.view_cache = None;
     }
     let job = if interacting { job.draft() } else { job };
@@ -1587,9 +1587,9 @@ mod tests {
     }
 
     /// The loupe at rest with an explicit Preview size, on a warmed view cache built at that size:
-    /// the cache is not kept for the request, so the render comes from the source at the edge asked for.
+    /// the cache is reused for the request, so the render is not made again from the source.
     #[test]
-    fn explicit_preview_limit_does_not_reuse_warmed_view_cache() {
+    fn explicit_preview_limit_reuses_warmed_view_cache() {
         use super::loupe_request_job;
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
         // not the Develop panels, where the view cache is dropped anyway
@@ -1600,6 +1600,6 @@ mod tests {
         let job = app.session.loupe_job(id, 3840, 3840, true).unwrap();
         assert!(job.cached_view().is_some(), "the warmed 3840 view cache is present before the request");
         let job = loupe_request_job(&app, job, false, [1920, 1920]);
-        assert!(job.cached_view().is_none(), "a warmed view cache must not be reused for an explicit Preview size at rest");
+        assert!(job.cached_view().is_some(), "a warmed view cache at the explicit Preview size is reused at rest");
     }
 }
