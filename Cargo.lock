@@ -1200,6 +1200,15 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
 
 [[package]]
+name = "craft-heif"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=6e21c5b0b1358f7d5505e7ea395948fe21f4d872#6e21c5b0b1358f7d5505e7ea395948fe21f4d872"
+dependencies = [
+ "heic-rs",
+ "rayon",
+]
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -3667,6 +3676,7 @@ version = "0.18.0"
 dependencies = [
  "avif-serialize",
  "bytemuck",
+ "craft-heif",
  "dhat",
  "image",
  "image-webp",
@@ -3676,7 +3686,6 @@ dependencies = [
  "jxl-oxide",
  "lightcraft-color",
  "lightcraft-geom",
- "lightcraft-heif",
  "lightcraft-raster",
  "lightcraft-testkit",
  "moxcms 0.9.1",
@@ -3753,6 +3762,7 @@ dependencies = [
  "ab_glyph",
  "chrono",
  "craft-docpath",
+ "craft-heif",
  "craft-tiff",
  "crc32fast",
  "fs4",
@@ -3770,7 +3780,6 @@ dependencies = [
  "lightcraft-geocode",
  "lightcraft-geom",
  "lightcraft-gpu",
- "lightcraft-heif",
  "lightcraft-lensdb",
  "lightcraft-merge",
  "lightcraft-meta",
@@ -3863,14 +3872,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightcraft-heif"
-version = "0.18.0"
-dependencies = [
- "heic-rs",
- "rayon",
-]
-
-[[package]]
 name = "lightcraft-inpaint"
 version = "0.18.0"
 dependencies = [
@@ -3918,9 +3919,9 @@ name = "lightcraft-meta"
 version = "0.18.0"
 dependencies = [
  "chrono",
+ "craft-heif",
  "craft-tiff",
  "lightcraft-geom",
- "lightcraft-heif",
  "proptest",
  "quick-xml 0.41.0",
  "serde",
