@@ -115,10 +115,21 @@ fn held_offset(ctx: &egui::Context) -> Option<f32> {
     Some((offset + grew).max(0.0)).filter(|o| o.is_finite())
 }
 
+/// Anchor translated panel titles at the reading edge without reversing canvas, values or widget IDs.
+fn heading_anchor(r: Rect, rtl: bool) -> (egui::Pos2, Align2) {
+    let y = r.center().y + 2.0;
+    if rtl { (pos2(r.right() - 24.0, y), Align2::RIGHT_CENTER) } else { (pos2(r.left() + 24.0, y), Align2::LEFT_CENTER) }
+}
+
+fn hebrew_ui() -> bool {
+    crate::i18n::language() == crate::i18n::Locale::He
+}
+
 pub fn header(ui: &mut egui::Ui, title: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(15.0), t.text);
+    let (pos, align) = heading_anchor(r, hebrew_ui());
+    ui.painter().text(pos, align, crate::i18n::tr(title), t.semibold(15.0), t.text);
 }
 
 /// A panel title that folds its section shut and open again (`section:{id}`; kept in
@@ -142,9 +153,23 @@ pub fn fold_title(app: &mut LightcraftApp, ui: &egui::Ui, id: &str, r: Rect, res
     if resp.has_focus() {
         p.rect_stroke(r.shrink(2.0), 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     }
-    p.text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, title, t.semibold(15.0), t.text);
-    let chevron = Rect::from_center_size(pos2(r.right() - 30.0, r.center().y + 2.0), vec2(14.0, 14.0));
-    paint(p, chevron, if open { Icon::ChevronDown } else { Icon::ChevronRight }, t.icon);
+    let rtl = hebrew_ui();
+    let (pos, align) = heading_anchor(r, rtl);
+    p.text(pos, align, title, t.semibold(15.0), t.text);
+    let chevron_x = if rtl { r.left() + 30.0 } else { r.right() - 30.0 };
+    let chevron = Rect::from_center_size(pos2(chevron_x, r.center().y + 2.0), vec2(14.0, 14.0));
+    paint(
+        p,
+        chevron,
+        if open {
+            Icon::ChevronDown
+        } else if rtl {
+            Icon::ChevronLeft
+        } else {
+            Icon::ChevronRight
+        },
+        t.icon,
+    );
     if resp.clicked() {
         app.ui.toggle_folded(id);
     }
