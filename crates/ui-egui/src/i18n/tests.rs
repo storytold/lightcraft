@@ -1533,3 +1533,23 @@ fn hebrew_develop_masks_lens_denoise_and_export_are_translated() {
     assert_eq!(Locale::He.tr("Download Lens Database"), "הורדת מסד נתוני עדשות");
     assert_eq!(Locale::He.tr("DSC_1249.NEF"), "DSC_1249.NEF");
 }
+
+#[test]
+fn hebrew_photo_mask_controls_are_localized() {
+    let catalog = Locale::He.catalog();
+    for source in [
+        "Brush",
+        "Brush Settings",
+        "Brush Stroke",
+        "Increase Brush Size",
+        "Decrease Brush Size",
+        "Increase Brush Feather",
+        "Decrease Brush Feather",
+        "Linear Gradient",
+        "Radial Gradient",
+        "Show/Hide Mask",
+    ] {
+        let translated = catalog.get(source).expect("missing Hebrew photo workflow label");
+        assert!(translated.chars().any(|c| ('א'..='ת').contains(&c)), "{source} is not localized in Hebrew");
+    }
+}

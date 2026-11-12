@@ -996,5 +996,15 @@
   "Edit in HDR: highlights above SDR white, for HDR exports and displays": "עריכה ב־HDR: אזורים בהירים מעל הלבן של SDR, עבור ייצוא ותצוגות HDR",
   "Edit Panel": "חלונית עריכה",
   "Import dropped files without review": "ייבוא קבצים שנגררו ללא סקירה",
-  "Export next to the originals": "ייצוא לצד קובצי המקור"
+  "Export next to the originals": "ייצוא לצד קובצי המקור",
+  "Brush": "מברשת",
+  "Brush Settings": "הגדרות מברשת",
+  "Brush Stroke": "משיכת מברשת",
+  "Increase Brush Size": "הגדלת גודל המברשת",
+  "Decrease Brush Size": "הקטנת גודל המברשת",
+  "Increase Brush Feather": "הגדלת ריכוך שולי המברשת",
+  "Decrease Brush Feather": "הקטנת ריכוך שולי המברשת",
+  "Linear Gradient": "מעבר צבע ליניארי",
+  "Radial Gradient": "מעבר צבע רדיאלי",
+  "Show/Hide Mask": "הצגת מסכה או הסתרתה"
 }
