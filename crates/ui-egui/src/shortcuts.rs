@@ -592,7 +592,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
     }
     if matches!(f, "library.nextUnrated" | "library.prevUnrated") {
         use crate::panels::compare;
-        if compare::culling(app) {
+        if compare::culling(app) || app.ui.slideshow.is_some() {
             return;
         }
         if let Ok(result) = app.run(f, json!({})) {
