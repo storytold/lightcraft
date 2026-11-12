@@ -10,6 +10,16 @@
   and Clone read their source at whole pixels, so a patch is no longer smoother than the photo around it. This is
   rendering process 9: new photos (and Reset) get it, photos you already edited keep their look until you choose
   Photo ▸ Update to Current Process. See [process versions](process-versions.md).
+### Flatpak updates
+- Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
+  This permissions repair must first arrive through your existing host-side update method. Flatpaks
+  managed by a software repository continue to use its package manager, and launcher-pinned versions
+  keep their selected version.
+
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
 
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy

@@ -19,8 +19,8 @@
 
 use std::collections::HashSet;
 
+use craft_tiff::{ByteOrder, FieldType, Tiff, tags as t};
 use lightcraft_meta::cr3::{Cr3TrackKind, XMP_UUID, is_cr3, parse_cr3};
-use lightcraft_tiff::{ByteOrder, FieldType, Tiff, tags as t};
 
 use crate::RawFormat;
 
@@ -29,7 +29,7 @@ use crate::RawFormat;
 const HEAD: u64 = 64 * 1024;
 /// An image whose chunks hold fewer bytes than this is read (thumbnails, small previews).
 const BULK: u64 = 256 * 1024;
-/// The same bounds as `lightcraft_tiff`'s reader.
+/// The same bounds as `craft_tiff`'s reader.
 const MAX_IFDS: usize = 1024;
 const MAX_ENTRIES: u64 = 8192;
 const MAX_BOXES: usize = 4096;
@@ -301,7 +301,7 @@ fn tiff_plan(bytes: &[u8], loaded: &Ranges, preview: bool) -> HeaderPlan {
     })
 }
 
-/// Walk the IFDs of the TIFF in `data` (which starts at `origin` in the file) as `lightcraft_tiff`'s
+/// Walk the IFDs of the TIFF in `data` (which starts at `origin` in the file) as `craft_tiff`'s
 /// reader does — the chain, `SubIFDs`, Exif, GPS and Interop, plus the `extra` pointer tags —
 /// asking for every IFD table and for the values that locate IFDs and image chunks. Returns the IFD
 /// tables and out-of-line values found (absolute ranges); incomplete while `w` needs more.

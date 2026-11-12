@@ -5,10 +5,10 @@ use crate::gaintable::GainTableMap;
 use crate::profile::{HsvTable, ProfileLook, ToneCurve};
 use crate::tiffraw::{Packing, read_image_in};
 use crate::{BlackLevel, Cfa, ColorData, Mat3, Mode, RawData, RawError, RawFormat, RawImage, Rect, Result, opcodes};
+use craft_tiff::tags::{self as t, photometric};
+use craft_tiff::{ByteOrder, Ifd, Tiff};
 use lightcraft_color::Xy;
 use lightcraft_geom::Orientation;
-use lightcraft_tiff::tags::{self as t, photometric};
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff};
 
 /// The main raw IFD: full-resolution (NewSubfileType 0) CFA or LinearRaw image with the most pixels.
 pub(crate) fn raw_ifd(tiff: &Tiff) -> Option<&Ifd> {
@@ -183,7 +183,7 @@ pub(crate) fn is_plain_cfa_tiff(tiff: &Tiff, bytes: &[u8]) -> bool {
         t::compression::JPEG => info
             .chunks(bytes.len() as u64)
             .first()
-            .and_then(|c| lightcraft_tiff::image::chunk_bytes(bytes, c))
+            .and_then(|c| craft_tiff::image::chunk_bytes(bytes, c))
             .is_some_and(|src| crate::ljpeg::frame_info(src).is_ok()),
         _ => false,
     }
