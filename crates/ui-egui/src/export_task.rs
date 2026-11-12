@@ -50,7 +50,7 @@ pub struct Queued {
     after: Option<AfterExport>,
     cancel: Arc<AtomicBool>,
     /// The waiting row; dropped (gone from the stack) when the export starts or is dropped.
-    _guard: TaskGuard,
+    row: TaskGuard,
 }
 
 /// Start exporting `items` in the background, then do `after` with the files written (Add to Apple
@@ -71,23 +71,32 @@ pub fn start(
         let label = crate::i18n::tr_format!("Waiting to export {total} photo{}", if total == 1 { "" } else { "s" }, total = total);
         let guard = app.session.activity.start("export", &label, Cancel::Flag(cancel.clone()));
         guard.progress(0, total as u64);
-        app.export_queue.push_back(Queued { items, opts, to, after, cancel, _guard: guard });
+        app.export_queue.push_back(Queued { items, opts, to, after, cancel, row: guard });
         return Ok(json!({"background": true, "total": total, "queued": app.export_queue.len()}));
     }
     start_now(app, items, opts, to, after)
 }
 
-/// The next queued export that hasn't been dropped, started now; one that can't start says why and the
-/// one after it is tried.
+/// The next queued export that hasn't been dropped, started now. One that adds to Apple Photos waits while
+/// another import holds Photos (its row says so; [`poll`] tries again). The library may have grown while it
+/// waited, so what it writes is checked against the originals as they are now. One that can't start says why,
+/// on screen for longer, and the one after it is tried.
 fn start_next(app: &mut LightcraftApp, ctx: &egui::Context) {
-    while let Some(q) = app.export_queue.pop_front() {
-        if q.cancel.load(Ordering::Relaxed) {
-            continue;
+    app.export_queue.retain(|q| !q.cancel.load(Ordering::Relaxed));
+    while let Some(q) = app.export_queue.front() {
+        if q.opts.add_to_photos && app.session.apple_photos_imports.running().is_some() {
+            q.row.detail(crate::i18n::tr("waiting for Apple Photos"));
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            return;
         }
-        let Queued { items, opts, to, after, .. } = q;
+        let Some(Queued { mut items, opts, to, after, .. }) = app.export_queue.pop_front() else { return };
+        let guard = Arc::new(app.session.original_guard());
+        for item in &mut items {
+            item.use_guard(guard.clone());
+        }
         match start_now(app, items, opts, to, after) {
             Ok(_) => return,
-            Err(e) => app.toast(ctx, e),
+            Err(e) => app.toast_for(ctx, crate::i18n::tr_format!("A waiting export could not start: {e}", e = e), 15.0),
         }
     }
 }
@@ -324,13 +333,18 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
 
 /// Per frame: keep the activity row up to date; when the batch finishes, report it.
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let Some(task) = &app.export else { return };
+    let Some(task) = &app.export else {
+        // nothing running, but an export waits (for Apple Photos): see whether it can start now
+        if !app.export_queue.is_empty() {
+            start_next(app, ctx);
+        }
+        return;
+    };
     match task.rx.try_recv() {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
             app.export = None;
-            start_next(app, ctx);
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
             let msg = match r {
@@ -346,6 +360,8 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             } else {
                 app.toast(ctx, msg);
             }
+            // after this export's toast, so a waiting export that can't start is the one shown
+            start_next(app, ctx);
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             let (done, current) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();

@@ -2062,6 +2062,60 @@ fn a_second_export_waits_for_the_first() {
     assert_eq!(h.request("ui.inspect", json!({}), t)["result"]["activity"], json!([]), "no rows left");
 }
 
+/// Issue #2965: a waiting export that adds to Apple Photos waits while another import holds Photos (its row
+/// says so) instead of being dropped, and starts when Photos is free.
+#[test]
+fn a_waiting_export_waits_for_apple_photos() {
+    if !cfg!(target_os = "macos") {
+        return; // Add to Apple Photos is refused before anything is queued elsewhere
+    }
+    let mut h = demo([1200.0, 900.0]);
+    let t = Duration::from_secs(10);
+    let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let w = written.clone();
+    let gate = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let g = gate.clone();
+    h.app.services.write_shared = Some(std::sync::Arc::new(move |p: &str, _: &[u8]| {
+        let t0 = Instant::now();
+        while p.starts_with("/lc-photos-a/") && !g.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        w.lock().unwrap().push(p.to_string());
+        Ok(())
+    }));
+    let runner: lightcraft_engine::apple_photos::Runner =
+        Arc::new(|_: &[String], _| Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: String::new(), stderr: String::new() }));
+    h.app.session.apple_photos = Some(runner.clone());
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    h.app.run("app.export", json!({"ids": [ids[0]], "dir": "/lc-photos-a", "background": true, "longEdge": 64})).unwrap();
+    let queued =
+        h.app.run("app.export", json!({"ids": [ids[1]], "dir": "/lc-photos-b", "background": true, "longEdge": 64, "addToPhotos": true})).unwrap();
+    assert_eq!(queued["queued"], 1, "{queued}");
+    // another import takes Photos while the first export runs
+    let held = h.app.session.apple_photos_imports.reserve(runner, "").unwrap();
+    gate.store(true, std::sync::atomic::Ordering::SeqCst);
+    let t0 = Instant::now();
+    while h.app.export.is_some() && t0.elapsed() < Duration::from_secs(60) {
+        h.step();
+    }
+    for _ in 0..10 {
+        h.step();
+    }
+    assert!(h.app.export.is_none(), "the first export ended");
+    assert_eq!(h.app.export_queue.len(), 1, "the Photos export still waits, it was not dropped");
+    let rows = h.request("ui.inspect", json!({}), t)["result"]["activity"].clone();
+    assert!(rows.to_string().contains("waiting for Apple Photos"), "{rows}");
+    // Photos free again: it starts and runs
+    drop(held);
+    let t0 = Instant::now();
+    while (h.app.export.is_some() || !h.app.export_queue.is_empty()) && t0.elapsed() < Duration::from_secs(60) {
+        h.step();
+    }
+    assert!(h.app.export.is_none() && h.app.export_queue.is_empty());
+    let w = written.lock().unwrap().clone();
+    assert_eq!(w.iter().filter(|p| p.starts_with("/lc-photos-b/")).count(), 1, "{w:?}");
+}
+
 /// Issue #236: the Export dialog's Add to Apple Photos is there on macOS only; there the
 /// background export hands the files it wrote to Photos (a fake runner: tests never start
 /// osascript or Photos) and the toast says how it went.
