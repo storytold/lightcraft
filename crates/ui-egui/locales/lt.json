@@ -4446,5 +4446,18 @@
   "frame sooner: 8.3 ms at 120 Hz, 16.7 ms at 60 Hz. On a MacBook Pro at 120 Hz, a heavy develop drag went from": "atnaujinimo kadru greičiau: po 8,3 ms esant 120 Hz ir po 16,7 ms esant 60 Hz. „MacBook Pro“ kompiuteryje, veikiančiame 120 Hz dažniu, sudėtingo koregavimo vilkimo delsa sumažėjo nuo",
   "about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames": "maždaug 18 ms iki 10 ms tarp kadro perdavimo „macOS“ ir jo sukomponavimo sistemoje, išlaikant tuos pačius 120 kadrų",
   "a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a": "per sekundę. „Mac“ kompiuteryje langas taip pat laiko vienu atvaizduojamuoju buferiu mažiau: jo dydis yra plotis × aukštis × 4 baitai, t. y. 15–22 MB",
-  "1200–1500-point-wide window on a Retina display.": "1200–1500 taškų pločio langui „Retina“ ekrane."
+  "1200–1500-point-wide window on a Retina display.": "1200–1500 taškų pločio langui „Retina“ ekrane.",
+  "Virtual-copy numbering stops cleanly at its limit": "Virtualiųjų kopijų numeracija tvarkingai sustoja pasiekusi ribą",
+  "Creating a numbered virtual copy now reports when the `Copy N` sequence is exhausted, before any copies in a": "Kuriant sunumeruotą virtualiąją kopiją dabar pranešama, kai seka `Copy N` išnaudota, dar prieš sukuriant bet kurią kopiją",
+  "batch are created. An explicit name remains available even when the numeric sequence is full.": "pakete. Net ir pasibaigus skaitinei sekai, vis dar galima nurodyti pavadinimą rankiniu būdu.",
+  "A right-click while you carry photos opens no menu": "Velkant nuotraukas dešiniuoju pelės mygtuku neatveriamas kontekstinis meniu",
+  "While you drag photos from the grid, a right-click opens no context menu, on an album, folder or keyword row in": "Velkant nuotraukas iš tinklelio, dešiniuoju pelės mygtuku nebeatveriamas kontekstinis meniu nei ant albumo, aplanko ar raktažodžio eilutės",
+  "the sidebar or on any other row or thumbnail that has one. Before, the menu opened on the row the photos were over.": "šoninėje juostoje, nei ant kitos eilutės ar miniatiūros, kuriai toks meniu priklauso. Anksčiau meniu atsidarydavo ant eilutės, virš kurios buvo velkamos nuotraukos.",
+  "The menu of a text field (Cut, Copy, Paste) is not held back.": "Teksto lauko meniu („Iškirpti“, „Kopijuoti“, „Įklijuoti“) ir toliau atveriamas įprastai.",
+  "Adding photos that are already in an album no longer costs an undo step": "Pridedant albume jau esančias nuotraukas, nebesukuriamas bereikalingas atšaukimo veiksmas",
+  "Add to Album and dragging photos to an album now leave the album, the undo history and Redo alone when every": "Komandos „Pridėti prie albumo“ ir nuotraukų vilkimas į albumą dabar nekeičia albumo, veiksmų atšaukimo istorijos ir pakartojimo istorijos, jei visos",
+  "photo was in the album already. Before, they still recorded an undo step, so Redo was lost and Undo had a step": "nuotraukos jame jau buvo. Anksčiau vis tiek būdavo įrašomas atšaukimo veiksmas, todėl prarasdavote pakartojimo galimybę, o atšaukimo istorijoje atsirasdavo veiksmas,",
+  "that changed nothing. Photos the library no longer has (a selection kept after an Undo took them away) are also": "kuris nieko nepakeisdavo. Nuotraukos, kurių bibliotekoje nebėra (pavyzdžiui, pasirinkimas, likęs po to, kai atšaukimo veiksmas jas pašalino), taip pat",
+  "left out of a new album made from the selection, out of Add to Album, and out of the target album (B), which does": "neįtraukiamos į naują albumą, sukurtą iš pasirinkimo, nepridedamos komanda „Pridėti prie albumo“ ir neperkeliamos į paskirties albumą (B). Jei tokių nuotraukų",
+  "nothing and says nothing when none of them is left, and counts only the photos it changed.": "nebelieka nė vienos, nieko nedaroma ir nerodomas pranešimas. Skaičiuojamos tik tos nuotraukos, kurios iš tikrųjų pakeistos."
 }
