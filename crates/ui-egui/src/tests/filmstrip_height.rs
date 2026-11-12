@@ -78,3 +78,17 @@ fn a_stored_filmstrip_height_is_kept_in_range() {
     assert_eq!(crate::state::film_height(300.0, 500.0), 200.0);
     assert_eq!(crate::state::film_height(300.0, 200.0), FILM_HEIGHT_MIN, "never below the usual height");
 }
+
+/// A `filmHeight` in `ui.json` that is not a number (hand-edited, or written by another build) gives the
+/// usual height and costs none of the other saved settings.
+#[test]
+fn a_filmstrip_height_that_is_not_a_number_loses_no_other_setting() {
+    for bad in [json!(null), json!("tall"), json!([200]), json!({"h": 200})] {
+        let ui: crate::UiState = serde_json::from_value(json!({"filmHeight": bad, "thumbSize": 300.0})).unwrap_or_else(|e| panic!("{bad}: {e}"));
+        assert_eq!((ui.film_height, ui.thumb_size), (FILM_HEIGHT_MIN, 300.0), "{bad}");
+    }
+    let ui: crate::UiState = serde_json::from_value(json!({"filmHeight": 200})).unwrap();
+    assert_eq!(ui.film_height, 200.0);
+    let ui: crate::UiState = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(ui.film_height, FILM_HEIGHT_MIN, "absent: the usual height");
+}

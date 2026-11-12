@@ -59,7 +59,9 @@ pub struct UiState {
     /// Presets column: show a live thumbnail of the photo with each preset.
     pub preset_thumbs: bool,
     pub filmstrip: bool,
-    /// The filmstrip's height in points, set by dragging its top edge ([`film_height`]; issue #4110).
+    /// The filmstrip's height in points, set by dragging its top edge ([`film_height`]; issue #4110). Read
+    /// leniently: a stored value that is not a number is the usual height, never the other settings lost.
+    #[serde(deserialize_with = "lenient_film_height")]
     pub film_height: f32,
     pub zoom: Zoom,
     /// Pan offset of the loupe when zoomed (image-normalized centre).
@@ -643,6 +645,13 @@ impl UiState {
     pub fn record_startup_dialog_seen(&mut self) {
         self.seen_version = Some(env!("CARGO_PKG_VERSION").to_string());
     }
+}
+
+/// The filmstrip height read leniently: anything but a number is [`FILM_HEIGHT_MIN`] (the range is
+/// [`UiState::sanitized`]'s).
+fn lenient_film_height<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f32, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_f64().map_or(FILM_HEIGHT_MIN, |v| v as f32))
 }
 
 /// A list of ids read leniently: what isn't a list is none, and what isn't text in it is left out.
