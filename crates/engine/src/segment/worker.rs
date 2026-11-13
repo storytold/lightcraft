@@ -849,7 +849,6 @@ mod tests {
     }
 
     /// The component shape the session records on a detail pass's tag.
-
     fn object_shape() -> lightcraft_develop::MaskShape {
         lightcraft_develop::MaskShape::Object { hint: Vec::new(), exclude: Vec::new(), seg: None, detail: Vec::new(), edge: 0.0 }
     }
