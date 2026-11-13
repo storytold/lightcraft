@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Reload from Disk picks up a corrected camera or lens name
+- Reload from Disk (`photo.reload`) now takes the camera and lens names the file states. It used to keep the name the
+  catalog already had, so a lens name fixed with an EXIF tool stayed wrong in the Lens column and filter while the lens
+  profile was already looked up by the new name (issue #4182). A file that states no name keeps the catalog's.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
