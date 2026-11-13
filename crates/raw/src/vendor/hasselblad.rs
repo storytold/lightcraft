@@ -25,8 +25,8 @@
 //!   [`rgb_preview`] hands the largest 8-bit one on as a small baseline TIFF.
 use crate::dng;
 use crate::{ColorData, Mode, RawFormat, RawImage, Result};
-use lightcraft_tiff::image::{Layout, chunk_bytes};
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, ParseOptions, Tiff, TiffWriter, Value, tags as t};
+use craft_tiff::image::{Layout, chunk_bytes};
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, ParseOptions, Tiff, TiffWriter, Value, tags as t};
 
 /// Private IFD0 tag holding the original 3FR header (a complete TIFF) inside an FFF.
 pub(crate) const ORIGINAL_HEADER: u16 = 0xc51b;
@@ -124,7 +124,7 @@ fn adopt_matrices(color: &mut ColorData, from: &ColorData) {
 mod tests {
     use super::*;
     use crate::{RawData, RawError, decode as decode_file, probe, probe_info};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags as t};
 
     const MATRIX: [(i32, i32); 9] =
         [(686, 1000), (-196, 1000), (-32, 1000), (-437, 1000), (1228, 1000), (235, 1000), (-165, 1000), (317, 1000), (675, 1000)];
