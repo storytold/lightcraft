@@ -499,7 +499,7 @@ fn survey_tiles_glide_to_their_new_cells() {
     h.step();
     let moving = tile(&h);
     assert!(h.app.survey_motion.moving(h.time()), "the tiles are on their way");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     let after = tile(&h);
     assert!(!h.app.survey_motion.moving(h.time()));
     assert_ne!(before, after, "the photo has a new cell");
@@ -519,7 +519,7 @@ fn survey_tiles_glide_when_a_photo_joins() {
     h.step();
     let moving = ids.map(|id| tile(&h, id));
     assert!(h.app.survey_motion.moving(h.time()), "the tiles are on their way");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     let after = ids.map(|id| tile(&h, id));
     let moved: Vec<usize> = (0..3).filter(|&i| before[i] != after[i]).collect();
     assert!(!moved.is_empty(), "a photo joining changes the grid: {before:?} → {after:?}");

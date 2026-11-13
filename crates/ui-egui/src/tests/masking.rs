@@ -2197,7 +2197,7 @@ fn lens_blur_focus_and_blur_brushes_paint_on_the_photo() {
     // switching the blur off puts the brush down
     click(&mut h, "check:lensBlur.enabled");
     assert_eq!(h.app.ui.tool, "");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking check:lensBlur.enabled");
 }
 
 /// Lens Blur focus shape: without a focus mask a button per shape sets it; with one they're gone.
@@ -2224,7 +2224,7 @@ fn lens_blur_shape_buttons_pick_the_focus_shape() {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.clickWidget", json!({"id": "lensBlurShape:round"}), T);
     assert_eq!(r["ok"], false, "no shape buttons with a focus mask: {r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.clickWidget lensBlurShape:round");
 }
 
 /// While Apply is off the focus controls don't respond; on, Move & Resize drags the fixed shape on
@@ -2269,7 +2269,7 @@ fn lens_blur_focus_controls_follow_apply_and_the_shape_moves() {
     // switching the blur off puts the tool down
     click(&mut h, "check:lensBlur.enabled");
     assert_eq!(h.app.ui.tool, "");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking check:lensBlur.enabled");
 }
 
 /// A mask's Lens Blur is a block of its own under the mask's sliders: which side it blurs, its
@@ -2279,7 +2279,7 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     let mut h = detail("panel.masking");
     assert_eq!(h.request("ui.resize", json!({"width": 1200, "height": 3200}), T)["ok"], true);
     exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after mask.add");
     let adjust = |h: &Headless| develop(h).masks[0].adjust;
     // the block's own sliders, not one more in the list
     assert!(h.app.widgets.iter().any(|(id, _)| id == "section:maskLensBlur"));
@@ -2293,7 +2293,7 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     assert!(adjust(&h).lens_blur_boost > 30.0, "{:?}", adjust(&h));
     // the eye (shown over the header) switches it off and keeps the values
     h.request("ui.hoverWidget", json!({"id": "section:maskLensBlur"}), T);
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after ui.hoverWidget");
     click(&mut h, "sectionEye:maskLensBlur");
     let off = adjust(&h);
     assert!(off.lens_blur_off && off.lens_blur == 50.0 && off.lens_blur_outside, "{off:?}");
@@ -2308,5 +2308,5 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     assert!(h.app.ui.section_folded("maskLensBlur"));
     click(&mut h, "section:maskLensBlur");
     assert!(!h.app.ui.section_folded("maskLensBlur"));
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after clicking section:maskLensBlur");
 }
