@@ -325,6 +325,8 @@ mod tests {
         assert_eq!(a.exists("gone"), Some(false));
         assert!(a.is_offline("gone") && !a.is_offline("here") && !a.is_offline("unknown"));
         assert_eq!(on_caller.load(Ordering::SeqCst), 0, "never probed on the calling thread");
+        // Publishing the cached answer happens before the worker invokes its waker.
+        wait_until("availability wake notifications", || woke.load(Ordering::SeqCst) >= 2);
         assert!(woke.load(Ordering::SeqCst) >= 2);
         assert!(a.gone_generation() >= 2);
     }
