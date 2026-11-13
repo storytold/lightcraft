@@ -1096,9 +1096,13 @@ impl Session {
         }
         let settings = Arc::new(settings);
         let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
-        Some(Op::Batch {
-            ops: vec![Op::SetDevelop { id, settings, label: label.into(), edited: Some((self.clock)()) }, Op::PushHistory { id, step }],
-        })
+        let mut ops = vec![Op::SetDevelop { id, settings, label: label.into(), edited: Some((self.clock)()) }];
+        // a photo's first edit also lists where it started, as Lightroom's "Import" step: there to go back to (#4203)
+        if let Some(start) = before.filter(|_| self.catalog.photo(id).is_some_and(|p| p.history.is_empty())) {
+            ops.push(Op::PushHistory { id, step: lightcraft_catalog::HistoryStep { label: "Import".into(), settings: start } });
+        }
+        ops.push(Op::PushHistory { id, step });
+        Some(Op::Batch { ops })
     }
 
     /// Put the old masks of `d` (on the corrected frame, `Mask::on_photo` false) on photo `id`
