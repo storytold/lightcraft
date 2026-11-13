@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Shorter names in Open Recent Library
+- File ▸ Open Recent Library lists each library by its name instead of its whole folder path, so the menu stays
+  narrow. Two libraries with the same name show just the folders that tell them apart, written like the grid's
+  folder titles (`2025/work`, `2026/work`; `~` for your home folder). The full path is still shown in the launch
+  window's list of recent libraries (issue #4000).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
