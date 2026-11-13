@@ -285,7 +285,9 @@ fn huge_overlays_on_a_big_slide_stay_cheap() {
     let mut img = blank(4000, 2500);
     let t = std::time::Instant::now();
     SlideOverlays::resolve(&s, Some(&p)).draw_front(&mut img, &l);
-    assert!(t.elapsed().as_secs_f64() < 20.0, "{:?}", t.elapsed());
+    // stretched on a slow machine, never shrunk
+    let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(20)).max(std::time::Duration::from_secs(20));
+    assert!(t.elapsed() < limit, "{:?}", t.elapsed());
     assert!(img.get(100, 300)[0] > 0, "the text's start shows");
 }
 

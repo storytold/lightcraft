@@ -73,6 +73,7 @@ fn a_rejected_model_file_says_why_in_settings() {
     h.app.session.set_denoise_models_dir(Some(dir.join("denoise-models")));
     // without the runtime the button is disabled (the workspace build turns it on through the desktop app)
     if h.app.session.execute("denoise.models.list", &json!({})).unwrap()["runtime"] != true {
+        lightcraft_testkit::skip!(Feature, "denoise runtime unavailable: the workspace build turns it on");
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
@@ -101,6 +102,20 @@ fn a_rejected_model_file_says_why_in_settings() {
 
 use super::*;
 use std::sync::Arc;
+
+/// Every headless test is watched (issue #3062): one stuck past the watchdog's limit ends the
+/// test binary with its name instead of hanging it.
+#[test]
+fn a_headless_session_watches_its_test() {
+    let me = std::thread::current().name().unwrap_or_default().to_owned();
+    let mine = || lightcraft_testkit::watched().iter().filter(|t| **t == me).count();
+    assert_eq!(mine(), 0);
+    let app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services { png: None, ..Default::default() });
+    let h = Headless::new(app, [400.0, 300.0], 1.0);
+    assert_eq!(mine(), 1);
+    drop(h);
+    assert_eq!(mine(), 0, "the watch ends with the session");
+}
 
 /// The pretend host has a clipboard, as a desktop does: text the UI copies lands in it, and a
 /// cut, copy or paste request (from a context menu) comes back as that event on the next frame.
@@ -2121,20 +2136,31 @@ fn a_slow_photos_import_never_blocks_the_window() {
     h.app.services.write = Some(Box::new(|p: &str, bytes: &[u8]| lightcraft_engine::export::write_file(p, bytes)));
     let (go, wait) = std::sync::mpsc::channel::<()>();
     let wait = std::sync::Mutex::new(wait);
+    // how many imports Photos has answered: it answers each only after `go`
+    let answered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let a = answered.clone();
+    // how long Photos is held at most: 20 s, stretched by LIGHTCRAFT_TIME_SCALE, never shrunk
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
     h.app.session.apple_photos_background = true; // as the desktop app sets it
     h.app.session.apple_photos = Some(Arc::new(move |args: &[String], _| {
-        // a regression (Photos on the UI thread) fails the timing below instead of hanging
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        // a regression (Photos on the UI thread) answers only once this runs out, and fails the
+        // checks below instead of hanging
+        let _ = wait.lock().unwrap().recv_timeout(hold);
         let n = args.len() - args.iter().position(|a| a == lightcraft_engine::apple_photos::MARKER).unwrap() - 2;
+        a.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
     }));
     let t0 = Instant::now();
     let r = h.request("engine.execute", json!({"command": "export.addToPhotos", "params": {"paths": [file.to_string_lossy()], "album": "Slow"}}), t);
-    assert!(t0.elapsed() < Duration::from_secs(5), "answered at once: {r}");
+    assert_eq!(answered.load(std::sync::atomic::Ordering::SeqCst), 0, "answered before Photos did: {r}");
+    // nor after waiting a while for it first: well inside the hold (both stretch alike)
+    assert!(t0.elapsed() < hold / 4, "answered at once: {:?} (hold {hold:?}): {r}", t0.elapsed());
     assert_eq!(r["result"]["running"], true, "{r}");
     go.send(()).unwrap();
+    // the outcome gets the whole hold from t0: the answer above may have used up to a quarter of
+    // it, and scaled(20 s) alone would be 2 s at LIGHTCRAFT_TIME_SCALE=0.1
     while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Apple Photos")) {
-        assert!(t0.elapsed() < Duration::from_secs(20), "the outcome is announced");
+        assert!(t0.elapsed() < hold, "the outcome is announced: {:?} (hold {hold:?})", t0.elapsed());
         h.step();
     }
     assert_eq!(h.app.ui.toast.as_ref().unwrap().0, "1 added to Apple Photos album “Slow”");
@@ -2142,12 +2168,14 @@ fn a_slow_photos_import_never_blocks_the_window() {
         let t1 = Instant::now();
         let p = json!({"dir": out.to_string_lossy(), "longEdge": 32, "addToPhotos": true});
         let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
-        assert!(t1.elapsed() < Duration::from_secs(10), "the export answers without waiting for Photos: {r}");
+        assert_eq!(answered.load(std::sync::atomic::Ordering::SeqCst), 1, "the export answers without waiting for Photos: {r}");
+        // the export renders first, so it gets half the hold
+        assert!(t1.elapsed() < hold / 2, "the export answers at once: {:?} (hold {hold:?}): {r}", t1.elapsed());
         assert_eq!(r["result"]["applePhotos"]["running"], true, "{r}");
         assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
         go.send(()).unwrap();
         while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.starts_with("1 added to Apple Photos") && !t.0.contains("Slow")) {
-            assert!(t1.elapsed() < Duration::from_secs(20), "the outcome is announced");
+            assert!(t1.elapsed() < hold, "the outcome is announced: {:?} (hold {hold:?})", t1.elapsed());
             h.step();
         }
     }
@@ -2234,11 +2262,14 @@ fn a_background_export_holds_photos_while_it_writes() {
     std::fs::create_dir_all(&out).unwrap();
     let other = out.join("other.jpg");
     std::fs::write(&other, b"jpeg").unwrap();
-    // the writer waits for `go`: the export is still writing while we try another import
+    // the writer waits for `go`: the export is still writing while we try another import. It
+    // lets itself go after 20 s (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk) so a
+    // regression fails instead of hanging; a test that fails first drops `go`, which frees it.
     let (go, wait) = std::sync::mpsc::channel::<()>();
     let wait = std::sync::Mutex::new(wait);
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20));
     h.app.services.write_shared = Some(Arc::new(move |p: &str, bytes: &[u8]| {
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
+        let _ = wait.lock().unwrap().recv_timeout(hold);
         lightcraft_engine::export::write_file(p, bytes)
     }));
     let calls = Arc::new(std::sync::Mutex::new(Vec::<Vec<String>>::new()));
@@ -2258,7 +2289,7 @@ fn a_background_export_holds_photos_while_it_writes() {
     go.send(()).unwrap();
     let t0 = Instant::now();
     while h.app.export.is_some() {
-        assert!(t0.elapsed() < Duration::from_secs(20), "the export finishes");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(20)), "the export finishes");
         h.step();
     }
     let last = h.app.last_export_result.clone().unwrap();
@@ -3388,9 +3419,9 @@ fn browsing_the_same_folder_again_does_not_restart() {
     let (g, n) = (gate.clone(), started.clone());
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
         n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        while !g.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        lightcraft_testkit::wait_until_at_least(Duration::from_secs(60), "the test opens the probe's gate", || {
+            g.load(std::sync::atomic::Ordering::Relaxed)
+        });
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
     }));
     let browse = |h: &mut Headless| h.request("engine.execute", json!({"command": "library.browse", "params": {"path": dir.to_string_lossy()}}), t);
@@ -3516,9 +3547,9 @@ fn folder_scan_cancel_and_busy() {
     let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let g = gate.clone();
     h.app.session.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
-        while !g.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        lightcraft_testkit::wait_until_at_least(Duration::from_secs(60), "the test opens the probe's gate", || {
+            g.load(std::sync::atomic::Ordering::Relaxed)
+        });
         Ok(lightcraft_engine::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
     }));
     let r = h.request("engine.execute", json!({"command": "file.addFolder", "params": {"path": dir.to_string_lossy()}}), t);

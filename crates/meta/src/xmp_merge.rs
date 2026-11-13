@@ -487,7 +487,9 @@ mod tests {
         let found = scan(&s).unwrap();
         let took = t.elapsed();
         assert_eq!(found.descs[0].attrs.len(), n + 2, "every attribute is read");
-        assert!(took < std::time::Duration::from_secs(5), "{n} attributes took {took:?}");
+        // stretched on a slow machine, never shrunk
+        let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(5)).max(std::time::Duration::from_secs(5));
+        assert!(took < limit, "{n} attributes took {took:?} (limit {limit:?})");
     }
 
     #[test]

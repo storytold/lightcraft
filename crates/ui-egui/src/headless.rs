@@ -269,6 +269,10 @@ pub struct Headless {
     /// create a prompt after the host input was already filtered for the previous frame.
     #[cfg(test)]
     after_raw_input_hook: Option<Box<dyn FnMut(&mut LightcraftApp)>>,
+    /// The test driving this session is watched while it lives: a test stuck past the watchdog's
+    /// limit ends the binary with the names of the tests still running (`lightcraft_testkit::watch`).
+    #[cfg(test)]
+    _watch: lightcraft_testkit::Watch,
 }
 
 /// A headless run (`lightcraft-cli snapshot`, tests) is a one-shot process: however it ends, it
@@ -311,6 +315,8 @@ impl Headless {
             last_cursor: egui::CursorIcon::Default,
             #[cfg(test)]
             after_raw_input_hook: None,
+            #[cfg(test)]
+            _watch: lightcraft_testkit::watch(),
         }
     }
 

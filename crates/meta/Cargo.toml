@@ -18,5 +18,7 @@ chrono = { workspace = true }
 [dev-dependencies]
 # Lossless synthetic HEIC files: the HEIF item reader is proved against a real container writer.
 craft-heif = { workspace = true, features = ["testdata"] }
+# time guards stretched by LIGHTCRAFT_TIME_SCALE
+lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }
