@@ -189,6 +189,63 @@ fn presets_conflicts_and_subfolders() {
     assert_eq!(written, ["out/Sub/LC01347.png"]);
 }
 
+/// Each of the four named delivery-target built-ins: listed as built-in, expanded to the settings the
+/// issue asks for, valid as `app.export` params, round-tripped through a user preset, and rendered at
+/// its size. A long edge is all a preset sets, so none of them crops the photo.
+#[test]
+fn named_builtin_presets_expand_round_trip_and_apply() {
+    use crate::export::output_size;
+    let mut s = Session::with_demo();
+    // the issue's four named built-ins are listed, marked builtin
+    let builtin: Vec<String> = s
+        .execute("export.presets", &json!({}))
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["builtin"].as_bool().unwrap())
+        .map(|p| p["name"].as_str().unwrap().to_string())
+        .collect();
+    // 0 = no resize: the photo's own (cropped) full size
+    let issue = [
+        ("Instagram Feed", json!({"format": "jpeg", "quality": 85, "longEdge": 1080, "colorSpace": "srgb", "sharpen": "screen"})),
+        ("Instagram Story / Reel", json!({"format": "jpeg", "quality": 85, "longEdge": 1920, "colorSpace": "srgb", "sharpen": "screen"})),
+        ("Web / Portfolio", json!({"format": "jpeg", "quality": 85, "longEdge": 2048, "colorSpace": "srgb", "metadata": "copyright"})),
+        ("Full Resolution Master", json!({"format": "jpeg", "quality": 95, "longEdge": 0, "colorSpace": "displayP3"})),
+    ];
+    for (name, settings) in &issue {
+        assert!(builtin.contains(&name.to_string()), "{name}: {builtin:?}");
+        // expanding one yields exactly the issue's settings, and they validate as app.export params
+        let params = s.export_params(&json!({"preset": name})).unwrap();
+        assert_eq!(&params, settings, "{name}");
+        ExportOptions::validate("app.export", &params).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        // round trip: save as a user preset → expand again → identical ExportOptions
+        let mine = format!("My {name}");
+        s.execute("export.savePreset", &json!({"name": mine, "params": params})).unwrap();
+        let again = s.export_params(&json!({"preset": mine})).unwrap();
+        assert_eq!(ExportOptions::from_json(&params), ExportOptions::from_json(&again), "{name}");
+    }
+    // built-in names (the new ones too) are reserved
+    assert!(s.execute("export.savePreset", &json!({"name": "web / portfolio", "params": {}})).is_err());
+    // applying each one really renders at its size, and the photo keeps its own shape. The fixture
+    // is a demo scene at 2048×1365 instead of the demo library's 6000×4000: a preset only sets a
+    // long edge, so its behaviour is the same at this size, and every preset edge (1080, 1920,
+    // 2048) still lands — the largest one exactly at the fixture's own size, unresized.
+    use lightcraft_catalog::{Op, Photo, Source};
+    let id = s.catalog.alloc_photo_id();
+    let photo = Photo::new(id, Source::Demo { scene: 1 }, "LC01200.JPG", "JPEG", 2048, 1365, "2026-09-28T09:30:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(photo.clone()) }).unwrap();
+    for (name, settings) in &issue {
+        let o = ExportOptions::from_json(settings);
+        let e = export_photo(&mut s, id, &o, 1).unwrap();
+        assert_eq!((e.width, e.height), output_size(&photo, &o), "{name}");
+        match settings["longEdge"].as_u64().unwrap_or(0) {
+            0 => assert!(o.resize.is_none(), "{name}: full size means no resize"),
+            edge => assert_eq!(e.width.max(e.height) as u64, edge, "{name}: {}×{}", e.width, e.height),
+        }
+    }
+}
+
 /// Issue #2571: a subfolder with `..`, a root or a drive wrote outside the chosen folder. It is
 /// cleaned where the folder is used, so a preset or the Export dialog's field (which set it
 /// without `from_json`) are covered as well as command parameters.
@@ -317,6 +374,8 @@ fn library_with_jpeg(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::p
 
 fn preset_export_preserves_originals(command: &str, selection: serde_json::Value, tag: &str) {
     let (mut s, _, dir, src, original) = library_with_jpeg(tag);
+    // something for mask.exportEffects to write (the other commands ignore it)
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
     let sidecar = src.with_extension("xmp");
     let appended_sidecar = dir.join("IMG_1.jpg.xmp");
     std::fs::write(&sidecar, b"existing sidecar").unwrap();
@@ -342,6 +401,14 @@ fn preset_export_preserves_originals(command: &str, selection: serde_json::Value
         assert_eq!(std::fs::read(&sidecar).unwrap(), b"existing sidecar");
         assert_eq!(std::fs::read(&appended_sidecar).unwrap(), b"appended sidecar");
     }
+    // `..` through a folder that does not exist yet could reach the original once it is created
+    let mut params = selection.clone();
+    params["path"] = json!(dir.join("missing/../IMG_1.jpg").to_string_lossy());
+    let error = s.execute(command, &params).unwrap_err().to_string();
+    // Windows resolves `..` lexically and finds the original; Unix cannot resolve it and refuses
+    assert!(error.contains("cannot be resolved") || error.contains("never writes over an original"), "{error}");
+    assert!(!dir.join("missing").exists());
+    assert_eq!(std::fs::read(&src).unwrap(), original);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -403,9 +470,12 @@ fn keyword_export_preserves_the_previous_file_on_write_failure() {
 fn preset_exports_preserve_previous_files_on_write_failure() {
     let dir = temp_dir("preset-export-failure");
     let mut s = Session::new();
-    for (command, selection, file) in
-        [("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"), ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve")]
-    {
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
+    for (command, selection, file) in [
+        ("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"),
+        ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve"),
+        ("mask.exportEffects", json!({"names": ["Glow"]}), "effects.lceffect"),
+    ] {
         let path = dir.join(file);
         let mut params = selection;
         params["path"] = json!(path.to_string_lossy());
@@ -418,8 +488,13 @@ fn preset_exports_preserve_previous_files_on_write_failure() {
         assert_eq!(std::fs::read(&path).unwrap(), previous, "{command} preserves the prior export");
         assert_eq!(s.execute(command, &params).unwrap()["count"], 1, "replacement still succeeds");
     }
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no temporary files remain");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "no temporary files remain");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn mask_effect_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("mask.exportEffects", json!({"names": ["Glow"]}), "effect-export-guard");
 }
 
 fn disk_batch(
@@ -886,6 +961,30 @@ fn metadata_none_in_any_case_exports_no_metadata() {
     }
     let m = export(&mut s, json!({"metadata": "ALL", "removeLocation": true}));
     assert!(m.gps.is_none() && m.city.is_none(), "{m:?}");
+}
+
+/// A raw's Exif Make, Model and LensMake reach an exported JPEG apart, as stitching tools read them.
+#[test]
+fn export_writes_camera_make_and_lens_make_to_exif() {
+    let dir = temp_dir("export-raw-exif");
+    let src = dir.join("Canon.dng");
+    let meta = lightcraft_meta::Metadata {
+        make: Some("Canon".into()),
+        model: Some("EOS R5".into()),
+        lens_make: Some("Sigma".into()),
+        lens_model: Some("RF 24-105mm f/4L IS USM".into()),
+        ..Default::default()
+    };
+    std::fs::write(&src, synthetic_dng_with(None, meta)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "jpeg", "longEdge": 64, "metadata": "all"})), 1).unwrap();
+    let back = lightcraft_meta::extract(&e.bytes);
+    assert_eq!(back.make.as_deref(), Some("Canon"), "EXIF Make is missing: {back:?}");
+    assert_eq!(back.model.as_deref(), Some("EOS R5"), "EXIF Model holds the model alone: {back:?}");
+    assert_eq!(back.lens_make.as_deref(), Some("Sigma"), "EXIF LensMake is missing: {back:?}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An original raw whose own metadata holds GPS is refused under "Remove location info".
@@ -1462,4 +1561,34 @@ fn huge_export_size_is_an_error() {
     assert!(s.render_export(id, 70_000, 10, OutputSpace::Srgb, OutputDepth::U8).is_err());
     assert!(s.render_now(id, huge, huge).is_err());
     assert!(s.render_now(id, 10, 70_000).is_err());
+}
+
+/// A user export preset whose name collides with a built-in one (in any case) is shadowed by it:
+/// the built-ins are looked up first, so the user's preset can never be selected or exported, and
+/// the save path refuses to recreate it under a free name. Loading the preferences renames it to a
+/// name of its own instead, keeping its settings.
+#[test]
+fn a_user_preset_naming_a_built_in_is_renamed_when_the_library_opens() {
+    let lib = temp_dir("export-preset-rename");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        s.close_library().unwrap();
+    }
+    std::fs::write(lib.join("prefs.json"), r#"{"exportPresets": [{"name": "web / portfolio", "params": {"format": "png", "width": 64}}]}"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+
+    let builtins: Vec<String> = crate::export::builtin_presets().into_iter().map(|p| p.name).collect();
+    assert_eq!(s.export_presets.len(), 1, "the user's preset is kept");
+    let name = s.export_presets[0].name.clone();
+    assert!(!builtins.iter().any(|b| b.eq_ignore_ascii_case(&name)), "{name} still shadows a built-in");
+    assert_eq!(s.export_presets[0].params, json!({"format": "png", "width": 64}), "its settings are kept");
+    // it is reachable under its own name: the export takes the user's settings
+    let p = s.export_params(&json!({"preset": name})).unwrap();
+    assert_eq!((p["format"].as_str(), p["width"].as_u64()), (Some("png"), Some(64)), "{p}");
+    // and the built-in of that name is still the built-in
+    let b = s.export_params(&json!({"preset": "Web / Portfolio"})).unwrap();
+    assert_eq!((b["format"].as_str(), b["longEdge"].as_u64()), (Some("jpeg"), Some(2048)), "{b}");
+    let _ = std::fs::remove_dir_all(&lib);
 }
