@@ -1208,6 +1208,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-gif"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3c51d883#3c51d883305314afcd301bc5707e5a0c7f4db486"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "craft-heif"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=430a908f68819bf23d14fe73ab9b18d8f4fd4e5d#430a908f68819bf23d14fe73ab9b18d8f4fd4e5d"
@@ -3686,6 +3694,7 @@ dependencies = [
  "avif-serialize",
  "bytemuck",
  "craft-gainmap",
+ "craft-gif",
  "craft-heif",
  "dhat",
  "image",
