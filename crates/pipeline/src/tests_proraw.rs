@@ -111,14 +111,41 @@ fn proraw_hdr_midtones_match_the_sdr_render() {
 /// reduced size. Here the window sits in a dark area next to a bright one it doesn't show.
 #[test]
 fn proraw_highlights_and_shadows_at_depth_match_the_whole_render() {
-    let info = proraw_info();
+    window_matches_the_whole_render(&proraw_info(), DevelopSettings::default());
+}
+
+/// With the camera's local tone mapping on, the neighbourhood a window reads has its gain too:
+/// here a uniform 8× gain, which lifts the whole frame's neighbourhood by three stops.
+#[test]
+fn proraw_window_neighbourhood_has_the_camera_local_tone() {
+    use lightcraft_raw::gaintable::{GainTableMap, SourcePlacement};
+    let map = GainTableMap {
+        points_v: 1,
+        points_h: 1,
+        points_n: 2,
+        spacing_v: 1.0,
+        spacing_h: 1.0,
+        origin_v: 0.0,
+        origin_h: 0.0,
+        weights: [0.25, 0.5, 0.25, 0.0, 0.0],
+        gamma: 1.0,
+        gains: vec![8.0, 8.0],
+    };
+    let placement = SourcePlacement { rect: [0.0, 0.0, 1.0, 1.0], orientation: lightcraft_geom::Orientation::Normal };
+    let info = SourceInfo { local_tone: Some(Arc::new(crate::local_tone::LocalTone { map, placement })), ..proraw_info() };
+    let mut s = DevelopSettings::default();
+    s.profile.camera_local_tone = true;
+    window_matches_the_whole_render(&info, s);
+}
+
+fn window_matches_the_whole_render(info: &SourceInfo, mut s: DevelopSettings) {
+    let info = info.clone();
     assert!(crate::proraw::active(&DevelopSettings::default(), &info).is_some());
     let src = Rgb32f::from_fn(600, 400, |x, y| {
         let l = if x < 300 { 0.03 } else { 0.8 };
         let t = 1.0 + 0.3 * (((x * 7 + y * 13) % 11) as f32 / 10.0 - 0.5);
         [l * t * 1.05, l * t, l * t * 0.9]
     });
-    let mut s = DevelopSettings::default();
     controls::set(&mut s, "light.shadows", 80.0);
     controls::set(&mut s, "light.highlights", -80.0);
     let req = RenderRequest::fit(7680, 5120);

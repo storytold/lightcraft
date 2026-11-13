@@ -952,6 +952,8 @@ pub(crate) fn frame_airlight(src: &Rgb32f, info: &SourceInfo, s: &DevelopSetting
 /// more than a zoomed window holds, so a windowed render reads it from here ([`context_window`]).
 pub(crate) fn frame_context(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, frame: &Frame, proxy_w: usize, proxy_h: usize) -> Plane {
     let mut img = Rgb32f::clone(&frame_proxy(src, frame, proxy_w, proxy_h));
+    // (with the camera's local tone mapping, as the whole render's source has it)
+    crate::local_tone::apply_in(&mut img, info, s, frame);
     white_balance(&mut img, info, s);
     let sigma = (crate::proraw::LR_CONTEXT_SIGMA as f64 * frame.px_per_long(proxy_w)).max(1.0) as f32;
     gaussian(&img.map(log_lum), sigma)
