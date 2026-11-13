@@ -348,7 +348,7 @@ impl ImportJob {
             let packet = if duplicate_of.is_some() && info.captured.is_some() {
                 None
             } else if let Some(f) = found_sidecar {
-                std::fs::read_to_string(&f).inspect_err(|e| log::warn!("import {path}: sidecar {}: {e}", f.display())).ok()
+                crate::sidecar::read_sidecar_text(&f).inspect_err(|e| log::warn!("import {path}: sidecar {}: {e}", f.display())).ok()
             } else {
                 info.xmp.clone()
             };

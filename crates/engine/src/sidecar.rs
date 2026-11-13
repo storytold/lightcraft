@@ -852,7 +852,7 @@ fn file_path(p: &Photo) -> Option<&str> {
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
-        return crate::read_file::read_regular(&sc, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
+        return read_sidecar_text(&sc).ok().map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
         let bytes = crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES).ok()?;
@@ -869,6 +869,13 @@ pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Op
 
 /// Most bytes of a sidecar read whole (the opened file must be a regular file).
 const SIDECAR_READ_MAX: u64 = 256 << 20;
+
+/// A sidecar's text: a regular file of at most [`SIDECAR_READ_MAX`] bytes, in UTF-8. Import and a
+/// manual reread ([`read_packet`]) read a found sidecar the same way.
+pub(crate) fn read_sidecar_text(path: &Path) -> std::io::Result<String> {
+    let bytes = crate::read_file::read_regular(path, SIDECAR_READ_MAX)?;
+    String::from_utf8(bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
 
 /// The XMP packet embedded in a JPEG's header, read as [`read_packet`] reads it from the file.
 pub(crate) fn jpeg_header_xmp(bytes: &[u8]) -> Option<String> {
