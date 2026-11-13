@@ -9,6 +9,7 @@ mod arw_lens;
 pub(crate) mod arw_lens_rm6;
 pub mod cr2;
 pub mod cr3;
+pub mod crw;
 pub mod crx;
 pub(crate) mod crx_wavelet;
 pub mod erf;
@@ -29,7 +30,7 @@ mod sr2;
 pub mod srw;
 
 use crate::{BlackLevel, Cfa, Rect};
-use lightcraft_tiff::Tiff;
+use craft_tiff::Tiff;
 use std::ops::Range;
 
 /// Exif `CFAPattern`.
@@ -246,7 +247,7 @@ pub(crate) fn declare_strip_len(file: &mut [u8], len: u32, declared: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::tags as t;
+    use craft_tiff::tags as t;
 
     /// `file`, whose image IFD holds one strip, as two strips at the same offset whose StripByteCounts are LONG8 (which
     /// classic TIFF readers accept) `[u64::MAX, 1]`: their sum is past `u64::MAX`.

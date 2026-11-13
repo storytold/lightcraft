@@ -206,7 +206,7 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// preview-only photo this version hasn't checked yet: its stamp is refreshed so it isn't probed
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
-    let preview_checked = lightcraft_catalog::preview_stamp(&info.preview_only);
+    let preview_checked = ph.preview_stamp(&info.preview_only);
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
@@ -233,6 +233,12 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.lens.is_empty() {
         m.lens = src.lens.clone();
     }
+    if m.make.is_empty() {
+        m.make = src.make.clone();
+    }
+    if m.lens_make.is_empty() {
+        m.lens_make = src.lens_make.clone();
+    }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
         m.exposure_time = src.exposure_time;
@@ -249,6 +255,11 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     m.focal_mm = m.focal_mm.or(src.focal_mm);
     m.aperture = m.aperture.or(src.aperture);
     m.iso = m.iso.or(src.iso);
+    m.flash = m.flash.or(src.flash);
+    m.exposure_bias = m.exposure_bias.or(src.exposure_bias);
+    if m.serial_number.is_empty() {
+        m.serial_number = src.serial_number.clone();
+    }
     m.gps = m.gps.or(src.gps);
     // the camera's focus point: photos imported before it was read get it here
     if m.focus.is_none() {
@@ -505,6 +516,7 @@ mod tests {
             warp: Some(lightcraft_develop::EmbeddedWarp { planes: [[1.0, -0.1, 0.03, 0.0, 0.0, 0.0]; 3], ..Default::default() }),
             vignette: None,
             stages: Default::default(),
+            source: Default::default(),
         }
     }
     fn old_rw2() -> lightcraft_catalog::Photo {

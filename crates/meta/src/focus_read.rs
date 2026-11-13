@@ -14,7 +14,7 @@
 use std::io;
 
 use crate::focus::FocusPoint;
-use lightcraft_tiff::{ByteOrder, FieldType, Tiff, tags as t};
+use craft_tiff::{ByteOrder, FieldType, Tiff, tags as t};
 
 /// Bytes read first: the α1's and A7S III's focus data ends before 16 KB, so one read covers it.
 pub const HEADER_PREFIX: u64 = 32 * 1024;
@@ -176,8 +176,7 @@ fn tiff(r: &mut Reader, head: Vec<u8>) -> io::Result<Option<FocusPoint>> {
                 // file length: only the loaded ranges are data, and an unrelated entry that claims a
                 // huge value must be cut by what leaving it cost, not by what the buffer claims to hold.
                 // The same 8 × / + 1 MiB shape the general TIFF reader uses, over `reader.bytes` instead.
-                let opts =
-                    lightcraft_tiff::ParseOptions { value_budget: Some(r.bytes.saturating_mul(8).saturating_add(1 << 20)), ..Default::default() };
+                let opts = craft_tiff::ParseOptions { value_budget: Some(r.bytes.saturating_mul(8).saturating_add(1 << 20)), ..Default::default() };
                 return Ok(crate::try_read_exif_with(&buf, &opts).ok().and_then(|m| m.focus));
             }
             Step::Nothing => return Ok(None),
@@ -354,7 +353,7 @@ impl Want<'_> {
 
 /// What of a classic TIFF the focus decoder still needs, given what is `loaded`: IFD0 (Make, Model,
 /// the Exif pointer), the Exif IFD (the maker-note entry), the maker note's header and IFD as
-/// `lightcraft_tiff::makernote` locates it, and the focus tags' values.
+/// `craft_tiff::makernote` locates it, and the focus tags' values.
 fn plan(buf: &[u8], loaded: &Loaded) -> Step {
     let Some((order, false)) = Tiff::sniff(buf) else { return Step::Nothing };
     let mut w = Want { buf, order, loaded, need: Vec::new() };

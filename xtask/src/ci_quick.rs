@@ -4,10 +4,10 @@
 //! parity check, ~23 minutes cold. `--quick` looks at what changed since the merge base with
 //! `origin/main` (or `--base REF`), committed or not, and runs:
 //!
-//! - fmt, layers, assets: always (seconds);
+//! - fmt, layers, assets, roots: always (seconds);
 //! - clippy on the whole workspace (check builds only; catches callers broken by an API change);
 //! - the tests of the changed packages only (not their dependents);
-//! - heif when `lightcraft-codecs` / `lightcraft-heif` changed;
+//! - heif when `lightcraft-codecs` changed (or the workspace files, which pin craft-heif);
 //! - parity when the tracker docs, a command/control crate, or a file's path changed (renames and
 //!   deletions: the tracker cites paths);
 //! - the wasm check of the changed packages that must build for wasm32.
@@ -28,7 +28,7 @@ const WORKSPACE_WIDE_DIRS: &[&str] = &[".cargo/"];
 /// Packages whose ids or paths the parity tracker cites (commands, develop controls, UI menus).
 const PARITY_PACKAGES: &[&str] = &["lightcraft-engine", "lightcraft-develop", "lightcraft-ui-egui", "lightcraft-cli"];
 const PARITY_DOCS: &[&str] = &["docs/parity-checklist.md", "docs/gaps.md"];
-const HEIF_PACKAGES: &[&str] = &["lightcraft-codecs", "lightcraft-heif"];
+const HEIF_PACKAGES: &[&str] = &["lightcraft-codecs"];
 /// Files outside a package's directory that it compiles in (`include_str!` / `include_bytes!`,
 /// a build script's `rerun-if-changed`): a change to one counts as a change to those packages.
 /// An entry ending in `/` covers the directory. `embedded_files_are_mapped` keeps this complete.
@@ -39,6 +39,7 @@ const EMBEDDED: &[(&str, &[&str])] = &[
     ("assets/fonts/", &["lightcraft-engine", "lightcraft-ui-egui"]),
     ("contributors/", &["lightcraft-ui-egui"]),
     ("docs/whats-new.md", &["lightcraft-ui-egui"]),
+    ("packaging/linux/flatpak/", &["lightcraft-ui-egui"]),
     ("docs/raw/coverage-sweep.tsv", &["lightcraft-raw"]),
     ("docs/raf-corpus.sha256", &["lightcraft-raw"]),
     ("xtask/src/raw_samples.rs", &["lightcraft-raw"]),

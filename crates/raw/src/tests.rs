@@ -120,7 +120,7 @@ fn black_levels() {
 
 // --- TIFF shells around a private raw block (thumbnail-only IFD0) ---
 
-use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
 
 /// An uncompressed 8-bit RGB image IFD.
 fn rgb_ifd(w: u32, h: u32) -> IfdBuilder {
@@ -258,9 +258,12 @@ fn private_containers_are_recognised_by_their_magic() {
     assert_eq!(probe(b"II\x1a\0\0\0HEAPCCDR\0\0"), Some(RawFormat::Crw));
     assert_eq!(probe(b"\0MRM\0\x01\0\0"), Some(RawFormat::Mrw));
     assert_eq!(probe(b"FOVb\x02\0\x02\0"), Some(RawFormat::X3f));
-    for f in [RawFormat::Crw, RawFormat::X3f] {
-        assert!(!f.is_supported());
+    for f in [RawFormat::Crw, RawFormat::Mrw] {
+        assert!(f.is_supported());
     }
+    assert!(!RawFormat::X3f.is_supported());
+    // a CRW signature with no heap behind it is corrupt, not a panic
+    assert!(matches!(decode(b"II\x1a\0\0\0HEAPCCDR\0\0"), Err(RawError::Corrupt(_))));
     assert!(matches!(decode(b"FOVb\x02\0\x02\0"), Err(RawError::Unsupported(w)) if w.contains("X3f")));
     // too short for the CIFF signature
     assert_eq!(probe(b"II\x1a\0\0\0HEAP"), None);
@@ -405,7 +408,7 @@ fn uncompressed_leaf_mos_is_a_raw() {
         }
         ifd
     };
-    let bytes = TiffWriter::new(lightcraft_tiff::ByteOrder::Big, false).write(&[mosaic(true)]).unwrap();
+    let bytes = TiffWriter::new(craft_tiff::ByteOrder::Big, false).write(&[mosaic(true)]).unwrap();
     assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
     assert!(matches!(decode(&bytes), Err(RawError::Unsupported(_))));
     assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(_))));

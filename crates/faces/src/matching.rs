@@ -54,12 +54,16 @@ fn dot(a: &[f32], b: &[f32]) -> f32 {
 /// best first. Names are compared case-insensitively and shown as first seen.
 pub fn rank(query: &[f32], gallery: &[(&str, &[f32])]) -> Vec<Ranked> {
     let mut people: Vec<(String, String, Vec<f32>)> = Vec::new(); // (key, shown name, similarities)
+    let mut at: std::collections::HashMap<String, usize> = std::collections::HashMap::new(); // key -> index in `people`
     for (name, emb) in gallery {
         let Some(c) = cosine(query, emb) else { continue };
         let key = name.to_lowercase();
-        match people.iter_mut().find(|p| p.0 == key) {
+        match at.get(&key).and_then(|&i| people.get_mut(i)) {
             Some(p) => p.2.push(c),
-            None => people.push((key, (*name).to_string(), vec![c])),
+            None => {
+                at.insert(key.clone(), people.len());
+                people.push((key, (*name).to_string(), vec![c]));
+            }
         }
     }
     let mut out: Vec<Ranked> = people
