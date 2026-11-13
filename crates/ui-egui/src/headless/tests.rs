@@ -128,6 +128,27 @@ fn the_headless_host_has_a_clipboard() {
     assert!(!seen.iter().any(|e| matches!(e, egui::Event::Paste(_))), "{seen:?}");
 }
 
+/// Waiting on a render gives it the CPU: `settle` and `step_until` draw a frame each time a render
+/// finishes or [`BUSY_PAUSE`] passes, not one frame after another (#3981).
+#[test]
+fn waits_pace_their_frames_while_a_render_is_out() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [800.0, 600.0], 1.0);
+    // a render that never finishes
+    h.app.renderer.force_in_flight_for_test(1);
+    let limit = Duration::from_millis(300);
+    for wait in ["settle", "step_until"] {
+        assert!(h.busy(), "{wait}: the render is still out");
+        let (frames, t0) = (h.frames(), Instant::now());
+        let done = if wait == "settle" { h.settle(limit) } else { h.step_until(limit, |_| false) };
+        let (ran, took) = (h.frames() - frames, t0.elapsed());
+        assert!(!done, "{wait}: nothing finished");
+        // one frame per pause at most, and one more for the frame that found the limit passed
+        let paced = (took.as_millis() / BUSY_PAUSE.as_millis()) as u64 + 2;
+        assert!(ran <= paced, "{wait}: {ran} frames in {took:?}, at most {paced} paced ones");
+    }
+}
+
 #[test]
 fn screenshot_dimensions_are_checked_before_layout() {
     assert_eq!(viewport_pixels([1600.0, 1000.0], 2.0).unwrap(), [3200, 2000]);
