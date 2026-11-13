@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Flatpak updates
+- Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
+  This permissions repair must first arrive through your existing host-side update method. Flatpaks
+  managed by a software repository continue to use its package manager, and launcher-pinned versions
+  keep their selected version.
+
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
+
 ### A Channel Mixer in the Edit panel
 - The Edit panel has a new Channel Mixer section, above Calibration: three output rows — Red, Green and Blue — each with
   three sliders saying in per cent how much of each colour goes into it (−200 to +200). It starts neutral, each row taking
