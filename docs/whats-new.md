@@ -37,6 +37,45 @@
   messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
   when a page asks for both.
 
+### A library is written only to the folder it was opened from
+- LightCraft wrote a library's files to wherever the library's path led at that moment, not to the folder it had opened.
+  When a share was mounted over the library's folder, or the folder was moved away and another put in its place while
+  the library was open, it wrote into that other folder: it could replace another library's catalog (`catalog.snap`
+  and `catalog.log`) with its own, and closing the library removed the note another program had left in
+  `catalog.lock.owner` to say that it has the library open (issue #3240).
+- LightCraft now remembers the folder it opened (its device and inode number) and, before every save, checks that the
+  library's path still leads to it. If it doesn't, nothing is written: not the catalog, its log, the library's
+  settings, the lock note or a thumbnail. The not-saved warning says why, names the path and asks you to put the
+  original folder back; your changes are kept in memory, quitting asks first as it does for any unsaved change, and
+  saving goes on by itself once the original folder is at its path again. That holds for photos, albums and presets; a
+  preference that could not be saved is reported where you changed it, and is written with the next preference you
+  save. Opening the library at that path again takes the lock of the folder that is there now, so it is refused while
+  another program has that library open.
+- Saving keeps working after a drive or share is mounted again. A volume that is mounted again gets a new device
+  number, and some file systems number their folders anew at every mount (FAT and exFAT drives on Linux, sshfs). The
+  folder at the path still counts as the one that was opened when it holds exactly the lock note this session wrote
+  into the folder it opened (the note holds a value no other lock's note has), or when it is the same volume mounted
+  again: the same inode number and the same creation time under another device number (a system that doesn't know
+  when a folder was created can't tell that from another folder). On the same device an inode number is given again
+  to a folder made later, so two creation times that are known and differ are two folders. A copy of the library's
+  folder made while the library was open holds that note too and counts as the library, and so does a clone of its
+  volume; a share mounted over the folder, with another library in it or with nothing, never does. A copy lacks the
+  changes made after it was made: they are written to it by the next snapshot, which holds them all, and until then
+  they are kept in memory and reported as not saved. If neither tells, the folder counts as another one and nothing is
+  written.
+- Dropping the lock removes the lock note only if it is the one this session wrote, with the bytes it wrote, in the
+  folder it locked or one that holds that note; another program's note is left alone.
+- Import ▸ Move removes the originals from the card only after the library's catalog is on disk, not just handed over
+  to be written: when the library can't be saved, the originals stay on the card.
+- On Windows a folder's identity isn't available to the program yet (Rust's standard library offers it only on its
+  nightly builds), so there the check notices a path that no longer leads to a folder, not one that leads to another
+  folder; the lock note is protected there too.
+- On every system, files outside the library's catalog and settings are still written by path, some of them over what
+  is there: originals copied into the library (always under a new name), Smart Previews, profiles, the face-scan
+  record (`focus-scanned.bin`), the Lightroom import's `Interop` folder, and what is done to the photos stored in the
+  library's `Originals` folder (their sidecars, Save Metadata to File, rename, delete from disk, duplicate and
+  conversion to DNG).
+
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
   At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue
