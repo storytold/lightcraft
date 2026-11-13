@@ -7,8 +7,8 @@
 //! Non-test code forbids unsafe code and panics. All input streams are treated as untrusted and hostile.
 
 use crate::{RawError, Result};
-use lightcraft_tiff::Ifd;
-use lightcraft_tiff::makernote::MakerNote;
+use craft_tiff::Ifd;
+use craft_tiff::makernote::MakerNote;
 
 /// Olympus MakerNote tag specifying valid sensor bit depth.
 const MAKERNOTE_VALID_BITS_TAG: u16 = 0x102c;

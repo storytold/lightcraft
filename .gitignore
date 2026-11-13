@@ -17,6 +17,4 @@ plan/
 
 # Python tools import their public operator family.
 __pycache__/
-# Local user notes
-bdu-*.md
 clean-room/orf/corpus/*
