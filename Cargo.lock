@@ -1240,6 +1240,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-jxl"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=d61671b6ded40929dcaacaaa658512d9f7981fc4#d61671b6ded40929dcaacaaa658512d9f7981fc4"
+dependencies = [
+ "jixel",
+ "jxl-oxide",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-tiff"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=430a908f68819bf23d14fe73ab9b18d8f4fd4e5d#430a908f68819bf23d14fe73ab9b18d8f4fd4e5d"
@@ -3687,10 +3697,10 @@ dependencies = [
  "bytemuck",
  "craft-gainmap",
  "craft-heif",
+ "craft-jxl",
  "dhat",
  "image",
  "image-webp",
- "jixel",
  "jpeg-decoder",
  "jpeg-encoder",
  "jxl-oxide",
