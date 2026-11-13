@@ -90,7 +90,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 - **Raw-format sources:** decoders are written from prose format descriptions (even ones published
   alongside GPL code); decoder source is never read (decided 2026-10-05). Still open:
   freedom-to-operate review for local Laplacian filters, PatchMatch and HEVC (HEIC).
-- **Look parity** with Adobe's default rendering is tuned by eye until the fidelity suite exists.
+- **Look parity** with Adobe's default rendering is tuned by eye until the fidelity suite exists, except Apple ProRAW's tone sliders from process V9 (fitted on one photo, #613).
   Retuning changes existing edits, so it ships as a new process version
   ([process-versions.md](process-versions.md)).
 

@@ -13,6 +13,12 @@
   the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
   and a failed write (a full disk) could leave a cut-off file where an earlier export was.
 
+### iPhone ProRAW renders like Lightroom (process V9)
+- On Apple ProRAW, Exposure, Contrast, Highlights, Shadows, Whites and Blacks now work as they do in Lightroom
+  Classic, and the file's own tone curve applies to colour, not only brightness, so iPhone photos are no longer
+  washed out. New photos (and Reset) get it; photos you already edited keep their look until Photo ▸ Update to
+  Current Process. Other photos, including other DNGs with a tone curve, render exactly as before.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
