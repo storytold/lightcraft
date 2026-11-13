@@ -860,7 +860,7 @@ fn waiting_files_wait_for_a_running_import_instead_of_being_dropped() {
     // file to a new import (once the first one ends) leaves that import unlisted until its own
     // first tick, and quitting right then still asks
     let t0 = std::time::Instant::now();
-    while !h.app.waiting_import.files.is_empty() && t0.elapsed() < T {
+    while !h.app.waiting_import.files.is_empty() && t0.elapsed() < lightcraft_testkit::scaled(T) {
         let ctx = h.view.ctx.clone();
         h.app.logic(&ctx);
         std::thread::sleep(Duration::from_millis(2));
@@ -869,7 +869,7 @@ fn waiting_files_wait_for_a_running_import_instead_of_being_dropped() {
     assert!(h.app.import.as_ref().is_some_and(|t| !t.listed()), "not listed before its first tick");
     assert!(!crate::panels::notices::may_close(&mut h.app), "quitting asks about the import just handed over");
     h.app.quit_prompt = None;
-    while !(h.app.import.is_none() && h.app.session.catalog.len() == 101) && t0.elapsed() < T {
+    while !(h.app.import.is_none() && h.app.session.catalog.len() == 101) && t0.elapsed() < lightcraft_testkit::scaled(T) {
         let ctx = h.view.ctx.clone();
         h.app.logic(&ctx);
         std::thread::sleep(Duration::from_millis(2));

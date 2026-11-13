@@ -283,8 +283,9 @@ pub(crate) mod test_gate {
 
     /// The longest a lane waits for a test to open the gate: if a test ends without its
     /// [`ReleaseOnDrop`] running, the build still finishes instead of stranding its worker.
+    /// Stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk, so a slow test never finds it open early.
     const MAX_HOLD: Duration = Duration::from_secs(30);
-    /// The longest a test waits for a lane to reach the gate.
+    /// The longest a test waits for a lane to reach the gate (stretched by `LIGHTCRAFT_TIME_SCALE`).
     const MAX_ENTER_WAIT: Duration = Duration::from_secs(10);
 
     #[derive(Default)]
@@ -317,7 +318,7 @@ pub(crate) mod test_gate {
             let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             st.entered = st.entered.saturating_add(1);
             self.opened.notify_all();
-            let deadline = Instant::now() + MAX_HOLD;
+            let deadline = Instant::now() + lightcraft_testkit::scaled(MAX_HOLD).max(MAX_HOLD);
             while !st.released {
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
@@ -331,7 +332,7 @@ pub(crate) mod test_gate {
         /// Wait (at most `MAX_ENTER_WAIT`) until at least `n` lanes have reached the gate.
         pub(crate) fn wait_entered(&self, n: usize) -> bool {
             let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-            let deadline = Instant::now() + MAX_ENTER_WAIT;
+            let deadline = Instant::now() + lightcraft_testkit::scaled(MAX_ENTER_WAIT);
             loop {
                 if st.entered >= n {
                     return true;

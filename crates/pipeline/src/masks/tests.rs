@@ -70,7 +70,9 @@ fn a_hostile_number_of_detail_patches_is_capped() {
     let t = std::time::Instant::now();
     let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
     assert!(a.get(5, 16) > 0.99 && a.get(60, 16) < 0.01);
-    assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+    // stretched on a slow machine, never shrunk
+    let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(20)).max(std::time::Duration::from_secs(20));
+    assert!(t.elapsed() < limit, "{:?}", t.elapsed());
 }
 
 #[test]

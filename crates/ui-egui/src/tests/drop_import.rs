@@ -1195,7 +1195,7 @@ fn second_auto_import_listing(h: &mut Headless, dir: &Scratch) {
 /// Apply Auto Import's listing now, before another frame can change what runs.
 fn apply_auto_import_listing(h: &mut Headless) {
     let ctx = h.view.ctx.clone();
-    assert!(crate::tasks::wait_for(&mut h.app, &ctx, "Auto Import", T), "the listing ends");
+    assert!(crate::tasks::wait_for(&mut h.app, &ctx, "Auto Import", lightcraft_testkit::scaled(T)), "the listing ends");
 }
 
 /// An import that starts while Auto Import lists its watched folder: the new photo isn't marked as

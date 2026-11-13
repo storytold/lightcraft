@@ -132,7 +132,7 @@ fn lock_held_by_another_process_is_released_when_it_dies() {
         .stderr(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(60));
     while !dir.join("child-locked").exists() {
         assert!(child.try_wait().unwrap().is_none(), "child exited before locking");
         assert!(std::time::Instant::now() < deadline, "child never locked");
@@ -216,7 +216,7 @@ fn dropping_the_lock_frees_the_library_while_another_thread_spawns_processes() {
     let enough = |cycles: usize| (cycles >= 200_000 || t0.elapsed() >= Duration::from_secs(2)) && count.load(Ordering::Relaxed) >= CHILDREN;
     let mut cycles = 0usize;
     let mut refused = Vec::new();
-    while !enough(cycles) && t0.elapsed() < Duration::from_secs(60) {
+    while !enough(cycles) && t0.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(60)).max(Duration::from_secs(60)) {
         match LibraryLock::acquire(&dir, "LightCraft") {
             Ok(l) => assert!(l.held()), // dropped here: the next cycle must get it back
             Err(e) => refused.push(format!("cycle {cycles}: {e:?}")),

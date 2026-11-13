@@ -511,13 +511,22 @@ mod prepared_tests {
     /// limit and the argument is imported instead, so LightCraft still starts.
     #[test]
     fn a_blocked_launch_probe_gives_up_after_its_limit() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // the probe blocks for 5 s (stretched by LIGHTCRAFT_TIME_SCALE, never shrunk); the call is given 50 ms
+        let block = std::time::Duration::from_secs(5);
+        let block = lightcraft_testkit::scaled(block).max(block);
+        let answered = std::sync::Arc::new(AtomicBool::new(false));
+        let a = answered.clone();
         let start = std::time::Instant::now();
-        let found = within(std::time::Duration::from_millis(50), || {
-            std::thread::sleep(std::time::Duration::from_secs(5));
+        let found = within(std::time::Duration::from_millis(50), move || {
+            std::thread::sleep(block);
+            a.store(true, Ordering::SeqCst);
             Some(PathBuf::from("late"))
         });
         assert_eq!(found, None);
-        assert!(start.elapsed() < std::time::Duration::from_secs(2), "waited {:?}", start.elapsed());
+        assert!(!answered.load(Ordering::SeqCst), "the call waited for the probe");
+        // and returned well inside the probe's block (2 s of 5 s at a scale of 1)
+        assert!(start.elapsed() < block * 2 / 5, "waited {:?} (the probe blocks {block:?})", start.elapsed());
         assert_eq!(within(LAUNCH_PROBE_LIMIT, || Some(1)), Some(1), "a quick answer is kept");
     }
 
@@ -663,8 +672,10 @@ mod prepared_tests {
         let paths: Vec<&str> = names.iter().map(String::as_str).collect();
         let seen = stat_all(&paths, &std::sync::atomic::AtomicBool::new(false), |p| {
             active.fetch_add(1, Relaxed);
-            // waits (at most a second) for another file to be asked about while this one is
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            // waits (at most a second, stretched by LIGHTCRAFT_TIME_SCALE, never shrunk) for another file
+            // to be asked about while this one is
+            let end =
+                std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(1)).max(std::time::Duration::from_secs(1));
             while active.load(Relaxed) < 2 && std::time::Instant::now() < end {
                 std::thread::yield_now();
             }
@@ -746,7 +757,8 @@ mod prepared_tests {
         let files: Vec<&str> = names.iter().map(String::as_str).collect();
         let found = sidecars_of(&files, &std::sync::atomic::AtomicBool::new(false), |f| {
             active.fetch_add(1, Relaxed);
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            let end =
+                std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(1)).max(std::time::Duration::from_secs(1));
             while active.load(Relaxed) < 2 && std::time::Instant::now() < end {
                 std::thread::yield_now();
             }

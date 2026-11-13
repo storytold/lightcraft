@@ -26,7 +26,8 @@ pub(super) fn damaged_model(name: &str) -> std::path::PathBuf {
     d
 }
 
-/// Poll until the worker is idle (or `limit` passes), collecting messages.
+/// Poll until the worker is idle (or `limit`, stretched by `LIGHTCRAFT_TIME_SCALE`, passes),
+/// collecting messages.
 fn settle(s: &mut Session, limit: Duration) -> Vec<String> {
     let t = Instant::now();
     let mut messages = Vec::new();
@@ -37,7 +38,7 @@ fn settle(s: &mut Session, limit: Duration) -> Vec<String> {
             messages.extend(s.segment_poll().messages);
             return messages;
         }
-        assert!(t.elapsed() < limit, "the worker never finished");
+        assert!(t.elapsed() < lightcraft_testkit::scaled(limit), "the worker never finished");
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -77,6 +78,8 @@ fn status_and_model_commands_without_the_model() {
 #[test]
 fn a_failing_download_ends_with_an_error_and_never_blocks() {
     use std::io::{BufRead, BufReader, Write};
+    // the mirror's hold, and the bound on a request that must not wait for it, from one scale
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30));
     // a local mirror that has nothing; its first answer waits until the test has made its second
     // request, so the download is still running then however the threads are scheduled (a 404 at
     // once could end it before, and the second request would rightly start a new one)
@@ -92,7 +95,7 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
                 line.clear();
             }
             if let Some(released) = first.take() {
-                let _ = released.recv_timeout(Duration::from_secs(10));
+                let _ = released.recv_timeout(hold);
             }
             let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<h1>404</h1>\n");
         }
@@ -103,22 +106,25 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
     let mut s = Session::with_demo();
     s.segmenter.dir = Some(dir.clone());
     s.segmenter.mirrors_file = Some(mirrors.clone());
-    let t = Instant::now();
     let r = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert_eq!(r["started"], true);
-    assert!(t.elapsed() < Duration::from_secs(1), "starting a download returns at once");
+    // the mirror holds its answer until `release`: still running means the call did not wait for it
+    assert!(s.segmenter.download_status().running, "starting a download returns at once");
     // a second request while it runs starts nothing
     let again = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert!(again["started"] == false || again["downloading"] == false);
+    // AI mask requests meanwhile: an error while the mirror still holds the download, never a wait for it
+    let q = Instant::now();
+    let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
+    assert!(q.elapsed() < hold / 4, "the AI mask request waited {:?} (bound {:?})", q.elapsed(), hold / 4);
+    assert!(e.contains(NOT_INSTALLED), "{e}");
+    assert!(s.segmenter.download_status().running, "the AI mask request did not wait for the download");
     let _ = release.send(());
     let t = Instant::now();
     while s.segmenter.download_status().running {
-        assert!(t.elapsed() < Duration::from_secs(30), "the download never ended");
-        // AI mask requests meanwhile: an error at once, never a wait
-        let q = Instant::now();
+        assert!(t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)), "the download never ended");
         let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
         assert!(e.contains(NOT_INSTALLED), "{e}");
-        assert!(q.elapsed() < Duration::from_millis(500));
         std::thread::sleep(Duration::from_millis(20));
     }
     let st = s.segmenter.download_status();
@@ -297,7 +303,7 @@ fn a_running_model_download_shows_in_activity_and_cancels() {
     s.execute("activity.cancel", &json!({"id": rows[0].id})).unwrap();
     let t = Instant::now();
     while s.segmenter.download_status().running || !s.activity.list().is_empty() {
-        assert!(t.elapsed() < Duration::from_secs(10), "the download never stopped");
+        assert!(t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(10)), "the download never stopped");
         std::thread::sleep(Duration::from_millis(10));
     }
     let st = s.segmenter.download_status();

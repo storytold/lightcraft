@@ -50,7 +50,7 @@ fn pump_until_idle(s: &mut Session) -> Value {
         if v["active"] == false {
             return v;
         }
-        assert!(started.elapsed() < Duration::from_secs(30), "the job never ended: {v}");
+        assert!(started.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)), "the job never ended: {v}");
         std::thread::sleep(Duration::from_millis(5));
     }
 }
@@ -197,7 +197,7 @@ fn the_activity_row_progresses_pauses_and_cancels() {
     // a few more at a light pace, then cancel
     let started = Instant::now();
     let mut done = still;
-    while done < still + 3 && started.elapsed() < Duration::from_secs(20) {
+    while done < still + 3 && started.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(20)) {
         std::thread::sleep(Duration::from_millis(20));
         done = s.execute("focus.pump", &json!({"pace": "light"})).unwrap()["running"]["done"].as_u64().unwrap_or(40);
     }

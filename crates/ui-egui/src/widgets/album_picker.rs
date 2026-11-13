@@ -474,7 +474,11 @@ mod tests {
         let open: Vec<u64> = (0..200u64).map(|f| f * 101 + 1).collect();
         assert_eq!(visible_tree(&v, &open).len(), v.len());
         assert_eq!(search(&v, "folder 7 wedding").len(), want);
-        assert!(start.elapsed() < std::time::Duration::from_secs(1), "took {:?}", start.elapsed());
+        // a regression guard, not a speed measurement: this takes some 20 ms in a debug build; a path
+        // worked out per row by scanning every album takes seconds (stretched by LIGHTCRAFT_TIME_SCALE,
+        // never shrunk below 1 s)
+        let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(1)).max(std::time::Duration::from_secs(1));
+        assert!(start.elapsed() < limit, "took {:?}", start.elapsed());
     }
 
     /// Every word typed is in the album's path (folders included), in any case; names that start
