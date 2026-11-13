@@ -33,7 +33,7 @@ fn profiles(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The ops that give photo `id` (and its virtual copies) the profile `name` from `db`, for its file as `info` (a fresh
-/// probe) reads it: the chosen correction, the Lens field naming it, and Enable Lens Corrections on. `Err` says why
+/// probe) reads it and `focal_35mm` its 35 mm equivalent focal length: the chosen correction, the Lens field naming it, and Enable Lens Corrections on. `Err` says why
 /// the photo can't have it.
 pub(crate) fn ops_for(
     s: &Session,
@@ -41,6 +41,7 @@ pub(crate) fn ops_for(
     db: &lightcraft_lensdb::LensDb,
     name: &str,
     info: &crate::media::ProbeInfo,
+    focal_35mm: Option<f64>,
 ) -> std::result::Result<Vec<Op>, String> {
     let ph = s.catalog.photo(id).ok_or("no such photo")?;
     if !ph.develops_raw() {
@@ -50,8 +51,15 @@ pub(crate) fn ops_for(
     let (w, h) = if o.swaps_axes() { (info.height, info.width) } else { (info.width, info.height) };
     let focal = info.meta.focal_mm.or(ph.meta.focal_mm).map(f64::from);
     let aperture = info.meta.aperture.or(ph.meta.aperture).map(f64::from);
-    let lens =
-        crate::lens_profiles::chosen(db, name, (&ph.meta.make, &ph.meta.camera), focal, aperture, (f64::from(w.max(1)), f64::from(h.max(1))), o)?;
+    let lens = crate::lens_profiles::chosen(
+        db,
+        name,
+        (&ph.meta.make, &ph.meta.camera),
+        (focal, focal_35mm),
+        aperture,
+        (f64::from(w.max(1)), f64::from(h.max(1))),
+        o,
+    )?;
     let mut ops = Vec::new();
     // the photo and its virtual copies share the file and the lens
     for f in std::iter::once(&**ph).chain(s.catalog.photos().filter(|c| c.copy_of == Some(id)).map(|c| &**c)) {
@@ -68,6 +76,19 @@ pub(crate) fn ops_for(
         }
     }
     Ok(ops)
+}
+
+/// The 35 mm equivalent focal length the file at `path` records in its Exif (the library doesn't keep it): a
+/// full-frame body shooting a crop says so this way.
+fn focal_35mm(s: &Session, path: &str) -> Option<f64> {
+    let bytes = match &s.media.file_bytes {
+        Some(read) => read(path).ok()?,
+        #[cfg(not(target_arch = "wasm32"))]
+        None => std::fs::read(path).ok()?,
+        #[cfg(target_arch = "wasm32")]
+        None => return None,
+    };
+    lightcraft_meta::extract(&bytes).focal_length_35mm.filter(|f| f.is_finite() && *f > 0.0)
 }
 
 /// `photo.chooseLensProfile`: every target raw gets the profile named `lens`, read for its own size, orientation and
@@ -96,8 +117,8 @@ fn choose(s: &mut Session, p: &Value) -> Result<Value> {
             }
             None => continue,
         };
-        let got = match crate::import::probe_with(&probe, &[path]).pop() {
-            Some(Ok(info)) => ops_for(s, id, &db, name, &info),
+        let got = match crate::import::probe_with(&probe, std::slice::from_ref(&path)).pop() {
+            Some(Ok(info)) => ops_for(s, id, &db, name, &info, focal_35mm(s, &path)),
             Some(Err(e)) => Err(e),
             None => continue,
         };

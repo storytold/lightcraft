@@ -226,7 +226,8 @@ pub fn choices(db: &LensDb, make: &str, camera: &str) -> Vec<String> {
 }
 
 /// The profile named `name` (one of [`choices`]) for a photo taken with the camera `make` / `camera` at `focal` mm
-/// and `aperture`, for its `w × h` (unoriented, default-cropped) image, re-expressed after `orientation` and marked
+/// (`focal_35mm` its 35 mm equivalent, when the file records it) and `aperture`, for its `w × h` (unoriented,
+/// default-cropped) image, re-expressed after `orientation` and marked
 /// [`LensSource::Chosen`] (issue #1049). A photo without a focal length takes a prime's (a profile calibrated at one
 /// focal length). `Err` says why there is none.
 #[allow(clippy::too_many_arguments)]
@@ -234,12 +235,18 @@ pub fn chosen(
     db: &LensDb,
     name: &str,
     (make, camera): (&str, &str),
-    focal: Option<f64>,
+    (focal, focal_35mm): (Option<f64>, Option<f64>),
     aperture: Option<f64>,
     (w, h): (f64, f64),
     orientation: lightcraft_geom::Orientation,
 ) -> Result<EmbeddedLens, String> {
-    let lens = db.lenses.iter().find(|l| display_name(l).as_deref() == Some(name)).ok_or_else(|| format!("no lens profile named {name}"))?;
+    let cam = camera_of(db, make, camera);
+    // the profile [`choices`] listed under this name: for the camera's mount when one fits, as the list is made
+    let named = |l: &&lightcraft_lensdb::Profile| display_name(l).as_deref() == Some(name);
+    let mount = cam.map(|c| c.mount.as_str()).filter(|m| !m.is_empty());
+    let fits = |l: &&lightcraft_lensdb::Profile| mount.is_none_or(|m| l.mounts.iter().any(|lm| lm.eq_ignore_ascii_case(m)));
+    let lens =
+        db.lenses.iter().filter(named).find(fits).or_else(|| db.lenses.iter().find(named)).ok_or_else(|| format!("no lens profile named {name}"))?;
     let focal = match focal.filter(|f| f.is_finite() && *f > 0.0) {
         Some(f) => f,
         None => {
@@ -252,8 +259,8 @@ pub fn chosen(
             first
         }
     };
-    let cam = camera_of(db, make, camera);
-    let crop = frame_crop_factor(cam.and_then(|c| c.crop_factor), focal, None);
+    // a full-frame body shooting a crop says so by its 35 mm equivalent focal length
+    let crop = frame_crop_factor(cam.and_then(|c| c.crop_factor), focal, focal_35mm);
     let shot = Shot { focal, aperture, distance: None, crop_factor: crop, width: w, height: h };
     let corr = lens.correction(&shot).ok_or_else(|| format!("{name} gives no correction for this photo"))?;
     Ok(EmbeddedLens { source: LensSource::Chosen, ..lightcraft_pipeline::optics::reorient_lens(&corr, orientation, w, h) })

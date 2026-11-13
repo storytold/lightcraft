@@ -432,8 +432,16 @@ fn lens_profile_choice(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, 
                     let b = ui.button(name.as_str());
                     crate::widgets::register(ui, format!("lensProfileOption:{i}"), b.rect);
                     if b.clicked() {
-                        if let Err(e) = app.run("photo.chooseLensProfile", serde_json::json!({"lens": name})) {
-                            app.ui.status = e;
+                        match app.run("photo.chooseLensProfile", serde_json::json!({"lens": name})) {
+                            // a photo it couldn't be given to says why (its file isn't there, a zoom needs a focal length…)
+                            Ok(r) => {
+                                if let Some(first) = r["skipped"].as_array().and_then(|a| a.first()) {
+                                    let n = r["skipped"].as_array().map_or(0, Vec::len);
+                                    let why = first["why"].as_str().unwrap_or_default();
+                                    app.ui.status = crate::i18n::tr_format!("{n} photo(s) not given {name}: {why}", n = n, name = name, why = why);
+                                }
+                            }
+                            Err(e) => app.ui.status = e,
                         }
                         ui.close();
                     }
