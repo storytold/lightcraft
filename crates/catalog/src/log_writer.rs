@@ -23,7 +23,8 @@
 //! mounted over it, issue #3240) nothing is written. The bytes are held like those of any other
 //! write that failed, and written once the folder that was opened is back at the path.
 //!
-//! **The log is opened by its path for each batch, never kept open.** A copy of the library's folder
+//! **Successful batches reopen the log by path.** A failed batch keeps its descriptor only to
+//! roll back its own bytes, never to append into a moved-away folder. A copy of the library's folder
 //! put at the path counts as the opened one (it holds the lock's note) and has a log of its own: a
 //! file kept open from before would go on writing into the folder that was moved away. A log that
 //! isn't as long as what this thread wrote (a fragment of its own failed write is cut first) is not
@@ -81,11 +82,12 @@ fn not_written(why: &str) -> io::Error {
 
 impl LogWriter {
     /// A writer for `name` in the folder (`None` when no thread can start: the store then writes itself).
-    pub(crate) fn start(folder: OpenedFolder, name: &str) -> Option<LogWriter> {
+    pub(crate) fn start(folder: OpenedFolder, name: &str, expected: Option<u64>) -> Option<LogWriter> {
         let (tx, rx) = channel::<Msg>();
         let shared = Arc::new(Mutex::new(Shared::default()));
         let sh = shared.clone();
         let mut w = Writer::new(folder, name);
+        w.good = expected;
         let thread = std::thread::Builder::new().name("catalog-log".into()).spawn(move || w.run(&rx, &sh)).ok()?;
         Some(LogWriter { name: name.to_string(), tx: Some(tx), shared, thread: Some(thread) })
     }
@@ -159,13 +161,13 @@ struct Writer {
     tmp: PathBuf,
     /// The folder the store opened: asked before anything is written.
     folder: OpenedFolder,
-    /// Bytes of the file written whole and synced (`None` until the file was first opened).
+    /// Bytes read by the journal or written whole and synced (`None` until first observed).
     good: Option<u64>,
     /// Handed over, not yet written and synced.
     held: Vec<u8>,
     failed: Option<String>,
-    /// A write failed after the file was open: bytes of it may be past `good`, cut before the retry.
-    torn: bool,
+    /// The exact file whose append failed; only this descriptor can have its torn bytes removed.
+    torn: Option<std::fs::File>,
     /// The file isn't the log this thread wrote ([`Writer::open`]).
     foreign: bool,
 }
@@ -179,7 +181,7 @@ impl Writer {
         let dir = folder.path().to_path_buf();
         let path = dir.join(name);
         let tmp = dir.join(format!("{name}.tmp"));
-        Writer { dir, path, tmp, folder, good: None, held: Vec::new(), failed: None, torn: false, foreign: false }
+        Writer { dir, path, tmp, folder, good: None, held: Vec::new(), failed: None, torn: None, foreign: false }
     }
 
     fn hook(&self, step: crate::fault::Step) -> io::Result<()> {
@@ -191,6 +193,9 @@ impl Writer {
     /// put at the path, or it was changed): refused.
     fn open(&mut self) -> io::Result<(std::fs::File, u64)> {
         self.folder.check()?;
+        if let Some(good) = self.good {
+            crate::store::rollback_torn(&mut self.torn, good)?;
+        }
         // (a link or a device planted at the name meanwhile is refused, as at the first append)
         crate::store::check_regular_directory_entry(&self.path)?;
         let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(&self.path)?;
@@ -198,10 +203,6 @@ impl Writer {
         let good = match self.good {
             None => len,
             Some(g) if len == g => g,
-            Some(g) if len > g && self.torn => {
-                f.set_len(g)?;
-                g
-            }
             Some(g) => {
                 self.foreign = true;
                 return Err(io::Error::other(format!(
@@ -224,7 +225,7 @@ impl Writer {
         self.hook(crate::fault::Step::Write)?;
         let (mut f, good) = self.open()?;
         let written = f.write_all(&self.held).and_then(|()| self.hook(crate::fault::Step::Sync)).and_then(|()| f.sync_data());
-        self.torn = written.is_err();
+        self.torn = written.is_err().then_some(f);
         written?;
         self.good = Some(good.saturating_add(self.held.len() as u64));
         self.held.clear();
@@ -251,16 +252,13 @@ impl Writer {
             return Ok(());
         }
         self.folder.check()?;
+        crate::store::rollback_torn(&mut self.torn, good)?;
         crate::store::check_regular_directory_entry(&self.path)?;
-        let f = match std::fs::OpenOptions::new().write(true).open(&self.path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                self.good = None;
-                self.held.clear();
-                return Ok(());
-            }
-            Err(e) => return Err(e),
-        };
+        let f = std::fs::OpenOptions::new().write(true).open(&self.path)?;
+        if f.metadata()?.len() != good {
+            self.foreign = true;
+            return Err(io::Error::other("the log changed before truncate: a snapshot must replace it"));
+        }
         f.set_len(len)?;
         f.sync_all()?;
         self.good = Some(len);
@@ -286,7 +284,7 @@ impl Writer {
                 self.good = Some(data.len() as u64);
                 self.held.clear();
                 self.failed = None;
-                self.torn = false;
+                self.torn = None;
                 self.foreign = false;
                 Ok(())
             }

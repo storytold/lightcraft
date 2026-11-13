@@ -430,6 +430,146 @@ fn a_caller_append_refuses_a_changed_log_and_a_snapshot_preserves_every_op() {
 
 #[cfg(unix)]
 #[test]
+fn a_log_open_expectation_survives_a_copy_before_the_first_append() {
+    for caller in [true, false] {
+        let base = scratch(&format!("open-log-copy-{caller}"));
+        let dir = base.join("lib");
+        crate::fault::write_on_caller(&dir, caller);
+        let note = b"the note this session's lock wrote";
+        let open = || {
+            let store = FsStore::open(&dir).unwrap();
+            store.folder().vouch(note);
+            std::fs::write(dir.join(OWNER), note).unwrap();
+            Journal::open(Box::new(store)).unwrap()
+        };
+        let add = |n| Op::AddAlbum { album: Album::new(AlbumId(n), format!("album {n}")) };
+        let (mut seed, mut catalog, _) = open();
+        let first = add(1);
+        catalog.apply(first.clone()).unwrap();
+        seed.append(&[first]).unwrap();
+        seed.flush().unwrap();
+        let copy = base.join("copy");
+        std::fs::create_dir(&copy).unwrap();
+        for (name, bytes) in files_in(&dir) {
+            std::fs::write(copy.join(name), bytes).unwrap();
+        }
+        let second = add(2);
+        catalog.apply(second.clone()).unwrap();
+        seed.append(&[second]).unwrap();
+        seed.flush().unwrap();
+        drop(seed);
+        let (mut journal, mut catalog, _) = open();
+        std::fs::rename(&dir, base.join("away")).unwrap();
+        std::fs::rename(&copy, &dir).unwrap();
+        let replacement = std::fs::read(dir.join(LOG)).unwrap();
+        let third = add(3);
+        catalog.apply(third.clone()).unwrap();
+        let result = journal.append(&[third]);
+        let unlogged = u64::from(result.is_err());
+        let refused = result.is_err() || journal.flush().is_err();
+        crate::fault::write_on_caller(&dir, false);
+        assert!(refused, "the first append must use the log length read at open");
+        assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), replacement);
+        journal.snapshot_with_unlogged(&catalog, unlogged).unwrap();
+        drop(journal);
+        let (reopened, loaded, _) = open();
+        assert_eq!(reopened.seq(), 3);
+        for n in 1..=3 {
+            assert!(loaded.album(AlbumId(n)).is_some(), "every acknowledged and unlogged op must reload");
+        }
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(base);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_log_sync_failure_can_only_roll_back_the_file_that_failed() {
+    for caller in [true, false] {
+        let base = scratch(&format!("failed-log-copy-{caller}"));
+        let dir = base.join("lib");
+        crate::fault::write_on_caller(&dir, caller);
+        let mut store = FsStore::open(&dir).unwrap();
+        let note = b"the note this session's lock wrote";
+        store.folder().vouch(note);
+        std::fs::write(dir.join(OWNER), note).unwrap();
+        store.append(LOG, b"1\n").unwrap();
+        store.flush().unwrap();
+        let copy = base.join("copy");
+        std::fs::create_dir(&copy).unwrap();
+        let foreign = b"this is a longer log whose records must not be removed\n";
+        std::fs::write(copy.join(LOG), foreign).unwrap();
+        std::fs::write(copy.join(OWNER), note).unwrap();
+        let dir_for_hook = dir.clone();
+        let away = base.join("away");
+        let away_for_hook = away.clone();
+        let swapped = std::sync::atomic::AtomicBool::new(false);
+        crate::fault::install(
+            &dir,
+            std::sync::Arc::new(move |step| {
+                if step == crate::fault::Step::Sync {
+                    if !swapped.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                        std::fs::rename(&dir_for_hook, &away_for_hook)?;
+                        std::fs::rename(&copy, &dir_for_hook)?;
+                    }
+                    return Err(std::io::Error::other("injected failed sync"));
+                }
+                Ok(())
+            }),
+        );
+        let result = store.append(LOG, b"2\n");
+        if caller {
+            assert!(result.is_err());
+            assert!(store.truncate(LOG, 2).is_err(), "cleanup must refuse the replacement log");
+        } else {
+            result.unwrap();
+            assert!(store.flush().is_err());
+            assert!(store.truncate(LOG, 2).is_err(), "cleanup must refuse the replacement log");
+        }
+        crate::fault::remove(&dir);
+        crate::fault::write_on_caller(&dir, false);
+        assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), foreign, "a torn-tail rollback must never touch the replacement");
+        assert_eq!(std::fs::read(away.join(LOG)).unwrap(), b"1\n", "only our own failed append is rolled back");
+        store.write_atomic(LOG, b"tail\n1\n2\n").unwrap();
+        store.append(LOG, b"3\n").unwrap();
+        store.flush().unwrap();
+        assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"tail\n1\n2\n3\n");
+        drop(store);
+        let _ = std::fs::remove_dir_all(base);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_log_read_for_repair_does_not_permit_truncating_a_shorter_copy() {
+    let base = scratch("read-repair-copy");
+    let dir = base.join("lib");
+    let mut store = FsStore::open(&dir).unwrap();
+    let note = b"the note this session's lock wrote";
+    store.folder().vouch(note);
+    std::fs::write(dir.join(OWNER), note).unwrap();
+    std::fs::write(dir.join(LOG), b"good\ntorn").unwrap();
+    assert_eq!(store.read(LOG).unwrap().unwrap(), b"good\ntorn");
+    let copy = base.join("copy");
+    std::fs::create_dir(&copy).unwrap();
+    std::fs::write(copy.join(OWNER), note).unwrap();
+    std::fs::write(copy.join(LOG), b"x\n").unwrap();
+    let away = base.join("away");
+    std::fs::rename(&dir, &away).unwrap();
+    std::fs::rename(&copy, &dir).unwrap();
+    assert!(store.truncate(LOG, 5).is_err(), "initial repair must use the length read, not extend a replacement");
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"x\n");
+    assert_eq!(std::fs::read(away.join(LOG)).unwrap(), b"good\ntorn");
+    store.write_atomic(LOG, b"whole\n").unwrap();
+    store.append(LOG, b"next\n").unwrap();
+    store.flush().unwrap();
+    assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), b"whole\nnext\n");
+    drop(store);
+    let _ = std::fs::remove_dir_all(base);
+}
+
+#[cfg(unix)]
+#[test]
 fn a_replaced_staging_name_is_neither_published_nor_removed() {
     for fail_fill in [false, true] {
         let dir = scratch(&format!("staging-name-{fail_fill}"));

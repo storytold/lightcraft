@@ -77,19 +77,29 @@ pub(crate) fn check_regular_directory_entry(path: &Path) -> io::Result<()> {
 /// `Journal::append` requests a snapshot on an error rather than acknowledging a sequence gap.
 struct SynchronousLog {
     good: u64,
-    torn: bool,
+    torn: Option<std::fs::File>,
 }
 
-impl SynchronousLog {
-    fn check(&self, len: u64, allow_torn: bool) -> io::Result<()> {
-        if len == self.good || (allow_torn && self.torn && len > self.good) {
-            return Ok(());
-        }
-        Err(io::Error::other(format!(
-            "catalog log holds {len} bytes, the log this session wrote has {}: it is another file, so a snapshot must replace it",
-            self.good
-        )))
+fn check_log_len(len: u64, good: u64) -> io::Result<()> {
+    if len == good {
+        return Ok(());
     }
+    Err(io::Error::other(format!(
+        "catalog log holds {len} bytes, the log this session read or wrote has {good}: it is another file, so a snapshot must replace it"
+    )))
+}
+
+/// Roll back only the descriptor whose append failed, never a new file at its old path.
+pub(crate) fn rollback_torn(file: &mut Option<std::fs::File>, good: u64) -> io::Result<()> {
+    if let Some(f) = file.as_ref() {
+        if f.metadata()?.len() < good {
+            return Err(io::Error::other("the failed log was shortened: a snapshot must replace it"));
+        }
+        f.set_len(good)?;
+        f.sync_data()?;
+        *file = None;
+    }
+    Ok(())
 }
 
 /// Files in a directory.
@@ -101,6 +111,8 @@ pub struct FsStore {
     /// Set only after using the synchronous fallback; do not switch to a fresh thread afterward
     /// and forget which records that fallback acknowledged.
     sync_log: Option<SynchronousLog>,
+    /// Length of the log the journal read, retained through the first asynchronous or caller append.
+    known_log_len: Option<u64>,
     /// The thread that writes the log (natively; started by the first append).
     #[cfg(not(target_arch = "wasm32"))]
     log: Option<crate::log_writer::LogWriter>,
@@ -120,6 +132,7 @@ impl FsStore {
             dir: folder.path().to_path_buf(),
             folder,
             sync_log: None,
+            known_log_len: None,
             #[cfg(not(target_arch = "wasm32"))]
             log: None,
         }
@@ -150,8 +163,11 @@ impl FsStore {
     }
 
     fn reset_sync_log(&mut self, name: &str, len: u64) {
-        if name == crate::journal::LOG && self.sync_log.is_some() {
-            self.sync_log = Some(SynchronousLog { good: len, torn: false });
+        if name == crate::journal::LOG {
+            self.known_log_len = Some(len);
+            if self.sync_log.is_some() {
+                self.sync_log = Some(SynchronousLog { good: len, torn: None });
+            }
         }
     }
 
@@ -202,11 +218,15 @@ impl Store for FsStore {
             // what was handed over, written or still held
             return w.read();
         }
-        match std::fs::read(self.path(name)) {
-            Ok(b) => Ok(Some(b)),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
+        let bytes = match std::fs::read(self.path(name)) {
+            Ok(b) => Some(b),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        if name == crate::journal::LOG && self.known_log_len.is_none() {
+            self.known_log_len = Some(bytes.as_ref().map_or(0, |b| b.len() as u64));
         }
+        Ok(bytes)
     }
 
     fn write_atomic(&mut self, name: &str, data: &[u8]) -> io::Result<()> {
@@ -281,7 +301,8 @@ impl Store for FsStore {
                     std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
                     self.sync_dir();
                 }
-                self.log = crate::log_writer::LogWriter::start(self.folder.clone(), name);
+                let expected = if name == crate::journal::LOG { self.known_log_len } else { None };
+                self.log = crate::log_writer::LogWriter::start(self.folder.clone(), name, expected);
             }
             // (another name than the log's is written here, as without a thread)
             if let Some(w) = self.log_for(name) {
@@ -299,8 +320,8 @@ impl Store for FsStore {
         }
         if name == crate::journal::LOG {
             let len = f.metadata()?.len();
-            let log = self.sync_log.get_or_insert(SynchronousLog { good: len, torn: false });
-            log.check(len, false)?;
+            let log = self.sync_log.get_or_insert(SynchronousLog { good: self.known_log_len.unwrap_or(len), torn: None });
+            check_log_len(len, log.good)?;
         }
         #[cfg(not(target_arch = "wasm32"))]
         let written = crate::fault::check(&self.dir, crate::fault::Step::Write)
@@ -312,7 +333,7 @@ impl Store for FsStore {
         if name == crate::journal::LOG
             && let Some(log) = self.sync_log.as_mut()
         {
-            log.torn = written.is_err();
+            log.torn = written.is_err().then_some(f);
             if written.is_ok() {
                 log.good = log.good.saturating_add(data.len() as u64);
             }
@@ -328,6 +349,11 @@ impl Store for FsStore {
             return w.truncate(len);
         }
         self.folder.check()?;
+        if name == crate::journal::LOG
+            && let Some(log) = self.sync_log.as_mut()
+        {
+            rollback_torn(&mut log.torn, log.good)?;
+        }
         check_regular_directory_entry(&self.path(name))?;
         let f = match std::fs::OpenOptions::new().write(true).open(self.path(name)) {
             Ok(f) => f,
@@ -336,11 +362,11 @@ impl Store for FsStore {
             Err(e) => return Err(e),
         };
         if name == crate::journal::LOG
-            && let Some(log) = &self.sync_log
+            && let Some(good) = self.sync_log.as_ref().map(|log| log.good).or(self.known_log_len)
         {
-            // A refused append wrote nothing: its cleanup must not cut or extend a foreign log.
-            // Only a failed write of our own permits removing a longer torn tail.
-            log.check(f.metadata()?.len(), true)?;
+            // Also covers initial repair before any append. Our own torn bytes, if any, were
+            // rolled back through their held descriptor, never through this possibly replaced path.
+            check_log_len(f.metadata()?.len(), good)?;
         }
         f.set_len(len)?;
         f.sync_all()?;
@@ -354,7 +380,7 @@ impl Store for FsStore {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn background_writer(&self) -> Option<Box<dyn Store>> {
-        Some(Box::new(FsStore { dir: self.dir.clone(), folder: self.folder.clone(), sync_log: None, log: None }))
+        Some(Box::new(FsStore { dir: self.dir.clone(), folder: self.folder.clone(), sync_log: None, known_log_len: None, log: None }))
     }
 
     fn flush(&mut self) -> io::Result<()> {
