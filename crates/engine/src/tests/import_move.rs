@@ -15,7 +15,7 @@ fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
-fn write_png(path: &Path, seed: u8) {
+pub(super) fn write_png(path: &Path, seed: u8) {
     let (w, h) = (40usize, 24usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
     let img = lightcraft_raster::Rgba8 { width: w, height: h, data };

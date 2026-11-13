@@ -681,13 +681,9 @@ impl Renderer {
         if let Some(&(k, p)) = self.pending.get(&slot) {
             return k != key || (p != priority && self.is_queued(slot));
         }
-        if (slot == Slot::CurveHistogram && self.curve_histogram.as_ref().is_some_and(|h| h.1 == key))
+        !((slot == Slot::CurveHistogram && self.curve_histogram.as_ref().is_some_and(|h| h.1 == key))
             || self.textures.get(&slot).is_some_and(|t| t.key == key)
-            || self.failed.get(&slot).is_some_and(|f| f.0 == key && f.2 == self.catalog_rev)
-        {
-            return false;
-        }
-        true
+            || self.failed.get(&slot).is_some_and(|f| f.0 == key && f.2 == self.catalog_rev))
     }
     /// Free a view slot's texture and stage cache (the view is no longer shown).
     pub fn release(&mut self, slot: Slot) {

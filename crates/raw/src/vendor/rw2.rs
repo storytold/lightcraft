@@ -105,8 +105,8 @@
 use super::pef::{Bits, Huffman, diff};
 use super::{active_rows, white_from_data};
 use crate::{BlackLevel, Cfa, ColorData, MAX_SAMPLES, Mode, Opcode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
+use craft_tiff::{ByteOrder, Ifd, Tiff, Value, tags as t};
 use lightcraft_geom::Orientation;
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff, Value, tags as t};
 use rayon::prelude::*;
 
 const SENSOR_WIDTH: u16 = 0x0002;
@@ -698,7 +698,7 @@ fn distortion(ifd: &Ifd, active: Rect) -> Option<Opcode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{IfdBuilder, TiffWriter};
+    use craft_tiff::{IfdBuilder, TiffWriter};
 
     /// Writes bit fields into a 16-byte block from bit 127 down (the inverse of [`Fields`]).
     struct FieldWriter {
