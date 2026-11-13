@@ -1204,7 +1204,7 @@
   "Describe…": "Aprašyti…",
   "Description": "Aprašas",
   "Deselect": "Atžymėti",
-  "Deselect All": "Atžymėti viską",
+  "Deselect All": "Nužymėti viską",
   "Desert Heat": "Dykumos karštis",
   "Desert Warmth": "Dykumos šiluma",
   "Desktop": "Darbalaukis",
@@ -1691,7 +1691,7 @@
   "Frame rate": "Kadrų dažnis",
   "Frame Rate": "Kadrų dažnis",
   "frame sooner: 8.3 ms at 120 Hz, 16.7 ms at 60 Hz. On a MacBook Pro at 120 Hz, a heavy develop drag went from": "atnaujinimo kadru greičiau: po 8,3 ms esant 120 Hz ir po 16,7 ms esant 60 Hz. „MacBook Pro“ kompiuteryje, veikiančiame 120 Hz dažniu, sudėtingo koregavimo vilkimo delsa sumažėjo nuo",
-  "Frame time": "Kadro laikas",
+  "Frame time": "Vieno kadro trukmė",
   "Frame update": "Kadro atnaujinimas",
   "framing. Other recent Fujifilm bodies whose tables have nine knots are read the same way, but only the X-T4 was": "kadruote. Taip pat apdorojami ir kitų naujesnių „Fujifilm“ fotoaparatų duomenys, kurių lentelėse yra devyni kontroliniai taškai, tačiau išbandytas tik „X-T4“.",
   "Free": "Laisvai",
@@ -3369,8 +3369,8 @@
   "Reset All": "Atkurti viską",
   "Reset All Curves": "Atkurti visas kreives",
   "Reset all curves: point curves (all channels) and parametric (double-click a channel to reset only that one)": "Atkurti visas kreives: taškines kreives (visus kanalus) ir parametrinę kreivę (dukart spustelėkite kanalą, kad atkurtumėte tik jį).",
-  "Reset all edits": "Atkurti visus pakeitimus",
-  "Reset all edits (Cmd+Shift+R)": "Atkurti visus pakeitimus (Cmd+Shift+R)",
+  "Reset all edits": "Atkurti pradinius nustatymus",
+  "Reset all edits (Cmd+Shift+R)": "Atkurti pradinius nustatymus (Cmd+Shift+R)",
   "Reset All Keyboard Shortcuts": "Atkurti visus sparčiuosius klavišus",
   "Reset Before to Import State": "Atkurti būseną, buvusią prieš importavimą",
   "Reset Control": "Atkurti control",
@@ -4612,5 +4612,6 @@
   "Zoomed in, the \"Before\" label (\\ key or the Before view) now sits at the canvas' corner instead of leaving the": "Priartinus vaizdą, žyma „Prieš“ (klavišas `\\` arba rodinys „Prieš“) dabar lieka drobės kampe, užuot išnykusi kartu su",
   "Zooming in with Before/After side by side decodes the original once: the Before side used to decode its own copy": "Priartinant vaizdą palyginimui „Prieš / Po“ greta, originalas iškoduojamas tik kartą: anksčiau „Prieš“ pusė iškoduodavo atskirą kopiją",
   "日本語": "Japonų",
-  "繁體中文（台灣）": "Tradicinė kinų (Taivanas)"
+  "繁體中文（台灣）": "Tradicinė kinų (Taivanas)",
+  "Debug": "Derinimas"
 }
