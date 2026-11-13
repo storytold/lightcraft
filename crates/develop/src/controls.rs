@@ -256,7 +256,7 @@ controls! {
     "detail.sharpenRadius" => detail.sharpen_radius, "Radius", Detail, 0.5, 3, 1, 0.1, 1, Plain;
     "detail.sharpenDetail" => detail.sharpen_detail, "Detail", Detail, 0, 100, 25, 1, 0, Plain;
     "detail.sharpenMasking" => detail.sharpen_masking, "Masking", Detail, 0, 100, 0, 1, 0, Plain;
-    "detail.nrLuminance" => detail.nr_luminance, "Noise Reduction", Detail, 0, 100, 0, 1, 0, Plain;
+    "detail.nrLuminance" => detail.nr_luminance, "Noise Reduction Strength", Detail, 0, 100, 0, 1, 0, Plain;
     "detail.nrDetail" => detail.nr_detail, "Detail", Detail, 0, 100, 50, 1, 0, Plain;
     "detail.nrContrast" => detail.nr_contrast, "Contrast", Detail, 0, 100, 0, 1, 0, Plain;
     "detail.nrColor" => detail.nr_color, "Color Noise Reduction", Detail, 0, 100, 0, 1, 0, Plain;
