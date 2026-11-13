@@ -638,7 +638,7 @@ fn an_orientation_only_the_xmp_states_leaves_stored_frame_regions_as_written() {
     let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
     // an Exif that states the size as stored (32 × 24, as cameras do) and no orientation
     let exif = {
-        use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+        use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
         let mut sub = IfdBuilder::new();
         sub.set(t::PIXEL_X_DIMENSION, Value::Long(vec![32]));
         sub.set(t::PIXEL_Y_DIMENSION, Value::Long(vec![24]));
@@ -681,7 +681,7 @@ fn a_raws_decoder_orientation_turns_stored_frame_regions_on_import_and_reread() 
     let px: Vec<u16> = (0..16 * 6).map(|i| (i * 41 % 4096) as u16).collect();
     let strip: Vec<u8> = px.chunks(2).flat_map(|p| [(p[0] >> 4) as u8, ((p[0] & 15) << 4) as u8 | (p[1] >> 8) as u8, p[1] as u8]).collect();
     {
-        use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+        use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value, tags as t};
         let mut raw = IfdBuilder::new();
         raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
         raw.set(t::IMAGE_WIDTH, Value::Long(vec![16]));

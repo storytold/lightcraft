@@ -16,9 +16,9 @@
 //! - No white-balance tag was found (the maker note holds an ICC-like profile), so the as-shot gains are measured
 //!   from that preview's neutral pixels ([`crate::wb_estimate`]).
 use crate::{BlackLevel, Cfa, ColorData, Mode, OpcodeLists, RawData, RawError, RawFormat, RawImage, Rect, Result};
+use craft_tiff::image::chunk_bytes;
+use craft_tiff::{Ifd, Tiff, tags as t};
 use lightcraft_geom::Orientation;
-use lightcraft_tiff::image::chunk_bytes;
-use lightcraft_tiff::{Ifd, Tiff, tags as t};
 
 /// Where the preview's window starts in the sensor frame, and how many sensor pixels one preview pixel covers.
 const CROP_ORIGIN: (usize, usize) = (24, 12);
@@ -142,7 +142,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
     fn pack(px: &[u16]) -> Vec<u8> {
         px.chunks(2).flat_map(|p| [(p[0] >> 4) as u8, ((p[0] & 15) << 4) as u8 | (p[1] >> 8) as u8, p[1] as u8]).collect()

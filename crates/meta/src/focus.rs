@@ -31,7 +31,7 @@
 
 pub use crate::focus_read::{HEADER_PREFIX, HeaderRead, MAX_HEADER_BYTES, read_header};
 use crate::{Orientation, Rect};
-use lightcraft_tiff::{ByteOrder, Ifd, Tiff, makernote, tags as t};
+use craft_tiff::{ByteOrder, Ifd, Tiff, makernote, tags as t};
 use serde::{Deserialize, Serialize};
 
 /// Where the camera focused, on the upright photo.
