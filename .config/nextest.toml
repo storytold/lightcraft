@@ -1,0 +1,10 @@
+# These two regressions exercise real full-resolution rendering with native workers and Rayon.
+# Reserve the complete nextest budget rather than oversubscribing it with other test processes.
+# Keep every fixture, readiness assertion and original timeout unchanged.
+[[profile.default.overrides]]
+filter = 'package(lightcraft-ui-egui) & test(=tests::slideshow::next_slides_are_prepared_before_they_are_due)'
+threads-required = "num-test-threads"
+
+[[profile.default.overrides]]
+filter = 'package(lightcraft-ui-egui) & test(=tests::compare::compare_zoom_window_tracks_the_zoomed_pane)'
+threads-required = "num-test-threads"
