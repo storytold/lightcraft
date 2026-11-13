@@ -15,12 +15,12 @@ const HEADER_DECODE_MAX_PIXELS: u64 = 4_000_000;
 pub(crate) fn header(bytes: &[u8], format: Format) -> Result<(u32, u32, u16)> {
     if format == Format::Gif {
         let info = craft_gif::scan(bytes, 1).ok_or_else(|| Error::Malformed(format, "invalid GIF header".into()))?;
-        if craft_gif::palette(bytes).is_none() {
-            return Err(Error::Malformed(format, "GIF has no readable colour table".into()));
-        }
         let (w, h) = (u32::from(info.width), u32::from(info.height));
         check_size(format, u64::from(w), u64::from(h), &DecodeOptions::default())?;
         check_fillable(format, bytes, w, h)?;
+        if craft_gif::palette(bytes).is_none() {
+            return Err(Error::Malformed(format, "GIF has no readable colour table".into()));
+        }
         if u64::from(w).saturating_mul(u64::from(h)) <= HEADER_DECODE_MAX_PIXELS {
             let decoded = decode(bytes, format, &DecodeOptions::fit(64, 64))?;
             return Ok((decoded.source_width, decoded.source_height, decoded.orientation));
@@ -79,8 +79,23 @@ fn check_fillable(format: Format, bytes: &[u8], w: u32, h: u32) -> Result<()> {
     // the pixels the file's data can cover
     let covered = match format {
         Format::Gif => {
-            // Without a readable first frame there is nothing to decode, and nothing to bound the canvas by.
-            craft_gif::first_frame_decoded_pixels(bytes).ok_or_else(|| Error::Malformed(format, "no readable first frame".into()))?
+            // A frame's compressed data must cover its declared raster before it can justify the
+            // logical screen. This retains the old "can hold" refusal for truncated/empty frames.
+            let info = craft_gif::scan(bytes, 1).ok_or_else(|| Error::Malformed(format, "no readable first frame".into()))?;
+            let Some(frame) = info.frames.first() else {
+                return Err(Error::Malformed(format, "no readable first frame".into()));
+            };
+            let frame_width = u32::from(frame.width);
+            let frame_height = u32::from(frame.height);
+            let compressed_bytes =
+                craft_gif::first_frame_compressed_bytes(bytes).ok_or_else(|| Error::Malformed(format, "no readable first frame".into()))?;
+            if area(frame_width, frame_height) > (compressed_bytes as u64).saturating_mul(2_731) {
+                return Err(Error::Malformed(
+                    format,
+                    format!("a {frame_width} × {frame_height} frame is far larger than its {compressed_bytes} bytes of pixel data can hold"),
+                ));
+            }
+            craft_gif::first_frame_decoded_pixels(bytes).unwrap_or(0)
         }
         _ => match bmp_layout(bytes) {
             BmpLayout::Rle { offset, rle4 } => bmp_rle_pixels(bytes, offset, rle4, w, h),

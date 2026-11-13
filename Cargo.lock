@@ -1210,7 +1210,7 @@ dependencies = [
 [[package]]
 name = "craft-gif"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=3c51d883#3c51d883305314afcd301bc5707e5a0c7f4db486"
+source = "git+https://github.com/storytold/craft-libs?rev=ededdd75#ededdd75c97588855b822349c53a22cabbd070f4"
 dependencies = [
  "image",
 ]
