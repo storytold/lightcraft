@@ -1037,7 +1037,9 @@ fn a_gate_that_closes_during_a_prune_or_a_clear_stops_it() {
         reopened.store(true, Ordering::SeqCst);
         pass(&d);
         assert_eq!(files.iter().filter(|p| p.exists()).count(), 0, "{what}: with the gate open again the rest goes");
-        assert_eq!(d.known_size(), Some(0), "{what}");
+        // (a clear leaves the size unknown: a thumbnail written while it removes files outlives it)
+        let size = if what == "clear" { None } else { Some(0) };
+        assert_eq!(d.known_size(), size, "{what}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
