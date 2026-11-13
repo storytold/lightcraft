@@ -27,6 +27,10 @@ const CLEAR: Color32 = Color32::from_rgb(12, 12, 12);
 /// Simulated frame interval (deterministic animation time).
 const FRAME_DT: f64 = 1.0 / 60.0;
 
+/// The longest [`Headless::wait_for_work`] waits between two frames for pending work. Shorter
+/// than a frame of the simulated clock ([`FRAME_DT`]), so a busy app still runs ahead of real time.
+const BUSY_PAUSE: Duration = Duration::from_millis(10);
+
 /// Validate the scaled screenshot dimensions before layout or pixel allocation.
 pub fn viewport_pixels(size: [f32; 2], pixels_per_point: f32) -> Result<[usize; 2], String> {
     if size.iter().any(|edge| *edge < 1.0) {
@@ -408,7 +412,8 @@ impl Headless {
     }
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
-    /// a row, or `timeout` passes. Returns whether it settled.
+    /// a row, or `timeout` passes. Returns whether it settled. While something is pending, frames
+    /// are paced by [`Self::wait_for_work`].
     pub fn settle(&mut self, timeout: Duration) -> bool {
         let t0 = Instant::now();
         let mut quiet = 0;
@@ -416,7 +421,7 @@ impl Headless {
             self.step();
             if self.busy() {
                 quiet = 0;
-                std::thread::sleep(Duration::from_millis(1));
+                self.wait_for_work();
             } else {
                 quiet += 1;
             }
@@ -432,6 +437,7 @@ impl Headless {
 
     /// Run frames until `done` holds or `timeout` passes (a render that finishes on a busy machine
     /// after a quiet spell, where [`Self::settle`] alone would stop too early). Returns `done`.
+    /// While [`Self::busy`], frames are paced by [`Self::wait_for_work`].
     pub fn step_until(&mut self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
         let t0 = Instant::now();
         while !done(self) {
@@ -439,9 +445,26 @@ impl Headless {
                 return false;
             }
             self.step();
-            std::thread::sleep(Duration::from_millis(1));
+            if self.busy() {
+                self.wait_for_work();
+            } else {
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
         true
+    }
+
+    /// Between two frames while the app is [`Self::busy`]: leave the CPU to the work being waited
+    /// for until a render finishes or [`BUSY_PAUSE`] passes, rather than draw the next frame at
+    /// once. Every frame lays out the whole UI; drawn back to back, the frames of the tests that were
+    /// waiting took about half the CPU of ui-egui's test binary on a loaded machine, away from the
+    /// very renders they waited for, and the waits ran past their limits (#3981).
+    fn wait_for_work(&mut self) {
+        let t0 = Instant::now();
+        // (no render on the workers to wait for: a merge, file checks, input, an offload)
+        if !self.app.renderer.wait_for_worker(BUSY_PAUSE) {
+            std::thread::sleep(BUSY_PAUSE.saturating_sub(t0.elapsed()));
+        }
     }
 
     /// Rasterize the last frame (with the photo textures).
@@ -492,7 +515,7 @@ impl Headless {
                 return json!({"ok": false, "error": "timeout"});
             }
             if self.busy() {
-                std::thread::sleep(Duration::from_millis(1));
+                self.wait_for_work();
             }
         };
         // let injected input (clicks, keys, drags) play out before the next request
