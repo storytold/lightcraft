@@ -10,6 +10,11 @@ fn crop_row_layout(locale: crate::i18n::Locale) -> egui::Layout {
     }
 }
 
+/// Use the locale reading edge even when the toolbar buttons wrap.
+fn crop_wrapped_row_layout(locale: crate::i18n::Locale) -> egui::Layout {
+    crop_row_layout(locale).with_main_wrap(true)
+}
+
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
 const ASPECT_PRESETS: [(&str, &str); 10] = [
     ("Free", "free"),
@@ -107,7 +112,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
+        ui.with_layout(crop_wrapped_row_layout(crate::i18n::language()), |ui| {
             if text_button(ui, "cropRotateLeft", crate::i18n::tr("Rotate Left"), false).clicked() {
                 let _ = app.run("photo.rotateLeft", json!({}));
             }
@@ -116,7 +121,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
+        ui.with_layout(crop_wrapped_row_layout(crate::i18n::language()), |ui| {
             if text_button(ui, "cropFlipH", crate::i18n::tr("Flip H"), d.crop.flip_h).clicked() {
                 let _ = app.run("photo.flipHorizontal", json!({}));
             }
@@ -241,7 +246,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
         let guided = d.geometry.upright == lightcraft_develop::Upright::Guided;
-        ui.horizontal_wrapped(|ui| {
+        ui.with_layout(crop_wrapped_row_layout(crate::i18n::language()), |ui| {
             if !guided
                 && d.geometry.upright != lightcraft_develop::Upright::Off
                 && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked()
@@ -411,7 +416,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use crate::state::ToolOverlay;
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
+    ui.with_layout(crop_row_layout(crate::i18n::language()), |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Tool Overlay")).color(t.text_dim));
         let current = app.ui.tool_overlay;
         let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
@@ -502,5 +507,13 @@ mod rtl_tests {
         assert_eq!(crop_row_layout(Locale::He).main_dir, egui::Direction::RightToLeft);
         assert_eq!(crop_row_layout(Locale::En).main_dir, egui::Direction::LeftToRight);
         assert_eq!(crop_row_layout(Locale::Fr).main_dir, egui::Direction::LeftToRight);
+    }
+    #[test]
+    fn crop_toolbar_wrapping_preserves_reading_edge() {
+        let he = super::crop_wrapped_row_layout(Locale::He);
+        let en = super::crop_wrapped_row_layout(Locale::En);
+        assert_eq!(he.main_dir, egui::Direction::RightToLeft);
+        assert_eq!(en.main_dir, egui::Direction::LeftToRight);
+        assert!(he.main_wrap && en.main_wrap);
     }
 }
