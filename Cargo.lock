@@ -3722,7 +3722,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-coreml"
-version = "0.15.0"
+version = "0.21.1"
 dependencies = [
  "block2 0.6.2",
  "lightcraft-testkit",

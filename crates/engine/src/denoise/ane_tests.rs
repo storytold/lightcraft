@@ -157,6 +157,7 @@ fn a_marker_from_a_crash_keeps_the_neural_engine_off_until_the_user_chooses() {
     // Automatic says it too: its first choice failed, and a retry is offered where the processor runs the photo
     let auto = model.device(RunOn::Auto);
     assert_eq!(auto["neuralEngineReason"], ANE_CRASHED, "{auto}");
+    assert_eq!(auto["neuralEngineRetry"], auto["kind"] == "cpu", "a crash is retryable where the processor runs the photo: {auto}");
     assert!(path.with_file_name(ANE_SETUP_MARKER).exists(), "the marker stays until the user chooses again");
     assert!(kept(&path).is_empty(), "nothing is made while the marker is there");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());

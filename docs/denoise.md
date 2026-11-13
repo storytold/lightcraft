@@ -241,7 +241,7 @@ the CPU, and three wrong tiles stop it. **Automatic** tries the Neural Engine fi
 is faster than the processor's at the pace the photo runs at, and than the card's when that was measured; **Neural
 Engine** uses it whenever it can (and otherwise behaves as Automatic); choosing where denoise runs again lets a
 failed set-up or a crash be tried again. `LIGHTCRAFT_GPU=0` and `LIGHTCRAFT_GPU_BACKEND=off` keep it off too, like the
-graphics card. `denoise.status` → `device` says `ane` with `aneMs` and `cpuMs`; when the Neural Engine was chosen (or Automatic tried it) and its set-up failed or it got too many tiles wrong, `neuralEngineReason` says why and `retry` is offered where the processor runs the photo; kept models of an older model file, tile or writer are removed when a new one is made;
+graphics card. `denoise.status` → `device` says `ane` with `aneMs` and `cpuMs`; when the Neural Engine was chosen (or Automatic tried it) and its set-up failed or it got too many tiles wrong, `neuralEngineReason` says why, `neuralEngineRetry` whether trying again may help, and `retry` is offered where the processor runs the photo; kept models of an older model file, tile or writer are removed when a new one is made;
 `denoise.models.list` → `neuralEngine` says whether this computer can have one.
 
 Measured on an Apple A18 Pro (8 GB, macOS 26.7), RawNIND UtNet2 (Bayer), one 512-cell tile, warm

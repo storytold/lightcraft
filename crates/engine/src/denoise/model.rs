@@ -507,8 +507,12 @@ impl Model for Network {
             let on_cpu = v["kind"] == "cpu";
             if let Some(o) = v.as_object_mut() {
                 o.insert("neuralEngineReason".into(), json!(why));
-                // retry only where the processor runs the photo: the card's device is in use, so no retry is offered
-                if on_cpu && worth_retrying(why) {
+                // retry only where the processor runs the photo: the card's device is in use, so no retry is offered; the
+                // flag of its own says it is the Neural Engine's failure that a retry may cure (a wrong answer on the
+                // check tile is not), so the button names the right device even when the card's failure is retryable too
+                let retryable = on_cpu && worth_retrying(why);
+                o.insert("neuralEngineRetry".into(), json!(retryable));
+                if retryable {
                     o.insert("retry".into(), json!(true));
                 }
             }
