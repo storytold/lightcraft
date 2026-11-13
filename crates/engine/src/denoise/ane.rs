@@ -244,6 +244,9 @@ mod tests {
     use super::*;
 
     /// Test: half made models older than an hour go and others stay.
+    // `std` cannot set a directory's modified time on Windows (it opens directories as files, which
+    // is refused), and the age check reads that time, so this test runs on Unix only.
+    #[cfg(unix)]
     #[test]
     fn half_made_models_older_than_an_hour_go_and_others_stay() {
         let root = std::env::temp_dir().join(format!("lc-ane-stale-{}", std::process::id()));
