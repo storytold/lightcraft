@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### One capture time for several photos
+- Edit Capture Time with several photos selected moves them all by the same amount, as before; tick "Give every
+  selected photo this time" under Set date & time to give each of them exactly the time you type instead
+  (issue #4205).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

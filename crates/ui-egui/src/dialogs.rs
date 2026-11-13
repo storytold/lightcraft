@@ -1070,7 +1070,7 @@ fn new_smart_album_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, 
 
 /// The body of the CaptureTime dialog.
 fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::CaptureTime { mode, time, days, hours, minutes, zone } = dlg else { return };
+    let Dialog::CaptureTime { mode, time, days, hours, minutes, zone, each } = dlg else { return };
     let n = app.session.selected().len();
     field(ui, "Change", |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
@@ -1086,7 +1086,12 @@ fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg
                 let r = ui.add(egui::TextEdit::singleline(time).hint_text("2026-09-30 14:05:00").desired_width(f32::INFINITY));
                 crate::widgets::register(ui, "field:captureTime", r.rect);
             });
-            json!({"time": time})
+            // several photos: give them all this time, rather than move them by the active photo's change
+            if n > 1 {
+                let r = ui.checkbox(each, crate::i18n::tr("Give every selected photo this time"));
+                crate::widgets::register(ui, "captureTimeEach", r.rect);
+            }
+            json!({"time": time, "each": *each})
         }
         "shift" => {
             field(ui, "Shift", |ui| {
@@ -1128,7 +1133,12 @@ fn capture_time_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg
         );
     }
     if n > 1 {
-        ui.label(egui::RichText::new(crate::i18n::tr_format!("All {n} selected photos move by the same amount.", n = n)).color(t.text_dim));
+        let note = if mode == "set" && *each {
+            crate::i18n::tr_format!("All {n} selected photos get this time.", n = n)
+        } else {
+            crate::i18n::tr_format!("All {n} selected photos move by the same amount.", n = n)
+        };
+        ui.label(egui::RichText::new(note).color(t.text_dim));
     }
 }
 

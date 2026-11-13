@@ -1161,8 +1161,15 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 .map(|d| d.replace('T', " "))
                 .unwrap_or_default();
             let mode = p.get("mode").and_then(Value::as_str).unwrap_or("set").to_string();
-            app.ui.dialog =
-                Some(Dialog::CaptureTime { mode, time: time.get(..19).unwrap_or(&time).to_string(), days: 0, hours: 0, minutes: 0, zone: 0.0 });
+            app.ui.dialog = Some(Dialog::CaptureTime {
+                mode,
+                time: time.get(..19).unwrap_or(&time).to_string(),
+                days: 0,
+                hours: 0,
+                minutes: 0,
+                zone: 0.0,
+                each: false,
+            });
             Ok(Value::Null)
         }
         "dialog.labelNames" => {
