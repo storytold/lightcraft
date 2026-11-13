@@ -101,11 +101,34 @@ fn camera_tone_and_relative_wb() {
         lifted.light.exposure = 2.0;
         check(&format!("camera tone {p:?} exposure +2"), &src, &info, &lifted, &RenderRequest::fit(320, 240));
     }
+    // Apple ProRAW's profile tone curve in Lightroom's chain: per channel, hue-preserving
+    let proraw = SourceInfo { proraw: Some(proraw_tone()), relative_wb: false, ..info.clone() };
+    check("ProRAW edited", &src, &proraw, &s, &RenderRequest::fit(320, 240));
+    check("ProRAW neutral", &src, &proraw, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
+    let mut lr = s.clone();
+    (lr.light.highlights, lr.light.shadows, lr.light.whites, lr.light.blacks) = (-36.0, 39.0, -28.0, 22.0);
+    check("ProRAW tone sliders", &src, &proraw, &lr, &RenderRequest::fit(320, 240));
+    (lr.light.contrast, lr.light.whites, lr.light.blacks) = (0.0, 0.0, 0.0);
+    check("ProRAW highlights / shadows", &src, &proraw, &lr, &RenderRequest::fit(320, 240));
+    (lr.light.contrast, lr.light.whites) = (40.0, 30.0);
+    check("ProRAW highlights / shadows with contrast", &src, &proraw, &lr, &RenderRequest::fit(320, 240));
     // a camera chroma curve: richer shadows, highlights bleached toward white
     let curve = curve.with_chroma([1.4, 1.3, 1.1, 1.0, 0.7, 0.4, 0.25, 0.2]).unwrap();
     let info = SourceInfo { camera_tone: Some(curve), ..info };
     check("camera chroma curve", &src, &info, &DevelopSettings::default(), &RenderRequest::fit(320, 240));
     check("camera chroma curve edited", &src, &info, &s, &RenderRequest::fit(320, 240));
+}
+
+/// An Apple ProRAW-like profile tone curve for Lightroom's chain (`lightcraft_pipeline::proraw`).
+fn proraw_tone() -> Arc<lightcraft_pipeline::proraw::ProRawTone> {
+    let n = lightcraft_pipeline::proraw::PRORAW_TONE_KNOTS;
+    let knots = (0..n)
+        .map(|i| {
+            let x = 2f32.powf(-12.0 + 12.0 * i as f32 / (n - 1) as f32);
+            [x, (x.powf(0.6) * 0.98).min(0.9995)]
+        })
+        .collect();
+    Arc::new(lightcraft_pipeline::proraw::ProRawTone::new(knots, -0.3, Some(-4.0)).unwrap())
 }
 
 fn scene(i: usize, w: usize, h: usize) -> Arc<Rgb32f> {
@@ -1103,6 +1126,11 @@ fn windows_match() {
     s.vignette.midpoint = 10.0;
     let corner = RenderRequest { window: Some(PixelWindow { x: 2360, y: 1520, w: 640, h: 480 }), ..RenderRequest::fit(3000, 2000) };
     check("window: vignette corner", &src, &info, &s, &corner);
+    // Apple ProRAW: Lightroom's Highlights / Shadows read the whole frame's neighbourhood
+    let proraw = SourceInfo { proraw: Some(proraw_tone()), ..info };
+    let mut s = DevelopSettings::default();
+    (s.light.contrast, s.light.highlights, s.light.shadows, s.light.whites) = (25.0, -60.0, 60.0, -20.0);
+    check("window: ProRAW highlights / shadows", &src, &proraw, &s, &req);
 }
 
 /// Issue #323: a window of a big photo is cut from the whole source on the device (288 MB for 24 MP).
@@ -1293,6 +1321,12 @@ fn hdr_float_render_matches() {
         edit(&mut s);
         check_hdr(name, &src, &raw, &s, &req, true);
     }
+    // Apple ProRAW: Lightroom's chain with the highlights lifted past white
+    let proraw = SourceInfo { proraw: Some(proraw_tone()), ..raw.clone() };
+    let mut s = hdr(Process::LATEST);
+    check_hdr("ProRAW HDR", &src, &proraw, &s, &req, true);
+    (s.light.contrast, s.light.highlights, s.light.shadows, s.light.whites) = (25.0, -40.0, 30.0, 20.0);
+    check_hdr("ProRAW HDR edited", &src, &proraw, &s, &req, true);
     let s = hdr(Process::LATEST);
     for space in lightcraft_pipeline::OutputSpace::ALL {
         check_hdr(&format!("HDR in {space:?}"), &src, &raw, &s, &RenderRequest { space, ..req }, true);
