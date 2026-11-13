@@ -3,6 +3,7 @@ use super::invalidation::Invalidation;
 use super::settings_hash::SettingsHashes;
 use super::source::{DecodedSource, DenoiseSpec, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
 use super::{Arc, DcpProfile, DevelopSettings, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
+use lightcraft_preview::WriteGate;
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
 /// file system, so it can be asked on the UI thread.
@@ -119,20 +120,25 @@ impl MediaCache {
     /// be the same one).
     #[cfg(test)]
     pub(crate) fn attach_disk_cache(&mut self, dir: &std::path::Path, disk_bytes: u64) {
-        self.attach_disk_cache_namespace(dir, disk_bytes, 0);
+        self.attach_disk_cache_namespace(dir, disk_bytes, 0, None);
     }
 
     /// Folder switches and reopening use the namespace saved with the library preferences.
     /// This resolves the folder's path ([`thumbnail_folder`]) and replaces memory state; it reads
-    /// or deletes no cache file (render workers read and prune them).
-    pub(crate) fn attach_disk_cache_namespace(&mut self, dir: &std::path::Path, disk_bytes: u64, namespace: u64) {
+    /// or deletes no cache file (render workers read and prune them). `gate` is asked before
+    /// the cache changes its folder (`lightcraft_preview::DiskCache::set_gate`).
+    pub(crate) fn attach_disk_cache_namespace(&mut self, dir: &std::path::Path, disk_bytes: u64, namespace: u64, gate: Option<WriteGate>) {
         let dir = &thumbnail_folder(dir);
         // A different namespace isolates late disk writes without waiting for their I/O.
         // Session::accept and the UI also compare cache identity before accepting results.
         if !self.rendered.disk().is_some_and(|disk| disk.dir() == dir && disk.namespace() != namespace) {
             self.rendered.retire();
         }
-        self.rendered = Arc::new(PreviewCache::with_disk_namespace(rendered_budget(self.budget), dir, disk_bytes, namespace));
+        let cache = PreviewCache::with_disk_namespace(rendered_budget(self.budget), dir, disk_bytes, namespace);
+        if let (Some(disk), Some(gate)) = (cache.disk(), gate) {
+            disk.set_gate(gate);
+        }
+        self.rendered = Arc::new(cache);
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.invalidation = Invalidation::for_disk(dir, self.rendered.clone());

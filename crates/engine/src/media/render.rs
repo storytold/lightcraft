@@ -370,6 +370,23 @@ impl RenderJob {
                 // converted for the display below
                 let clip_view = self.request.overlay.is_clipping();
                 let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
+                if let Err(e) = lightcraft_pipeline::check_brush_budget(src, &info, &self.settings, &request) {
+                    return RenderResult {
+                        request_id: self.request_id,
+                        source_key: self.source_key,
+                        photo: self.photo,
+                        level: self.level,
+                        key: self.key,
+                        cache_generation: self.cache_generation,
+                        cache_owner: self.cache_owner.clone(),
+                        rendered: Err(e),
+                        gpu_fallback: None,
+                        loaded: None,
+                        quick: None,
+                        display: None,
+                        frame: None,
+                    };
+                }
                 let pixels_needed =
                     self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
                 let frame = (self.on_screen && !pixels_needed && gpu)
