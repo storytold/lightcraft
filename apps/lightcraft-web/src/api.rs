@@ -57,7 +57,7 @@ pub use web::install;
 #[cfg(target_arch = "wasm32")]
 mod web {
     use std::rc::Rc;
-    use std::sync::mpsc::{Receiver, channel};
+    use std::sync::mpsc::{Receiver, TrySendError, sync_channel};
 
     use craft_web_api::methods::Methods;
     use craft_web_api::page::{PageApi, Request};
@@ -70,17 +70,25 @@ mod web {
     /// The app id in `window.<app>`.
     const APP: &str = "lightcraft";
 
+    /// How many control requests may wait for the app at once. `craft-web-api` already refuses calls past its own
+    /// in-flight limit; this bounds the app's queue too, so a flood of calls can't grow it without limit.
+    const QUEUE: usize = 64;
+
     /// Put the crate's functions on `window.lightcraft` and return the queue the app drains each
     /// frame (hand it to `LightcraftApp::with_control`). An existing `window.lightcraft` keeps the
     /// functions it already has (`command`, for one).
     pub fn install(ctx: egui::Context) -> Receiver<ControlRequest> {
-        let (queue, requests) = channel::<ControlRequest>();
+        let (queue, requests) = sync_channel::<ControlRequest>(QUEUE);
         let request: Request = Rc::new(move |method, params| {
             let (control, reply) = ControlRequest::new(method, params);
             let mut pending = Pending { reply, state: control.state.clone(), answered: false };
-            if queue.send(control).is_err() {
+            if let Err(refused) = queue.try_send(control) {
                 pending.answered = true;
-                return Box::pin(async { json!({"ok": false, "error": "the app is not running"}) });
+                let error = match refused {
+                    TrySendError::Full(_) => format!("lightcraft is busy: {QUEUE} requests are already waiting for the app"),
+                    TrySendError::Disconnected(_) => "the app is not running".to_string(),
+                };
+                return Box::pin(async move { json!({"ok": false, "error": error}) });
             }
             ctx.request_repaint();
             Box::pin(async move {
