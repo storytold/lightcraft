@@ -198,6 +198,67 @@ pub fn for_raw(raw: &lightcraft_raw::RawInfo, meta: impl FnOnce() -> lightcraft_
     })
 }
 
+/// The name a profile is shown and chosen by: its maker, then its first model, unless the model already starts with
+/// the maker ("Canon EF 70-200mm f/2.8L IS II USM").
+fn display_name(p: &lightcraft_lensdb::Profile) -> Option<String> {
+    let model = p.models.first()?;
+    Some(if model.to_lowercase().starts_with(&p.maker.to_lowercase()) || p.maker.is_empty() { model.clone() } else { format!("{} {model}", p.maker) })
+}
+
+/// The camera a photo's `make` and `camera` (the model, as the library shows it) name in the database.
+fn camera_of<'a>(db: &'a LensDb, make: &str, camera: &str) -> Option<&'a lightcraft_lensdb::Camera> {
+    db.find_camera(make, camera).or_else(|| camera.split_once(' ').and_then(|(mk, model)| db.find_camera(mk, model)))
+}
+
+/// The profiles a photo taken with the camera `make` / `camera` can be given by hand (issue #1049), by
+/// [`display_name`], sorted, once each: the lenses for the camera's mount when the database knows the camera and has
+/// lenses for its mount, else every lens.
+pub fn choices(db: &LensDb, make: &str, camera: &str) -> Vec<String> {
+    let mount = camera_of(db, make, camera).map(|c| c.mount.clone()).filter(|m| !m.is_empty());
+    let fits = |l: &&lightcraft_lensdb::Profile| mount.as_ref().is_none_or(|m| l.mounts.iter().any(|lm| lm.eq_ignore_ascii_case(m)));
+    let mut names: Vec<String> = db.lenses.iter().filter(fits).filter_map(display_name).collect();
+    if names.is_empty() && mount.is_some() {
+        names = db.lenses.iter().filter_map(display_name).collect();
+    }
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    names
+}
+
+/// The profile named `name` (one of [`choices`]) for a photo taken with the camera `make` / `camera` at `focal` mm
+/// and `aperture`, for its `w × h` (unoriented, default-cropped) image, re-expressed after `orientation` and marked
+/// [`LensSource::Chosen`] (issue #1049). A photo without a focal length takes a prime's (a profile calibrated at one
+/// focal length). `Err` says why there is none.
+#[allow(clippy::too_many_arguments)]
+pub fn chosen(
+    db: &LensDb,
+    name: &str,
+    (make, camera): (&str, &str),
+    focal: Option<f64>,
+    aperture: Option<f64>,
+    (w, h): (f64, f64),
+    orientation: lightcraft_geom::Orientation,
+) -> Result<EmbeddedLens, String> {
+    let lens = db.lenses.iter().find(|l| display_name(l).as_deref() == Some(name)).ok_or_else(|| format!("no lens profile named {name}"))?;
+    let focal = match focal.filter(|f| f.is_finite() && *f > 0.0) {
+        Some(f) => f,
+        None => {
+            let mut focals =
+                lens.distortion.iter().map(|(f, _)| *f).chain(lens.tca.iter().map(|(f, _)| *f)).chain(lens.vignetting.iter().map(|v| v.focal));
+            let first = focals.next().ok_or_else(|| format!("{name} has no calibration"))?;
+            if focals.any(|f| (f - first).abs() > 1e-6) {
+                return Err("the photo records no focal length, and this lens is a zoom".into());
+            }
+            first
+        }
+    };
+    let cam = camera_of(db, make, camera);
+    let crop = frame_crop_factor(cam.and_then(|c| c.crop_factor), focal, None);
+    let shot = Shot { focal, aperture, distance: None, crop_factor: crop, width: w, height: h };
+    let corr = lens.correction(&shot).ok_or_else(|| format!("{name} gives no correction for this photo"))?;
+    Ok(EmbeddedLens { source: LensSource::Chosen, ..lightcraft_pipeline::optics::reorient_lens(&corr, orientation, w, h) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

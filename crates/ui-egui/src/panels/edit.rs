@@ -344,6 +344,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     let r = ui.label(egui::RichText::new(text).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
                     crate::widgets::register(ui, "optics:lensProfile", r.rect);
                 }
+                lens_profile_choice(app, ui, id, &p);
             }
         });
         if d.optics.lens_profile {
@@ -396,4 +397,48 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if reset_clicked {
         let _ = app.run("develop.reset", json!({}));
     }
+}
+
+/// Optics ▸ Lens Profile: pick the photo's profile from the lens database by hand, for a lens its file doesn't name or
+/// the database doesn't recognise (issue #1049). The list is the camera's mount's lenses, narrowed by what is typed.
+fn lens_profile_choice(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, p: &lightcraft_catalog::Photo) {
+    if !p.develops_raw() || lightcraft_engine::lens_profiles::database().is_none() {
+        return;
+    }
+    let chosen = p.embedded_lens.is_some_and(|l| l.source == lightcraft_develop::LensSource::Chosen);
+    let t = Tokens::get(ui.ctx());
+    let current = if chosen { p.meta.lens.trim().to_string() } else { crate::i18n::tr("Choose…").to_string() };
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(crate::i18n::tr("Lens Profile")).size(11.5).color(t.text_dim));
+        let r = crate::widgets::dropdown(ui, "lensProfileChoose", &current, t.font(11.5), t.text);
+        egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            let query_id = egui::Id::unique(("lensProfileQuery", id.0));
+            let mut query = ui.data(|d| d.get_temp::<String>(query_id)).unwrap_or_default();
+            let edit = ui.add(egui::TextEdit::singleline(&mut query).hint_text(crate::i18n::tr("Search lenses")).desired_width(260.0));
+            crate::widgets::register(ui, "lensProfileSearch", edit.rect);
+            ui.data_mut(|d| d.insert_temp(query_id, query.clone()));
+            let names: Vec<String> = app
+                .run("lens.profiles", serde_json::json!({"id": id.0}))
+                .ok()
+                .and_then(|v| v["profiles"].as_array().map(|a| a.iter().filter_map(|n| n.as_str().map(str::to_string)).collect()))
+                .unwrap_or_default();
+            let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+            let shown: Vec<&String> = names.iter().filter(|n| words.iter().all(|w| n.to_lowercase().contains(w))).take(200).collect();
+            if shown.is_empty() {
+                ui.label(egui::RichText::new(crate::i18n::tr("No lens matches")).color(t.text_dim));
+            }
+            egui::ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+                for (i, name) in shown.into_iter().enumerate() {
+                    let b = ui.button(name.as_str());
+                    crate::widgets::register(ui, format!("lensProfileOption:{i}"), b.rect);
+                    if b.clicked() {
+                        if let Err(e) = app.run("photo.chooseLensProfile", serde_json::json!({"lens": name})) {
+                            app.ui.status = e;
+                        }
+                        ui.close();
+                    }
+                }
+            });
+        });
+    });
 }

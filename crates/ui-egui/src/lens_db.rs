@@ -187,6 +187,7 @@ pub fn readout(app: &LightcraftApp, p: &lightcraft_catalog::Photo) -> String {
     use lightcraft_develop::LensSource;
     match p.embedded_lens.map(|l| l.source) {
         Some(LensSource::File) => crate::i18n::tr("Profile: from the file (the camera's own correction)").to_string(),
+        Some(LensSource::Chosen) => crate::i18n::tr_format!("Profile: {} (chosen)", p.meta.lens.trim()),
         Some(LensSource::Database) => {
             let name = database_name(&p.meta.camera, &p.meta.lens).unwrap_or_else(|| p.meta.lens.trim().to_string());
             crate::i18n::tr_format!("Profile: {} (lens database)", name)
@@ -226,6 +227,17 @@ mod tests {
         // the database's name for it, or the file's own without a database (LIGHTCRAFT_LENSFUN_DIR may be set)
         let r = super::readout(&app, &p);
         assert!(r.starts_with("Profile: ") && r.contains("70-200mm f/2.8L IS II USM") && r.ends_with(" (lens database)"), "{r}");
+    }
+
+    /// A profile chosen by hand (issue #1049) is named as chosen, by the name the photo's Lens field now carries.
+    #[test]
+    fn the_optics_readout_names_a_chosen_profile() {
+        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+        let id = app.session.active().expect("a photo");
+        let mut p = (**app.session.catalog.photo(id).expect("the photo")).clone();
+        p.meta.lens = "Canon EF-S 18-55mm f/3.5-5.6".into();
+        p.embedded_lens = Some(EmbeddedLens { source: LensSource::Chosen, ..Default::default() });
+        assert_eq!(super::readout(&app, &p), "Profile: Canon EF-S 18-55mm f/3.5-5.6 (chosen)");
     }
 
     /// A first-run download that failed says so, instead of "no profile" for every lens.
