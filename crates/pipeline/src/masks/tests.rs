@@ -764,3 +764,56 @@ fn alpha_cache_is_tied_to_the_mattes() {
     assert_eq!(c.take(Some(&a)).len(), 1);
     assert!(c.is_empty());
 }
+
+#[cfg(test)]
+mod refinement_regression {
+    use super::*;
+    #[test]
+    fn packed_and_reused_refinement_preserves_finite_bits() {
+        for (w, h, sigma) in [(121, 83, 1.0), (399, 267, 11.7), (601, 403, 60.0)] {
+            let guide = Plane::from_fn(w, h, |x, y| ((x * 17 + y * 23) % 103) as f32 / 19.0 - 3.0);
+            let p = Plane::from_fn(w, h, |x, y| ((x * 7 + y * 11) % 97) as f32 / 97.0);
+            let expected = guided_cross_reference(&guide, &p, sigma, 0.02);
+            let mut cache = RefinementCache::default();
+            for (gkey, pkey) in [(1, 1), (1, 2), (2, 2), (2, 2)] {
+                let result = guided_cross_cached(&guide, &p, sigma, 0.02, &mut cache, gkey, Some(pkey));
+                for (actual, reference) in result.data.iter().zip(&expected.data) {
+                    assert_eq!(actual.to_bits(), reference.to_bits());
+                }
+                assert!(cache.bytes() <= REFINEMENT_BYTES);
+            }
+        }
+    }
+}
+#[cfg(test)]
+mod special_value_refinement_regression {
+    use super::*;
+    #[test]
+    // NaN payload propagation is not part of the grouped-filter contract. All
+    // other results, including signed zero and infinities, must retain their bits.
+    fn special_value_refinement_matches_scalar_values_and_classes() {
+        let vals = [-0.0, 0.0, 1.0, -1.0, f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(0x7fc00001), f32::from_bits(0xffc00002)];
+        for (w, h, sigma) in [(17, 9, 0.0), (33, 65, 1.0), (65, 33, 11.7)] {
+            for mode in 0..3 {
+                let guide =
+                    Plane::from_fn(
+                        w,
+                        h,
+                        |x, y| if mode == 0 { ((x * 17 + y * 23) % 103) as f32 / 19.0 - 3.0 } else { vals[(x + y * 3) % vals.len()] },
+                    );
+                let p = Plane::from_fn(w, h, |x, y| if mode == 1 { ((x * 7 + y * 11) % 97) as f32 / 97.0 } else { vals[(x * 3 + y) % vals.len()] });
+                let expected = guided_cross_reference(&guide, &p, sigma, 0.02);
+                let mut cache = RefinementCache::default();
+                for (gkey, pkey) in [(1, 1), (1, 2), (2, 2), (2, 2)] {
+                    let result = guided_cross_cached(&guide, &p, sigma, 0.02, &mut cache, gkey, Some(pkey));
+                    for (i, (a, b)) in result.data.iter().zip(&expected.data).enumerate() {
+                        assert!(
+                            a.is_nan() && b.is_nan() || a.to_bits() == b.to_bits(),
+                            "w={w} h={h} sigma={sigma} mode={mode} gkey={gkey} pkey={pkey} pixel={i}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

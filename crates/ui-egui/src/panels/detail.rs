@@ -290,7 +290,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     } else {
         Vec::new()
     };
-    let windows = request_windows(app, &window_ctx, window_views);
+    let windows = request_windows(app, ui.ctx(), &window_ctx, window_views);
     let single = hover_key.is_none() && !split && !show_before && !split_view && !interacting;
     let camera_full = request_camera_full(app, &photo, single && !windows.is_empty(), native_long.min(texture_side));
     let p = ui.painter_at(canvas);
@@ -383,6 +383,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !fullscreen {
         photo.preview_only.as_deref().inspect(|why| preview_only_pill(ui, canvas, why));
     }
+    windows
+        .iter()
+        .find_map(|(view, _)| app.renderer.failure_of(if view.before { Slot::RegionBefore } else { Slot::Region }, id))
+        .inspect(|error| info::region_failure_notice(ui, canvas, error, app.ui.navigator && !fullscreen));
     loupe_context_menu(app, &resp, id);
 }
 
@@ -671,10 +675,15 @@ fn proof_surround(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, canvas: Re
 }
 
 /// Request the window renders, remember which sides have one, and release the slot of a side without.
-fn request_windows(app: &mut LightcraftApp, ctx: &WindowCtx, views: Vec<WindowView>) -> Vec<(WindowView, crate::region::RegionView)> {
+fn request_windows(
+    app: &mut LightcraftApp,
+    ui_ctx: &egui::Context,
+    ctx: &WindowCtx,
+    views: Vec<WindowView>,
+) -> Vec<(WindowView, crate::region::RegionView)> {
     let mut windows: Vec<(WindowView, crate::region::RegionView)> = Vec::new();
     for v in views {
-        if let Some(view) = request_window(app, ctx, &v) {
+        if let Some(view) = request_window(app, ui_ctx, ctx, &v) {
             windows.push((v, view));
         }
     }

@@ -49,7 +49,7 @@ pub(super) struct WindowView {
 
 /// Ask for the window of `v` that holds what is on screen; remember it so its texture can be
 /// drawn where it belongs. `None`: no window is wanted (or possible) for this view.
-pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowView) -> Option<crate::region::RegionView> {
+pub(super) fn request_window(app: &mut LightcraftApp, ctx: &egui::Context, c: &WindowCtx, v: &WindowView) -> Option<crate::region::RegionView> {
     let frame_edge = c.frame_edge?;
     // while a pinch or scroll runs the windows there are keep being drawn, magnified: no new one
     // per frame (zooming out would ask for ever wider ones)
@@ -102,9 +102,11 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     let look = job.settings.hash64() ^ overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
     let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
     // windows of other photos, looks and zooms of this side can't be drawn any more
-    app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
+    app.region_tiles.retain(|(before, key), t| {
+        *before != v.before || (t.is_current(c.id, (fw, fh), look, c.interacting) && (Some(*key) == shown || *key == job.key))
+    });
     app.region_tiles.insert((v.before, job.key), view);
-    app.renderer.request(v.slot, job, 99);
+    app.renderer.request_window(ctx, v.slot, job, 99);
     Some(view)
 }
 

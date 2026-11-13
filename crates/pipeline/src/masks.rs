@@ -130,6 +130,14 @@ impl Mattes {
             _ => Vec::new(),
         }
     }
+
+    /// Whether evaluation uses a supplied matte instead of a spatial heuristic.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn uses_matte(&self, shape: &MaskShape) -> bool {
+        // Background evaluates Subject and then inverts its alpha.
+        let shape = if matches!(shape, MaskShape::Background) { &MaskShape::Subject } else { shape };
+        !self.for_shape(shape).is_empty()
+    }
 }
 
 pub struct Evaluated {
@@ -175,17 +183,18 @@ pub struct AlphaKeys {
 pub struct AlphaCache<P = Plane> {
     mattes: Option<Arc<Mattes>>,
     slots: Vec<(u64, Arc<P>)>,
+    refinement: RefinementCache,
 }
 
 impl<P> Clone for AlphaCache<P> {
     fn clone(&self) -> Self {
-        AlphaCache { mattes: self.mattes.clone(), slots: self.slots.clone() }
+        AlphaCache { mattes: self.mattes.clone(), slots: self.slots.clone(), refinement: self.refinement.clone() }
     }
 }
 
 impl<P> Default for AlphaCache<P> {
     fn default() -> Self {
-        AlphaCache { mattes: None, slots: Vec::new() }
+        AlphaCache { mattes: None, slots: Vec::new(), refinement: RefinementCache::default() }
     }
 }
 
@@ -199,7 +208,12 @@ impl<P> AlphaCache<P> {
             _ => false,
         };
         let slots = std::mem::take(&mut self.slots);
-        if same { slots } else { Vec::new() }
+        if same {
+            slots
+        } else {
+            self.refinement = RefinementCache::default();
+            Vec::new()
+        }
     }
 
     /// Hold `slots` (the alphas a render with `mattes` used), dropping everything else.
@@ -211,6 +225,11 @@ impl<P> AlphaCache<P> {
     /// The alphas held.
     pub fn planes(&self) -> impl Iterator<Item = &Arc<P>> {
         self.slots.iter().map(|(_, p)| p)
+    }
+
+    /// CPU refinement intermediates, included in the stage cache's byte count.
+    pub fn refinement_planes(&self) -> impl Iterator<Item = &Arc<Plane>> {
+        self.refinement.guide.iter().flat_map(|(_, _, a, b)| [a, b]).chain(self.refinement.means.iter().map(|(_, _, p)| p))
     }
 
     pub fn len(&self) -> usize {
@@ -256,7 +275,7 @@ impl<H: std::hash::Hasher> std::fmt::Write for HashWrite<'_, H> {
 }
 
 /// The key of mask `m`'s alpha in a render with `keys` and global exposure `ev`: everything
-/// [`evaluate_one`] reads — its components, Refine Edges, Invert and Amount, the frame its
+/// [`evaluate_one`] reads: its components, Refine Edges, Invert and Amount, the frame its
 /// coordinates are on ([`Mask::on_photo`]: on the photo before the warp, or an old mask's corrected
 /// frame), the render's frame, and the image and exposure for the masks that read them ([`reads`]).
 /// Not its other sliders, its components' names, its name or id.
@@ -294,6 +313,15 @@ pub fn evaluate_cached(
     cache: &mut AlphaCache,
 ) -> Vec<Evaluated> {
     let old = cache.take(mattes);
+    let mut refinement = std::mem::take(&mut cache.refinement);
+    // Means of geometric masks survive WB/NR edits; means of image-dependent
+    // shapes use the same dependency classifier as their unrefined alphas.
+    let mean_keys: Vec<_> =
+        masks.iter().filter(|m| m.visible && !m.components.is_empty() && m.refine > 0.0).map(|m| refinement_mean_key(m, keys, ev)).collect();
+    refinement.means.retain(|(k, _, _)| mean_keys.contains(k));
+    if mean_keys.is_empty() {
+        refinement.guide = None;
+    }
     let mut used = Vec::new();
     let out = masks
         .iter()
@@ -302,13 +330,14 @@ pub fn evaluate_cached(
             let key = alpha_key(m, keys, ev);
             let alpha = match old.iter().find(|(k, _)| *k == key) {
                 Some((_, a)) => a.clone(),
-                None => Arc::new(evaluate_one(m, frame, w, h, img, log_l, ev, mattes.map(|a| &**a))),
+                None => Arc::new(evaluate_one_with_refinement(m, frame, w, h, img, log_l, ev, mattes.map(|a| &**a), &mut refinement, keys)),
             };
             used.push((key, alpha.clone()));
             Evaluated { id: m.id, alpha, adjust: m.adjust }
         })
         .collect();
     cache.keep(mattes, used);
+    cache.refinement = refinement;
     out
 }
 
@@ -333,6 +362,24 @@ fn map_rows(p: &mut Plane, f: impl Fn(&mut f32) + Sync + Send) {
 /// scaled by its amount.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
+    evaluate_one_with_refinement(m, frame, w, h, img, log_l, ev, mattes, &mut RefinementCache::default(), AlphaKeys { geo: 0, image: 0 })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_one_with_refinement(
+    m: &Mask,
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    img: &Rgb32f,
+    log_l: &Plane,
+    ev: f32,
+    mattes: Option<&Mattes>,
+    refinement: &mut RefinementCache,
+    keys: AlphaKeys,
+) -> Plane {
+    #[cfg(target_arch = "wasm32")]
+    let _ = (refinement, keys);
     // its coordinates on the photo before the warp, or (an old mask) on the corrected frame
     let frame = &*frame.for_mask(m.on_photo);
     let mut alpha = Plane::new(w, h);
@@ -359,7 +406,18 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
         // the width of a soft brush edge or gradient)
         let k = (m.refine / 100.0).clamp(0.0, 1.0) as f32;
         let sigma = (0.04 * frame.output_long(w, h) as f32 * k).max(1.0);
+        #[cfg(target_arch = "wasm32")]
         let refined = guided_cross(log_l, &alpha, sigma, 0.02);
+        #[cfg(not(target_arch = "wasm32"))]
+        let refined = guided_cross_cached(
+            log_l,
+            &alpha,
+            sigma,
+            0.02,
+            refinement,
+            crate::hash_of((keys.geo, keys.image)),
+            Some(refinement_mean_key(m, keys, ev)),
+        );
         let t = k.sqrt();
         zip_rows(&mut alpha, &refined, |a, r| *a += (r - *a) * t);
     }
@@ -536,9 +594,21 @@ impl SegGrid {
     /// Output pixels per grid cell (the longer side of a cell: the grid is square over a
     /// rectangle).
     fn cell_px(&self, frame: &Frame, w: usize) -> f64 {
-        let px = frame.px_per_long(w) / frame.ow.max(frame.oh).max(1e-9);
-        ((self.r[2] - self.r[0]) * frame.ow).max((self.r[3] - self.r[1]) * frame.oh) * px / self.side.max(1) as f64
+        cell_px(self.r, self.side, frame, w)
     }
+}
+
+fn cell_px(r: [f64; 4], side: usize, frame: &Frame, w: usize) -> f64 {
+    let px = frame.px_per_long(w) / frame.ow.max(frame.oh).max(1e-9);
+    ((r[2] - r[0]) * frame.ow).max((r[3] - r[1]) * frame.oh) * px / side.max(1) as f64
+}
+
+/// The guided filter's sigma that [`sample_seg`] applies to these grids at an output `w` px wide
+/// (`None`: no filter), so a window can carry its context.
+pub(crate) fn seg_sigma(seg: Option<&SegMask>, detail: &[SegMask], frame: &Frame, w: usize) -> Option<f32> {
+    let grids = seg.into_iter().chain(detail.iter().take(lightcraft_develop::segmask::MAX_DETAIL));
+    let cell = grids.filter_map(|g| Some(cell_px(g.bounds()?, g.side as usize, frame, w))).fold(0.0, f64::max);
+    (cell >= 1.0).then_some((SEG_WINDOW * cell) as f32)
 }
 
 /// [`sample_seg`]'s window, in grid cells (Gaussian sigma): the width of the band bilinear
@@ -583,7 +653,8 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
     // (the coarsest grid sets the window: it leaves the widest uncertain band)
     let cell = coarse.iter().chain(&patches).map(|g| g.cell_px(frame, w)).fold(0.0, f64::max);
     if cell >= 1.0 {
-        guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
+        // (a window fits on the whole frame's reduced grid: its contour lands where the full render's does)
+        guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, frame.view, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
     }
     out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
 }
@@ -592,6 +663,13 @@ fn frame_px(frame: &Frame, w: usize) -> f32 {
     frame.px_per_long(w) as f32
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn smooth_plane(p: &mut Plane, sigma: f32) {
+    let owned = std::mem::replace(p, Plane::new(0, 0));
+    *p = lightcraft_raster::blur::gaussian_owned(owned, sigma.max(0.5));
+}
+
+#[cfg(target_arch = "wasm32")]
 fn smooth_plane(p: &mut Plane, sigma: f32) {
     *p = lightcraft_raster::blur::gaussian(p, sigma.max(0.5));
 }
@@ -949,6 +1027,13 @@ fn guided_coeffs(guide: &Plane, p: &Plane, sigma: f32, eps: f32, with_edge: bool
 
 /// Guided filter of `p` steered by `guide` (He et al.), clamped to 0..1: `p`'s edges snap to the
 /// guide's.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+    guided_cross_cached(guide, p, sigma, eps, &mut RefinementCache::default(), 0, None)
+}
+
+// Keep main's separate scalar buffers on wasm32.
+#[cfg(target_arch = "wasm32")]
 pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
     let g = guided_coeffs(guide, p, sigma, eps, false);
     let mut q = Plane::new(p.width, p.height);
@@ -967,26 +1052,34 @@ pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
 /// edge the guide has there (0 keeps it exactly: where the photo is flat the filter could only
 /// blur `p`). Extra memory: the reduced planes only (the coefficients are sampled per pixel, not
 /// enlarged into planes).
-fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight: impl Fn(f32) -> f32 + Sync + Send) {
-    use lightcraft_raster::resample::{Filter, resize};
+///
+/// A partial `view` of the output fits the model on the whole frame's reduced grid (its scale and
+/// phase, [`crate::local::GuidedGrid`]), given the context `window::margin` adds.
+fn guided_cross_fast(
+    guide: &Plane,
+    p: &mut Plane,
+    sigma: f32,
+    eps: f32,
+    view: Option<crate::geometry::ViewWindow>,
+    weight: impl Fn(f32) -> f32 + Sync + Send,
+) {
     let (w, h) = (p.width, p.height);
     if guide.width != w || guide.height != h || w == 0 || h == 0 || !sigma.is_finite() {
         return;
     }
+    let (fw, fh) = view.map_or((w, h), |v| (v.full_w as usize, v.full_h as usize));
     // (a window past the whole frame fits one model to it all)
-    let sigma = sigma.clamp(0.5, w.max(h) as f32);
+    let sigma = sigma.clamp(0.5, fw.max(fh).max(1) as f32);
     let s = crate::local::guided_fast_step(sigma);
-    let (lw, lh) = (w.div_ceil(s).max(1), h.div_ceil(s).max(1));
-    let g = guided_coeffs(&resize(guide, lw, lh, Filter::Box), &resize(p, lw, lh, Filter::Box), sigma / s as f32, eps, true);
+    let (lo_guide, lo_p, ((kx, ky), (ox, oy), (cx, cy))) = reduce_for_view(guide, p, s, view);
+    let g = guided_coeffs(&lo_guide, &lo_p, sigma / s as f32, eps, true);
     let Some(edge) = &g.edge else {
         return;
     };
-    // (the reduced planes span the same frame: their pixel per full pixel)
-    let (kx, ky) = (lw as f32 / w as f32, lh as f32 / h as f32);
     for_rows(&mut p.data, w, |y, row| {
-        let fy = (y as f32 + 0.5) * ky;
+        let fy = ((oy + y) as f32 + 0.5) * ky - cy;
         for (x, (v, i)) in row.iter_mut().zip(guide.row(y)).enumerate() {
-            let fx = (x as f32 + 0.5) * kx;
+            let fx = ((ox + x) as f32 + 0.5) * kx - cx;
             let k = weight(bilinear(&g.mean, fx, fy));
             // (no edge in the photo: nothing to follow, keep the sample)
             let k = if k > 0.0 { k * smooth(0.05, 1.0, bilinear(edge, fx, fy)) } else { 0.0 };
@@ -1021,6 +1114,158 @@ pub fn brush_over_budget(strokes: &[BrushStroke], frame: &Frame, w: usize, h: us
         room -= n;
     }
     false
+}
+
+/// Where a buffer's pixels fall on its reduced planes: reduced pixels per pixel, the buffer's origin
+/// in full-frame pixels, and the first reduced cell it holds.
+type Placement = ((f32, f32), (usize, usize), (f32, f32));
+
+/// `guide` and `p` box-reduced by `s`. A partial `view` reduces on the whole frame's grid, so its
+/// cells are the full render's.
+fn reduce_for_view(guide: &Plane, p: &Plane, s: usize, view: Option<crate::geometry::ViewWindow>) -> (Plane, Plane, Placement) {
+    use lightcraft_raster::resample::{Filter, resize};
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(v) = view
+        && let Some(grid) = crate::local::GuidedGrid::for_window(p.width, p.height, s, Some(v))
+    {
+        let (fw, fh) = (v.full_w as usize, v.full_h as usize);
+        let k = (fw.div_ceil(s) as f32 / fw as f32, fh.div_ceil(s) as f32 / fh as f32);
+        let at = ((v.x as usize, v.y as usize), (grid.first[0] as f32, grid.first[1] as f32));
+        return (crate::sampling::resize(guide, &grid.down), crate::sampling::resize(p, &grid.down), (k, at.0, at.1));
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = view;
+    let (w, h) = (p.width, p.height);
+    let (lw, lh) = (w.div_ceil(s).max(1), h.div_ceil(s).max(1));
+    // (the reduced planes span the same frame: their pixel per full pixel)
+    (resize(guide, lw, lh, Filter::Box), resize(p, lw, lh, Filter::Box), ((lw as f32 / w as f32, lh as f32 / h as f32), (0, 0), (0.0, 0.0)))
+}
+
+/// At most 512 MiB per stage entry (two entries per view). No extra buffers
+/// survive eviction, hiding the masks, changing supplied mattes or clearing stages.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+const REFINEMENT_BYTES: usize = 512 * 1024 * 1024;
+
+#[derive(Clone, Default)]
+struct RefinementCache {
+    guide: Option<(u64, u32, Arc<Plane>, Arc<Plane>)>,
+    means: Vec<(u64, u32, Arc<Plane>)>,
+}
+
+#[cfg(any(test, not(target_arch = "wasm32")))]
+impl RefinementCache {
+    fn bytes(&self) -> usize {
+        self.guide.as_ref().map_or(0, |(_, _, a, b)| (a.len() + b.len()) * 4) + self.means.iter().map(|(_, _, p)| p.len() * 4).sum::<usize>()
+    }
+    fn trim(&mut self) {
+        while self.bytes() > REFINEMENT_BYTES && !self.means.is_empty() {
+            self.means.remove(0);
+        }
+        if self.bytes() > REFINEMENT_BYTES {
+            self.guide = None;
+        }
+    }
+}
+
+fn refinement_mean_key(m: &Mask, keys: AlphaKeys, ev: f32) -> u64 {
+    let mut shape = m.clone();
+    shape.refine = 0.0;
+    alpha_key(&shape, keys, ev)
+}
+
+/// Independent channels share a blur traversal. Every channel retains the
+/// scalar filter's pass order, band origins and arithmetic. This makes the
+/// horizontal recurrence vectorizable without changing V1/V2 pixels. Finite
+/// values (including signed zero) retain their bits; NaN payloads may differ.
+#[allow(clippy::too_many_arguments)]
+#[cfg(any(test, not(target_arch = "wasm32")))]
+fn guided_cross_cached(guide: &Plane, p: &Plane, sigma: f32, eps: f32, cache: &mut RefinementCache, guide_key: u64, mean_key: Option<u64>) -> Plane {
+    use lightcraft_raster::blur::gaussian_owned;
+    let sig = sigma.to_bits();
+    let old_guide = cache.guide.as_ref().filter(|(k, s, _, _)| *k == guide_key && *s == sig).map(|(_, _, a, b)| (a.clone(), b.clone()));
+    let old_mean = mean_key.and_then(|key| cache.means.iter().find(|(k, s, _)| *k == key && *s == sig).map(|(_, _, p)| p.clone()));
+    let (mi, cii, mp, cip) = match (old_guide, old_mean) {
+        (None, None) => {
+            let stats = gaussian_owned(guide.zip_map(p, |i, p| [i, i * i, p, i * p]), sigma);
+            (Arc::new(stats.map(|v| v[0])), Arc::new(stats.map(|v| v[1])), Arc::new(stats.map(|v| v[2])), stats.map(|v| v[3]))
+        }
+        (None, Some(mp)) => {
+            let stats = gaussian_owned(guide.zip_map(p, |i, p| [i, i * i, i * p]), sigma);
+            (Arc::new(stats.map(|v| v[0])), Arc::new(stats.map(|v| v[1])), mp, stats.map(|v| v[2]))
+        }
+        (Some((mi, cii)), None) => {
+            let stats = gaussian_owned(guide.zip_map(p, |i, p| [p, i * p]), sigma);
+            (mi, cii, Arc::new(stats.map(|v| v[0])), stats.map(|v| v[1]))
+        }
+        (Some((mi, cii)), Some(mp)) => (mi, cii, mp, gaussian_owned(guide.zip_map(p, |i, p| i * p), sigma)),
+    };
+    cache.guide = Some((guide_key, sig, mi.clone(), cii.clone()));
+    if let Some(key) = mean_key {
+        cache.means.retain(|(k, _, _)| *k != key);
+        cache.means.push((key, sig, mp.clone()));
+    }
+    cache.trim();
+    let mut ab = Image::<[f32; 2]>::new(p.width, p.height);
+    for_rows(&mut ab.data, p.width, |y, row| {
+        let range = y * p.width..y * p.width + row.len();
+        let (Some(mi), Some(cii), Some(mp), Some(cip)) =
+            (mi.data.get(range.clone()), cii.data.get(range.clone()), mp.data.get(range.clone()), cip.data.get(range))
+        else {
+            return;
+        };
+        for (out, (((mi, cii), mp), cip)) in row.iter_mut().zip(mi.iter().zip(cii).zip(mp).zip(cip)) {
+            let var = (cii - mi * mi).max(0.0);
+            let a = (cip - mi * mp) / (var + eps);
+            *out = [a, mp - a * mi];
+        }
+    });
+    drop((mi, cii, mp, cip));
+    let ab = gaussian_owned(ab, sigma);
+    guide.zip_map(&ab, |i, v| (v[0] * i + v[1]).clamp(0.0, 1.0))
+}
+
+#[cfg(test)]
+fn guided_cross_reference(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+    use lightcraft_raster::blur::{gaussian, gaussian_owned};
+    let mi = gaussian(guide, sigma);
+    let mp = gaussian(p, sigma);
+    let cip = gaussian_owned(guide.zip_map(p, |a, b| a * b), sigma);
+    let cii = gaussian_owned(guide.map(|a| a * a), sigma);
+    let w = p.width;
+    let rows = |y: usize, len: usize| y * w..y * w + len;
+    // a = cov(I, p) / (var(I) + eps), b = mean(p) − a · mean(I)
+    // Reuse the covariance buffer for coefficients, then release each input after its last read.
+    let mut a = cip;
+    for_rows(&mut a.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(cii), Some(mi), Some(mp)) = (cii.data.get(r.clone()), mi.data.get(r.clone()), mp.data.get(r)) else {
+            return;
+        };
+        for (k, ((cii, mi), mp)) in row.iter_mut().zip(cii.iter().zip(mi).zip(mp)) {
+            let var = (cii - mi * mi).max(0.0);
+            *k = (*k - mi * mp) / (var + eps);
+        }
+    });
+    drop(cii);
+    let mut b = mp;
+    for_rows(&mut b.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(ks), Some(mi)) = (a.data.get(r.clone()), mi.data.get(r)) else { return };
+        for (b, (k, mi)) in row.iter_mut().zip(ks.iter().zip(mi)) {
+            *b -= k * mi;
+        }
+    });
+    drop(mi);
+    let ma = gaussian_owned(a, sigma);
+    let mut q = gaussian_owned(b, sigma);
+    for_rows(&mut q.data, w, |y, row| {
+        let r = rows(y, row.len());
+        let (Some(ma), Some(g)) = (ma.data.get(r.clone()), guide.data.get(r)) else { return };
+        for (q, (a, g)) in row.iter_mut().zip(ma.iter().zip(g)) {
+            *q = (a * g + *q).clamp(0.0, 1.0);
+        }
+    });
+    q
 }
 
 /// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight

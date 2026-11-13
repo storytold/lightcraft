@@ -17,7 +17,7 @@ fn on(process: Process, amount: f64) -> DevelopSettings {
 fn luma(src: &Rgb32f, s: &DevelopSettings, w: usize, h: usize) -> Vec<f64> {
     let mut req = RenderRequest::fit(w, h);
     req.depth = OutputDepth::U16;
-    let r = render(src, &SourceInfo::default(), s, &req);
+    let r = render(src, &SourceInfo::default(), s, &req).unwrap();
     let Some(crate::DeepSamples::U16(v)) = r.deep.map(|d| d.samples) else { panic!("no 16-bit render") };
     v.chunks(3).map(|p| (0.2126 * p[0] as f64 + 0.7152 * p[1] as f64 + 0.0722 * p[2] as f64) / 257.0).collect()
 }

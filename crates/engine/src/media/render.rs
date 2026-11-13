@@ -375,8 +375,8 @@ impl RenderJob {
                     self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
                 let frame = (self.on_screen && !pixels_needed && gpu)
                     .then(|| develop_on_screen(src, &info, &self.settings, &request, self.stages.as_deref()));
-                let (mut rendered, gpu_fallback) = match frame {
-                    Some(OnScreen::Frame(frame, histogram)) => {
+                let developed = match frame {
+                    Some(Ok(OnScreen::Frame(frame, histogram))) => {
                         return RenderResult {
                             request_id: self.request_id,
                             source_key: self.source_key,
@@ -395,8 +395,27 @@ impl RenderJob {
                             frame: Some(frame),
                         };
                     }
-                    Some(OnScreen::Pixels(r)) => (r, None),
+                    Some(Ok(OnScreen::Pixels(r))) => Ok((r, None)),
+                    Some(Err(error)) => Err(error),
                     None => develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu),
+                };
+                let (mut rendered, gpu_fallback) = match developed {
+                    Ok(result) => result,
+                    Err(error) => {
+                        return RenderResult {
+                            request_id: self.request_id,
+                            source_key: self.source_key,
+                            photo: self.photo,
+                            level: self.level,
+                            key: self.key,
+                            rendered: Err(error),
+                            gpu_fallback: None,
+                            loaded: (!was_loaded).then_some(source),
+                            quick: None,
+                            display: None,
+                            frame: None,
+                        };
+                    }
                 };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
@@ -518,8 +537,15 @@ fn shrink_rgba(img: &Rgba8, nw: usize, nh: usize) -> Rgba8 {
 /// Render `src`: on the GPU when `gpu` is set and a GPU is available (`lightcraft_gpu`), else on
 /// the CPU, reusing `stages` either way. Both produce the same image within 1–3 LSB (see
 /// `docs/gpu-pipeline.md`); `LIGHTCRAFT_GPU=0` or [`lightcraft_gpu::set_enabled`] forces the CPU.
-pub fn develop(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>, gpu: bool) -> Rendered {
-    develop_reporting(src, info, s, req, stages, gpu).0
+pub fn develop(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    gpu: bool,
+) -> Result<Rendered, String> {
+    develop_reporting(src, info, s, req, stages, gpu).map(|r| r.0)
 }
 
 /// [`develop`], also saying why the render fell back from the GPU to the CPU when it did (`None`:
@@ -532,13 +558,13 @@ pub fn develop_reporting(
     req: &RenderRequest,
     stages: Option<&StageCache>,
     gpu: bool,
-) -> (Rendered, Option<String>) {
-    let (mut rendered, fallback) = develop_image(src, info, s, req, stages, gpu);
+) -> Result<(Rendered, Option<String>), String> {
+    let (mut rendered, fallback) = develop_image(src, info, s, req, stages, gpu)?;
     // an HDR edit's preview is its SDR rendition: its histogram shows the HDR range instead
     if let Some(h) = lightcraft_pipeline::hdr_histogram(src, info, s, req) {
         rendered.histogram = h;
     }
-    (rendered, fallback)
+    Ok((rendered, fallback))
 }
 
 fn develop_image(
@@ -548,11 +574,11 @@ fn develop_image(
     req: &RenderRequest,
     stages: Option<&StageCache>,
     gpu: bool,
-) -> (Rendered, Option<String>) {
+) -> Result<(Rendered, Option<String>), String> {
     // (LUT profiles, Refine Edges and soft proofs render on the GPU too)
     let fallback = if gpu {
         match lightcraft_gpu::try_render(src, info, s, req, stages) {
-            Ok(r) => return (r, None),
+            Ok(r) => return Ok((r, None)),
             Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
             Err(lightcraft_gpu::Fallback::NotTried) => None,
         }
@@ -562,8 +588,8 @@ fn develop_image(
     let rendered = match stages {
         Some(st) => lightcraft_pipeline::render_cached(src, info, s, req, st),
         None => lightcraft_pipeline::render(src, info, s, req),
-    };
-    (rendered, fallback)
+    }?;
+    Ok((rendered, fallback))
 }
 
 /// What [`develop_on_screen`] made.
@@ -577,21 +603,27 @@ enum OnScreen {
 
 /// [`develop`] for a render that is only drawn: a texture on the window's device when the GPU
 /// renderer can hand one over, else the pixels.
-fn develop_on_screen(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> OnScreen {
+fn develop_on_screen(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+) -> Result<OnScreen, String> {
     #[cfg(not(target_arch = "wasm32"))]
     match lightcraft_gpu::render_display(src, info, s, req, stages) {
         // an HDR edit's histogram shows the HDR range, as `develop_reporting` gives it
         Some(lightcraft_gpu::Output::Display { frame, histogram }) => {
-            OnScreen::Frame(frame, lightcraft_pipeline::hdr_histogram(src, info, s, req).unwrap_or(histogram))
+            Ok(OnScreen::Frame(frame, lightcraft_pipeline::hdr_histogram(src, info, s, req).unwrap_or(histogram)))
         }
         Some(lightcraft_gpu::Output::Image(mut r)) => {
             if let Some(h) = lightcraft_pipeline::hdr_histogram(src, info, s, req) {
                 r.histogram = h;
             }
-            OnScreen::Pixels(r)
+            Ok(OnScreen::Pixels(r))
         }
-        None => OnScreen::Pixels(develop(src, info, s, req, stages, false)),
+        None => develop(src, info, s, req, stages, false).map(OnScreen::Pixels),
     }
     #[cfg(target_arch = "wasm32")]
-    OnScreen::Pixels(develop(src, info, s, req, stages, false))
+    develop(src, info, s, req, stages, false).map(OnScreen::Pixels)
 }

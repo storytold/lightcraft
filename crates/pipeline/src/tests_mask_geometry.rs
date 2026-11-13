@@ -70,7 +70,7 @@ fn luma(img: &Rgba8, i: usize) -> f64 {
 fn mark_at(s: &DevelopSettings) -> (f64, f64) {
     let req = RenderRequest::fit(W, H);
     let info = SourceInfo::default();
-    let (a, b) = (render(&marked(true), &info, s, &req).image, render(&marked(false), &info, s, &req).image);
+    let (a, b) = (render(&marked(true), &info, s, &req).unwrap().image, render(&marked(false), &info, s, &req).unwrap().image);
     centroid(a.width, (0..a.data.len()).map(|i| above_dither(luma(&a, i) - luma(&b, i))))
 }
 
@@ -136,12 +136,14 @@ fn check(name: &str, shape: MaskShape) {
         let mut s = with_mask(shape.clone());
         // a view that rendered the photo before the change (its stage cache holds the mask)
         let cache = StageCache::default();
-        render_cached(&src, &info, &s, &req, &cache);
+        render_cached(&src, &info, &s, &req, &cache).unwrap();
         change(&mut s);
         let plain = DevelopSettings { masks: Vec::new(), ..s.clone() };
-        let p = render(&src, &info, &plain, &req).image;
+        let p = render(&src, &info, &plain, &req).unwrap().image;
         let mark = mark_at(&plain);
-        for (how, m) in [("fresh", render(&src, &info, &s, &req).image), ("cached", render_cached(&src, &info, &s, &req, &cache).image)] {
+        for (how, m) in
+            [("fresh", render(&src, &info, &s, &req).unwrap().image), ("cached", render_cached(&src, &info, &s, &req, &cache).unwrap().image)]
+        {
             let at = mask_at(&m, &p);
             let d = ((at.0 - mark.0).powi(2) + (at.1 - mark.1).powi(2)).sqrt();
             assert!(d < 2.0, "{name} after {what} ({how}): the mask's effect is at {at:?}, the mark at {mark:?}");
@@ -182,8 +184,8 @@ fn an_old_mask_stays_where_it_was_drawn_on_the_corrected_frame() {
     s.geometry.vertical = 25.0;
     s.geometry.rotate = 6.0;
     let unmasked = DevelopSettings { masks: Vec::new(), ..s.clone() };
-    let plain = render(&src, &info, &unmasked, &req).image;
-    let at = mask_at(&render(&src, &info, &s, &req).image, &plain);
+    let plain = render(&src, &info, &unmasked, &req).unwrap().image;
+    let at = mask_at(&render(&src, &info, &s, &req).unwrap().image, &plain);
     let frame = crate::geometry::Frame::new(W, H, &s, true);
     let (w, h) = frame.fit(W, H);
     let want = frame.norm_to_out(w, h).apply(Point::new(MARK.0, MARK.1));

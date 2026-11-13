@@ -37,7 +37,7 @@ fn check_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     let mut s = DevelopSettings { process: Process::V4.version(), ..Default::default() };
     s.light.contrast = 100.0;
     s.light.blacks = 80.0;
-    let image = render(&src, &info, &s, &RenderRequest::fit(64, 64)).image;
+    let image = render(&src, &info, &s, &RenderRequest::fit(64, 64)).unwrap().image;
     // (8-bit output is dithered: a flat source varies by a level)
     assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
     for (actual, expected) in image.data[0].into_iter().zip(expected) {
@@ -68,7 +68,7 @@ fn fnv(hash: &mut u64, bytes: impl IntoIterator<Item = u8>) {
 }
 
 fn render_hash(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> u64 {
-    let r = render(src, info, s, req);
+    let r = render(src, info, s, req).unwrap();
     let mut h = 0xCBF2_9CE4_8422_2325u64;
     fnv(&mut h, r.image.data.iter().flatten().copied());
     match r.deep.map(|d| d.samples) {
@@ -298,7 +298,7 @@ fn v3_sliders_move_a_grey_ramp_their_way() {
         let mut s = DevelopSettings::default();
         assert!(s.process.process() >= Process::V4, "the default process has the V4 sliders");
         controls::set(&mut s, id, v);
-        let r = render(&ramp, &camera_look(), &s, &RenderRequest::fit(256, 8)).image;
+        let r = render(&ramp, &camera_look(), &s, &RenderRequest::fit(256, 8)).unwrap().image;
         (0..256).map(|x| r.get(x, 4)).collect::<Vec<[u8; 4]>>()
     };
     let plain = shot("light.exposure", 0.0);
@@ -391,11 +391,11 @@ fn calibrated_operators_match_in_cached_and_windowed_renders() {
     let cache = StageCache::default();
     let req = RenderRequest::fit(1200, 1200);
     for _ in 0..2 {
-        assert!(render_cached(&src, &info, &s, &req, &cache).image == render(&src, &info, &s, &req).image);
+        assert!(render_cached(&src, &info, &s, &req, &cache).unwrap().image == render(&src, &info, &s, &req).unwrap().image);
     }
     let win = PixelWindow { x: 300, y: 200, w: 400, h: 300 };
     let wreq = RenderRequest { window: Some(win), ..req };
-    let (f, w) = (render(&src, &info, &s, &req).image, render_cached(&src, &info, &s, &wreq, &cache).image);
+    let (f, w) = (render(&src, &info, &s, &req).unwrap().image, render_cached(&src, &info, &s, &wreq, &cache).unwrap().image);
     assert!(window_diff(&f, &w, win) <= 1, "the window is the frame's pixels");
 }
 

@@ -603,6 +603,11 @@ fn hue_weight(h: f32, lo: f32, hi: f32) -> f32 {
 /// Long edge (px) at which defringe widths are specified: fringes are 1–7 px wide on a ~4000 px image.
 pub const DEFRINGE_REF_LONG: f64 = 4000.0;
 
+/// Neighbourhood read by Defringe, shared with the window planner. Zero when disabled.
+pub(crate) fn defringe_radius(s: &DevelopSettings, scale: f64) -> usize {
+    defringe_params(s, scale).map_or(0, |p| p.radius)
+}
+
 /// Defringe's resolved parameters (the CPU stage below and the GPU kernels both read these).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DefringeParams {
