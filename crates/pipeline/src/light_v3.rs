@@ -279,12 +279,15 @@ pub struct LightOps {
 pub const FITS: [&Fit; 2] = [&fitted::CONTRAST, &fitted::BLACKS];
 
 /// Whether `s` renders `info` with the V4 operators: process V4 or later and a raw with its camera's tone
-/// curve (other sources keep the tone map's own Contrast and Blacks).
+/// curve (other sources keep the tone map's own Contrast and Blacks), except Apple ProRAW from V9
+/// ([`crate::proraw::active`]).
 pub fn applies(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let camera_look = info.raw && info.camera_tone.is_some();
     match s.process.process() {
         Process::V1 | Process::V2 | Process::V3 => false,
         Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => camera_look,
+        // (Apple ProRAW's Contrast and Blacks run in Lightroom's chain instead)
+        Process::V9 => camera_look && crate::proraw::active(s, info).is_none(),
     }
 }
 
