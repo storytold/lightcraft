@@ -31,13 +31,32 @@ const INPUT_CHUNK: usize = 4096;
 /// within a tracked allocation budget.
 fn open(bytes: &[u8], opts: &DecodeOptions) -> Result<JxlImage> {
     let budget = opts.max_pixels.saturating_mul(TRACKED_BYTES_PER_PIXEL).max(MIN_TRACKED_BYTES);
+    let (mut img, mut rest) = init(bytes, budget)?;
+    check_size(F, img.width() as u64, img.height() as u64, opts)?;
+    // Match `JxlImageBuilder::read`: bounded feeds until the final frame, not merely the first
+    // keyframe. `feed_bytes` copies codestream data into an untracked Vec, including any tail
+    // after the last frame; feeding the remaining file at once bypasses the allocation budget.
+    while !img.is_loading_done() && !rest.is_empty() {
+        let consumed = img.feed_bytes(rest.get(..INPUT_CHUNK).unwrap_or(rest)).map_err(err)?;
+        if consumed == 0 {
+            break;
+        }
+        rest = rest.get(consumed..).unwrap_or_default();
+    }
+    img.finalize().map_err(err)?;
+    Ok(img)
+}
+
+/// Feeds `bytes` in bounded windows until the headers are parsed, with `budget` bytes of tracked
+/// allocations; returns the image and the bytes not fed yet.
+fn init(bytes: &[u8], budget: u64) -> Result<(JxlImage, &[u8])> {
     let tracker = AllocTracker::with_limit(usize::try_from(budget).unwrap_or(usize::MAX));
     let mut uninit = JxlImage::builder().alloc_tracker(tracker).build_uninit();
     // Initialization can load already-buffered frame data, so small feeds limit work before
     // dimension checking.
     let mut rest = bytes;
     let mut window = INPUT_CHUNK;
-    let mut img = loop {
+    let img = loop {
         let consumed = uninit.feed_bytes(rest.get(..window).unwrap_or(rest)).map_err(err)?;
         rest = rest.get(consumed..).unwrap_or_default();
         match uninit.try_init().map_err(err)? {
@@ -52,19 +71,17 @@ fn open(bytes: &[u8], opts: &DecodeOptions) -> Result<JxlImage> {
             window = window.saturating_mul(2);
         }
     };
-    check_size(F, img.width() as u64, img.height() as u64, opts)?;
-    // Match `JxlImageBuilder::read`: bounded feeds until the final frame, not merely the first
-    // keyframe. `feed_bytes` copies codestream data into an untracked Vec, including any tail
-    // after the last frame; feeding the remaining file at once bypasses the allocation budget.
-    while !img.is_loading_done() && !rest.is_empty() {
-        let consumed = img.feed_bytes(rest.get(..INPUT_CHUNK).unwrap_or(rest)).map_err(err)?;
-        if consumed == 0 {
-            break;
-        }
-        rest = rest.get(consumed..).unwrap_or_default();
-    }
-    img.finalize().map_err(err)?;
-    Ok(img)
+    Ok((img, rest))
+}
+
+/// The image's size (orientation applied, as [`decode`] reports it) from its headers alone, no
+/// frame loaded: what a merge's memory plan reads before it decodes anything. Unlike
+/// [`crate::read_header`] (a small decode, as an import validates a file), it doesn't find a
+/// file truncated after its headers.
+pub(crate) fn size(bytes: &[u8]) -> Result<(u32, u32)> {
+    let (img, _) = init(bytes, MIN_TRACKED_BYTES)?;
+    check_size(F, img.width() as u64, img.height() as u64, &DecodeOptions::default())?;
+    Ok((img.width(), img.height()))
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {

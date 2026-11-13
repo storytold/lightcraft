@@ -526,6 +526,8 @@ fn saturation(img: &Rgb32f) -> Vec<f32> {
             *o = src[x.saturating_sub(1)..=(x + 1).min(w - 1)].iter().copied().fold(0.0, f32::max);
         }
     });
+    // every frame's is measured at once: two maps a frame, not three (the merge's memory plan counts two)
+    drop(m);
     let mut out = vec![0f32; w * h];
     out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
         let (a, b) = (y.saturating_sub(1), (y + 1).min(h - 1));

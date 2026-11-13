@@ -156,19 +156,22 @@ pub fn detect_clip(img: &Rgb32f) -> f32 {
 pub type RawColour<'a> = dyn Fn(&mut lightcraft_raw::RawImage, &[u8]) -> Option<ColorData> + Sync + 'a;
 
 /// Decode a photo (raw or standard format) into a frame no larger than `max_edge` (when given).
-/// `orient` applies the EXIF orientation to the pixels.
-pub fn load_frame(bytes: &[u8], max_edge: Option<usize>, orient: bool) -> Result<Frame> {
-    load_frame_with(bytes, max_edge, orient, &|_, _| None)
+/// `preview`: a small preview's frame, whose raw is demosaiced the fast way (bilinear) when it is
+/// at most 1200 px; any other frame, however small `max_edge`, demosaics with AHD. `orient` applies
+/// the EXIF orientation to the pixels.
+pub fn load_frame(bytes: &[u8], max_edge: Option<usize>, preview: bool, orient: bool) -> Result<Frame> {
+    load_frame_with(bytes, max_edge, preview, orient, &|_, _| None)
 }
 
 /// [`load_frame`] with a raw's colour tags from `colour`: a raw without colour matrices of its own
 /// (CR2, NEF, ARW…) starts from a colour the app works out (issue #965).
-pub fn load_frame_with(bytes: &[u8], max_edge: Option<usize>, orient: bool, colour: &RawColour) -> Result<Frame> {
+pub fn load_frame_with(bytes: &[u8], max_edge: Option<usize>, preview: bool, orient: bool, colour: &RawColour) -> Result<Frame> {
     let metadata = lightcraft_meta::extract(bytes);
     let exposure = exif_exposure(&metadata);
     if lightcraft_raw::probe(bytes).is_some() {
         let raw = lightcraft_raw::decode(bytes).map_err(|e| MergeError::Decode(e.to_string()))?;
-        return raw_frame(raw, bytes, metadata, exposure, max_edge, orient, colour);
+        let method = demosaic_method(max_edge, preview);
+        return raw_frame(raw, bytes, metadata, max_edge, method, orient, colour);
     }
     let opts = match max_edge {
         Some(m) => lightcraft_codecs::DecodeOptions::fit(m as u32, m as u32),
@@ -200,14 +203,20 @@ pub fn load_frame_with(bytes: &[u8], max_edge: Option<usize>, orient: bool, colo
     Ok(f)
 }
 
-/// A decoded raw (from `bytes`, which `colour` may read) as a frame: developed to camera RGB, with its colour tags,
-/// its as-shot white-balance multipliers and its orientation.
+/// How a raw for a frame of at most `max_edge` px is demosaiced: bilinear for a small preview's (fast; the preview
+/// is small enough not to show it), AHD for any other, also when memory made a full merge's frames small.
+fn demosaic_method(max_edge: Option<usize>, preview: bool) -> lightcraft_raw::Method {
+    if preview && max_edge.is_some_and(|m| m <= 1200) { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd }
+}
+
+/// A decoded raw (from `bytes`, which `colour` may read) as a frame: developed to camera RGB with `method`, with its
+/// colour tags, its as-shot white-balance multipliers and its orientation.
 fn raw_frame(
     mut raw: RawImage,
     bytes: &[u8],
     metadata: Metadata,
-    exposure: Option<f64>,
     max_edge: Option<usize>,
+    method: lightcraft_raw::Method,
     orient: bool,
     colour: &RawColour,
 ) -> Result<Frame> {
@@ -225,11 +234,10 @@ fn raw_frame(
         })
         .collect();
     raw.opcodes.list3.retain(|op| !op.is_lens_correction());
+    let exposure = exif_exposure(&metadata);
     if let Some(color) = colour(&mut raw, bytes) {
         raw.color = color;
     }
-    let small = max_edge.is_some_and(|m| m <= 1200);
-    let method = if small { lightcraft_raw::Method::Bilinear } else { lightcraft_raw::Method::Ahd };
     let mut image = raw.develop(method).map_err(|e| MergeError::Decode(e.to_string()))?;
     for p in image.data.iter_mut() {
         *p = p.map(|v| v.max(0.0));
@@ -315,7 +323,7 @@ mod tests {
     }
 
     fn frame_of(raw: RawImage, colour: &RawColour) -> Frame {
-        raw_frame(raw, &[], Metadata::default(), None, None, true, colour).unwrap()
+        raw_frame(raw, &[], Metadata::default(), None, lightcraft_raw::Method::Ahd, true, colour).unwrap()
     }
 
     /// Issue #1144: the as-shot multipliers of a CR2, NEF… (its only white balance) were dropped on loading, so
@@ -334,6 +342,26 @@ mod tests {
         // a file that gives none gives none
         assert_eq!(frame_of(mosaic(None), &|_, _| None).wb_multipliers, None);
         assert_eq!(Frame::from_linear_rec2020(Rgb32f::new(2, 2), None).wb_multipliers, None);
+    }
+
+    /// A full merge's frames are demosaiced with AHD however small memory made them (the plan can hold a panorama's
+    /// to 1024–1200 px): only a small preview's are demosaiced bilinear, as before.
+    #[test]
+    fn a_final_frame_is_demosaiced_with_ahd_at_any_edge() {
+        let developed = |method| mosaic(None).develop(method).unwrap().data.iter().map(|p| p.map(|v| v.max(0.0))).collect::<Vec<_>>();
+        let (ahd, bilinear) = (developed(lightcraft_raw::Method::Ahd), developed(lightcraft_raw::Method::Bilinear));
+        assert_ne!(ahd, bilinear, "the two methods tell apart here");
+        let frame = |edge, preview| {
+            let method = demosaic_method(edge, preview);
+            raw_frame(mosaic(None), &[], Metadata::default(), edge, method, false, &|_, _| None).unwrap().image.data
+        };
+        for edge in [None, Some(1024), Some(1100), Some(1200), Some(4000)] {
+            assert_eq!(frame(edge, false), ahd, "final at {edge:?}");
+        }
+        assert_eq!(frame(Some(1024), true), bilinear, "a preview, as before");
+        assert_eq!(frame(Some(1200), true), bilinear);
+        assert_eq!(frame(Some(2048), true), ahd, "a large preview");
+        assert_eq!(demosaic_method(None, true), lightcraft_raw::Method::Ahd);
     }
 
     fn voter(wb_multipliers: Option<[f32; 3]>) -> Frame {
