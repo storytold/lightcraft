@@ -2,6 +2,7 @@
 name = "lightcraft-pipeline"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft develop pipeline: scene-referred, float, resolution independent (CPU reference) (L2)"
 

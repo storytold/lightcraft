@@ -2,6 +2,7 @@
 name = "lightcraft-film"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft film-negative conversion: film base, levels in density space, film presets, colour and tone (L1)"
 

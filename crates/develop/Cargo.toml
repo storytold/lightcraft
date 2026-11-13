@@ -2,6 +2,7 @@
 name = "lightcraft-develop"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft develop settings: the non-destructive edit model, control specs, presets (L1)"
 
