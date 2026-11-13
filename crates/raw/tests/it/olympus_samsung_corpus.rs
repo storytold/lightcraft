@@ -148,7 +148,7 @@ fn compressed_olympus_bodies_decode_like_camera_jpeg() {
         let jpeg = embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
         let r = green_vs_camera_jpeg(&raw, &jpeg, 24, 16);
         eprintln!("{name:55} {}x{}: green follows the camera JPEG, r = {r:.3}", raw.width, raw.height);
-        assert!(r > 0.6, "{name}: decoded mosaic does not follow the camera JPEG (r = {r:.3})");
+        assert!(r > 0.92, "{name}: decoded mosaic does not follow the camera JPEG (r = {r:.3})");
     }
 }
 
