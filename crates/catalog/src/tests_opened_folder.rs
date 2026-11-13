@@ -372,6 +372,64 @@ fn a_caller_append_reopens_the_file_after_a_note_bearing_copy_replaces_the_folde
 
 #[cfg(unix)]
 #[test]
+fn a_caller_append_refuses_a_changed_log_and_a_snapshot_preserves_every_op() {
+    for longer in [false, true] {
+        let base = scratch(&format!("caller-log-length-{longer}"));
+        let dir = base.join("lib");
+        crate::fault::write_on_caller(&dir, true);
+        let store = FsStore::open(&dir).unwrap();
+        let note = b"the note this session's lock wrote";
+        store.folder().vouch(note);
+        std::fs::write(dir.join(OWNER), note).unwrap();
+        let (mut journal, mut catalog, _) = Journal::open(Box::new(store)).unwrap();
+        let add = |n| Op::AddAlbum { album: Album::new(AlbumId(n), format!("album {n}")) };
+        let first = add(1);
+        catalog.apply(first.clone()).unwrap();
+        journal.append(&[first]).unwrap();
+        let copy = base.join("copy");
+        std::fs::create_dir(&copy).unwrap();
+        for (name, bytes) in files_in(&dir) {
+            std::fs::write(copy.join(name), bytes).unwrap();
+        }
+        let second = add(2);
+        catalog.apply(second.clone()).unwrap();
+        journal.append(&[second]).unwrap();
+        if longer {
+            let mut bytes = std::fs::read(copy.join(LOG)).unwrap();
+            bytes.extend_from_slice(&[b'x'; 4096]);
+            std::fs::write(copy.join(LOG), bytes).unwrap();
+        }
+        let away = base.join("away");
+        std::fs::rename(&dir, &away).unwrap();
+        std::fs::rename(&copy, &dir).unwrap();
+        let replacement = std::fs::read(dir.join(LOG)).unwrap();
+        let acknowledged = std::fs::read(away.join(LOG)).unwrap();
+        let third = add(3);
+        catalog.apply(third.clone()).unwrap();
+        let result = journal.append(&[third]);
+        crate::fault::write_on_caller(&dir, false);
+        assert!(result.is_err(), "a changed fallback log must not acknowledge a record after a gap");
+        assert_eq!(std::fs::read(dir.join(LOG)).unwrap(), replacement, "even the failed-append cleanup must leave the foreign log alone");
+        assert_eq!(std::fs::read(away.join(LOG)).unwrap(), acknowledged);
+        assert!(journal.wants_snapshot(), "the synchronous error requests a snapshot of the live catalog");
+        journal.snapshot_with_unlogged(&catalog, 1).unwrap();
+        let fourth = add(4);
+        catalog.apply(fourth.clone()).unwrap();
+        journal.append(&[fourth]).unwrap();
+        journal.flush().unwrap();
+        drop(journal);
+        let (reopened, loaded, _) = Journal::open(Box::new(FsStore::open(&dir).unwrap())).unwrap();
+        assert_eq!(reopened.seq(), 4);
+        for n in 1..=4 {
+            assert_eq!(loaded.album(AlbumId(n)).unwrap().name, format!("album {n}"));
+        }
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(base);
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn a_replaced_staging_name_is_neither_published_nor_removed() {
     for fail_fill in [false, true] {
         let dir = scratch(&format!("staging-name-{fail_fill}"));

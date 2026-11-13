@@ -73,12 +73,34 @@ pub(crate) fn check_regular_directory_entry(path: &Path) -> io::Result<()> {
     }
 }
 
+/// The synchronous fallback's acknowledged log length. Failed records stay with the caller;
+/// `Journal::append` requests a snapshot on an error rather than acknowledging a sequence gap.
+struct SynchronousLog {
+    good: u64,
+    torn: bool,
+}
+
+impl SynchronousLog {
+    fn check(&self, len: u64, allow_torn: bool) -> io::Result<()> {
+        if len == self.good || (allow_torn && self.torn && len > self.good) {
+            return Ok(());
+        }
+        Err(io::Error::other(format!(
+            "catalog log holds {len} bytes, the log this session wrote has {}: it is another file, so a snapshot must replace it",
+            self.good
+        )))
+    }
+}
+
 /// Files in a directory.
 pub struct FsStore {
     dir: PathBuf,
     /// The folder `dir` named when the store was opened. Every write asks it first and is refused
     /// when `dir` leads somewhere else now (issue #3240); so does the log's thread.
     folder: OpenedFolder,
+    /// Set only after using the synchronous fallback; do not switch to a fresh thread afterward
+    /// and forget which records that fallback acknowledged.
+    sync_log: Option<SynchronousLog>,
     /// The thread that writes the log (natively; started by the first append).
     #[cfg(not(target_arch = "wasm32"))]
     log: Option<crate::log_writer::LogWriter>,
@@ -97,6 +119,7 @@ impl FsStore {
         FsStore {
             dir: folder.path().to_path_buf(),
             folder,
+            sync_log: None,
             #[cfg(not(target_arch = "wasm32"))]
             log: None,
         }
@@ -124,6 +147,12 @@ impl FsStore {
             return w.flush();
         }
         Ok(())
+    }
+
+    fn reset_sync_log(&mut self, name: &str, len: u64) {
+        if name == crate::journal::LOG && self.sync_log.is_some() {
+            self.sync_log = Some(SynchronousLog { good: len, torn: false });
+        }
     }
 
     fn sync_dir(&self) {
@@ -197,6 +226,7 @@ impl Store for FsStore {
         check_staging(&self.folder, &tmp, &f)?;
         std::fs::rename(&tmp, self.path(name))?;
         self.sync_dir();
+        self.reset_sync_log(name, data.len() as u64);
         Ok(())
     }
 
@@ -235,6 +265,7 @@ impl Store for FsStore {
         check_staging(&self.folder, &tmp, &file)?;
         std::fs::rename(&tmp, self.path(name))?;
         self.sync_dir();
+        self.reset_sync_log(name, n);
         Ok(n)
     }
 
@@ -242,7 +273,7 @@ impl Store for FsStore {
         use std::io::Write;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.log.is_none() && !crate::fault::on_caller(&self.dir) {
+            if self.log.is_none() && self.sync_log.is_none() && !crate::fault::on_caller(&self.dir) {
                 self.folder.check()?;
                 check_regular_directory_entry(&self.path(name))?;
                 if !self.path(name).exists() {
@@ -266,6 +297,11 @@ impl Store for FsStore {
         if !existed {
             self.sync_dir();
         }
+        if name == crate::journal::LOG {
+            let len = f.metadata()?.len();
+            let log = self.sync_log.get_or_insert(SynchronousLog { good: len, torn: false });
+            log.check(len, false)?;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let written = crate::fault::check(&self.dir, crate::fault::Step::Write)
             .and_then(|()| f.write_all(data))
@@ -273,6 +309,14 @@ impl Store for FsStore {
             .and_then(|()| f.sync_data());
         #[cfg(target_arch = "wasm32")]
         let written = f.write_all(data).and_then(|()| f.sync_data());
+        if name == crate::journal::LOG
+            && let Some(log) = self.sync_log.as_mut()
+        {
+            log.torn = written.is_err();
+            if written.is_ok() {
+                log.good = log.good.saturating_add(data.len() as u64);
+            }
+        }
         // A failed write can leave part of `data`; the caller cuts it back with `truncate`
         // before retrying. The file is reopened for that retry too.
         written
@@ -291,8 +335,17 @@ impl Store for FsStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(e) => return Err(e),
         };
+        if name == crate::journal::LOG
+            && let Some(log) = &self.sync_log
+        {
+            // A refused append wrote nothing: its cleanup must not cut or extend a foreign log.
+            // Only a failed write of our own permits removing a longer torn tail.
+            log.check(f.metadata()?.len(), true)?;
+        }
         f.set_len(len)?;
-        f.sync_all()
+        f.sync_all()?;
+        self.reset_sync_log(name, len);
+        Ok(())
     }
 
     fn describe(&self) -> String {
@@ -301,7 +354,7 @@ impl Store for FsStore {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn background_writer(&self) -> Option<Box<dyn Store>> {
-        Some(Box::new(FsStore { dir: self.dir.clone(), folder: self.folder.clone(), log: None }))
+        Some(Box::new(FsStore { dir: self.dir.clone(), folder: self.folder.clone(), sync_log: None, log: None }))
     }
 
     fn flush(&mut self) -> io::Result<()> {
