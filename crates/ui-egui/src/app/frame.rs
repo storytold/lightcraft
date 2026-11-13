@@ -1,7 +1,8 @@
 use super::{
-    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
-    shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
+    LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, monotonic_ms, panels, pick, recheck, shortcuts,
+    slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
 };
+use crate::startup;
 
 impl LightcraftApp {
     /// Install/refresh fonts once and watch the device and availability caches. Setup, not input.
@@ -26,6 +27,24 @@ impl LightcraftApp {
             self.font_language = self.ui.language;
         } else {
             self.fonts_ready = true;
+        }
+        // First run ever, or a fresh version: the tour, or What's New. Never headless —
+        // snapshots and scripted runs hold session-local state and must not gain a modal.
+        // Every frame until it shows: another dialog open on the first frame (a delivered file)
+        // keeps its place, and so does the blocking library window (the launch chooser or a
+        // library error — it is not in `ui.dialog`). The startup dialog opens once that window
+        // closes or is dismissed. Choosing it here is only dueing it: the version is recorded
+        // when the dialog is actually presented (`dialogs::show`), so a host that runs `logic`
+        // and quits before a visible frame does not burn the tour.
+        if self.ui.dialog.is_none()
+            && self.library_problem.as_ref().is_none_or(|p| p.dismissed)
+            && let Some(dialog) = startup::open_at_startup(self.ui.seen_version.as_deref(), self.headless_host)
+        {
+            self.ui.dialog = Some(dialog);
+            // a drop queued on this same frame (a delivered file, a host drop on the first pass)
+            // arrived before the dialog did: mark it, so it waits behind the dialog and imports
+            // once it closes instead of taking the close-the-dialog refusal on the first UI pass
+            self.defer_dropped_files();
         }
     }
 
@@ -81,7 +100,6 @@ impl LightcraftApp {
         self.slideshow_tick(ctx, now);
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
-        model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
         // auto import: list the watched folder every few seconds (on a worker thread: it may be on
         // a network share), then import what's new like any import (also on a worker thread)
@@ -266,6 +284,7 @@ impl LightcraftApp {
             self.import_dropped_files(ctx);
         }
         self.check_external_editor(ctx);
+        theme::refresh_window_on_first_focus(ctx);
         // Alt (Option on macOS) while a slider is dragged shows its temporary preview
         self.ui.alt_held = ctx.input(|i| i.modifiers.alt);
         // Recent-library checks and launch-list keys read focus/time/keys: they belong to the UI

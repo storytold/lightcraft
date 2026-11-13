@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** minor (KEYC-METADATA: ⌘⌥⇧K Set Keyword Shortcut and ⇧K; KEYC-METADATA: ⌘⇧K Edit Keywords; KEYC-METADATA: ⌘⌥K Enable Painting; KEYC-METADATA: ⌘⌥⇧C / ⌘⌥⇧V Copy / Paste Metadata; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌥0 / ⌥⇧0 next / previous keyword set; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named; KEYC-METADATA: ⌘K Add Keywords; KEYC-RATING: ⌘L Enable Filters; context menus: a right-click elsewhere on the same widget moves its open menu instead of flashing it, issue #1877; Reference Escape, catalog-local pins and deleted-photo handling verified on Windows; KEYC-RATING: `\` shows / hides the Filter Bar in the grids; earlier: zoom row soft proofing sharp at 1:1, canvas tools by keyboard, focus-order test, ~50 unnamed hand-drawn widgets named) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6
+> **Last reviewed:** 2026-10-11 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
 
 How LightCraft's interaction compares with Lightroom's: views, panels, tools and handles, modifier
 keys, shortcuts, zoom, context menus and feel. Rows for individual menu items and shortcuts live in
@@ -65,7 +65,7 @@ auto-repeat used to flip the zoom back and forth (`crates/ui-egui/src/space_hand
 | Expand/collapse edit sections | ⌘⌥1–5 | ⌘1–6 | ⌘0 = Zoom to Fit, ⌘1 = Zoom 100 %; Geometry lives in the Crop panel |
 | Histogram | ⌘⇧H | ⌘0 | ⌘0 = Zoom to Fit |
 | Square Grid | ⇧G | (none; ⇧G = Guided Upright) | Guided Upright is a button in the Crop panel |
-| Hide / show pins (Tool Overlay) | ⇧H (cycles Auto, Always, Selected, Never) | H (Classic) | H opens Remove; View ▸ Tool Overlay and the Remove / Masking panels pick a mode |
+| Hide / show pins (Tool Overlay) | ⇧H (cycles Auto, Always, Selected, Never); H toggles the mask pins while the Masking panel shows | H (Classic) | elsewhere H opens Remove, a reassigned Remove key still opens Remove in Masking, and the pin toggle yields only to an explicit assignment of H itself; View ▸ Tool Overlay and the Remove / Masking panels pick a mode |
 | Export dialog | ⌘⇧E (+ ⇧E) | ⇧E | ⌘⇧E is "Edit in Photoshop" there; no external-editor command yet |
 | Crop overlay cycle | ⇧O | O | O = mask overlay; ⇧O (mask colour / overlay orientation) unused otherwise |
 | Create Version | ⌘⇧S (+ ⇧M) | ⇧M (Windows: Ctrl+⇧S) | — |
@@ -99,6 +99,12 @@ default, also some GNOME / Xfce setups) the window manager takes the drag first:
 **Still missing / broken:**
 - Tab / ⇧Tab (hide the side panels / all panels): Tab moves the keyboard focus here (accessibility), so it is
   not bound; F5 (hide the top panel) is not bound either.
+- `H` toggles the mask pins while the Masking panel shows (the same switch as View → Show Mask Pins) and opens Remove everywhere
+  else — wherever no panel shows (the full-screen preview, a minimized or hidden panel), H keeps its own binding and opens Remove there
+  too. Only an unmodified H toggles, and it yields only to an explicit assignment of H itself: a Remove key reassigned in Help → Keyboard
+  Shortcuts still opens Remove while the Masking panel shows.
+  Lightroom (Classic) uses H to hide the pins of every local tool. ⇧H still cycles the Tool Overlay (#224), which hides
+  the Remove tool's spot pins that way.
 - ⌘M / ⌘H / ⌘Q / ⌘W rely on the platform window defaults (unverified).
 
 
@@ -172,6 +178,7 @@ establish OS keyboard delivery or cross-platform acceptance.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Shortcuts: in the Masking panel H toggles the mask pins (the same switch as View → Show Mask Pins) instead of opening Remove; only an unmodified H toggles and it yields only to an explicit assignment of H itself, a Remove key reassigned in Help → Keyboard Shortcuts still opens Remove there, and outside Masking — and the full-screen preview, where no panel shows — H keeps its own binding (Remove, by default) |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⌥K / Ctrl+Alt+K (Photo ▸ Enable Painting) paints the painter box's keyword, stops painting when pressed again, and with the box empty opens the Keywords panel |
 | 2026-10-24 | minor | KEYC-METADATA: ⌘⇧K / Ctrl+Shift+K (Edit Keywords) opens the keyword picked in the Keyword List in Edit Keyword Tag |
 | 2026-10-25 | minor | KEYC-METADATA: ⌘⌥⇧K / Ctrl+Alt+Shift+K (Set Keyword Shortcut) and ⇧K add and remove the keyword shortcut's keywords; the Keyword List marks them with a + |

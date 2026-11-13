@@ -51,6 +51,7 @@ const MODULES: &[Module] = &[
             "guided_pre",
             "guided_ab",
             "guided_apply",
+            "clamp_between_k",
             "wb_k",
             "nr_lum",
             "chroma_k",
@@ -62,6 +63,23 @@ const MODULES: &[Module] = &[
             "xguided_apply",
             "fringe_lab",
             "fringe_apply",
+        ],
+    },
+    Module {
+        src: include_str!("wgsl/nrcj.wgsl"),
+        bindings: &[("a", false, "f32"), ("b", false, "f32"), ("dst", true, "f32")],
+        entries: &[
+            "nrcj_yuv",
+            "nrcj_uv",
+            "nrcj_samples",
+            "nrcj_speck",
+            "nrcj_pilot",
+            "nrcj_links1",
+            "nrcj_paths",
+            "nrcj_links",
+            "nrcj_dh",
+            "nrcj_dv",
+            "nrcj_recon",
         ],
     },
     Module {
@@ -180,7 +198,11 @@ fn build_jobs(
             layout: Some(&p.pipeline_layout),
             module: &p.module,
             entry_point: Some(entry),
-            compilation_options: Default::default(),
+            // Only the median kernels (`blur.wgsl`, `med_tile`) use workgroup memory, and they
+            // load every element they read before the barrier, so wgpu's default zeroing is not
+            // needed. On DX12 it is written out as one assignment per element, which made FXC take
+            // about 87 s over these kernels at every start of a release build.
+            compilation_options: wgpu::PipelineCompilationOptions { zero_initialize_workgroup_memory: false, ..Default::default() },
             cache: None,
         });
         let kernel = Kernel { pipeline, layout: p.layout.clone(), nbuf: p.nbuf };
@@ -294,7 +316,8 @@ pub(crate) struct Tracked(wgpu::Buffer);
 
 impl Tracked {
     fn new(b: wgpu::Buffer) -> Tracked {
-        ALLOCATED.fetch_add(b.size(), Ordering::Relaxed);
+        let now = ALLOCATED.fetch_add(b.size(), Ordering::Relaxed) + b.size();
+        PEAK.fetch_max(now, Ordering::Relaxed);
         Tracked(b)
     }
 }
@@ -317,6 +340,15 @@ thread_local! {
 
 /// Bytes of device buffers that exist (in use, retired or pooled).
 static ALLOCATED: AtomicU64 = AtomicU64::new(0);
+/// Most bytes allocated since [`take_peak`] (profiling).
+static PEAK: AtomicU64 = AtomicU64::new(0);
+
+/// The most bytes allocated since the last call; starts over from what is allocated now.
+pub(crate) fn take_peak() -> (u64, u64) {
+    let now = ALLOCATED.load(Ordering::Relaxed);
+    (PEAK.swap(now, Ordering::Relaxed), now)
+}
+
 /// Bytes waiting in per-thread retired lists.
 static RETIRED_BYTES: AtomicU64 = AtomicU64::new(0);
 /// The render device is lost: wgpu's `poll` panics from then on, so [`Gpu::poll`] stops calling it.
@@ -355,6 +387,11 @@ pub struct Gpu {
     free: std::sync::Mutex<Vec<Tracked>>,
     /// Largest storage buffer the device accepts (bytes).
     pub max_buffer: u64,
+    /// The crystal grain tables of the last grain pattern, resident: a render (each Amount step
+    /// of a drag) copies them on the GPU instead of uploading their 12 MB again ([`Gpu::grain_tables`]).
+    /// Shared with each render that recorded a copy from them until it submits: replacing them
+    /// while another thread's copy is unsubmitted must not hand the buffer back to the pool.
+    grain: std::sync::Mutex<Option<(std::sync::Arc<lightcraft_pipeline::crystal::CrystalTile>, std::sync::Arc<Buf>)>>,
     /// The device is the window's (eframe's): renders can hand it textures to draw directly.
     pub window: bool,
 }
@@ -403,6 +440,12 @@ fn constants() -> String {
     for (i, h) in GRAIN_HASH.iter().enumerate() {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
+    use lightcraft_pipeline::crystal::{TILE_PER_LONG, TORI};
+    s += &format!(
+        "const CRYSTAL_T0: u32 = {}u;\nconst CRYSTAL_T1: u32 = {}u;\nconst CRYSTAL_TPL: f32 = {:?};\n",
+        TORI[0], TORI[1], TILE_PER_LONG as f32
+    );
+    s += &format!("const DEEP_WRITTEN: u32 = {}u;\n", crate::params::DEEP_WRITTEN);
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
     }
@@ -515,7 +558,7 @@ impl Gpu {
             max_buffer >> 20,
             if window { ", the window's device" } else { "" }
         );
-        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window })
+        Ok(Gpu { device, queue, info, kernels, dummy, free: Default::default(), max_buffer, window, grain: Default::default() })
     }
 
     /// A buffer of `len` 32-bit values with undefined contents (a recycled one when possible).
@@ -556,8 +599,12 @@ impl Gpu {
     }
 
     /// Submit command buffers, then make the buffers this thread dropped before reusable.
+    /// Nothing is submitted once this render has failed: the render is discarded and recomputed
+    /// on the CPU, and the failure contract says no further GPU work runs after a fatal failure.
     pub fn submit(&self, cmds: impl IntoIterator<Item = wgpu::CommandBuffer>) {
-        self.queue.submit(cmds);
+        if !failed() {
+            self.queue.submit(cmds);
+        }
         let retired = take_retired();
         self.pool(retired);
     }
@@ -610,6 +657,12 @@ impl Gpu {
     pub fn upload<T: bytemuck::Pod>(&self, data: &[T]) -> Buf {
         let bytes: &[u8] = bytemuck::cast_slice(data);
         let len = bytes.len() / 4;
+        // A failed render runs no further GPU work (`Gpu::submit` skips the submission and the
+        // render is redone on the CPU): staging the bytes would still queue a copy for the next
+        // submission, so the caller gets the placeholder with the requested length instead.
+        if failed() {
+            return Buf { buf: Some(Tracked::new(self.placeholder())), len };
+        }
         if bytes.is_empty() {
             return self.buffer(1);
         }
@@ -680,6 +733,44 @@ impl Gpu {
         );
     }
 
+    /// Record into `enc` a copy of `tile`'s summed-area tables (both tori, back to back) into
+    /// `dst` at value offset `at`, uploading them first unless they are the resident ones.
+    /// Returns the buffer copied from, which the caller keeps until it has submitted `enc` (another
+    /// render may replace the resident tables meanwhile). None when `dst` can't hold them (an
+    /// over-limit placeholder: the render has failed already).
+    pub fn grain_tables(
+        &self,
+        enc: &mut wgpu::CommandEncoder,
+        tile: &std::sync::Arc<lightcraft_pipeline::crystal::CrystalTile>,
+        dst: &Buf,
+        at: usize,
+    ) -> Option<std::sync::Arc<Buf>> {
+        let len: usize = tile.sats.iter().map(Vec::len).sum();
+        let (start, bytes) = ((at as u64) * 4, (len as u64) * 4);
+        if len == 0 || dst.raw().size() < start.saturating_add(bytes) {
+            return None;
+        }
+        let mut resident = self.grain.lock().unwrap_or_else(|e| e.into_inner());
+        if !resident.as_ref().is_some_and(|(t, b)| std::sync::Arc::ptr_eq(t, tile) && b.raw().size() >= bytes) {
+            // the old tables go back to the pool first (once no unsubmitted copy holds them): one
+            // pattern's tables are resident at a time
+            *resident = None;
+            let buf = self.buffer(len);
+            if buf.raw().size() < bytes {
+                return None;
+            }
+            let mut off = 0u64;
+            for sat in &tile.sats {
+                self.queue.write_buffer(buf.raw(), off, bytemuck::cast_slice(sat));
+                off += (sat.len() as u64) * 4;
+            }
+            *resident = Some((tile.clone(), std::sync::Arc::new(buf)));
+        }
+        let (_, src) = resident.as_ref()?;
+        enc.copy_buffer_to_buffer(src.raw(), 0, dst.raw(), start, bytes);
+        Some(src.clone())
+    }
+
     /// Stands in for a buffer that could not be created (the render has failed already).
     fn placeholder(&self) -> wgpu::Buffer {
         self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -715,7 +806,12 @@ impl Gpu {
             fail(FailKind::Fatal, format!("unknown kernel {name}"));
             return;
         };
-        assert_eq!(bufs.len(), k.nbuf, "{name}: binding count");
+        if bufs.len() != k.nbuf {
+            // a caller/kernel mismatch would bind the wrong buffers: fail this render over to the
+            // CPU instead of crashing
+            fail(FailKind::Fatal, format!("{name}: binding count {} != {}", bufs.len(), k.nbuf));
+            return;
+        }
         let params = self.init_buffer(bytemuck::cast_slice(if p.is_empty() { &[0u32] } else { p }), wgpu::BufferUsages::STORAGE);
         let mut entries = vec![wgpu::BindGroupEntry { binding: 0, resource: params.as_entire_binding() }];
         for (i, b) in bufs.iter().enumerate() {
@@ -731,13 +827,25 @@ impl Gpu {
 
     /// Submit `enc`, then read back the first `len` 32-bit values of `src`.
     ///
-    /// A failed readback (device lost, map error, timeout) fails the render ([`FailKind::Fatal`])
-    /// and returns zeros, which the caller discards; after an earlier failure in the same render
-    /// nothing more is submitted.
+    /// A failed readback (device lost, map error, timeout) or a `len` past the buffer's end fails
+    /// the render ([`FailKind::Fatal`]) and returns zeros, which the caller discards; after an
+    /// earlier failure in the same render nothing more is submitted. `T` is always a 32-bit type
+    /// at the call sites (the copy and the readback tail are defined in 32-bit words).
     pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
-        assert!(len <= src.len, "readback of {len} values from a buffer of {}", src.len);
         let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
         if failed() {
+            return zeros();
+        }
+        // a zero-length readback would issue a `copy_buffer_to_buffer` of size 0, which wgpu
+        // rejects as an invalid copy: submit the (possibly staged) work untouched and return
+        // zeros instead
+        if len == 0 {
+            self.submit([enc.finish()]);
+            return zeros();
+        }
+        if len > src.len {
+            // a caller bug would read past the buffer: fail this render over to the CPU
+            fail(FailKind::Fatal, format!("readback of {len} values from a buffer of {}", src.len));
             return zeros();
         }
         let size = (len * 4) as u64;
@@ -1193,6 +1301,25 @@ mod tests {
         let back: Vec<[u32; 3]> = g.finish_and_read(g.encoder(), &b, data.len());
         assert!(back.len() == 1 << 20 && back.as_flattened() == data.as_slice());
     }
+    /// An upload after this render has failed keeps the failure contract (`Gpu::submit` skips the
+    /// submission, so nothing further runs on the GPU): the caller gets the placeholder with the
+    /// requested length instead of a staging buffer holding a copy of the data for a submission
+    /// that will never happen.
+    #[test]
+    fn an_upload_after_a_failure_returns_the_placeholder() {
+        let Some(g) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        super::fail(super::FailKind::Fatal, "simulated failure before an upload".into());
+        assert!(super::failed());
+        let b = g.upload(&[7u32; 1024]);
+        assert_eq!(b.buf.as_ref().map(|t| t.0.size()), Some(16), "the placeholder, not a staged 4 KiB buffer");
+        assert_eq!(b.len, 1024, "the requested length is preserved");
+        // leave this thread's failure for nobody: later tests on the thread start unfailed
+        assert_eq!(super::take_failure().map(|f| f.kind), Some(super::FailKind::Fatal));
+    }
+
     /// Issue #1858: once a Vulkan or DX12 device is lost, wgpu 30 panics in `Device::poll` instead of
     /// returning an error. A render's readback panicked; while it unwound, a buffer's way back to
     /// the pool polls again from a destructor, and that second panic aborted the app.
@@ -1245,6 +1372,35 @@ mod tests {
         if run_child("really_lost_child").is_none() {
             lightcraft_testkit::skip!(Gpu, "no GPU device, or one that can't be lost on purpose here");
         }
+    }
+
+    /// Resident grain tables replaced by another pattern stay out of the pool while a render
+    /// that recorded a copy from them hasn't submitted it: reusing them then would hand that
+    /// render another tile's tables.
+    #[test]
+    fn replaced_grain_tables_stay_alive_until_their_copy_is_submitted() {
+        use lightcraft_pipeline::crystal::{CrystalLook, CrystalTile};
+        let Some(g) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        let look = CrystalLook::new(25.0, 50.0);
+        let (Some(a), Some(b)) = (CrystalTile::new(look, 0x7ab1_0001), CrystalTile::new(look, 0x7ab1_0002)) else { panic!("tiles") };
+        let (a, b) = (std::sync::Arc::new(a), std::sync::Arc::new(b));
+        let len: usize = a.sats.iter().map(Vec::len).sum();
+        let (dst_a, dst_b) = (g.buffer(len), g.buffer(len));
+        let mut first = g.encoder();
+        let held = g.grain_tables(&mut first, &a, &dst_a, 0).expect("tables copied");
+        // another render replaces the resident tables before `first` is submitted
+        let mut second = g.encoder();
+        assert!(g.grain_tables(&mut second, &b, &dst_b, 0).is_some());
+        let next = g.buffer(len);
+        assert!(next.raw() != held.raw(), "the replaced tables went back to the pool before their copy was submitted");
+        g.submit([first.finish()]);
+        // each render read its own tile's tables
+        let tables = |t: &lightcraft_pipeline::crystal::CrystalTile| t.sats.concat();
+        assert!(g.finish_and_read::<f32>(second, &dst_a, len) == tables(&a), "the first render copied other tables");
+        assert!(g.finish_and_read::<f32>(g.encoder(), &dst_b, len) == tables(&b), "the second render copied other tables");
     }
 
     /// A GPU retired by another failure (a validation error) keeps a live device: its buffers are

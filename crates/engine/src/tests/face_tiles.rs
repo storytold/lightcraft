@@ -46,7 +46,7 @@ fn jpeg(w: u32, h: u32, px: impl Fn(u32, u32) -> [u8; 3]) -> Vec<u8> {
 /// photo by its largest preview (600 × 400) and the develop path renders from it, after reading
 /// the whole file.
 fn raw_with_two_previews(tail: usize) -> Vec<u8> {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let preview = |w: u32, h: u32, bytes: Vec<u8>, first: bool| {
         let mut ifd = IfdBuilder::new();
         if first {
@@ -91,7 +91,7 @@ fn count_loads(s: &mut Session) -> Loads {
     let loads = Loads::default();
     let file = s.media.file_loader.clone().unwrap();
     let n = loads.files.clone();
-    s.media.file_loader = Some(Arc::new(move |p: &str, e: usize, dcp: Option<&crate::media::DcpProfile>| {
+    s.media.file_loader = Some(Arc::new(move |p: &str, e: usize, dcp: crate::media::RawDecode<'_>| {
         n.fetch_add(1, Ordering::SeqCst);
         file(p, e, dcp)
     }));

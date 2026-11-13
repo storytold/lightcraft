@@ -44,8 +44,8 @@ use settings_hash::SETTINGS_HASH_ENTRIES;
 use settings_hash::SettingsHashes;
 pub use source::{
     DISK_CACHE_BYTES, DISK_CACHE_PER_PHOTO, DecodedSource, DenoiseSpec, FACE_EDGE_STEP, FileLoader, FileProbe, MakeProduct, PairLoader,
-    PreviewLoader, ProbeInfo, RENDER_CACHE_VERSION, ReducedLoader, SourceLevel, SourceRef, THUMB_SIZES, Twin, default_disk_cache_bytes, face_edge,
-    thumb_bucket,
+    PreviewLoader, ProbeInfo, RENDER_CACHE_VERSION, RawDecode, ReducedLoader, SourceLevel, SourceRef, THUMB_SIZES, Twin, default_disk_cache_bytes,
+    face_edge, thumb_bucket,
 };
 
 pub struct MediaCache {

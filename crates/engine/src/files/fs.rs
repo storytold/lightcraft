@@ -1,7 +1,8 @@
 use super::load::{load_vec, load_vec_pair, load_vec_reduced};
 use super::preview::{fit_box, fs_preview_loader, preview_orientation};
 use super::probe::probe_bytes;
-use super::{Arc, DcpProfile, DenoiseSpec, FileLoader, FileProbe, Filter, PairLoader, ReducedLoader, fit};
+use super::{Arc, DenoiseSpec, FileLoader, FileProbe, Filter, PairLoader, ReducedLoader, fit};
+use crate::media::RawDecode;
 
 /// The file's first [`lightcraft_raw::PREVIEW_PREFIX`] bytes (or the whole file when it is shorter),
 /// which is what every format [`lightcraft_raw::bounded_preview`] covers keeps its pointer in.
@@ -60,13 +61,13 @@ pub(super) fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, ma
 /// The filesystem-backed [`PairLoader`]: the file is read and decoded once, and developed as usual and from the photo's
 /// denoised picture. It holds two pictures at once, so it counts for more at the memory gate than a plain load.
 pub fn fs_pair_loader() -> PairLoader {
-    Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec, dcp: Option<&DcpProfile>| {
+    Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec, with: RawDecode<'_>| {
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec_pair(bytes, max_edge, spec, dcp);
+        let bytes = crate::read_file::read_regular(path, crate::read_file::MAX_MEDIA_BYTES).map_err(|e| format!("{path}: {e}"))?;
+        let r = load_vec_pair(bytes, max_edge, spec, with);
         crate::memory::release();
         r
     })
@@ -81,17 +82,15 @@ pub fn fs_pair_loader() -> PairLoader {
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
     let loader: FileLoader =
-        Arc::new(|path: &str, max_edge: usize, dcp: Option<&DcpProfile>| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge, dcp)));
+        Arc::new(|path: &str, max_edge: usize, with: RawDecode<'_>| fs_load(path, max_edge, |bytes| load_vec(bytes, max_edge, with)));
     let probe: FileProbe = Arc::new(|path: &str| {
-        use std::io::Read;
         // one open, then everything from the open file: its size and modification time are not
         // round trips of their own (on a network share each of them is one)
-        let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+        let file = crate::read_file::open_for_read(path).map_err(|e| format!("{path}: {e}"))?;
         let meta = file.metadata().ok();
         let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
         let _permit = crate::memory::work_gate().acquire(len);
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = crate::read_file::read_open(file, crate::read_file::MAX_MEDIA_BYTES).map_err(|e| format!("{path}: {e}"))?;
         let mut info = probe_bytes(path, &bytes)?;
         info.file_modified = meta.as_ref().and_then(modified_iso);
         Ok(info)
@@ -101,7 +100,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
 pub fn fs_reduced_loader() -> ReducedLoader {
-    Arc::new(|path: &str, max_edge: usize, dcp: Option<&DcpProfile>| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, dcp)))
+    Arc::new(|path: &str, max_edge: usize, with: RawDecode<'_>| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, with)))
 }
 
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.
@@ -110,7 +109,7 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
     let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 });
     let gate = crate::memory::work_gate();
     let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let bytes = crate::read_file::read_regular(path, crate::read_file::MAX_MEDIA_BYTES).map_err(|e| format!("{path}: {e}"))?;
     let r = load(bytes);
     // the file, the samples and the intermediate images are gone: give their pages back
     crate::memory::release();

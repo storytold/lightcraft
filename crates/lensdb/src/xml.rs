@@ -53,13 +53,21 @@ fn entity(name: &str) -> Option<char> {
     })
 }
 
+/// Index of the `;` that ends a reference starting at `rest` (its `&`). The scan stops at the first
+/// byte that cannot appear in a name or a numeric reference, so zero-padded references such as
+/// `&#000000097;` are found and each run of name bytes is read once, not once per `&`.
+fn entity_end(rest: &str) -> Option<usize> {
+    let n = rest.bytes().skip(1).take_while(|b| b.is_ascii_alphanumeric() || *b == b'#').count();
+    (rest.as_bytes().get(n + 1) == Some(&b';')).then_some(n + 1)
+}
+
 fn unescape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(i) = rest.find('&') {
         out.push_str(rest.get(..i).unwrap_or_default());
         let tail = rest.get(i..).unwrap_or_default();
-        match tail.find(';').and_then(|j| entity(tail.get(1..j)?).map(|c| (c, j))) {
+        match entity_end(tail).and_then(|j| entity(tail.get(1..j)?).map(|c| (c, j))) {
             Some((c, j)) => {
                 out.push(c);
                 rest = tail.get(j + 1..).unwrap_or_default();
@@ -139,6 +147,20 @@ fn close(stack: &mut Vec<Node>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn many_ampersands_before_one_semicolon_are_read_once() {
+        // 200 000 `&` then a `;`: each `&` once searched the whole rest for the `;`
+        let hostile = format!("{};&amp;", "&".repeat(200_000));
+        assert_eq!(unescape(&hostile), format!("{};&", "&".repeat(200_000)));
+        assert_eq!(unescape("&lt;a&gt; &#x10FFFF; &unknownreference;"), "<a> \u{10FFFF} &unknownreference;");
+    }
+
+    #[test]
+    fn zero_padded_numeric_references_decode() {
+        assert_eq!(unescape("C&#0000000097;non &#x0000041; &#000000065;"), "Canon A A");
+        assert_eq!(unescape("&abc&#xyz;&;"), "&abc&#xyz;&;");
+    }
 
     #[test]
     fn entity_rejects_signed_numeric_references() {

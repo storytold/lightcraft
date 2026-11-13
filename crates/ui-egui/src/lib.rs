@@ -36,7 +36,6 @@ pub mod links;
 pub mod loupe_timing;
 pub mod menus;
 mod missing_sweep;
-mod model_setup;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
@@ -47,6 +46,7 @@ pub mod shortcuts;
 pub mod sidebar;
 pub mod softpaint;
 pub mod space_hand;
+pub mod startup;
 pub mod state;
 pub mod sync;
 pub mod tasks;
@@ -88,6 +88,7 @@ pub use widgets::rating;
 pub use widgets::text_field;
 
 mod app;
+mod auto_settings;
 mod caches;
 mod clock;
 mod services;
@@ -146,7 +147,6 @@ impl QuitPrompt {
 }
 
 pub struct LightcraftApp {
-    pub(crate) model_setup: model_setup::Pending,
     /// Per-catalog-revision caches of library-wide results the panels show every frame
     /// (expensive on big libraries).
     pub caches: Caches,
@@ -320,6 +320,8 @@ pub struct LightcraftApp {
     pub(crate) compare_tiles: std::collections::HashMap<(u8, u64), region::RegionView>,
     /// Until when (s) a pinch or scroll in Compare / Reference holds the windows there are.
     pub(crate) compare_hold_until: f64,
+    /// Survey tiles gliding to new cells, and the render slot each surveyed photo keeps.
+    pub(crate) survey_motion: panels::compare::survey::SurveyMotion,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
     /// An import in progress (the import review dialog's batches).
@@ -375,6 +377,8 @@ pub struct LightcraftApp {
     pub(crate) disk_notice: Option<(u64, String)>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
+    /// The hot pixel limit last applied (percent).
+    hot_pixels_applied: Option<f32>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
     /// Why the display profile setting could not be applied (shown in Settings ▸ Display).
