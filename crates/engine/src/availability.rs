@@ -325,7 +325,9 @@ mod tests {
         assert_eq!(a.exists("gone"), Some(false));
         assert!(a.is_offline("gone") && !a.is_offline("here") && !a.is_offline("unknown"));
         assert_eq!(on_caller.load(Ordering::SeqCst), 0, "never probed on the calling thread");
-        assert!(woke.load(Ordering::SeqCst) >= 2);
+        // the worker stores an answer and lets go of the lock before it wakes the caller: both answers can be
+        // seen above a moment before the second wake runs (a slow runner sees it), so wait for the wakes too
+        wait_until("both answers to wake the caller", || woke.load(Ordering::SeqCst) >= 2);
         assert!(a.gone_generation() >= 2);
     }
 
