@@ -29,6 +29,8 @@ lightcraft-meta = { workspace = true }
 lightcraft-lensdb = { workspace = true }
 lightcraft-faces = { workspace = true }
 miniz_oxide = { workspace = true }
+# CRC-32 of a catalog unpacked from a Lightroom backup zip (lightroom_backup.rs).
+crc32fast = { workspace = true }
 lightcraft-merge = { workspace = true }
 lightcraft-geocode = { workspace = true }
 lightcraft-slideshow = { workspace = true }
@@ -64,6 +66,6 @@ lightcraft-testkit = { workspace = true }
 # HDR JPEG XL tests read the file's colour encoding
 jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
-lightcraft-heif = { workspace = true, features = ["testdata"] }
+craft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
-lightcraft-tiff = { workspace = true }
+craft-tiff = { workspace = true }

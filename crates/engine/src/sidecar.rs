@@ -743,7 +743,7 @@ fn backup(path: &Path, stamp: &str) -> std::io::Result<PathBuf> {
     if !std::fs::symlink_metadata(path)?.is_file() {
         return Err(std::io::Error::other(format!("{} is not a regular file", path.display())));
     }
-    let bytes = std::fs::read(path)?;
+    let bytes = crate::read_file::read_regular(path, SIDECAR_READ_MAX)?;
     let stamp: String = stamp.chars().filter(char::is_ascii_alphanumeric).collect();
     let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     for k in 0..1000 {
@@ -774,7 +774,7 @@ pub struct SidecarSaved {
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
 /// Returns (contents, merged, backup).
 fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
-    let bytes = match std::fs::read(path) {
+    let bytes = match crate::read_file::read_regular(path, SIDECAR_READ_MAX) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
         // can't see what is there: never overwrite it blindly
@@ -784,17 +784,28 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
         return Ok((fresh, false, None));
     }
     let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
-    match std::str::from_utf8(&bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
-    {
-        Ok(merged) => Ok((merged, true, None)),
-        Err(why) => {
-            let b = backup(path, stamp)?;
-            log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
-            Ok((fresh, false, Some(b)))
-        }
-    }
+    let why = match std::str::from_utf8(&bytes) {
+        Ok(old) => match lightcraft_meta::merge_xmp(old, &fresh, rules) {
+            Ok(merged) => return Ok((merged, true, None)),
+            // a readable sidecar whose merge fails (e.g. the merged packet exceeds the XMP limits), or one
+            // that is valid but over the parser's complexity limits: fail the save and keep the file
+            // as it is, rather than replace metadata that could be read
+            // (text with no `rdf:RDF` element parses as empty metadata but holds nothing to keep: it is replaced
+            // after a backup, as any sidecar that is not XMP)
+            Err(why)
+                if why == lightcraft_meta::XmpError::TooComplex
+                    || (lightcraft_meta::parse_xmp(old.strip_prefix('\u{feff}').unwrap_or(old)).is_ok()
+                        && !matches!(&why, lightcraft_meta::XmpError::Xml(m) if m.contains("no rdf:RDF element"))) =>
+            {
+                return Err(std::io::Error::other(format!("the sidecar is readable but could not be merged ({why}); it was left unchanged")));
+            }
+            Err(why) => why.to_string(),
+        },
+        Err(why) => why.to_string(),
+    };
+    let b = backup(path, stamp)?;
+    log::warn!("{}: not readable as XMP ({why}); kept a copy as {} before replacing it", path.display(), b.display());
+    Ok((fresh, false, Some(b)))
 }
 
 /// Key of the stem sidecar a file maps to (case-insensitive).
@@ -840,10 +851,10 @@ fn file_path(p: &Photo) -> Option<&str> {
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
-        return std::fs::read_to_string(&sc).ok().map(|s| (s, sc));
+        return crate::read_file::read_regular(&sc, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
     }
     if kind == MediaKind::Raw {
-        let bytes = std::fs::read(original).ok()?;
+        let bytes = crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES).ok()?;
         let x = lightcraft_meta::embedded(&bytes).xmp?;
         return Some((x, PathBuf::from(original)));
     }
@@ -854,6 +865,9 @@ pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Op
     }
     None
 }
+
+/// Most bytes of a sidecar read whole (the opened file must be a regular file).
+const SIDECAR_READ_MAX: u64 = 256 << 20;
 
 const JPEG_XMP_HEADER_SPAN: u64 = 16 * 1024 * 1024;
 const JPEG_XMP_HEADER_STEPS: usize = 4096;
@@ -1589,6 +1603,62 @@ mod tests {
             assert!(!dir.join("IMG_2.xmp").exists(), "{original}");
             assert!(!Path::new(r"\\192.0.2.1\share\IMG_1.xmp").exists(), "{original}");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A readable sidecar whose merged packet fails read-back (too many namespace declarations in scope) is kept: the
+    /// save fails instead of moving it to a backup and writing fresh content only.
+    #[test]
+    fn a_readable_sidecar_that_cannot_be_merged_is_kept() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let decls: String = (0..500).map(|i| format!(" xmlns:n{i}=\"urn:n:{i}\"")).collect();
+        let old = format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"{decls}><rdf:Description rdf:about=\"\"/></rdf:RDF></x:xmpmeta>"
+        );
+        assert!(lightcraft_meta::parse_xmp(&old).is_ok(), "the existing sidecar is readable");
+        let path = dir.join("a.xmp");
+        std::fs::write(&path, &old).unwrap();
+        let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
+        assert!(super::sidecar_contents(&path, fresh, "t").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), old);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no backup was made");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Text that is not XMP at all (it parses as empty metadata, but has no `rdf:RDF` element) is backed up and replaced.
+    #[test]
+    fn a_sidecar_with_no_rdf_element_is_backed_up_and_replaced() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-plain-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.xmp");
+        std::fs::write(&path, "not xml at all").unwrap();
+        let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
+        let (data, merged, backup) = super::sidecar_contents(&path, fresh.clone(), "t").unwrap();
+        assert!(!merged && data == fresh);
+        assert!(backup.is_some_and(|b| std::fs::read_to_string(b).unwrap() == "not xml at all"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A sidecar over the parser's namespace-declaration limit cannot be read or merged: the save fails and the file stays.
+    #[test]
+    fn a_sidecar_over_the_complexity_limit_is_kept() {
+        let dir = std::env::temp_dir().join(format!("lightcraft-sidecar-complex-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let decls: String = (0..600).map(|i| format!(" xmlns:n{i}=\"urn:n:{i}\"")).collect();
+        let old = format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"{decls}><rdf:Description rdf:about=\"\"/></rdf:RDF></x:xmpmeta>"
+        );
+        assert_eq!(lightcraft_meta::parse_xmp(&old).unwrap_err(), lightcraft_meta::XmpError::TooComplex);
+        let path = dir.join("a.xmp");
+        std::fs::write(&path, &old).unwrap();
+        let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
+        assert!(super::sidecar_contents(&path, fresh, "t").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), old);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "no backup was made");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
