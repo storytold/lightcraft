@@ -371,6 +371,26 @@ fn main() {
             lightcraft_engine::gpu::trim_pool(0);
             drop(develop(&full, &info, &s, &bounded(w0), Some(&StageCache::default()), g).unwrap())
         });
+        let cols: Vec<String> = backends
+            .iter()
+            .map(|&g| {
+                format!(
+                    "{}",
+                    best_after(
+                        n,
+                        || {
+                            lightcraft_engine::gpu::trim_pool(0);
+                            let cache = StageCache::default();
+                            drop(develop(&full, &info, &s, &bounded(w0), Some(&cache), g).unwrap());
+                            cache
+                        },
+                        |cache| drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&cache), g).unwrap())
+                    )
+                )
+            })
+            .collect();
+        let first = if backends[0] { "gpu" } else { "cpu" };
+        println!("{:<38} {first}: {}{}", "window exact after bounded:", cols[0], cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default());
         let wc = [StageCache::default(), StageCache::default()];
         for g in backends {
             drop(develop(&full, &info, &s, &at(w0, Quality::Full), Some(&wc[*g as usize]), *g).unwrap());
@@ -428,16 +448,21 @@ fn main() {
                             } else {
                                 t.light.exposure = 0.3 + k * 0.01;
                             }
-                            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g));
+                            drop(develop(&full, &info, &t, &at(w0, Quality::Draft), Some(&wc[g as usize]), g).unwrap());
                         }
                         let (t0, c) = (Instant::now(), cpu_ms());
-                        drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g));
+                        drop(develop(&full, &info, &t, &at(w0, Quality::Full), Some(&wc[g as usize]), g).unwrap());
                         b = T(b.0.min(t0.elapsed().as_secs_f64() * 1e3), b.1.min(cpu_ms() - c));
                     }
                     format!("{b}")
                 })
                 .collect();
-            println!("{label:<38} {}: {}{}", if backends[0] { "gpu" } else { "cpu" }, cols[0], cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default());
+            println!(
+                "{label:<38} {}: {}{}",
+                if backends[0] { "gpu" } else { "cpu" },
+                cols[0],
+                cols.get(1).map(|g| format!("  |  gpu: {g}")).unwrap_or_default()
+            );
         }
         // `DUMP=file`: the GPU window's raw RGBA bytes (A/B pixel comparisons between builds)
         if let (true, Some(path)) = (gpu, std::env::var_os("DUMP")) {

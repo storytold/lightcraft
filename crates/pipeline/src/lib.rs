@@ -613,7 +613,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 // Defringe also surrounds the source patches read by spots.
                 let work = window::expand(work, full_w, full_h, optics::defringe_radius(s, px_per_long / optics::DEFRINGE_REF_LONG));
                 // (drafts follow a drag: main's window is enough for them, and keeps them as fast)
-                if req.bounded_window || req.quality == Quality::Draft || airlight::check_pixels(work.w, work.h).is_err() {
+                if req.is_bounded_window() || req.is_draft_window() || airlight::check_pixels(work.w, work.h).is_err() {
                     // Preserve main's bounded window when complete support cannot
                     // fit. Dehaze's full-frame budget check selects its proxy too.
                     if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win }
@@ -897,8 +897,10 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     #[cfg(not(target_arch = "wasm32"))]
     let fixed_air = if let Some(full) = full.as_ref().filter(|full| req.is_bounded_window() || full.lin_key != plan.lin_key) {
         let budget = shared.map_or(airlight::PREPARE_BUDGET, |(_, c)| c.airlight.budget());
-        if req.bounded_window {
+        if req.is_bounded_window() {
             Some(airlight::proxy(src_img, info, full))
+        } else if req.is_draft_window() {
+            Some(shared.and_then(|(src, cache)| cache.airlight.get(src, full.lin_key)).unwrap_or_else(|| airlight::proxy(src_img, info, full)))
         } else if airlight::check_prepare_budget(full, Some(&plan), budget, false).is_err()
             || airlight::check_pixels(src_img.width, src_img.height).is_err()
         {
@@ -916,10 +918,6 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
             let ready = shared.and_then(|(src, cache)| cache.airlight.get(src, full.lin_key)).filter(|_| !saved_matches || entry_matches);
             if let Some(air) = ready {
                 Some(air)
-            } else if req.quality == Quality::Draft {
-                // A drag doesn't wait for the whole frame's preparation: this image's statistic if
-                // known, else main's proxy (the full-quality render that follows is exact).
-                Some(shared.and_then(|(src, cache)| cache.airlight.get(src, full.lin_key)).unwrap_or_else(|| airlight::proxy(src_img, info, full)))
             } else {
                 let prepared = match saved {
                     Some((key, value)) if key == full.lin_key => value,
@@ -1031,7 +1029,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     }
     lap("prepare", &mut t);
     // (a bounded window is a stand-in: its stages would only evict the exact window's)
-    if let Some((a, c)) = shared.filter(|_| !req.bounded_window) {
+    if let Some((a, c)) = shared.filter(|_| !req.is_bounded_window()) {
         c.put(CacheEntry {
             src: a.clone(),
             geo,

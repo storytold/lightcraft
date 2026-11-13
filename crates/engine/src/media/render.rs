@@ -114,9 +114,15 @@ impl RenderJob {
     /// A window job rendered as main did (see [`lightcraft_pipeline::RenderRequest::bounded_window`]):
     /// a quick first look while the exact window follows. Gets its own result key.
     pub fn bounded_window(mut self) -> Self {
-        if self.request.window.is_some() && !self.request.bounded_window {
+        if cfg!(not(target_arch = "wasm32"))
+            && self.request.window.is_some()
+            && self.request.depth == lightcraft_pipeline::OutputDepth::U8
+            && !self.request.bounded_window
+        {
             self.request.bounded_window = true;
             self.key ^= 0x5851_f42d_4c95_7f2d;
+            self.cache = None;
+            self.view_cache = None;
         }
         self
     }
