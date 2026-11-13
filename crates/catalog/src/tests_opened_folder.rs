@@ -3,9 +3,13 @@
 //! at its path). A folder's identity is its device and inode number, so the tests that move a
 //! folder run on Unix; the rest hold everywhere.
 
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::path::Path;
+use std::path::PathBuf;
 
+#[cfg(unix)]
 use crate::journal::{LOG, SNAPSHOT};
+#[cfg(unix)]
 use crate::lock::OWNER;
 use crate::*;
 
