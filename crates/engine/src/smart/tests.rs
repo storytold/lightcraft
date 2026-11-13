@@ -362,3 +362,38 @@ fn a_proxy_from_an_older_encode_is_stale() {
     assert!(!look_checked(&dir), "a look-only marker is not enough to skip the rebuild");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn proraw_tone_travels_with_the_proxy() {
+    use lightcraft_pipeline::proraw::ProRawTone;
+    let knots = (0..32).map(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+        [x, (x / (x + 0.1)).min(0.999)]
+    });
+    let tone = ProRawTone::new(knots.collect(), -0.3, Some(-4.0)).unwrap();
+    let img = lightcraft_scenes::demo_library()[0].render(32, 20);
+    let info = SourceInfo { raw: true, proraw: Some(std::sync::Arc::new(tone.clone())), ..Default::default() };
+    let bytes = encode(&img, Some(&info)).unwrap();
+    let back = decode(&bytes).unwrap().2.expect("the facts are read back");
+    assert_eq!(back.proraw.as_deref(), Some(&tone));
+    // a proxy written before the field (its facts lack `proraw`) has none: process V9 then
+    // renders the file on the camera-curve path, as V8 does
+    let nl = MAGIC.len() + bytes[MAGIC.len()..].iter().position(|b| *b == b'\n').unwrap();
+    let mut head: serde_json::Value = serde_json::from_slice(&bytes[MAGIC.len()..nl]).unwrap();
+    let tail = head["tail"].as_u64().unwrap() as usize;
+    let t = &bytes[bytes.len() - tail..];
+    let n = u32::from_le_bytes(t[..4].try_into().unwrap()) as usize;
+    let mut facts: serde_json::Value = serde_json::from_slice(&t[4..4 + n]).unwrap();
+    assert!(facts.as_object_mut().unwrap().remove("proraw").is_some());
+    let facts = facts.to_string().into_bytes();
+    let mut new_tail = (facts.len() as u32).to_le_bytes().to_vec();
+    new_tail.extend_from_slice(&facts);
+    new_tail.extend_from_slice(&t[4 + n..]);
+    head["tail"] = serde_json::json!(new_tail.len());
+    let mut old = MAGIC.to_vec();
+    old.extend_from_slice(head.to_string().as_bytes());
+    old.extend_from_slice(&bytes[nl..bytes.len() - tail]);
+    old.extend_from_slice(&new_tail);
+    let back = decode(&old).unwrap().2.expect("the older facts are still read");
+    assert!(back.raw && back.proraw.is_none());
+}

@@ -245,6 +245,10 @@ fn load_bytes_now(
             raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve),
             kept_tone,
         );
+        // Apple ProRAW's own profile curve renders in Lightroom's chain from process V9, whose
+        // Contrast adapts to the image as decoded (at its own exposure, before any edit)
+        let proraw =
+            (dcp.is_none() && camera_look.is_none()).then(|| proraw_tone(&raw, t.baseline_exposure as f32, &img.data)).flatten().map(Arc::new);
         let local_tone = local_tone(&raw);
         let (temp, tint) = scale.as_shot(xy);
         return Ok((
@@ -261,6 +265,7 @@ fn load_bytes_now(
                 camera_tone,
                 mattes,
                 local_tone,
+                proraw,
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
             },
@@ -415,6 +420,35 @@ pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Opti
         [x, curve.eval(x).min(0.9995)]
     });
     lightcraft_pipeline::tone::CameraTone::new(knots)
+}
+
+/// Apple ProRAW: a DNG whose EXIF `Make` is Apple and that carries a `ProfileToneCurve`, the one
+/// camera Lightroom's tone operators were measured on (`lightcraft_pipeline::proraw`).
+pub(crate) fn is_apple_proraw(raw: &lightcraft_raw::RawImage) -> bool {
+    raw.format == lightcraft_raw::RawFormat::Dng
+        && raw.color.profile.tone_curve.is_some()
+        && raw.metadata.make.as_deref().is_some_and(|m| m.trim().eq_ignore_ascii_case("apple"))
+}
+
+/// Apple ProRAW's `ProfileToneCurve` for Lightroom's tone chain: [`PRORAW_TONE_KNOTS`] knots
+/// (within 0.03 L* of its 257-point curve), log-spaced over 12 stops below white, with the file's
+/// BaselineExposure `baseline_ev` and the Contrast key of its decoded `pixels` (scene-linear, with
+/// that exposure in them). `None` for any other raw.
+///
+/// [`PRORAW_TONE_KNOTS`]: lightcraft_pipeline::proraw::PRORAW_TONE_KNOTS
+pub(crate) fn proraw_tone(raw: &lightcraft_raw::RawImage, baseline_ev: f32, pixels: &[[f32; 3]]) -> Option<lightcraft_pipeline::proraw::ProRawTone> {
+    use lightcraft_pipeline::proraw::{PRORAW_TONE_KNOTS, ProRawTone, lr_key};
+    let curve = raw.color.profile.tone_curve.as_ref().filter(|_| is_apple_proraw(raw))?;
+    let last = (PRORAW_TONE_KNOTS - 1) as f32;
+    let knots = (0..PRORAW_TONE_KNOTS)
+        .map(|i| {
+            let x = 2f32.powf(-12.0 + 12.0 * i as f32 / last);
+            [x, curve.eval(x).min(0.9995)]
+        })
+        .collect();
+    let tone = ProRawTone::new(knots, baseline_ev, None)?;
+    let key = lr_key(pixels, tone.baseline_exposure());
+    Some(tone.with_key(key))
 }
 
 /// A raw's `OpcodeList3`.
