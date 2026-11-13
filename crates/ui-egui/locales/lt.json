@@ -1209,7 +1209,7 @@
   "Desert Warmth": "Dykumos šiluma",
   "Desktop": "Darbalaukis",
   "Destination library": "Paskirties biblioteka",
-  "Detail": "Detalės",
+  "Detail": "Detalumas",
   "Detail (D)": "Detalės (D)",
   "Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).": "Skiltyje Detalumas → Triukšmo mažinimas atsirado naujas žymimasis langelis „Pašalinti karštuosius pikselius“ (tik RAW failams). Naujai importuojamiems RAW failams ši funkcija įjungta pagal numatytuosius nustatymus (klaida Nr. 1345).",
   "Detail has a per-photo AI Denoise switch and Amount. Bayer RAW photos use a disposable cache, with matching previews and exports and pure-Rust CPU/GPU inference.": "Išsamios peržiūros režime kiekvienai nuotraukai yra atskiras DI triukšmo mažinimo jungiklis ir stiprumo nustatymas. „Bayer“ RAW nuotraukoms naudojamas laikinasis podėlis; peržiūros ir eksportuoti vaizdai atitinka vienas kitą, o išvados skaičiuojamos grynojo „Rust“ kodo CPU arba GPU priemonėmis.",
