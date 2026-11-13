@@ -86,7 +86,8 @@ fn threshold_compaction_runs_in_the_background() {
         }
     }
     assert!(background > 0, "compactions ran in the background");
-    for _ in 0..10_000 {
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_millis(10_000));
+    while std::time::Instant::now() < deadline {
         s.persist_if_dirty();
         if !s.library.as_ref().unwrap().journal().snapshot_running() {
             break;
@@ -875,7 +876,7 @@ fn a_thumbnail_cache_from_before_is_tidied_in_the_background_when_the_library_op
     let rows = s.activity.list();
     assert!(rows.iter().any(|r| r.kind == "cache" && r.label == "Tidying the thumbnail cache" && r.cancellable), "{rows:?}");
     let t0 = std::time::Instant::now();
-    while !s.activity.list().is_empty() && t0.elapsed() < std::time::Duration::from_secs(20) {
+    while !s.activity.list().is_empty() && t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)) {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(s.activity.list().is_empty());

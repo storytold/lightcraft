@@ -1322,11 +1322,13 @@ mod apple_photos {
         let mut s = Session::with_demo();
         let files = export_two(&mut s, "photos-slow");
         let paths: Vec<String> = files.iter().map(|f| f["path"].as_str().unwrap().to_string()).collect();
+        // how long Photos is held at most: a hang guard (20 s, stretched by LIGHTCRAFT_TIME_SCALE, never shrunk)
+        let hold = lightcraft_testkit::scaled(std::time::Duration::from_secs(20)).max(std::time::Duration::from_secs(20));
         let (go, wait) = std::sync::mpsc::channel::<()>();
         let wait = Mutex::new(wait);
         let runner: Runner = Arc::new(move |args: &[String], _| {
-            // a regression (waiting on the caller's thread) fails after 20 s instead of hanging
-            let _ = wait.lock().unwrap().recv_timeout(std::time::Duration::from_secs(20));
+            // a regression (waiting on the caller's thread) fails after the hold instead of hanging
+            let _ = wait.lock().unwrap().recv_timeout(hold);
             let n = args.len() - args.iter().position(|a| a == MARKER).unwrap() - 2;
             Ok(Output { status: Some(0), stdout: (0..n).map(|i| format!("ID-{i}\n")).collect(), stderr: String::new() })
         });
@@ -1334,10 +1336,12 @@ mod apple_photos {
         s.apple_photos_background = true; // as in the desktop app
         let t0 = std::time::Instant::now();
         let r = s.execute("export.addToPhotos", &json!({"paths": paths, "album": "Slow"})).unwrap();
-        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "answered without waiting for Photos");
+        // no bounded wait in front of the background job either (the gate below can't see one)
+        lightcraft_testkit::assert_responsive(t0, "export.addToPhotos in the background");
         assert_eq!(r, json!({"job": 1, "running": true, "requested": 2, "album": "Slow"}));
         let status = |s: &mut Session| s.execute("export.photosImports", &json!({"job": 1})).unwrap();
-        assert_eq!(status(&mut s)["running"], true);
+        // Photos is held until `go`: had the call waited for it, the import would be over by now
+        assert_eq!(status(&mut s)["running"], true, "answered without waiting for Photos");
         // a retry is refused, and says why
         let e = s.execute("export.addToPhotos", &json!({"paths": paths})).unwrap_err().to_string();
         assert!(e.contains("still adding 2 file(s) from an earlier request (import 1)"), "{e}");
@@ -1346,10 +1350,7 @@ mod apple_photos {
             assert!(s.after_export(&on).err().unwrap().contains("still adding"), "refused before writing anything");
         }
         go.send(()).unwrap();
-        while status(&mut s)["running"] == true {
-            assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the import finishes");
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
+        lightcraft_testkit::wait_until(std::time::Duration::from_secs(20), "the import finishes", || status(&mut s)["running"] == false);
         let done = status(&mut s);
         assert_eq!((done["imported"].as_u64(), done["album"].as_str()), (Some(2), Some("Slow")), "{done}");
         let all = s.execute("export.photosImports", &json!({})).unwrap();

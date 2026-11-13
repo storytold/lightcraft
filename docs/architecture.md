@@ -83,10 +83,23 @@ time, skips) and `target/ci/summary.md` (Markdown for a PR; `--summary-md` print
 no host name, user name or absolute path, and nothing is uploaded. `--hardware` adds a step that runs
 the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT_GPU_BACKEND`).
 
+libtest has no per-test timeout, so a test wait never goes without a limit: `lightcraft_testkit::wait_until`
+(a condition, polled with backoff) and `recv_within` (a channel) fail the test with what they waited for, and
+a hand-made limit uses `scaled`. `LIGHTCRAFT_TIME_SCALE` (default 1, clamped to 0.1–1000) stretches the limits
+these three set, and the watchdog's below, on a slow machine. A wait the test itself ends (a worker held until
+the test opens a gate) uses `wait_until_at_least`, whose limit stretches the same way but never drops below
+the one given. The headless harness's own timeouts (`Headless::request`, `settle`, `step_until`) stretch the
+same way in ui-egui's unit tests but never shrink (`headless::limit`), so callers there pass plain durations;
+outside those tests (`lightcraft-cli snapshot`, the web build) they're used as given. `lightcraft_testkit::watch()` registers the running test with a per-process watchdog (ui-egui's
+`Headless::new` does it in that crate's unit tests): once a watched test has run for
+`LIGHTCRAFT_TEST_WATCHDOG_MIN` minutes (default 30 × the time scale; `0` or `off` disables it) it prints the
+watched tests still running and exits with status 124, so a hung run ends with names.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Quality gates: test deadlines (`wait_until`, `recv_within`, `LIGHTCRAFT_TIME_SCALE`) and the test watchdog |
 | 2026-10-23 | minor | Quality gates: one integration-test binary per crate, doctests apart, nextest on request, one WASM check |
 | 2026-10-11 | minor | Quality gates: the CI machine probe, visible skips (`testkit`) and `target/ci/report.json` |
 | 2026-10-10 | major | Created from the code (crate sizes, layers, data model, rendering, control, gates) |

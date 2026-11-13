@@ -162,6 +162,10 @@ pub struct Shared {
     pub loaded: AtomicBool,
     /// Loading the model or encoding a photo right now (the slow parts).
     pub encoding: AtomicBool,
+    /// Run on the worker just before it loads the model: a test holds the load here to show that nothing else
+    /// waits for it.
+    #[cfg(test)]
+    pub before_load: std::sync::Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -365,6 +369,10 @@ fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path, place
         state.model = None;
         state.cache = None;
         let _busy = Flag::raise(&shared.encoding);
+        #[cfg(test)]
+        if let Some(hold) = shared.before_load.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
+            hold();
+        }
         let t = web_time::Instant::now();
         let m = match placement {
             Placement::Gpu => Sam3::load(dir)?,
@@ -550,11 +558,11 @@ mod tests {
             w.submit(job(Tag::Wait, &tx)).unwrap();
         }
         for _ in 0..3 {
-            let o = rx.recv_timeout(Duration::from_secs(30)).unwrap();
+            let o = lightcraft_testkit::recv_within(&rx, Duration::from_secs(30), "a job's outcome");
             assert!(o.result.unwrap_err().contains("not found"));
         }
         let t = web_time::Instant::now();
-        while w.pending() > 0 && t.elapsed() < Duration::from_secs(5) {
+        while w.pending() > 0 && t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(5)) {
             std::thread::yield_now();
         }
         assert_eq!(w.pending(), 0);

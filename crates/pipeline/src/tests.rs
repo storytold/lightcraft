@@ -840,7 +840,9 @@ fn sliver_crops_render_quickly_with_wide_stages_on() {
         s.light.shadows = 60.0;
         let t = std::time::Instant::now();
         let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(280, 180));
-        assert!(t.elapsed().as_secs_f64() < 20.0, "{rect:?}: {:?}", t.elapsed());
+        // stretched on a slow machine, never shrunk
+        let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(20)).max(std::time::Duration::from_secs(20));
+        assert!(t.elapsed() < limit, "{rect:?}: {:?}", t.elapsed());
         assert!(r.image.width >= 1 && r.image.height >= 1, "{rect:?}");
     }
 }

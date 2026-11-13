@@ -398,9 +398,10 @@ fn a_fast_draft_is_drawn_in_the_frame_that_asked_for_it() {
     s.catalog.apply(Op::AddPhoto { photo: Box::new((*photo()).clone()) }).unwrap();
     let mut r = Renderer::with_worker_threads(1);
     let ctx = egui::Context::default();
-    let budget = std::time::Duration::from_secs(10);
-    // the last loupe render took longer than the budget (a CPU render): not waited for
-    r.last_main_ms = 1e6;
+    let budget = lightcraft_testkit::scaled(std::time::Duration::from_secs(10));
+    // the last loupe render took longer than the budget (a CPU render): not waited for (ten
+    // budgets, whatever LIGHTCRAFT_TIME_SCALE made of it)
+    r.last_main_ms = budget.as_secs_f64() * 1e4;
     r.request(Slot::Main, s.render_job(PhotoId(1), 64, 64, false, true).unwrap(), 100);
     r.wait_for_draft(&ctx, &mut s, budget);
     assert!(r.is_pending(Slot::Main) && !r.textures.contains_key(&Slot::Main));
@@ -811,7 +812,7 @@ fn a_panicking_render_is_a_failure_not_a_dead_worker() {
     ask(&mut app);
     let t0 = std::time::Instant::now();
     while app.renderer.is_pending(slot) {
-        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the render never answered");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)), "the render never answered");
         std::thread::sleep(std::time::Duration::from_millis(5));
         app.renderer.poll(&ctx, &mut app.session);
     }
@@ -838,7 +839,7 @@ fn a_test_app_renders_on_two_workers() {
     assert_eq!(app.renderer.live_workers(), TEST_WORKERS, "the pool starts all its workers with its first job");
     let t0 = std::time::Instant::now();
     while app.renderer.is_pending(slot) {
-        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the render never answered");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)), "the render never answered");
         std::thread::sleep(std::time::Duration::from_millis(5));
         app.renderer.poll(&ctx, &mut app.session);
     }
@@ -873,7 +874,7 @@ fn raw_quick_path_frames_build_no_jobs() {
     drop(held);
     let t0 = std::time::Instant::now();
     while !app.renderer.textures.contains_key(&quick) {
-        assert!(t0.elapsed() < std::time::Duration::from_secs(20), "the embedded preview never arrived");
+        assert!(t0.elapsed() < lightcraft_testkit::scaled(std::time::Duration::from_secs(20)), "the embedded preview never arrived");
         std::thread::sleep(std::time::Duration::from_millis(5));
         app.renderer.poll(&ctx, &mut app.session);
     }

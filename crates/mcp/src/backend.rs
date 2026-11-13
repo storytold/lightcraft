@@ -218,7 +218,7 @@ mod tests {
         let reply = reply.to_vec();
         let worker = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            stream.set_read_timeout(Some(at_least(Duration::from_secs(2)))).unwrap();
             let mut writer = stream.try_clone().unwrap();
             let mut reader = BufReader::new(stream);
             let mut request = String::new();
@@ -337,7 +337,7 @@ mod tests {
         let addr = listener.local_addr().unwrap().to_string();
         let worker = std::thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            stream.set_read_timeout(Some(at_least(Duration::from_secs(2)))).unwrap();
             let mut writer = stream.try_clone().unwrap();
             let mut reader = BufReader::new(stream);
             for id in 1..=2 {
@@ -404,9 +404,16 @@ mod tests {
         assert_eq!(seen.load(Ordering::SeqCst), 2);
     }
 
-    /// Accept the next connection within 5 s, as a blocking stream with a 3 s read timeout.
+    /// `d` stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: how long a stand-in app waits for the
+    /// test's client, which a slow machine may keep from connecting or sending for a while.
+    fn at_least(d: Duration) -> Duration {
+        lightcraft_testkit::scaled(d).max(d)
+    }
+
+    /// Accept the next connection within 5 s, as a blocking stream with a 3 s read timeout (both
+    /// [`at_least`]).
     fn accept(listener: &TcpListener) -> (BufReader<TcpStream>, TcpStream) {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + at_least(Duration::from_secs(5));
         let stream = loop {
             match listener.accept() {
                 Ok((stream, _)) => break stream,
@@ -418,7 +425,7 @@ mod tests {
         };
         // BSD kernels (macOS, FreeBSD) let an accepted socket inherit the listener's non-blocking flag.
         stream.set_nonblocking(false).unwrap();
-        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        stream.set_read_timeout(Some(at_least(Duration::from_secs(3)))).unwrap();
         (BufReader::new(stream.try_clone().unwrap()), stream)
     }
 
@@ -485,8 +492,8 @@ mod tests {
         });
         let mut remote = Remote::lazy(&addr);
         assert_eq!(remote.call("engine.execute", json!({"command": "edit.undo"})).unwrap(), json!(1));
-        expired.recv_timeout(Duration::from_secs(5)).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        lightcraft_testkit::recv_within(&expired, Duration::from_secs(5), "the stand-in app's idle close");
+        let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(Duration::from_secs(5));
         while !remote.conn.as_ref().is_some_and(|(_, writer)| peer_closed(writer)) {
             assert!(std::time::Instant::now() < deadline, "the idle close never reached the client");
             std::thread::sleep(Duration::from_millis(1));

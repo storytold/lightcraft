@@ -198,6 +198,17 @@ pub fn launch_deadline() -> std::time::Instant {
 /// `probe`'s answer, or `None` when it takes longer than `limit`: it runs on its own thread, which is left to
 /// finish (or stay blocked) on its own. Also `None` when no thread can be started.
 pub(crate) fn within<T: Send + 'static>(limit: std::time::Duration, probe: impl FnOnce() -> Option<T> + Send + 'static) -> Option<T> {
+    within_waiting(limit, probe, |rx, limit| rx.recv_timeout(limit))
+}
+
+/// [`within`], waiting for the probe's answer with `wait` (given the answer's channel and `limit`). The tests pass
+/// a `wait` that records the limit it was given and gives up at once, which shows how long the call would wait
+/// without timing it.
+fn within_waiting<T: Send + 'static>(
+    limit: std::time::Duration,
+    probe: impl FnOnce() -> Option<T> + Send + 'static,
+    wait: impl FnOnce(&std::sync::mpsc::Receiver<Option<T>>, std::time::Duration) -> Result<Option<T>, std::sync::mpsc::RecvTimeoutError>,
+) -> Option<T> {
     let (tx, rx) = std::sync::mpsc::channel();
     let started = std::thread::Builder::new().name("launch-probe".into()).spawn(move || {
         let _ = tx.send(probe());
@@ -206,7 +217,7 @@ pub(crate) fn within<T: Send + 'static>(limit: std::time::Duration, probe: impl 
         log::warn!("could not start the launch-path check: {e}");
         return None;
     }
-    match rx.recv_timeout(limit) {
+    match wait(&rx, limit) {
         Ok(found) => found,
         Err(_) => {
             log::warn!("the launch-path check took longer than {limit:?}; treating the argument as photos to import");
@@ -234,6 +245,20 @@ pub fn launch_path_until(
     home: Option<&Path>,
     dcim: impl Fn(&Path) -> Option<PathBuf>,
     deadline: std::time::Instant,
+) -> Option<LaunchPath> {
+    launch_path_checking(arg, cwd, home, dcim, deadline, |left, path| within(left, move || library_dir_of(&path)))
+}
+
+/// [`launch_path_until`], asking `check` (given the time left until `deadline` and the absolute path) for the
+/// library folder the path names, if any. Never asked once the deadline has passed. The tests pass a `check` that
+/// records what it was given, which shows what the call would wait for without timing it.
+fn launch_path_checking(
+    arg: &str,
+    cwd: Option<&Path>,
+    home: Option<&Path>,
+    dcim: impl Fn(&Path) -> Option<PathBuf>,
+    deadline: std::time::Instant,
+    check: impl FnOnce(std::time::Duration, PathBuf) -> Option<PathBuf>,
 ) -> Option<LaunchPath> {
     if arg.trim().is_empty() {
         return None;
@@ -270,9 +295,8 @@ pub fn launch_path_until(
         return Some(LaunchPath::Refused { path: shown, why: "the whole home folder".into() });
     }
     let left = deadline.saturating_duration_since(std::time::Instant::now());
-    let probed = abs.clone();
     if !left.is_zero()
-        && let Some(dir) = within(left, move || library_dir_of(&probed))
+        && let Some(dir) = check(left, abs.clone())
     {
         return Some(LaunchPath::Library(dir.to_string_lossy().to_string()));
     }
@@ -508,31 +532,86 @@ mod prepared_tests {
     }
 
     /// The library check runs before the window opens; one that blocks (a dead network mount) gives up after the
-    /// limit and the argument is imported instead, so LightCraft still starts.
+    /// limit and the argument is imported instead, so LightCraft still starts. The probe stays blocked until the
+    /// test ends, and the wait is recorded instead of timed: the call waits once, for its limit, and gives up with
+    /// the probe still blocked.
     #[test]
     fn a_blocked_launch_probe_gives_up_after_its_limit() {
-        let start = std::time::Instant::now();
-        let found = within(std::time::Duration::from_millis(50), || {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            Some(PathBuf::from("late"))
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+        // a probe that answers only once `open` goes (at the end of the test, or when a check fails)
+        let blocked = |answered: &std::sync::Arc<AtomicBool>| {
+            let (open, gate) = std::sync::mpsc::channel::<()>();
+            let a = answered.clone();
+            let probe = move || {
+                let _ = gate.recv();
+                a.store(true, Ordering::SeqCst);
+                Some(PathBuf::from("late"))
+            };
+            (open, probe)
+        };
+        let answered = std::sync::Arc::new(AtomicBool::new(false));
+        let (open, probe) = blocked(&answered);
+        // the call runs on a thread of its own: one that waited for the probe would block there, not here
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            let found = within_waiting(Duration::from_millis(50), probe, |_, limit| {
+                asked.push(limit);
+                // (the limit runs out)
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            });
+            let _ = tx.send((found, asked));
         });
+        let (found, asked) = lightcraft_testkit::recv_within(&rx, Duration::from_secs(30), "the call returns while the probe is blocked");
         assert_eq!(found, None);
-        assert!(start.elapsed() < std::time::Duration::from_secs(2), "waited {:?}", start.elapsed());
+        assert_eq!(asked, [Duration::from_millis(50)], "the call waits once, for its limit, no longer");
+        assert!(!answered.load(Ordering::SeqCst), "the probe never answered");
+        drop(open);
+        // the same through the real wait (on a thread of its own too): given up after 50 ms, the probe still blocked
+        let answered = std::sync::Arc::new(AtomicBool::new(false));
+        let (open, probe) = blocked(&answered);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(within(Duration::from_millis(50), probe));
+        });
+        let found = lightcraft_testkit::recv_within(&rx, Duration::from_secs(30), "the real wait returns while the probe is blocked");
+        assert_eq!(found, None);
+        assert!(!answered.load(Ordering::SeqCst), "the call waited for the probe");
+        drop(open);
         assert_eq!(within(LAUNCH_PROBE_LIMIT, || Some(1)), Some(1), "a quick answer is kept");
     }
 
     /// The launch arguments share one deadline (CodeRabbit on #2979): once it has passed, an argument is imported
-    /// without its library check, so several paths on a dead mount can't each wait the limit.
+    /// without its library check, so several paths on a dead mount can't each wait the limit. What the call would
+    /// wait for is recorded instead of timed: nothing once the deadline has passed, and only what is left of it
+    /// before.
     #[test]
     fn launch_arguments_share_one_deadline() {
+        use std::time::{Duration, Instant};
         let dir = temp_dir("deadline");
         std::fs::write(dir.join(lightcraft_catalog::journal::LOG), b"x").unwrap();
         let arg = dir.to_string_lossy().to_string();
         let none = |_: &Path| None;
         assert_eq!(launch_path_until(&arg, None, None, none, launch_deadline()), Some(LaunchPath::Library(arg.clone())));
-        let start = std::time::Instant::now();
-        assert_eq!(launch_path_until(&arg, None, None, none, start), Some(LaunchPath::Import(arg.clone())), "deadline passed");
-        assert!(start.elapsed() < std::time::Duration::from_millis(500), "waited {:?}", start.elapsed());
+        assert_eq!(launch_path_until(&arg, None, None, none, Instant::now()), Some(LaunchPath::Import(arg.clone())), "deadline passed");
+        // past the deadline the library check isn't asked at all: no wait, not even for the probe limit
+        let mut asked = Vec::new();
+        let passed = launch_path_checking(&arg, None, None, none, Instant::now(), |left, _| {
+            asked.push(left);
+            None
+        });
+        assert_eq!(passed, Some(LaunchPath::Import(arg.clone())));
+        assert_eq!(asked, [], "checked after the shared deadline");
+        // before it, the check is given what is left of the deadline (an hour here), not a limit of its own
+        let hour = Duration::from_secs(3600);
+        let before = Instant::now();
+        let ahead = launch_path_checking(&arg, None, None, none, before + hour, |left, path| {
+            asked.push(left);
+            library_dir_of(&path)
+        });
+        assert_eq!(ahead, Some(LaunchPath::Library(arg.clone())));
+        assert!(asked.len() == 1 && asked[0] <= hour && asked[0] > LAUNCH_PROBE_LIMIT, "{asked:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -663,8 +742,10 @@ mod prepared_tests {
         let paths: Vec<&str> = names.iter().map(String::as_str).collect();
         let seen = stat_all(&paths, &std::sync::atomic::AtomicBool::new(false), |p| {
             active.fetch_add(1, Relaxed);
-            // waits (at most a second) for another file to be asked about while this one is
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            // waits (at most a second, stretched by LIGHTCRAFT_TIME_SCALE, never shrunk) for another file
+            // to be asked about while this one is
+            let end =
+                std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(1)).max(std::time::Duration::from_secs(1));
             while active.load(Relaxed) < 2 && std::time::Instant::now() < end {
                 std::thread::yield_now();
             }
@@ -746,7 +827,8 @@ mod prepared_tests {
         let files: Vec<&str> = names.iter().map(String::as_str).collect();
         let found = sidecars_of(&files, &std::sync::atomic::AtomicBool::new(false), |f| {
             active.fetch_add(1, Relaxed);
-            let end = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            let end =
+                std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_secs(1)).max(std::time::Duration::from_secs(1));
             while active.load(Relaxed) < 2 && std::time::Instant::now() < end {
                 std::thread::yield_now();
             }

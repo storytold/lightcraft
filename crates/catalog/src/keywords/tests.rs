@@ -706,7 +706,9 @@ fn a_big_keyword_list_imports_quickly() {
     c.apply(op).unwrap();
     assert_eq!(added, 5_000);
     let took = t0.elapsed();
-    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    // stretched on a slow machine, never shrunk
+    let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(10)).max(std::time::Duration::from_secs(10));
+    assert!(took < limit, "{took:?} (limit {limit:?})");
 }
 
 /// Importing a list adds the keywords the library doesn't have, with their attributes, and gives

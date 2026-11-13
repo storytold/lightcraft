@@ -418,7 +418,7 @@ mod tests {
         assert!(rx.recv_timeout(std::time::Duration::from_millis(100)).is_err(), "the switch waits for the cancel");
         flag.store(true, Ordering::Relaxed); // the cancel goes through...
         drop(gate);
-        assert!(rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap(), "...and the step sees it");
+        assert!(lightcraft_testkit::recv_within(&rx, std::time::Duration::from_secs(10), "the step's answer"), "...and the step sees it");
         worker.join().unwrap();
         // once it is off, cancels are refused
         let g2 = a.start("export", "Exporting", Cancel::Yes);

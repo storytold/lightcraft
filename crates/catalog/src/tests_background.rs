@@ -50,7 +50,11 @@ impl Store for Gated {
     fn write_atomic_with(&mut self, name: &str, fill: &mut dyn FnMut(&mut dyn std::io::Write) -> std::io::Result<()>) -> std::io::Result<u64> {
         if name == SNAPSHOT {
             let (lock, cv) = &*self.gate;
-            let (open, timeout) = cv.wait_timeout_while(lock.lock().unwrap(), Duration::from_secs(20), |open| !*open).unwrap();
+            let (open, timeout) = cv
+                .wait_timeout_while(lock.lock().unwrap(), lightcraft_testkit::scaled(Duration::from_secs(20)).max(Duration::from_secs(20)), |open| {
+                    !*open
+                })
+                .unwrap();
             if !*open || timeout.timed_out() {
                 return Err(std::io::Error::other("gate never opened"));
             }
@@ -105,7 +109,8 @@ fn assert_recovers(g: &Gated, live: &Catalog) -> LoadReport {
 }
 
 fn wait_written(j: &Journal) {
-    for _ in 0..20_000 {
+    let deadline = std::time::Instant::now() + lightcraft_testkit::scaled(std::time::Duration::from_millis(20_000));
+    while std::time::Instant::now() < deadline {
         if j.snapshot_written() {
             return;
         }

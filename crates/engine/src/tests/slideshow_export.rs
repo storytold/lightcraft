@@ -240,7 +240,7 @@ fn video_in_webm_with_a_fade_colour() {
 }
 
 fn wait_for(s: &Session) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + lightcraft_testkit::scaled(Duration::from_secs(120));
     loop {
         let run = s.slideshow_export.clone().unwrap();
         if !run.running() {

@@ -241,6 +241,22 @@ fn lookup(
     deadline: Instant,
     limits: &Limits,
 ) -> Result<Vec<SocketAddr>, HttpError> {
+    lookup_waiting(host, resolve, deadline, limits, |rx, slice| rx.recv_timeout(slice))
+}
+
+/// The answer of a name lookup.
+type Resolved = std::io::Result<Vec<SocketAddr>>;
+
+/// [`lookup`], waiting for the resolver's answer a slice at a time with `wait` (given the answer's channel and how
+/// long to wait). The tests pass a `wait` that records the slices and comes back at once, which shows how often
+/// the lookup looks at Cancel without timing it.
+fn lookup_waiting(
+    host: &str,
+    resolve: impl FnOnce() -> Resolved + Send + 'static,
+    deadline: Instant,
+    limits: &Limits,
+    mut wait: impl FnMut(&std::sync::mpsc::Receiver<Resolved>, Duration) -> Result<Resolved, std::sync::mpsc::RecvTimeoutError>,
+) -> Result<Vec<SocketAddr>, HttpError> {
     if limits.cancel.load(Ordering::Relaxed) {
         return Err(HttpError::Cancelled);
     }
@@ -259,7 +275,7 @@ fn lookup(
         if left.is_zero() {
             return Err(HttpError::Connect(format!("{host}: the name lookup timed out")));
         }
-        match rx.recv_timeout(left.min(TICK)) {
+        match wait(&rx, left.min(TICK)) {
             Ok(r) => return r.map_err(|e| HttpError::Connect(format!("{host}: {e}"))),
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(HttpError::Connect(format!("{host}: the name lookup failed"))),
@@ -270,16 +286,30 @@ fn lookup(
 /// Connect to the first of `addrs` that answers, all of them together within `deadline` (each used to get the whole
 /// connect timeout of its own, issue #1532).
 fn connect_any(host: &str, addrs: &[SocketAddr], deadline: Instant, limits: &Limits) -> Result<TcpStream, HttpError> {
+    connect_any_with(host, addrs, deadline, limits, Instant::now, TcpStream::connect_timeout)
+}
+
+/// [`connect_any`] on the clock `now`, connecting with `connect` (given the address and how long it may take). The
+/// tests pass a clock that moves only while `connect` waits and a `connect` that records the time it was given,
+/// which shows that the addresses share the deadline without timing it.
+fn connect_any_with(
+    host: &str,
+    addrs: &[SocketAddr],
+    deadline: Instant,
+    limits: &Limits,
+    now: impl Fn() -> Instant,
+    mut connect: impl FnMut(&SocketAddr, Duration) -> std::io::Result<TcpStream>,
+) -> Result<TcpStream, HttpError> {
     let mut last = format!("{host}: no address");
     for a in addrs {
         if limits.cancel.load(Ordering::Relaxed) {
             return Err(HttpError::Cancelled);
         }
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.saturating_duration_since(now());
         if left.is_zero() {
             return Err(HttpError::Connect(format!("{host}: connecting timed out")));
         }
-        match TcpStream::connect_timeout(a, left) {
+        match connect(a, left) {
             Ok(s) => return Ok(s),
             Err(e) => last = format!("{host}: {e}"),
         }
@@ -308,8 +338,14 @@ impl Stream {
     }
 
     /// Wait for `f` to make progress, retrying timeouts until `stall` passes without any.
-    fn retry<T>(limits: &Limits, mut f: impl FnMut() -> std::io::Result<T>) -> Result<T, HttpError> {
-        let start = Instant::now();
+    fn retry<T>(limits: &Limits, f: impl FnMut() -> std::io::Result<T>) -> Result<T, HttpError> {
+        Self::retry_on(Instant::now, limits, f)
+    }
+
+    /// [`Stream::retry`] on the clock `now`. The tests pass a clock that moves only while `f` waits, which shows
+    /// when a stall is given up without timing it.
+    fn retry_on<T>(now: impl Fn() -> Instant, limits: &Limits, mut f: impl FnMut() -> std::io::Result<T>) -> Result<T, HttpError> {
+        let start = now();
         loop {
             if limits.cancel.load(Ordering::Relaxed) {
                 return Err(HttpError::Cancelled);
@@ -317,7 +353,7 @@ impl Stream {
             match f() {
                 Ok(v) => return Ok(v),
                 Err(e) if is_timeout(&e) => {
-                    if start.elapsed() >= limits.stall {
+                    if now().saturating_duration_since(start) >= limits.stall {
                         return Err(HttpError::Stalled);
                     }
                 }
@@ -611,51 +647,162 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
 mod tests_connect {
     use super::*;
 
+    /// `d` stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: the bounds here sit on the client's
+    /// fixed [`TICK`] (how often a wait looks at Cancel), which a scale below 1 doesn't shorten.
+    fn stretched(d: Duration) -> Duration {
+        lightcraft_testkit::scaled(d).max(d)
+    }
+
     fn limits(cancel: &AtomicBool) -> Limits<'_> {
-        Limits { connect: Duration::from_millis(300), stall: Duration::from_secs(1), cancel }
+        Limits { connect: stretched(Duration::from_millis(300)), stall: stretched(Duration::from_secs(1)), cancel }
     }
 
     /// A name lookup that hangs is given up on at the connect timeout, and Cancel stops it at once (issue #1532).
+    /// The resolver stays blocked until the test ends (`forced` records that its hang guard ran out), and the
+    /// lookup's waits are recorded instead of timed.
     #[test]
     fn a_hung_name_lookup_times_out_and_can_be_cancelled() {
         let cancel = AtomicBool::new(false);
-        let slow = || {
-            std::thread::sleep(Duration::from_secs(10));
-            Ok(Vec::new())
+        // a resolver that answers only once its gate opens (dropped at the end of the test); the hold is only a
+        // hang guard: a lookup that waited for the resolver gets an empty answer after it, and fails the checks
+        let hold = stretched(Duration::from_secs(30));
+        let forced = Arc::new(AtomicBool::new(false));
+        let blocked = || {
+            let (open, gate) = std::sync::mpsc::channel::<()>();
+            let forced = forced.clone();
+            let resolve = move || {
+                if matches!(gate.recv_timeout(hold), Err(std::sync::mpsc::RecvTimeoutError::Timeout)) {
+                    forced.store(true, Ordering::SeqCst);
+                }
+                Ok(Vec::new())
+            };
+            (open, resolve)
         };
-        let t = Instant::now();
-        let r = lookup("slow.example", slow, Instant::now() + Duration::from_millis(300), &limits(&cancel));
+        // given up at its deadline (300 ms from now), the resolver still blocked
+        let (open, resolve) = blocked();
+        let r = lookup("slow.example", resolve, Instant::now() + Duration::from_millis(300), &limits(&cancel));
         assert!(matches!(&r, Err(HttpError::Connect(m)) if m.contains("timed out")), "{r:?}");
-        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
-        // Cancel while the lookup is waiting on the resolver, not before it starts
-        let t = Instant::now();
-        let r = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(100));
+        assert!(!forced.load(Ordering::SeqCst), "the lookup waited for the resolver");
+        drop(open);
+        // Cancel while the lookup is waiting on the resolver: its deadline is an hour away, so only Cancel ends it,
+        // and it looks at Cancel every TICK at least. Cancel comes during the third wait.
+        let (open, resolve) = blocked();
+        let mut slices = Vec::new();
+        let r = lookup_waiting("slow.example", resolve, Instant::now() + Duration::from_secs(3600), &limits(&cancel), |_, slice| {
+            slices.push(slice);
+            // the fake wait returns at once and the deadline is an hour away: a lookup that never looked at Cancel
+            // would loop here until memory ran out, long before a hang guard; fail it after a few waits instead
+            assert!(slices.len() <= 10, "the lookup went on {} waits after Cancel came during the third", slices.len() - 3);
+            if slices.len() == 3 {
                 cancel.store(true, Ordering::Relaxed);
-            });
-            lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
         });
         assert!(matches!(r, Err(HttpError::Cancelled)), "{r:?}");
-        assert!(t.elapsed() >= Duration::from_millis(100) && t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        assert_eq!(slices, [TICK; 3], "Cancel is looked at after each wait of a TICK at most, and stops the lookup at once");
+        assert!(!forced.load(Ordering::SeqCst));
+        drop(open);
+        // the same through the real wait, Cancel from another thread
+        cancel.store(false, Ordering::Relaxed);
+        let (open, resolve) = blocked();
+        let (began, has_begun) = std::sync::mpsc::channel();
+        let signalling = move || {
+            let _ = began.send(());
+            resolve()
+        };
+        let r = std::thread::scope(|scope| {
+            let cancel = &cancel;
+            scope.spawn(move || {
+                lightcraft_testkit::recv_within(&has_begun, Duration::from_secs(30), "the resolver starts");
+                cancel.store(true, Ordering::Relaxed);
+            });
+            lookup("slow.example", signalling, Instant::now() + Duration::from_secs(3600), &limits(cancel))
+        });
+        assert!(matches!(r, Err(HttpError::Cancelled)), "{r:?}");
+        assert!(!forced.load(Ordering::SeqCst), "the lookup waited for the resolver, not for Cancel");
+        drop(open);
         // and a lookup asked for after Cancel doesn't start
-        assert!(matches!(lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel)), Err(HttpError::Cancelled)));
+        let (open, resolve) = blocked();
+        assert!(matches!(lookup("slow.example", resolve, Instant::now() + Duration::from_secs(30), &limits(&cancel)), Err(HttpError::Cancelled)));
+        drop(open);
         // a lookup that answers is used
         let cancel = AtomicBool::new(false);
         let local: SocketAddr = "127.0.0.1:9".parse().unwrap();
         assert_eq!(lookup("local", move || Ok(vec![local]), Instant::now() + Duration::from_secs(5), &limits(&cancel)).unwrap(), [local]);
     }
 
-    /// Several addresses that don't answer share one deadline instead of each getting the full timeout.
+    /// A connection that stays quiet is given up as stalled once `stall` has passed without progress, not later:
+    /// on a clock that moves only while a read waits (a `TICK` each), after exactly `stall`. Cancel stops it at
+    /// the next look.
+    #[test]
+    fn a_quiet_connection_is_given_up_at_the_stall_limit() {
+        let cancel = AtomicBool::new(false);
+        let limits = Limits { connect: Duration::from_secs(1), stall: Duration::from_secs(1), cancel: &cancel };
+        let base = Instant::now();
+        let at = std::cell::Cell::new(Duration::ZERO);
+        let quiet = || -> std::io::Result<()> {
+            at.set(at.get() + TICK);
+            Err(std::io::ErrorKind::TimedOut.into())
+        };
+        let r = Stream::retry_on(|| base + at.get(), &limits, quiet);
+        assert!(matches!(r, Err(HttpError::Stalled)), "{r:?}");
+        assert_eq!(at.get(), limits.stall, "given up after the stall limit");
+        at.set(Duration::ZERO);
+        let mut reads = 0;
+        let r = Stream::retry_on(
+            || base + at.get(),
+            &limits,
+            || -> std::io::Result<()> {
+                reads += 1;
+                cancel.store(true, Ordering::Relaxed);
+                Err(std::io::ErrorKind::TimedOut.into())
+            },
+        );
+        assert!(matches!(r, Err(HttpError::Cancelled)), "{r:?}");
+        assert_eq!(reads, 1, "Cancel is looked at after each wait");
+    }
+
+    /// Several addresses that don't answer share one deadline instead of each getting the full timeout. On a clock
+    /// that moves only while a connection is tried, each stand-in connection takes all the time it is given (an
+    /// address that never answers); what each was given is recorded instead of timed.
     #[test]
     fn addresses_share_one_connect_deadline() {
         let cancel = AtomicBool::new(false);
-        // non-routable addresses: each either hangs until the deadline or fails at once, never longer
         let addrs: Vec<SocketAddr> = (1..=5).map(|i| format!("10.255.255.{i}:81").parse().unwrap()).collect();
-        let t = Instant::now();
-        let r = connect_any("blackhole", &addrs, Instant::now() + Duration::from_millis(400), &limits(&cancel));
+        let base = Instant::now();
+        let at = std::cell::Cell::new(Duration::ZERO);
+        // (shorter than the connect timeout of `limits`, so an address given a timeout of its own shows)
+        let deadline = base + Duration::from_millis(200);
+        let mut given = Vec::new();
+        let r = connect_any_with(
+            "blackhole",
+            &addrs,
+            deadline,
+            &limits(&cancel),
+            || base + at.get(),
+            |_, timeout| {
+                given.push(timeout);
+                at.set(at.get() + timeout);
+                Err(std::io::ErrorKind::TimedOut.into())
+            },
+        );
+        assert!(matches!(&r, Err(HttpError::Connect(m)) if m.contains("timed out")), "{r:?}");
+        assert_eq!(given, [Duration::from_millis(200)], "the first address used up the one deadline; the rest got none");
+        // and an address that fails at once leaves the rest of the deadline to the next
+        let mut given = Vec::new();
+        let r = connect_any_with(
+            "refused",
+            &addrs,
+            base + Duration::from_secs(3600),
+            &limits(&cancel),
+            || base,
+            |_, timeout| {
+                given.push(timeout);
+                Err(std::io::ErrorKind::ConnectionRefused.into())
+            },
+        );
         assert!(r.is_err());
-        assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+        assert_eq!(given, [Duration::from_secs(3600); 5], "every address is tried with what is left");
     }
 
     /// Content-Length is `1*DIGIT`: a sign, hex prefix, trailing junk or empty value is refused, not read as a length.

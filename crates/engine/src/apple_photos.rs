@@ -493,21 +493,28 @@ impl Imports {
     /// under) plus `limits.margin` from when it started; never longer than `limits.cap` in all.
     /// True when nothing is left reserved or running.
     pub fn wait_idle_within(&self, limits: WaitLimits) -> bool {
-        let t0 = std::time::Instant::now();
+        self.wait_idle_clocked(limits, std::time::Instant::now, || std::thread::sleep(Duration::from_millis(20)))
+    }
+
+    /// [`Imports::wait_idle_within`] on the clock `now`, napping with `nap` between looks. The tests pass a clock
+    /// that moves only when the wait naps, which shows which deadline the wait keeps without timing it.
+    fn wait_idle_clocked(&self, limits: WaitLimits, now: impl Fn() -> std::time::Instant, mut nap: impl FnMut()) -> bool {
+        let t0 = now();
         loop {
             let Some(job) = self.running() else { return true };
-            let waited = t0.elapsed();
+            let at = now();
+            let waited = at.saturating_duration_since(t0);
             if waited >= limits.cap {
                 return false;
             }
             let expired = match job.started() {
                 None => waited >= limits.writing,
-                Some(at) => at.elapsed() >= (limits.import)(job.requested()).saturating_add(limits.margin),
+                Some(asked) => at.saturating_duration_since(asked) >= (limits.import)(job.requested()).saturating_add(limits.margin),
             };
             if expired {
                 return false;
             }
-            std::thread::sleep(Duration::from_millis(20));
+            nap();
         }
     }
 }

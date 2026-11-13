@@ -26,7 +26,8 @@ pub(super) fn damaged_model(name: &str) -> std::path::PathBuf {
     d
 }
 
-/// Poll until the worker is idle (or `limit` passes), collecting messages.
+/// Poll until the worker is idle (or `limit`, stretched by `LIGHTCRAFT_TIME_SCALE`, passes),
+/// collecting messages.
 fn settle(s: &mut Session, limit: Duration) -> Vec<String> {
     let t = Instant::now();
     let mut messages = Vec::new();
@@ -37,7 +38,7 @@ fn settle(s: &mut Session, limit: Duration) -> Vec<String> {
             messages.extend(s.segment_poll().messages);
             return messages;
         }
-        assert!(t.elapsed() < limit, "the worker never finished");
+        assert!(t.elapsed() < lightcraft_testkit::scaled(limit), "the worker never finished");
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -77,6 +78,9 @@ fn status_and_model_commands_without_the_model() {
 #[test]
 fn a_failing_download_ends_with_an_error_and_never_blocks() {
     use std::io::{BufRead, BufReader, Write};
+    // how long the mirror holds its first answer at most: a hang guard (a request that waited for the download
+    // gets its answer only after it, and fails the `running` checks below)
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30));
     // a local mirror that has nothing; its first answer waits until the test has made its second
     // request, so the download is still running then however the threads are scheduled (a 404 at
     // once could end it before, and the second request would rightly start a new one)
@@ -92,7 +96,7 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
                 line.clear();
             }
             if let Some(released) = first.take() {
-                let _ = released.recv_timeout(Duration::from_secs(10));
+                let _ = released.recv_timeout(hold);
             }
             let _ = c.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 13\r\nConnection: close\r\n\r\n<h1>404</h1>\n");
         }
@@ -103,22 +107,25 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
     let mut s = Session::with_demo();
     s.segmenter.dir = Some(dir.clone());
     s.segmenter.mirrors_file = Some(mirrors.clone());
-    let t = Instant::now();
     let r = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert_eq!(r["started"], true);
-    assert!(t.elapsed() < Duration::from_secs(1), "starting a download returns at once");
+    // the mirror holds its answer until `release`: still running means the call did not wait for it
+    assert!(s.segmenter.download_status().running, "starting a download returns at once");
     // a second request while it runs starts nothing
     let again = s.execute("segment.model.download", &json!({"acknowledged": true})).unwrap();
     assert!(again["started"] == false || again["downloading"] == false);
+    // AI mask requests meanwhile: an error while the mirror still holds the download, never a wait for it
+    let q = Instant::now();
+    let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
+    lightcraft_testkit::assert_responsive(q, "an AI mask request during the download");
+    assert!(e.contains(NOT_INSTALLED), "{e}");
+    assert!(s.segmenter.download_status().running, "the AI mask request did not wait for the download");
     let _ = release.send(());
     let t = Instant::now();
     while s.segmenter.download_status().running {
-        assert!(t.elapsed() < Duration::from_secs(30), "the download never ended");
-        // AI mask requests meanwhile: an error at once, never a wait
-        let q = Instant::now();
+        assert!(t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(30)), "the download never ended");
         let e = s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).unwrap_err().to_string();
         assert!(e.contains(NOT_INSTALLED), "{e}");
-        assert!(q.elapsed() < Duration::from_millis(500));
         std::thread::sleep(Duration::from_millis(20));
     }
     let st = s.segmenter.download_status();
@@ -137,6 +144,9 @@ fn a_failing_download_ends_with_an_error_and_never_blocks() {
 
 /// The app (background mode) never waits: with the model missing every request fails at once;
 /// with a damaged model the requests are queued, fail on the worker, and come back as messages.
+/// Observed, not timed: nothing is queued or downloaded for a missing model, and the requests for a
+/// damaged one return while the worker is held just before loading it. Each also has a responsiveness guard
+/// (`assert_responsive`), for a bounded wait in front of the answer that leaves no other trace.
 #[test]
 fn background_requests_never_wait_and_failures_come_back_as_messages() {
     let mut s = Session::with_demo();
@@ -145,24 +155,49 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     s.segmenter.dir = Some(tmp("missing"));
     for (cmd, p) in [("mask.add", json!({"kind": "object"})), ("mask.add", json!({"kind": "prompt", "text": "sky"})), ("segment.prepare", json!({}))]
     {
-        let t = Instant::now();
+        let t0 = Instant::now();
         let e = s.execute(cmd, &p).unwrap_err().to_string();
-        assert!(t.elapsed() < Duration::from_millis(500), "{cmd}");
+        // nothing to wait for, and no bounded wait in front of the error either (the checks below can't see one)
+        lightcraft_testkit::assert_responsive(t0, &format!("{cmd} with the model missing"));
         if Segmenter::AVAILABLE {
             assert!(e.starts_with(NOT_INSTALLED), "{cmd}: {e}");
         } else {
             assert!(e.contains("not available"), "{cmd}: {e}");
         }
+        // nothing to wait for: no request for the worker, no download
+        assert!(!s.segmenter.busy(), "{cmd} queued a request");
+        assert!(!s.segmenter.download_status().running, "{cmd} started a download");
     }
     assert!(s.develop_of(id).unwrap().masks.is_empty());
-    if !Segmenter::AVAILABLE {
-        return;
-    }
-    // a model folder whose weights are damaged
+    #[cfg(feature = "sam")]
+    damaged_model_requests_are_queued_while_the_model_loads(&mut s, id);
+}
+
+/// [`background_requests_never_wait_and_failures_come_back_as_messages`] with a damaged model: the worker is held
+/// just before it loads the model until every request has returned, so a request that waited for the load could
+/// not have returned yet.
+#[cfg(feature = "sam")]
+fn damaged_model_requests_are_queued_while_the_model_loads(s: &mut Session, id: lightcraft_catalog::PhotoId) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
     let dir = damaged_model("damaged");
     s.segmenter.dir = Some(dir.clone());
     assert!(s.segmenter.installed());
-    let t = Instant::now();
+    // each load waits until `release` goes; the hold is only a hang guard (a request that waited for the load would block
+    // the test until it runs out, and is then caught by the checks below and by `forced`)
+    let hold = lightcraft_testkit::scaled(Duration::from_secs(30)).max(Duration::from_secs(30));
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    let gate = Mutex::new(gate);
+    let (entered, forced) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let (e, f) = (entered.clone(), forced.clone());
+    s.segmenter.before_model_load(move || {
+        e.store(true, Ordering::SeqCst);
+        let waited = gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner).recv_timeout(hold);
+        if matches!(waited, Err(std::sync::mpsc::RecvTimeoutError::Timeout)) {
+            f.store(true, Ordering::SeqCst);
+        }
+    });
+    let t0 = std::time::Instant::now();
     s.execute("mask.add", &json!({"kind": "object"})).unwrap();
     let r = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap();
     assert_eq!(r["pending"], true);
@@ -172,8 +207,17 @@ fn background_requests_never_wait_and_failures_come_back_as_messages() {
     assert_eq!((r["include"].as_u64(), r["exclude"].as_u64()), (Some(1), Some(1)));
     let r = s.execute("mask.add", &json!({"kind": "prompt", "text": "the sky"})).unwrap();
     assert_eq!(r["pending"], true);
-    assert!(t.elapsed() < Duration::from_secs(1), "nothing waited for the model: {:?}", t.elapsed());
-    let messages = settle(&mut s, Duration::from_secs(60));
+    // every request has returned, and the worker is (or is about to be) held at the load
+    assert!(!forced.load(Ordering::SeqCst), "a request waited for the model");
+    // and none waited a bounded while in front of the queue either (the gate can't see that)
+    lightcraft_testkit::assert_responsive(t0, "queueing four AI mask requests while the model loads");
+    assert!(s.segmenter.busy(), "the requests are queued on the worker");
+    lightcraft_testkit::wait_until(Duration::from_secs(30), "the worker reaches the model load", || entered.load(Ordering::SeqCst));
+    assert!(s.segment_poll().messages.is_empty(), "nothing came back while the load is held");
+    // (dropped: this load and every later one go on)
+    drop(release);
+    let messages = settle(s, Duration::from_secs(60));
+    assert!(!forced.load(Ordering::SeqCst), "the load was held until the test let it go");
     assert!(!messages.is_empty() && messages.iter().all(|m| !m.is_empty()), "{messages:?}");
     assert!(messages.iter().any(|m| m.contains("model.safetensors") || m.contains("SAM 3")), "{messages:?}");
     assert!(s.segmenter.pending_clicks().is_none());
@@ -297,7 +341,7 @@ fn a_running_model_download_shows_in_activity_and_cancels() {
     s.execute("activity.cancel", &json!({"id": rows[0].id})).unwrap();
     let t = Instant::now();
     while s.segmenter.download_status().running || !s.activity.list().is_empty() {
-        assert!(t.elapsed() < Duration::from_secs(10), "the download never stopped");
+        assert!(t.elapsed() < lightcraft_testkit::scaled(Duration::from_secs(10)), "the download never stopped");
         std::thread::sleep(Duration::from_millis(10));
     }
     let st = s.segmenter.download_status();
