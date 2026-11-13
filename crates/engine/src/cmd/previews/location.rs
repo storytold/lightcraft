@@ -122,7 +122,7 @@ fn commit(s: &mut Session, to: &std::path::Path, custom: Option<PathBuf>, task: 
     // reopens with different thumbnail keys. Replacing this cache does no file scan or
     // deletion. Cache identity rejects old results; their disk writes use the old namespace.
     if let Some(lib) = s.library.as_ref() {
-        s.media.attach_disk_cache_namespace(&lib.thumbs_dir(), s.cache_bytes(), next_generation);
+        s.media.attach_disk_cache_namespace(&lib.thumbs_dir(), s.cache_bytes(), next_generation, lib.thumbs_gate());
     }
     s.media.smart_dir = Some(to.to_path_buf());
     s.media.clear_sources();

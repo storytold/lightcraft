@@ -210,6 +210,8 @@ impl WorkerCore {
             None => src,
         };
         let info = src.info_or(job.info());
+        // an over-budget brush mask is an error for the caller, not a preview missing its later strokes
+        lightcraft_engine::pipeline::check_brush_budget(&src.image, &info, &job.settings, &job.request())?;
         let mut rendered = match &job.stages {
             Some(view) => {
                 let st = self.stages.entry(view.clone()).or_default().clone();
@@ -440,6 +442,21 @@ mod tests {
         // stays within docs/gpu-pipeline.md's bound (≤ 3 LSB per channel) rather than bit-exact
         let max = a.image.data.iter().zip(&b.image.data).flat_map(|(p, q)| (0..3).map(move |c| p[c].abs_diff(q[c]))).max();
         assert!(max.is_some_and(|m| m <= 3), "max channel difference {max:?}");
+    }
+
+    // an over-budget brush mask is an error for the caller, as on native
+    #[test]
+    fn an_over_budget_brush_mask_fails_the_render() {
+        use lightcraft_engine::develop::{BrushStroke, Mask, MaskComponent, MaskShape};
+        let mut s = Session::with_demo();
+        let id = s.visible_cloned()[0];
+        let mut wire = WireJob::from_job(&s.thumb_job(id, 128).unwrap(), false, "Thumb");
+        let points = serde_json::from_value(serde_json::json!([{"x": -4000.0, "y": 0.5}, {"x": 4000.0, "y": 0.5}])).unwrap();
+        let far = BrushStroke { points, size: 0.05, ..Default::default() };
+        let component = MaskComponent { name: None, op: Default::default(), invert: false, shape: MaskShape::Brush { strokes: vec![far; 10] } };
+        Arc::make_mut(&mut wire.settings).masks.push(Mask { visible: true, components: vec![component], ..Default::default() });
+        let err = WorkerCore::default().render(&wire, None).err().unwrap_or_default();
+        assert!(err.contains("dabs"), "{err}");
     }
 
     // a job from before windows existed has none

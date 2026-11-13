@@ -34,7 +34,7 @@ fn write_png(path: &Path, seed: u8) {
 }
 
 fn exif_clock_block(original: Option<&str>, digitized: Option<&str>) -> Vec<u8> {
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
 
     let mut exif = IfdBuilder::new();
     if let Some(value) = original {
@@ -2960,7 +2960,7 @@ fn a_file_gone_since_the_import_review_is_not_imported() {
 /// a JPEG. In a build without the codecs' `heif` feature it is reported as failed, saying why.
 #[test]
 fn heic_imports_as_a_normal_photo_or_says_why_not() {
-    use lightcraft_heif::testdata::{Prop, Spec, build};
+    use craft_heif::testdata::{Prop, Spec, build};
     let src = temp_dir("heic");
     let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
     let p3 = lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3);
@@ -2997,8 +2997,8 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
 /// writes as UTC: an iPhone photo landed five hours late and after 19:00 on the wrong day.
 #[test]
 fn a_heic_is_dated_by_its_exif_and_not_by_the_file() {
-    use lightcraft_heif::testdata::{Spec, build};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    use craft_heif::testdata::{Spec, build};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
     let src = temp_dir("heic-capture-time");
     let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
     let mut exif = IfdBuilder::new();
