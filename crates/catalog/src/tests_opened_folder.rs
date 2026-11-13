@@ -348,6 +348,34 @@ fn a_snapshot_swap_during_fill_cannot_remove_another_librarys_staging_file() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn a_failed_caller_append_rolls_back_its_opened_file_not_the_replacement() {
+    let dir = scratch("caller-held-file-rollback");
+    let log = crate::journal::LOG;
+    crate::fault::write_on_caller(&dir, true);
+    let mut store = FsStore::open(&dir).unwrap();
+    store.append(log, b"first\n").unwrap();
+    crate::fault::install(
+        &dir,
+        std::sync::Arc::new(|step| if step == crate::fault::Step::Sync { Err(std::io::Error::other("injected sync failure")) } else { Ok(()) }),
+    );
+    assert!(store.append(log, b"torn\n").is_err());
+    crate::fault::remove(&dir);
+    let held = dir.join("held.log");
+    std::fs::rename(dir.join(log), &held).unwrap();
+    let replacement = b"other\nextra\n";
+    std::fs::write(dir.join(log), replacement).unwrap();
+    assert!(store.truncate(log, 6).is_err(), "cleanup must refuse the replacement");
+    assert_eq!(std::fs::read(&held).unwrap(), b"first\n", "the retained descriptor must allow rollback on every native platform");
+    assert_eq!(std::fs::read(dir.join(log)).unwrap(), replacement);
+    store.write_atomic(log, b"first\n").unwrap();
+    store.append(log, b"next\n").unwrap();
+    assert_eq!(store.read(log).unwrap().unwrap(), b"first\nnext\n");
+    crate::fault::write_on_caller(&dir, false);
+    drop(store);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_caller_append_reopens_the_file_after_a_note_bearing_copy_replaces_the_folder() {

@@ -314,7 +314,16 @@ impl Store for FsStore {
         // moved-away folder. As the log thread does, reopen the current path for every batch.
         check_regular_directory_entry(&self.path(name))?;
         let existed = self.path(name).exists();
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(self.path(name))?;
+        // Windows append-only handles cannot truncate their own failed write. For LOG,
+        // match the native writer's writable handle and seek to the checked length.
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).truncate(false);
+        if name == crate::journal::LOG {
+            options.write(true);
+        } else {
+            options.append(true);
+        }
+        let mut f = options.open(self.path(name))?;
         if !existed {
             self.sync_dir();
         }
@@ -322,6 +331,7 @@ impl Store for FsStore {
             let len = f.metadata()?.len();
             let log = self.sync_log.get_or_insert(SynchronousLog { good: self.known_log_len.unwrap_or(len), torn: None });
             check_log_len(len, log.good)?;
+            std::io::Seek::seek(&mut f, std::io::SeekFrom::Start(log.good))?;
         }
         #[cfg(not(target_arch = "wasm32"))]
         let written = crate::fault::check(&self.dir, crate::fault::Step::Write)
