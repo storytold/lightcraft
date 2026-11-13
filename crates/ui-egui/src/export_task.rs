@@ -81,10 +81,21 @@ pub fn start(
 /// another import holds Photos (its row says so; [`poll`] tries again). The library may have grown while it
 /// waited, so what it writes is checked against the originals as they are now. One that can't start says why,
 /// on screen for longer, and the one after it is tried.
+/// Another Apple Photos import holds Photos (the web build has none).
+fn photos_busy(app: &LightcraftApp) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return app.session.apple_photos_imports.running().is_some();
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = app;
+        false
+    }
+}
+
 fn start_next(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.export_queue.retain(|q| !q.cancel.load(Ordering::Relaxed));
     while let Some(q) = app.export_queue.front() {
-        if q.opts.add_to_photos && app.session.apple_photos_imports.running().is_some() {
+        if q.opts.add_to_photos && photos_busy(app) {
             q.row.detail(crate::i18n::tr("waiting for Apple Photos"));
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
             return;
