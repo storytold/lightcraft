@@ -14,7 +14,12 @@ const SETTLE: Duration = Duration::from_secs(120);
 /// The Library grid with the Keywords panel open and two photos selected: the first with beach and
 /// Weddings, the second with beach.
 fn two_selected() -> (Headless, Vec<u64>) {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    two_selected_in(lightcraft_engine::Session::with_demo())
+}
+
+/// [`two_selected`] in `session`'s library.
+fn two_selected_in(session: lightcraft_engine::Session) -> (Headless, Vec<u64>) {
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
     let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
     for (method, params) in [
@@ -1102,6 +1107,49 @@ fn enter_keywords_refuses_a_name_ending_in_an_asterisk() {
     ask(&mut h, "ui.key", json!({"key": "Backspace"}));
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     assert!(all_have(&h, &ids, "sea"), "the text was kept and put right");
+}
+
+/// An edit the library could not write to disk is still applied in memory: the box gives it up as
+/// applied. Retyping the photos' earlier keywords then takes it back, and another Return adds no
+/// second undo step, so one Undo takes it back.
+#[test]
+fn enter_keywords_treats_an_edit_saved_only_in_memory_as_applied() {
+    use std::sync::atomic::Ordering;
+    let store = super::unsaved::Flaky::default();
+    let mut session = lightcraft_engine::Session::new();
+    let stores = lightcraft_engine::library::LibraryStores {
+        dir: "flaky".into(),
+        catalog: Box::new(store.clone()),
+        files: Box::new(lightcraft_catalog::MemStore::new()),
+        on_disk: false,
+    };
+    session.open_library_in(stores, true).unwrap();
+    let (mut h, ids) = two_selected_in(session);
+    let undo = h.app.session.undo.len();
+
+    store.fail.store(true, Ordering::SeqCst);
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "harbor"), "the edit is applied in memory");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|(t, ..)| t.contains("not written to disk")), "{:?}", h.app.ui.toast);
+    assert!(!enter_focused(&h), "Return gave up the cursor, as for an applied edit");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(h.app.session.undo.len(), undo + 1, "another Return added no undo step");
+    store.fail.store(false, Ordering::SeqCst);
+    ask(&mut h, "engine.execute", json!({"command": "edit.undo", "params": {}}));
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"], "one undo takes the edit back");
+    assert_eq!(keywords_of(&h, ids[1]), ["beach"]);
+
+    store.fail.store(true, Ordering::SeqCst);
+    enter(&mut h, "beach, Weddings*, harbor");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(all_have(&h, &ids, "harbor"));
+    enter(&mut h, "beach, Weddings*");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(none_has(&h, &ids, "harbor"), "retyping the earlier keywords took the edit back");
+    assert_eq!(keywords_of(&h, ids[0]), ["beach", "Weddings"]);
+    assert_eq!(keywords_of(&h, ids[1]), ["beach"]);
+    store.fail.store(false, Ordering::SeqCst);
 }
 
 /// What the Enter Keywords box shows, read by copying all of it.

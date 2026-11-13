@@ -264,15 +264,17 @@ fn enter_id() -> egui::Id {
 }
 
 /// Applies the Enter Keywords `edit` to the photos it was started on, as one undo step. Returns
-/// whether it was applied (an edit that changes nothing is); a refusal is said.
+/// whether it was applied (an edit that changes nothing is, and so is one saved in memory but not
+/// written to disk); a refusal or a failed write is said.
 fn apply_enter(app: &mut LightcraftApp, ctx: &egui::Context, edit: &EnterEdit) -> bool {
     match crate::panels::keywording::entered(&app.session.catalog, &edit.start, &edit.text) {
         Ok(change) if change.is_empty() => true,
-        Ok(change) => match app.run("photo.setMeta", json!({"ids": &*edit.ids, "addKeywords": change.add, "removeKeywords": change.remove})) {
+        Ok(change) => match app.run_typed("photo.setMeta", json!({"ids": &*edit.ids, "addKeywords": change.add, "removeKeywords": change.remove})) {
             Ok(_) => true,
             Err(e) => {
-                app.toast_error(ctx, e);
-                false
+                let applied = e.kind == crate::ErrorKind::NotSaved;
+                app.toast_error(ctx, e.message);
+                applied
             }
         },
         Err(name) => {
