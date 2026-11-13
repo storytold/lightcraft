@@ -615,9 +615,23 @@ fn album_rule_validation_and_matching_keep_exact_target() {
     assert!(!exact.matches(&photo(11), &cat));
     assert!(exact.matches(&photo(12), &cat));
 
+    let not_exact = rs(json!({"rules": [{"field": "album", "op": "isNot", "value": next}]}));
+    assert!(not_exact.check(&cat).is_empty());
+    assert!(not_exact.matches(&photo(11), &cat));
+    assert!(!not_exact.matches(&photo(12), &cat));
+
     let unit_bearing = rs(json!({"rules": [{"field": "album", "op": "is", "value": "f/3mm"}]}));
     assert!(!unit_bearing.check(&cat).is_empty());
     assert!(!unit_bearing.matches(&photo(13), &cat));
+}
+
+#[test]
+fn album_rule_is_not_rejects_invalid_ids() {
+    let cat = Catalog::new();
+    let invalid = rs(json!({"rules": [{"field": "album", "op": "isNot", "value": "f/3mm"}]}));
+
+    assert!(!invalid.check(&cat).is_empty());
+    assert!(!invalid.matches(&photo(1), &cat));
 }
 
 /// Album rules saved before Album offered only "is" / "isn't" (≥, between… from when it was a
