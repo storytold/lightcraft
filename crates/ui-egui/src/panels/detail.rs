@@ -18,6 +18,7 @@ mod crop;
 mod filmstrip;
 mod geometry;
 mod info;
+mod lens_blur;
 mod look_ahead;
 mod masks;
 mod retouch;
@@ -48,6 +49,7 @@ use info::{
     preview_only_pill, quick_name,
 };
 pub(crate) use info::{draw_focus_point, failed_pill, loupe_pill, rendering_overdue};
+use lens_blur::{lens_blur_brush_overlay, lens_blur_shape_overlay};
 use look_ahead::BEHIND;
 pub use look_ahead::LookAhead;
 pub(crate) use look_ahead::{Prepare, look_ahead};
@@ -59,6 +61,12 @@ use window::{WindowCtx, WindowView, draw_window, request_window};
 /// An in-progress on-canvas gesture.
 #[derive(Clone, Debug)]
 pub enum Gesture {
+    /// Lens Blur's fixed focus shape: moving it (`handle` 0) or stretching it sideways (1) or
+    /// up and down (2), from `original` (where it was when the drag began).
+    LensBlurArea {
+        handle: u8,
+        original: lightcraft_develop::FocusArea,
+    },
     Brush {
         points: Vec<Point>,
         /// Pen pressure (0..1) at each point; empty when no pen pressure was reported (a mouse) or the
@@ -344,7 +352,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the line of a wipe over both
     draw_wipe_line(app.ui.before_after, &p, img_rect, line);
     let map = CanvasMap::new(&frame, img_rect);
-    let over = OverPhoto { photo: &photo, d: &d, map: &map, canvas, img_rect, fullscreen, crop_tool, clipping: !show_before };
+    let over = OverPhoto { photo: &photo, d: &d, map: &map, canvas, img_rect, fullscreen, crop_tool };
     photo_overlays(app, ui, &p, &over);
     // Cursor selection must also run on gesture frames, when tool input is suppressed.
     if !matches!(right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
@@ -434,7 +442,8 @@ fn face_boxes(
     let people = if app.ui.name_edit.is_some() { app.caches.person_names(&app.session.catalog) } else { Default::default() };
     // while the name box is open and recognition is not set up, the box offers the next step
     let setup = if app.ui.name_edit.is_some() { super::faces::setup(app, ui.ctx()) } else { super::faces::Setup::Running };
-    let regions = RegionContext { photo, orient: d.orientation, hints: hints.as_deref(), people: &people, setup };
+    let movable = !matches!(app.ui.right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye);
+    let regions = RegionContext { photo, orient: d.orientation, hints: hints.as_deref(), people: &people, setup, movable };
     match region_overlay(ui, p, map, &regions, &mut app.ui.name_edit) {
         Some(RegionEdit::SetUp) => {
             app.ui.name_edit = None;
@@ -757,6 +766,8 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
         RightPanel::Remove => remove_overlay(app, ui, resp, map, d),
         RightPanel::RedEye => eye_overlay(app, ui, resp, map, d),
+        RightPanel::Edit if app.ui.tool == "lensBlurShape" => lens_blur_shape_overlay(app, ui, resp, map, d),
+        RightPanel::Edit if app.ui.tool.starts_with("lensBlur") => lens_blur_brush_overlay(app, ui, resp, map),
         _ => {
             // side by side / stacked: Before shows the same frame, so a click in its view (white
             // balance, colour samples, targeted adjustment) means the same point of the photo.
@@ -1064,17 +1075,12 @@ struct OverPhoto<'a> {
     img_rect: Rect,
     fullscreen: bool,
     crop_tool: bool,
-    /// the clipping overlay may show (not in the Before view)
-    clipping: bool,
 }
 
-/// The overlays over the photo: clipping, layout image, info, filter pill, faces, focus point and
+/// The overlays over the photo: layout image, info, filter pill, faces, focus point and
 /// the transform grid.
 fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, o: &OverPhoto) {
     let (canvas, img_rect) = (o.canvas, o.img_rect);
-    if app.ui.show_clipping && o.clipping && !o.fullscreen {
-        clipping_overlay(app, p, img_rect);
-    }
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)
     super::layout_overlay::draw(app, p, img_rect);
     register(ui, "canvas:image", img_rect);
@@ -1154,7 +1160,7 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
 }
 
 /// The diagnostic overlay the loupe shows (an Alt-drag preview, the selected mask, Point Color's
-/// visualized range, Visualize Spots).
+/// visualized range, Visualize Spots, the clipping warnings).
 pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
@@ -1198,20 +1204,11 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     if edit && app.ui.hdr_visualize && d.hdr.enabled {
         return Overlay::HdrRange;
     }
-    Overlay::None
-}
-
-fn clipping_overlay(app: &LightcraftApp, p: &egui::Painter, r: Rect) {
-    // Highlight clipped regions using the histogram's extremes isn't spatial; show a subtle frame hint.
-    if let Some(h) = app.renderer.textures.get(&Slot::Main).and_then(|t| t.histogram.as_ref()) {
-        let (lo, hi) = h.clipping();
-        if hi > 0.003 {
-            p.rect_stroke(r, 0.0, Stroke::new(2.0, Color32::from_rgb(255, 60, 60)), StrokeKind::Outside);
-        }
-        if lo > 0.003 {
-            p.rect_stroke(r.expand(3.0), 0.0, Stroke::new(2.0, Color32::from_rgb(60, 120, 255)), StrokeKind::Outside);
-        }
+    // Clipping warnings (J): clipped highlights red, clipped shadows blue, on the photo itself
+    if app.ui.show_clipping {
+        return Overlay::ClipWarnings;
     }
+    Overlay::None
 }
 
 fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: Rect, canvas: Rect) {
