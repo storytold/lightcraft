@@ -131,8 +131,11 @@ fn pt(x: f64, y: f64) -> Value {
 /// What Lightroom Classic does, from its exports of synthetic DNGs whose masks we wrote (issue #1815):
 /// - **`MaskGroupBasedCorrections`, `crs:Version` ≥ 2** (what Lightroom writes today): an ordinary
 ///   radial — effect inside — is written `Flipped="true"`, so `Flipped` is the "inside" flag.
-///   Inverting the mask is a separate field, `crs:MaskInverted` (see [`component`]). `Flipped="false"`
-///   is read as outside, the same sense as the legacy filter's; Lightroom never wrote one for us.
+///   Inverting the mask is a separate field, `crs:MaskInverted` (see [`component`]). Lightroom
+///   Classic 15.6 (Camera Raw 18.7) writes an inverted radial as `MaskInverted="true"` *with*
+///   `Flipped="false"` (issue #3592): so when `MaskInverted` is true, `Flipped` isn't read, or the two
+///   would cancel out. Otherwise `Flipped="false"` is read as outside, the same sense as the legacy
+///   filter's; Lightroom never wrote that combination for us.
 /// - **`MaskGroupBasedCorrections` without `crs:Version`**: Lightroom renders the effect inside
 ///   whatever `Flipped` says, and rewrites both `Flipped="false"` and `"true"` as `Flipped="true"`
 ///   with `Version="2"`. So `Flipped` is ignored here.
@@ -142,7 +145,8 @@ fn pt(x: f64, y: f64) -> Value {
 fn radial_inside(m: &XmpValue, container: &str) -> bool {
     let flipped = flag(m, "crs:Flipped");
     if container == "crs:MaskGroupBasedCorrections" {
-        if num(m, "crs:Version").is_some_and(|v| v >= 2.0) { flipped.unwrap_or(true) } else { true }
+        let inverted = flag(m, "crs:MaskInverted").unwrap_or(false);
+        if num(m, "crs:Version").is_some_and(|v| v >= 2.0) && !inverted { flipped.unwrap_or(true) } else { true }
     } else {
         flipped.unwrap_or(false)
     }
