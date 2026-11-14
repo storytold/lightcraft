@@ -182,7 +182,7 @@ fn import_thumbnail_close_releases_previews_for_all_cancel_paths() {
             "control" => review.request("ui.dialog.cancel", json!({})),
             _ => review.request("ui.clickWidget", json!({"id": "button:dialogCancel"})),
         }
-        assert!(review.h.settle(super::ui_settle_timeout()));
+        assert!(review.h.settle(T));
         assert!(review.h.app.ui.dialog.is_none());
         assert!(review.h.app.renderer.textures.keys().all(|slot| !matches!(slot, Slot::Import(_))));
         assert!(!review.h.app.renderer.is_pending(Slot::Import(0)));
@@ -220,7 +220,7 @@ fn import_thumbnail_slider_keeps_the_shared_keyboard_contract() {
     }
     let before = review.h.app.ui.import_thumb_size;
     review.request("ui.key", json!({"key": "ArrowUp"}));
-    assert!(review.h.settle(super::ui_settle_timeout()));
+    assert!(review.h.settle(T));
     assert_eq!(review.h.app.ui.import_thumb_size, before + 1.0);
     assert_eq!(review.checks(), checked);
 }
