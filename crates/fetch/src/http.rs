@@ -611,33 +611,53 @@ pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Res
 mod tests_connect {
     use super::*;
 
+    /// `d` stretched by `LIGHTCRAFT_TIME_SCALE`, never shrunk: the bounds here sit on the client's
+    /// fixed [`TICK`] (how often a wait looks at Cancel), which a scale below 1 doesn't shorten.
+    fn stretched(d: Duration) -> Duration {
+        lightcraft_testkit::scaled(d).max(d)
+    }
+
     fn limits(cancel: &AtomicBool) -> Limits<'_> {
-        Limits { connect: Duration::from_millis(300), stall: Duration::from_secs(1), cancel }
+        Limits { connect: stretched(Duration::from_millis(300)), stall: stretched(Duration::from_secs(1)), cancel }
     }
 
     /// A name lookup that hangs is given up on at the connect timeout, and Cancel stops it at once (issue #1532).
     #[test]
     fn a_hung_name_lookup_times_out_and_can_be_cancelled() {
         let cancel = AtomicBool::new(false);
+        // (every time here is stretched by LIGHTCRAFT_TIME_SCALE, so the resolver stays far slower than the bounds)
         let slow = || {
-            std::thread::sleep(Duration::from_secs(10));
+            std::thread::sleep(stretched(Duration::from_secs(10)));
             Ok(Vec::new())
         };
         let t = Instant::now();
-        let r = lookup("slow.example", slow, Instant::now() + Duration::from_millis(300), &limits(&cancel));
+        let r = lookup("slow.example", slow, Instant::now() + stretched(Duration::from_millis(300)), &limits(&cancel));
         assert!(matches!(&r, Err(HttpError::Connect(m)) if m.contains("timed out")), "{r:?}");
-        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
-        // Cancel while the lookup is waiting on the resolver, not before it starts
+        assert!(t.elapsed() < stretched(Duration::from_secs(2)), "{:?}", t.elapsed());
+        // Cancel while the lookup is waiting on the resolver (100 ms after it started), not before it starts
+        let (began, has_begun) = std::sync::mpsc::channel();
+        let signalling = move || {
+            let _ = began.send(());
+            std::thread::sleep(stretched(Duration::from_secs(10)));
+            Ok(Vec::new())
+        };
         let t = Instant::now();
         let r = std::thread::scope(|scope| {
-            scope.spawn(|| {
+            let cancel = &cancel;
+            scope.spawn(move || {
+                // as long as the lookup's own deadline, which a time scale below 1 doesn't shorten
+                let started = has_begun.recv_timeout(stretched(Duration::from_secs(30)));
+                assert!(started.is_ok(), "the resolver didn't start within the lookup's deadline: {started:?}");
                 std::thread::sleep(Duration::from_millis(100));
                 cancel.store(true, Ordering::Relaxed);
             });
-            lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel))
+            lookup("slow.example", signalling, Instant::now() + stretched(Duration::from_secs(30)), &limits(cancel))
         });
         assert!(matches!(r, Err(HttpError::Cancelled)), "{r:?}");
-        assert!(t.elapsed() >= Duration::from_millis(100) && t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
+        // at least the 100 ms before Cancel; then noticed within a TICK (the margin is for a slow machine)
+        let waited = t.elapsed();
+        let limit = Duration::from_millis(100) + stretched(Duration::from_millis(900));
+        assert!(waited >= Duration::from_millis(100) && waited < limit, "{waited:?} (limit {limit:?})");
         // and a lookup asked for after Cancel doesn't start
         assert!(matches!(lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel)), Err(HttpError::Cancelled)));
         // a lookup that answers is used
@@ -652,10 +672,11 @@ mod tests_connect {
         let cancel = AtomicBool::new(false);
         // non-routable addresses: each either hangs until the deadline or fails at once, never longer
         let addrs: Vec<SocketAddr> = (1..=5).map(|i| format!("10.255.255.{i}:81").parse().unwrap()).collect();
+        // five full timeouts would take 2 s; one shared one 400 ms
         let t = Instant::now();
-        let r = connect_any("blackhole", &addrs, Instant::now() + Duration::from_millis(400), &limits(&cancel));
+        let r = connect_any("blackhole", &addrs, Instant::now() + stretched(Duration::from_millis(400)), &limits(&cancel));
         assert!(r.is_err());
-        assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+        assert!(t.elapsed() < stretched(Duration::from_millis(1500)), "{:?}", t.elapsed());
     }
 
     /// Content-Length is `1*DIGIT`: a sign, hex prefix, trailing junk or empty value is refused, not read as a length.
