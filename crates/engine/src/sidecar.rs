@@ -1495,8 +1495,10 @@ mod tests {
                     section.push(0);
                 }
             }
+            // a valid header: one RGB pixel, 8 bits
             let mut p = b"8BPS\0\x01".to_vec();
-            p.resize(26, 0);
+            p.resize(12, 0);
+            p.extend_from_slice(&[0, 3, 0, 0, 0, 1, 0, 0, 0, 1, 0, 8, 0, 3]);
             p.extend_from_slice(&(colour as u32).to_be_bytes());
             p.resize(p.len() + colour, 0);
             p.extend_from_slice(&(section.len() as u32).to_be_bytes());
