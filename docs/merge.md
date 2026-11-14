@@ -1,5 +1,7 @@
 # Photo Merge (HDR, Panorama, HDR Panorama)
 
+> **Changes:** [revision history](#revision-history)
+
 `crates/merge` (layer L3, no UI dependencies) implements the algorithms; `crates/engine/src/merge.rs`
 plans, runs and finishes merges in the library; the desktop UI shows a dialog with a live preview.
 All algorithms are our own implementations from published papers (cited in the module docs).
@@ -86,7 +88,26 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
 - *Create Stack*: the result goes on top of a collapsed stack of its sources (`Catalog::stack_with_ops`); its
   caption also lists them.
 - Panorama output is limited to `maxMegapixels` (default 40) — blending memory is ~25 bytes/pixel.
-- HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
-  photos are decoded one at a time. Measured on 67 MP raws: 3 frames 3.8 GB, 4 frames 4.7 GB, 5 frames 5.5 GB (was
-  4.8 / 6.3 GB for 3 / 4). Half-float frames would halve the per-frame share.
+- HDR memory: frames still use 32-bit float RGB (12 bytes per pixel). Each decoded frame is validated and its
+  excess crop capacity is released before reading the next. Warps write straight into retained f32 storage;
+  saturation uses three rows per frame per active merge worker, and inputs/validity maps are freed before the
+  full-size ghost overlay. The original Lanczos kernel and arithmetic order are unchanged; a frozen f32 oracle
+  checks bit-identical radiance, overlay, DNG output and developer results. Generated brackets, four workers and
+  High deghosting: three 67.28 MP frames peak at 3.398 GB live heap (was 5.011 GB); seven 24 MP frames peak at
+  2.672 GB (was 3.483 GB). These counts exclude raw decoding, DNG writing and app caches. They are not directly
+  comparable to the older real-raw RSS measurements. Half-float storage is deferred because original threshold
+  decisions must survive packing and alignment; naive packing changes a generated highlight by over 15%.
+  Lazy input requests check cancellation before decoding, and a decode error stops subsequent requests.
+  Checked row/tile views and parallel finite scans keep the safety checks while removing a measured CPU regression.
+  Release medians on generated 24-MP brackets are 1.072 s for three frames and 1.982 s for five, with unchanged
+  paired peak heap; these are merge-core timings, not real-raw or end-to-end timings.
+  Measurements, allocation budgets, precision gates and limits: [HDR memory](hdr-memory.md).
 - The browser build has no file access for merges yet.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-07 | patch | LR-MERGE-HDR: safe row/tile access and parallel finite checks; release timing and heap A/B evidence, byte-identical output |
+| 2026-11-05 | patch | LR-MERGE-HDR: cancellation before each lazy input request, unchanged decode errors and engine progress mapping; regressions for two frames and mixed orientations |
+| 2026-11-05 | minor | LR-MERGE-HDR: exact row saturation, sequential validated storage and input release before overlay; generated 24 MP and 67.28 MP memory measurements; half-float frames deferred, no parity gap closes |

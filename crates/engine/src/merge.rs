@@ -106,6 +106,26 @@ fn err(e: impl std::fmt::Display) -> String {
 }
 
 impl MergeJob {
+    /// HDR keeps each decoded image at its logical size before reading the next source.
+    fn run_hdr(&self, hdr: &HdrOptions, progress: &ProgressFn) -> std::result::Result<lightcraft_merge::HdrResult, String> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let n = self.sources.len().max(1);
+        let loaded = AtomicUsize::new(0);
+        let frames = self.sources.iter().enumerate().map(|(i, (_, path))| {
+            let bytes = (self.read)(path).map_err(lightcraft_merge::MergeError::Decode)?;
+            let frame = lightcraft_merge::load_frame_with(&bytes, self.preview, false, &crate::camera_preview::starting_colour_tags)
+                .map_err(|e| lightcraft_merge::MergeError::Decode(format!("{path}: {e}")))?;
+            loaded.store(i.saturating_add(1), Ordering::Relaxed);
+            Ok(frame)
+        });
+        let p = |f: f32, stage: &str| {
+            // Fraction zero checks the next input. Keep reads in 0..30%, then merge in 30..90%.
+            let f = if f == 0.0 { 0.3 * loaded.load(Ordering::Relaxed) as f32 / n as f32 } else { 0.3 + 0.6 * f };
+            progress(f, stage)
+        };
+        lightcraft_merge::hdr::merge_hdr_iter(frames, hdr, &p).map_err(err)
+    }
+
     fn load(&self, orient: bool, progress: &ProgressFn, span: (f32, f32)) -> std::result::Result<Vec<Frame>, String> {
         use rayon::prelude::*;
         let done = std::sync::atomic::AtomicUsize::new(0);
@@ -137,9 +157,7 @@ impl MergeJob {
         let mut lens = Vec::new();
         let (image, color, orientation, metadata, baseline, samples, crop, mut info, ghost) = match &self.kind {
             MergeKind::Hdr { hdr } => {
-                let frames = self.load(false, progress, (0.0, 0.3))?;
-                let p = sub(0.3, 0.9);
-                let mut r = lightcraft_merge::merge_hdr(frames, hdr, &p).map_err(err)?;
+                let mut r = self.run_hdr(hdr, progress)?;
                 lens = std::mem::take(&mut r.lens);
                 let info = json!({
                     "reference": self.sources[r.reference].0.0,

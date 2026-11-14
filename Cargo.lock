@@ -4064,10 +4064,14 @@ dependencies = [
 name = "lightcraft-merge"
 version = "0.21.1"
 dependencies = [
+ "dhat",
+ "half",
  "lightcraft-codecs",
  "lightcraft-color",
+ "lightcraft-develop",
  "lightcraft-geom",
  "lightcraft-meta",
+ "lightcraft-pipeline",
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-scenes",
