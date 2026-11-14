@@ -162,7 +162,8 @@ impl ColorOps {
             hue: bands.map(|b| (b.hue / 100.0) as f32 * 0.5),
             sat: bands.map(|b| (b.sat / 100.0) as f32),
             lum: bands.map(|b| (b.lum / 100.0) as f32 * 0.18),
-            mixer: !s.mixer.is_neutral(),
+            // from process V9 the colour stage applies the mixer (`crate::mixer_stage`)
+            mixer: !s.mixer.is_neutral() && s.process.process() < lightcraft_develop::Process::V9,
             points: if crate::is_bw(s) {
                 Vec::new()
             } else {
@@ -366,7 +367,8 @@ mod tests {
 
     #[test]
     fn mixer_targets_its_band() {
-        let mut s = DevelopSettings::default();
+        // V7's mixer (from V9 the colour stage applies it: `crate::mixer_stage`)
+        let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
         s.mixer.blue.sat = -100.0;
         let ops = ColorOps::new(&s);
         let blue = [0.02, 0.05, 0.4];
@@ -376,6 +378,20 @@ mod tests {
         let cr = lab_to_lch(oklab_from_2020(ops.apply(red, 0.0, 0.0)))[1];
         assert!(cb < 0.02, "{cb}");
         assert!((cr - cr0).abs() < 0.01);
+    }
+
+    #[test]
+    fn v8_leaves_the_mixer_to_the_mixer_stage() {
+        // from V9 `crate::mixer_stage` applies the mixer, so `ColorOps` must not apply it again
+        let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
+        s.mixer.blue.sat = -100.0;
+        assert!(ColorOps::new(&s).mixer);
+        // V8 (the Highlights/Shadows base change) still applies the earlier mixer, and has no mixer stage
+        s.process = lightcraft_develop::Process::V8.version();
+        assert!(ColorOps::new(&s).mixer);
+        assert!(crate::mixer_stage::MixerStage::new(&s).is_none());
+        s.process = lightcraft_develop::Process::V9.version();
+        assert!(!ColorOps::new(&s).mixer);
     }
 
     #[test]
