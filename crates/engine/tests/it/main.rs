@@ -4,5 +4,6 @@
 mod denoise_cpu;
 #[cfg(feature = "denoise")]
 mod denoise_real;
+mod negative_scans;
 mod orf_withdrawal;
 mod preview_read;

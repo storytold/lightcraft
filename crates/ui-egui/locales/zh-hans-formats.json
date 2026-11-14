@@ -324,6 +324,11 @@
   "Panel move was not applied: {error}": "面板移动未应用：{error}",
   "{name} is installed": "{name} 已安装",
   "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
+  "Converting resets the edits made on the negative: {list}.": "转换会重置在负片上所做的编辑：{list}。",
+  "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "“同步胶卷”会转换尚未转换的帧（已选择 {n} 帧），并重置它们在负片上所做的编辑：{list}。",
+  "Roll synced: {n} frames share one film base and range": "胶卷已同步：{n} 帧共用同一片基和范围",
+  "Roll synced: {n} frames ({m} could not be read)": "胶卷已同步：{n} 帧（{m} 帧无法读取）",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "胶卷已同步：{n} 帧（{m} 帧无法读取；同步期间被编辑的 {c} 帧保持原样）",
   "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"

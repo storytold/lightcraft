@@ -245,6 +245,24 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             crate::panels::mask_effects::save_confirm(app, name, group, fields, *amount, *brush)
         }
         Dialog::DeleteEffects { names } => app.run("mask.deleteEffect", json!({"names": names})),
+        Dialog::ConvertNegative { film, roll, photo, reset, library } => {
+            // another library opened meanwhile: these numbers are other photos there
+            if *library != app.session.library_generation() {
+                return Err(crate::i18n::tr("Another library was opened since the warning: nothing was converted").to_string());
+            }
+            // the photos the dialog warned about, whatever is active now; and only the edits it listed are reset
+            let ids: Vec<u64> = if roll.is_empty() { photo.iter().copied().collect() } else { roll.clone() };
+            let now = app.session.execute("negative.conflicts", &json!({"ids": ids})).map_err(|e| e.to_string())?;
+            let more = now["reset"].as_array().is_some_and(|a| a.iter().filter_map(serde_json::Value::as_str).any(|n| !reset.iter().any(|r| r == n)));
+            if more {
+                return Err(crate::i18n::tr("The photo was edited since the warning: choose Convert again to see what it would reset").to_string());
+            }
+            if roll.is_empty() {
+                app.run("negative.convert", json!({"film": film, "ids": ids}))
+            } else {
+                app.run("negative.syncRoll", json!({"ids": roll}))
+            }
+        }
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
         Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } | Dialog::ManageEffects { .. } | Dialog::ViewOptions => {

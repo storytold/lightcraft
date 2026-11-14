@@ -27,7 +27,8 @@ pub struct LocalTone {
 
 /// Whether the render applies the source's local tone mapping.
 pub fn enabled(info: &SourceInfo, s: &DevelopSettings) -> bool {
-    s.profile.camera_local_tone && info.raw && info.local_tone.is_some()
+    // (not on a converted film scan: the camera's map is for the scene it photographed, not for the film's positive)
+    s.profile.camera_local_tone && info.raw && info.local_tone.is_some() && !s.negative_active()
 }
 
 /// Multiply the resampled, not yet white-balanced source `img` (the output frame of `p`) by the

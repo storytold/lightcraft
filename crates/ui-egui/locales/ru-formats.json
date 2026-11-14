@@ -324,6 +324,11 @@
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
   "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "Converting resets the edits made on the negative: {list}.": "Преобразование сбрасывает правки, сделанные на негативе: {list}.",
+  "Sync Roll converts the frames not converted yet ({n} selected) and resets their edits made on the negative: {list}.": "«Синхронизировать плёнку» преобразует ещё не преобразованные кадры (выбрано: {n}) и сбрасывает их правки, сделанные на негативе: {list}.",
+  "Roll synced: {n} frames share one film base and range": "Плёнка синхронизирована: общая подложка и диапазон у кадров: {n}",
+  "Roll synced: {n} frames ({m} could not be read)": "Плёнка синхронизирована, кадров: {n} (не удалось прочитать: {m})",
+  "Roll synced: {n} frames ({m} could not be read; {c} edited during the sync were left as they were)": "Плёнка синхронизирована, кадров: {n} (не удалось прочитать: {m}; изменены во время синхронизации и оставлены как есть: {c})",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографии добавляются через Файл › Импорт фото… ({keys}).",
   "View › Detail View ({keys}).": "Вид › Режим детализации ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys})."

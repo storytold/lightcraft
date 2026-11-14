@@ -160,3 +160,82 @@ fn the_process_is_not_an_edit_nor_part_of_copied_settings() {
 
 /// A process other than the latest: a newer LightCraft's number (no older one than V1 exists).
 const LATEST_PLUS_ONE: u32 = ProcessVersion::LATEST.0 + 1;
+
+/// Copy / paste / sync carry the Negative group whole: from an unconverted photo it turns the target's conversion
+/// off, from an unlocked one it unlocks the target (the saved JSON leaves both out, as defaults).
+#[test]
+fn the_negative_group_copies_off_and_unlocked_too() {
+    use crate::{FilmType, SettingsGroup, apply_partial, extract_groups};
+    let mut target = DevelopSettings::default();
+    target.negative.film = FilmType::ColorNegative;
+    target.negative.locked = true;
+    let off = extract_groups(&DevelopSettings::default(), &[SettingsGroup::Negative]);
+    assert_eq!(apply_partial(&target, &off, 1.0).negative.film, FilmType::Off, "pasting an unconverted photo's group");
+    let mut unlocked = DevelopSettings::default();
+    unlocked.negative.film = FilmType::ColorNegative;
+    let partial = extract_groups(&unlocked, &[SettingsGroup::Negative]);
+    let pasted = apply_partial(&target, &partial, 1.0);
+    assert!(!pasted.negative.locked && pasted.negative.film == FilmType::ColorNegative);
+    // other groups don't drag the Negative group along, and the default copy (presets too) leaves it out, so a preset
+    // made from an ordinary photo never switches a converted scan back to its negative
+    assert!(extract_groups(&DevelopSettings::default(), &[SettingsGroup::Light]).get("negative").is_none());
+    assert!(!SettingsGroup::default_copy().contains(&SettingsGroup::Negative));
+    let look = extract_groups(&DevelopSettings::default(), &SettingsGroup::default_copy());
+    assert!(apply_partial(&target, &look, 0.4).negative.converts());
+}
+
+/// A preset holding the Negative group applies below 50 % too: the amount is interpolated against a base with the
+/// group spelled out, where it used to find nothing, turn the group into null and drop the whole preset.
+#[test]
+fn a_preset_with_the_negative_group_applies_below_half_strength() {
+    use crate::{FilmType, Preset, SettingsGroup};
+    let mut source = DevelopSettings::default();
+    source.light.exposure = 1.0;
+    source.negative.film = FilmType::ColorNegative;
+    source.negative.contrast = 40.0;
+    let p = Preset::from_settings("p", "P", "User", &source, &[SettingsGroup::Light, SettingsGroup::Negative]);
+    let target = DevelopSettings::default();
+    for amount in [0.3, 0.49] {
+        let out = p.apply(&target, amount);
+        assert!((out.light.exposure - amount).abs() < 1e-9, "{amount}: the preset applied (exposure {})", out.light.exposure);
+        assert!((out.negative.contrast - 40.0 * amount).abs() < 1e-9, "{amount}: the group's numbers interpolate");
+        assert_eq!(out.negative.film, FilmType::Off, "{amount}: below half, the choice stays the photo's");
+    }
+    assert_eq!(p.apply(&target, 0.6).negative.film, FilmType::ColorNegative);
+}
+
+/// Stored film analysis numbers past what a film can measure (a damaged sidecar) aren't valid: the photo is measured
+/// again instead of a channel going black or flat when they are narrowed to `f32`.
+#[test]
+fn absurd_film_analysis_numbers_are_not_valid() {
+    use crate::FilmAnalysis;
+    let ok = FilmAnalysis { base: [0.6, 0.5, 0.3], lo: [0.1; 3], hi: [1.4; 3], ..FilmAnalysis::default() };
+    assert!(ok.is_valid());
+    assert!(FilmAnalysis { tones: Some(std::array::from_fn(|k| [0.2 + k as f64 * 0.1; 3])), ..ok }.is_valid());
+    for bad in [
+        FilmAnalysis { hi: [1.0e30; 3], ..ok },
+        FilmAnalysis { base: [1.0e39, 0.5, 0.3], ..ok },
+        FilmAnalysis { mid: [-1.0e20; 3], ..ok },
+        FilmAnalysis { mid: [-0.5, 0.5, 0.5], ..ok },
+        FilmAnalysis { mid: [0.5, 1.5, 0.5], ..ok },
+        FilmAnalysis { tones: Some([[1.0e30; 3]; 9]), ..ok },
+        FilmAnalysis { base: [1.0e-9, 0.5, 0.3], ..ok },
+        FilmAnalysis { tones: Some(std::array::from_fn(|k| [1.0 - k as f64 * 0.1; 3])), ..ok },
+    ] {
+        assert!(!bad.is_valid(), "{bad:?}");
+    }
+}
+
+/// A merge (a preset, a paste) that changes the film type unlocks a roll-synced frame: the roll's numbers were measured
+/// for the old type, and the frame is measured on its own now.
+#[test]
+fn a_merge_that_changes_the_film_type_unlocks_the_frame() {
+    use crate::FilmType;
+    let mut d = DevelopSettings::default();
+    d.negative.film = FilmType::ColorNegative;
+    d.negative.locked = true;
+    let other = d.merged(&serde_json::json!({"negative": {"film": "bwNegative"}})).unwrap();
+    assert!(!other.negative.locked);
+    let same = d.merged(&serde_json::json!({"negative": {"contrast": 20.0}})).unwrap();
+    assert!(same.negative.locked, "the same film type keeps the roll's lock");
+}

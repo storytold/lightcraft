@@ -392,6 +392,12 @@ impl FinishParams {
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
+    // a converted film scan is a scene-linear positive the conversion made: the generic scene tone map, never the
+    // camera's own look for digital photos (a raw scan) nor the near-identity of a rendered file (a JPEG scan), so
+    // both kinds of scan of one negative look alike (`docs/negative-conversion.md`)
+    if s.negative_active() {
+        return ToneMap::hdr(l.contrast, l.whites, l.blacks, peak);
+    }
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
         Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
