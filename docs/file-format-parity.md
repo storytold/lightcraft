@@ -55,7 +55,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | Lightroom (cloud) library `.lrlibrary` | native | ⬜ | cloud library format, local cache only |
 | Write back to `.lrcat` | native | ⬜ (one-way migration by design) | |
 | Keyword lists (text) | import / export | ✅ | |
-| GPX track logs | ✅ | ✅ | `crates/meta/src/gpx.rs` |
+| GPX track logs | ✅ | ✅ | `crates/meta/src/lib.rs` (re-exports shared `craft_metadata::parse_gpx`), `crates/engine/src/cmd/manage.rs` |
 | Export presets, metadata presets, filename templates | ✅ (`.lrtemplate`) | ✅ own JSON | not interchangeable |
 | Lightroom plug-ins (`.lrplugin`, `.lrdevplugin`) | ✅ | ⬜ | see ecosystem in [target-app-parity.md](target-app-parity.md) |
 
