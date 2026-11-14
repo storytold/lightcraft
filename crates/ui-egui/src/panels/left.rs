@@ -34,6 +34,8 @@ pub(crate) use rows::{INDENT_STEP, MIN_INDENT_STEP};
 use rows::{LIBFOLDER_REVEALED, Row, SCROLL_TO_ROW, set_tree_open};
 pub(crate) use rows::{content_width, indent_step, step_for};
 pub(crate) use sections::PlacedSection;
+#[cfg(test)]
+pub(crate) use sections::missing_counted_at;
 pub use sections::section_drag_feedback;
 #[cfg(test)]
 pub(crate) use sections::section_drop_before;

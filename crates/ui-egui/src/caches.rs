@@ -33,8 +33,8 @@ pub(crate) fn key_of(parts: impl std::hash::Hash) -> u64 {
 /// `reads` of a photo: nothing changed since, or only other things of some photos did (a rating changes no folder's
 /// count, a slider changes none at all). Each of these tallies asks every photo, so one kept is a pass over the
 /// library saved on every edit.
-fn still_right(cat: &lightcraft_catalog::Catalog, revision: u64, reads: lightcraft_catalog::Aspects) -> bool {
-    revision == cat.revision || cat.aspects_since(revision).is_some_and(|changed| !changed.any_of(reads))
+pub(crate) fn still_right(cat: &lightcraft_catalog::Catalog, revision: u64, reads: lightcraft_catalog::Aspects) -> bool {
+    cat.unchanged_for(revision, reads)
 }
 
 /// What the tallies below read of a photo, besides whether it is in the library.
@@ -47,6 +47,9 @@ const READS_PEOPLE: lightcraft_catalog::Aspects = READS_META.with(lightcraft_cat
 const READS_CAPTURED: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::CAPTURED);
 
 const READS_FLAG: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::PRESENCE.with(lightcraft_catalog::Aspects::FLAG);
+
+/// What reads anything of a photo but its develop state (a slider tick leaves it).
+pub(crate) const READS_NO_DEVELOP: lightcraft_catalog::Aspects = lightcraft_catalog::Aspects::ALL_BUT_DEVELOP;
 
 impl Caches {
     /// The folders the library's photos were imported from.
@@ -76,8 +79,11 @@ impl Caches {
         export: bool,
     ) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
         let key = key_of((selection, export));
-        match &self.keyword_names {
-            Some((r, k, c)) if *r == cat.revision && *k == key => c.clone(),
+        match &mut self.keyword_names {
+            Some((r, k, c)) if *k == key && still_right(cat, *r, READS_META) => {
+                *r = cat.revision;
+                c.clone()
+            }
             _ => {
                 let c = std::sync::Arc::new(if export {
                     panels::keywording::will_export(cat, selection)
@@ -96,8 +102,11 @@ impl Caches {
         selection: &[lightcraft_catalog::PhotoId],
     ) -> std::sync::Arc<Vec<panels::keywording::Chip>> {
         let key = key_of(selection);
-        match &self.keyword_chips {
-            Some((r, k, c)) if *r == cat.revision && *k == key => c.clone(),
+        match &mut self.keyword_chips {
+            Some((r, k, c)) if *k == key && still_right(cat, *r, READS_META) => {
+                *r = cat.revision;
+                c.clone()
+            }
             _ => {
                 let c = std::sync::Arc::new(panels::keywording::chips(cat, selection));
                 self.keyword_chips = Some((cat.revision, key, c.clone()));
@@ -109,8 +118,11 @@ impl Caches {
     /// box's "N of M" counts).
     pub(crate) fn selected_photos(&mut self, cat: &lightcraft_catalog::Catalog, selection: &[lightcraft_catalog::PhotoId]) -> usize {
         let key = key_of(selection);
-        match self.selected_photos {
-            Some((r, k, n)) if r == cat.revision && k == key => n,
+        match &mut self.selected_photos {
+            Some((r, k, n)) if *k == key && still_right(cat, *r, READS_NO_DEVELOP) => {
+                *r = cat.revision;
+                *n
+            }
             _ => {
                 let n = panels::keywording::distinct(cat, selection).len();
                 self.selected_photos = Some((cat.revision, key, n));
@@ -125,8 +137,11 @@ impl Caches {
         selection: &[lightcraft_catalog::PhotoId],
     ) -> std::sync::Arc<Vec<panels::keywording::Group>> {
         let key = key_of(selection);
-        match &self.keyword_groups {
-            Some((r, k, g)) if *r == cat.revision && *k == key => g.clone(),
+        match &mut self.keyword_groups {
+            Some((r, k, g)) if *k == key && still_right(cat, *r, READS_META) => {
+                *r = cat.revision;
+                g.clone()
+            }
             _ => {
                 let chips = self.keyword_chips(cat, selection);
                 let g = std::sync::Arc::new(panels::keywording::grouped(&chips));
@@ -142,8 +157,11 @@ impl Caches {
         selection: &[lightcraft_catalog::PhotoId],
     ) -> std::sync::Arc<panels::keyword_list::Ticks> {
         let key = key_of(selection);
-        match &self.keyword_ticks {
-            Some((r, k, t)) if *r == cat.revision && *k == key => t.clone(),
+        match &mut self.keyword_ticks {
+            Some((r, k, t)) if *k == key && still_right(cat, *r, READS_META) => {
+                *r = cat.revision;
+                t.clone()
+            }
             _ => {
                 let t = std::sync::Arc::new(panels::keyword_list::Ticks::of(cat, selection));
                 self.keyword_ticks = Some((cat.revision, key, t.clone()));
@@ -159,8 +177,12 @@ impl Caches {
         filter: &lightcraft_catalog::Filter,
     ) -> std::sync::Arc<Vec<lightcraft_catalog::Person>> {
         let key = lightcraft_catalog::Filter { person: None, ..filter.clone() };
-        match &self.people {
-            Some((r, f, t)) if *r == cat.revision && *f == key => t.clone(),
+        // (develop state only when the filter, or a smart album it tests, reads it)
+        match &mut self.people {
+            Some((r, f, t)) if *f == key && still_right(cat, *r, cat.filter_reads(&key)) => {
+                *r = cat.revision;
+                t.clone()
+            }
             _ => {
                 let t = std::sync::Arc::new(cat.people_in(&key));
                 self.people = Some((cat.revision, key, t.clone()));
@@ -206,8 +228,11 @@ impl Caches {
     }
     /// Cameras, lenses and keywords in the library (filter bar pickers).
     pub fn filter_values(&mut self, cat: &lightcraft_catalog::Catalog) -> std::sync::Arc<FilterValues> {
-        match &self.filter_values {
-            Some((r, v)) if *r == cat.revision => v.clone(),
+        match &mut self.filter_values {
+            Some((r, v)) if still_right(cat, *r, READS_META) => {
+                *r = cat.revision;
+                v.clone()
+            }
             _ => {
                 let distinct = |mut v: Vec<String>| {
                     v.retain(|s| !s.trim().is_empty());
@@ -235,24 +260,30 @@ impl Caches {
         current: &[String],
         typed: &str,
     ) -> std::sync::Arc<panels::keywording::Offers> {
-        let k = key_of((cat.revision, current, typed));
-        match &self.completions {
-            Some((h, v)) if *h == k => v.clone(),
+        let k = key_of((current, typed));
+        match &mut self.completions {
+            Some((r, h, v)) if *h == k && still_right(cat, *r, READS_META) => {
+                *r = cat.revision;
+                v.clone()
+            }
             _ => {
                 let v = std::sync::Arc::new(panels::keywording::offers(cat, current, typed));
-                self.completions = Some((k, v.clone()));
+                self.completions = Some((cat.revision, k, v.clone()));
                 v
             }
         }
     }
     /// Keyword suggestions for a photo with `current` keywords and the typed `prefix`.
     pub fn suggestions(&mut self, cat: &lightcraft_catalog::Catalog, current: &[String], prefix: &str, n: usize) -> std::sync::Arc<Vec<String>> {
-        let k = key_of((cat.revision, current, prefix, n));
-        match &self.suggestions {
-            Some((h, v)) if *h == k => v.clone(),
+        let k = key_of((current, prefix, n));
+        match &mut self.suggestions {
+            Some((r, h, v)) if *h == k && still_right(cat, *r, READS_META) => {
+                *r = cat.revision;
+                v.clone()
+            }
             _ => {
                 let v = std::sync::Arc::new(cat.keyword_suggestions(current, prefix, n));
-                self.suggestions = Some((k, v.clone()));
+                self.suggestions = Some((cat.revision, k, v.clone()));
                 v
             }
         }
@@ -275,10 +306,14 @@ impl Caches {
     ) -> std::sync::Arc<RulesView> {
         let relative = rules.depends_on_now();
         let minute = if relative { now.get(..16).unwrap_or(now) } else { "" };
-        let k = key_of((cat.revision, serde_json::to_string(rules).unwrap_or_default(), editing, &folder, minute, i18n::language().code()));
-        if let Some((key, v)) = &self.rules_view
+        let k = key_of((serde_json::to_string(rules).unwrap_or_default(), editing, &folder, minute, i18n::language().code()));
+        // (the count follows a develop edit only when the rules, or the smart albums they test, read develop state)
+        let reads = cat.filter_reads(&lightcraft_catalog::Filter { rule_set: Some(rules.clone()), ..Default::default() });
+        if let Some((r, key, v)) = &mut self.rules_view
             && *key == k
+            && still_right(cat, *r, reads)
         {
+            *r = cat.revision;
             return v.clone();
         }
         if relative {
@@ -289,7 +324,7 @@ impl Caches {
         let count = if problems.is_empty() { cat.query(&filter, &Default::default()).len() } else { 0 };
         let v = std::sync::Arc::new(RulesView { problems, count, albums: panels::dialogs::album_entries(cat, editing) });
         self.rules_view_scans += 1;
-        self.rules_view = Some((k, v.clone()));
+        self.rules_view = Some((cat.revision, k, v.clone()));
         v
     }
 
@@ -314,9 +349,10 @@ impl Caches {
         &mut self,
         cat: &lightcraft_catalog::Catalog,
     ) -> std::sync::Arc<std::collections::HashMap<lightcraft_catalog::AlbumId, Vec<lightcraft_catalog::rules::Problem>>> {
-        if let Some((rev, v)) = &self.smart_problems
-            && *rev == cat.revision
+        if let Some((rev, v)) = &mut self.smart_problems
+            && still_right(cat, *rev, READS_NO_DEVELOP)
         {
+            *rev = cat.revision;
             return v.clone();
         }
         let v: std::sync::Arc<std::collections::HashMap<_, _>> = std::sync::Arc::new(
@@ -384,6 +420,64 @@ mod cache_tests {
         let rules: RuleSet = serde_json::from_value(rules).unwrap();
         a.smart = Some(Box::new(Filter { rule_set: Some(rules), ..Default::default() }));
         Op::AddAlbum { album: a }
+    }
+
+    /// A develop edit (one slider tick: settings, edit time and a History step) changes nothing the sidebar's
+    /// trees, counts and keyword lists read, nor the rule dialog's count for rules that read no develop state: none
+    /// is worked out again. Rules testing Has Edits or Cropped (directly or through an Album rule) follow the edit.
+    #[test]
+    fn develop_edits_only_redo_what_reads_develop_state() {
+        let mut cat = Catalog::default();
+        let mut c = super::Caches::default();
+        for i in 0..3u64 {
+            cat.apply(photo(i + 1, "2026-09-30T11:00:00", if i == 0 { 5 } else { 1 })).unwrap();
+        }
+        cat.apply(smart(10, serde_json::json!({"rules": [{"field": "rating", "op": "gte", "value": 3}]}))).unwrap();
+        let now = "2026-09-30T12:00:00";
+        let rating =
+            |v: u64| -> RuleSet { serde_json::from_value(serde_json::json!({"rules": [{"field": "rating", "op": "gte", "value": v}]})).unwrap() };
+        let cropped: RuleSet = serde_json::from_value(serde_json::json!({"rules": [{"field": "cropped", "op": "is", "value": true}]})).unwrap();
+        let develop = |cat: &mut Catalog, id: u64, f: &dyn Fn(&mut lightcraft_develop::DevelopSettings)| {
+            let mut s = (*cat.photo(PhotoId(id)).unwrap().develop).clone();
+            f(&mut s);
+            let settings = std::sync::Arc::new(s);
+            let step = lightcraft_catalog::HistoryStep { label: "Edit".into(), settings: settings.clone() };
+            let set = Op::SetDevelop { id: PhotoId(id), settings, label: "Edit".into(), edited: Some(now.into()) };
+            cat.apply(Op::Batch { ops: vec![set, Op::PushHistory { id: PhotoId(id), step }] }).unwrap();
+        };
+        let selection = [PhotoId(2)];
+        c.rules_view(&cat, &rating(3), None, None, now);
+        let (tree, values, people) = (c.keyword_tree(&cat), c.filter_values(&cat), c.people(&cat, &Filter::default()));
+        let (chips, ticks, problems) = (c.keyword_chips(&cat, &selection), c.keyword_ticks(&cat, &selection), c.smart_album_problems(&cat));
+        let suggestions = c.suggestions(&cat, &[], "", 5);
+        for i in 0..20 {
+            develop(&mut cat, 2, &|s| s.light.exposure = i as f64 / 10.0);
+            c.rules_view(&cat, &rating(3), None, None, now);
+            assert!(std::sync::Arc::ptr_eq(&tree, &c.keyword_tree(&cat)));
+            assert!(std::sync::Arc::ptr_eq(&values, &c.filter_values(&cat)));
+            assert!(std::sync::Arc::ptr_eq(&people, &c.people(&cat, &Filter::default())));
+            assert!(std::sync::Arc::ptr_eq(&chips, &c.keyword_chips(&cat, &selection)));
+            assert!(std::sync::Arc::ptr_eq(&ticks, &c.keyword_ticks(&cat, &selection)));
+            assert!(std::sync::Arc::ptr_eq(&problems, &c.smart_album_problems(&cat)));
+            assert!(std::sync::Arc::ptr_eq(&suggestions, &c.suggestions(&cat, &[], "", 5)));
+        }
+        assert_eq!((c.rules_view_scans, c.smart_problem_scans), (1, 1), "slider ticks don't work them out again");
+        // a rating is no develop edit: what reads ratings follows it
+        cat.apply(Op::SetRating { id: PhotoId(2), rating: 4 }).unwrap();
+        assert_eq!(c.rules_view(&cat, &rating(3), None, None, now).count, 2);
+        // what reads develop state follows the edit
+        assert_eq!(c.rules_view(&cat, &cropped, None, None, now).count, 0);
+        cat.apply(smart(11, serde_json::json!({"rules": [{"field": "edited", "op": "is", "value": true}]}))).unwrap();
+        assert_eq!(c.album_counts(&cat, now)[&AlbumId(11)], 1, "photo 2 has edits");
+        develop(&mut cat, 3, &|s| s.crop.geometry.rect = lightcraft_geom::Rect::new(0.1, 0.1, 0.9, 0.9));
+        assert_eq!(c.album_counts(&cat, now)[&AlbumId(11)], 2, "a smart album testing Has Edits counts the new edit");
+        assert_eq!(c.rules_view(&cat, &cropped, None, None, now).count, 1, "a rule testing Cropped sees the crop");
+        // and a rule that tests such an album through an Album rule
+        let via: RuleSet = serde_json::from_value(serde_json::json!({"rules": [{"field": "album", "op": "is", "value": 11}]})).unwrap();
+        assert_eq!(c.rules_view(&cat, &via, None, None, now).count, 2);
+        develop(&mut cat, 1, &|s| s.light.exposure = 1.0);
+        assert_eq!(c.rules_view(&cat, &via, None, None, now).count, 3);
+        assert_eq!(c.album_counts(&cat, now)[&AlbumId(11)], 3);
     }
 
     /// Smart-album counts: unchanged frames reuse them; metadata and rule changes and (for
