@@ -1,10 +1,12 @@
 # Nikon embedded distortion corrections
 
+> Last updated: 2026-11-05. Z 6 / Z 7 distortion validation; vignetting remains unfinished.
+
 Nikon writes its own distortion correction into NEFs from its mirrorless bodies, in the raw SubIFD tag `0xc7d5`
-(NikonNEFInfo). LightCraft reads it for the NIKON Z 6_2 (Z 6II), the NIKON Z 8 and the NIKON Z f and turns it into an
+(NikonNEFInfo). LightCraft reads it for the NIKON Z 6, NIKON Z 7, NIKON Z 6_2 (Z 6II), NIKON Z 8 and NIKON Z f and turns it into an
 `OpcodeList3` `WarpRectilinear`, so it goes through the same profile correction control, optics path, orientation
 handling and DNG export as the other embedded corrections. Other bodies are left alone for now even if they have the
-same tag, because I've only checked files from these three.
+same tag. Body recognition is limited to files checked against their camera JPEGs.
 
 This is distortion only. The vignetting block (`0x0006`) and what looks like lateral CA (`0x0007`) aren't applied
 yet. Like the Sony, Fujifilm and Panasonic corrections it's on by default and can be turned off under Lens
@@ -12,9 +14,10 @@ Corrections.
 
 ## Where the data comes from
 
-The [ExifTool Nikon tag names](https://exiftool.org/TagNames/Nikon.html) give the names of NikonNEFInfo and its
-DistortionInfo entry (`0x0005`): DistortionCorrection and RadialDistortionCoefficient1 to 3. Nothing else was taken
-from other software. The rest was worked out by comparing LightCraft's uncorrected render of each NEF with the
+The [ExifTool Nikon tag-name documentation](https://exiftool.org/TagNames/Nikon.html) gives tag identities and offsets
+for NikonNEFInfo and its DistortionInfo entry (`0x0005`), including DistortionCorrection and
+RadialDistortionCoefficient1 to 3. The ExifTool executable also extracts metadata and embedded JPEG data black-box.
+The mapping was worked out independently by comparing LightCraft's uncorrected render of each NEF with the
 full-size JPEG the camera embeds in it. That JPEG is always distortion-corrected with Z lenses ("On (Required)"), and
 with other lenses when Auto distortion control is on. The comparison matched textured patches between the two images
 (normalised cross-correlation on the green channel at quarter size).
@@ -24,7 +27,7 @@ NikonNEFInfo starts with `"Nikon\0"` and a 4-byte version, followed by a small T
 | Entry | Bytes | What it holds |
 |---|---|---|
 | `0x0005` DistortionInfo | 0–3 | `"0100"` |
-| | 4 | correction mode: 1 "On (Optional)", 3 "On (Required)", 0 none |
+| | 4 | correction mode: 1 "On (Optional)", 3 "On (Required)"; 0 none, 2 "Off" and unknown modes are skipped |
 | | 8–15 | normalisation radius in mm, a signed rational. It's 21.6 (the FX half diagonal) in every file I looked at |
 | | 16–19 | number of terms, 4 |
 | | 20, 28, 36 | the three coefficients, called `k1`, `k2`, `k3` here after ExifTool's names |
@@ -84,12 +87,143 @@ extra correction for Z lenses that isn't in the readable coefficients. NikonNEFI
 didn't try to decode it. Even so, the readable correction takes most of the distortion out. At 24 mm the error at 0.7
 half diagonals goes from −82 px to +25 px, and at 70 mm from about −137 px to under 4 px.
 
+## Z 6 and Z 7 validation
+
+The six CC0 raw.pixls.us files in `docs/raw/coverage-sweep.tsv` are six exposures
+of two repeated scenes, with one NIKKOR Z 24-70mm f/4 S. The Z 6 files (3584,
+3581, 3582) are at 52 mm and f/6.7; the Z 7 files (2792, 2789, 2790) are at
+56 mm and f/5.6. They do not establish coverage at other focal lengths or lenses.
+All six file SHA-256 hashes were checked before decoding.
+
+`docs/raw/nikon_lens_probe.py` matches log-green patches in a quarter-size sensor
+proxy against the full-size embedded JPEG. It requires normalized correlation
+at least 0.90 and a peak at least 0.02 above competing matches outside its
+7-by-7 neighborhood. The stored coefficients, zoom and optical center are used
+without fitting a correction to each photo. Radial errors below are full-size
+pixels over reliable matches between 0.15 and 0.95 image half-diagonals.
+
+| Body | Files | Uncorrected radial median | Corrected radial median | Corrected radial p95 |
+|---|---:|---:|---:|---:|
+| Z 6 | 3 | 82.84-84.00 px | 0.88-0.96 px | 4.69-4.99 px |
+| Z 7 | 3 | 124.21-124.80 px | 1.37-1.46 px | 6.18-6.38 px |
+
+Reliable patches reach about 0.90-0.91 half-diagonals on the Z 6 and 0.94 on
+the Z 7. The extreme corners remain unvalidated geometrically. The remaining
+smooth edge error is consistent with the native Z lens residual described
+above. These results support extending the existing model to these bodies,
+with the same full-frame crop, layout, radius and mapping guards.
+
+Fresh production exports, including the refitted camera look, were compared
+against the same references across all 40 coverage-sweep rows. The measurement
+method, base/candidate results and unchanged-image hashes are recorded in
+[`raw/nikon-distortion-sweep.tsv`](raw/nikon-distortion-sweep.tsv). The historical file and sensor-hash provenance
+in the TSV is retained. Only rows whose rendered pixels change are updated.
+
+The production comparison uses CPU CLI exports at a 1200 px long edge, the
+recorded reference orientation and a center crop to the camera reference aspect,
+then Lab L* at 200 px. The outer ring starts at 0.75 image half-diagonals.
+A lens database is disabled for both runs. The camera look is refitted by each
+binary, and all settings remain at their import defaults.
+
+| File ID | Base r | Corrected r | Base mean dL | Corrected mean dL | Base outer mean dL | Corrected outer mean dL |
+|---|---:|---:|---:|---:|---:|---:|
+| 3584 | 0.8769 | 0.9964 | +0.299 | +0.173 | -3.479 | -1.609 |
+| 3581 | 0.8772 | 0.9964 | +0.320 | +0.196 | -3.470 | -1.611 |
+| 3582 | 0.8775 | 0.9964 | +0.430 | +0.212 | -3.431 | -1.592 |
+| 2792 | 0.7497 | 0.9914 | +1.924 | +1.215 | -2.982 | -2.068 |
+| 2789 | 0.7483 | 0.9910 | +2.188 | +1.271 | -2.881 | -2.028 |
+| 2790 | 0.7480 | 0.9910 | +2.240 | +1.251 | -2.868 | -2.073 |
+
+Here dL is LightCraft minus camera JPEG. All six improve in correlation,
+absolute mean dL and outer-ring mean absolute error. The other 34 production
+RGB outputs are byte-identical. Residual tone and corner brightness differences
+remain; neither Auto Picture Control nor Nikon shading is reproduced exactly.
+
+## Vignetting remains unfinished
+
+No Nikon vignette correction or fitted per-body strength is applied. The
+investigation used the six Z 6 / Z 7 files and one public file each from the
+Z 6II, Z 8 and Z f. That is nine exposures, five scenes, four lenses and five
+focal lengths in total; the repeated scenes are not independent lens evidence.
+
+The `0100` block at `0x0006` has a 21.600098 mm radius and a term count of eight
+in these files. Nine signed rationals start at offset 20. A provisional model
+reads them in descending polynomial order: odd terms are zero and the last
+term is one. It includes an unnamed rational `a` at offset 20 as well as the
+three named coefficients at offsets 36, 52 and 68:
+
+```text
+P(rho) = 1 + c3*rho^2 + c2*rho^4 + c1*rho^6 + a*rho^8
+candidate gain = 1 + strength * (P(rho) - 1)
+```
+
+Here `rho` is the unwarped source radius over the image-area half diagonal,
+about the recorded optical center. The ordering, powers, normalization and
+strength are hypotheses derived from the files and camera-JPEG comparisons.
+Tag identities and the named coefficient offsets came from ExifTool's tag-name
+documentation; its executable also extracts file metadata and embedded JPEG data
+black-box. No external decoder implementation was read.
+
+The unnamed term matters: at `rho = 1`, the named three alone give gains of
+0.912 on the Z 6 and 2.790 on the Z 7; the complete polynomial gives 1.705 and
+1.673. However, diagnostic renders that retain the old camera-look fit overbrighten
+the corners at full strength and worsen the Z 8 and Z f comparison. Those
+experiments do not predict production output after a camera-look refit. Treating the rational at offset 96 as the strength
+also fails to establish one consistent interpretation across bodies and scenes.
+
+The diagnostic fitter uses a global log-tone spline and color-ratio terms,
+with alternating spatial tiles reserved for validation. It rejects undersampled
+splits and radial bins and non-finite statistics. Effective fitted strengths
+vary among captures. Scene brightness correlated with radius, Auto Picture
+Control on the Z 6, and Auto Active D-Lighting on the Z 6II sample limit the
+inference. No contrast response was tuned to close those differences.
+
+Further investigation needs other lenses, apertures and focal lengths, whole
+captures held out, flat or near-flat scenes where available, and different
+correction settings. Private pairs must stay in place, with diagnostics outside
+the repository and anonymous results. Vignetting requires a later review.
+If validated, `FixVignetteRadial` before the warp in `OpcodeList3` would use the
+existing profile toggle, amount, orientation and DNG path. A `GainMap` would
+be baked into the source and would not provide that lens toggle.
+
+## Existing libraries and process versions
+
+These are source corrections under `docs/process-versions.md`; they do not
+introduce a rendering process. Qualifying Z 6 / Z 7 NEFs can acquire the warp,
+and mode-2 NEFs on previously validated bodies lose the unwanted warp. Modes
+1 (On Optional) and 3 (On Required) are accepted; 0, 2 and unknown modes are skipped.
+
+The camera-look fit uses the recognized geometry even when profile corrections
+are switched off, so existing edited photos on any process can change tone or
+color when decoded again. `LOOK_VERSION` and `RENDER_CACHE_VERSION` are advanced
+together. Old smart previews are rebuilt from online originals and retained
+with their stored pixels, tone and lens data while originals are offline.
+Build Smart Previews reads the original independently of decoded-source caches,
+so a proxy cached by the offline loupe cannot prevent rebuilding after reconnect.
+
+The 2026-11-05 audit of all 747 open PR patches found a highest assigned
+`LOOK_VERSION` of 25 (#1206) and a highest `RENDER_CACHE_VERSION` of
+8,589,934,600 (#160, `8 | (2 << 32)`). A 2026-11-11 recheck found
+`LOOK_VERSION` 26 in #3943 and 27 in #3429, so this change uses 28 and
+8,589,934,601.
+Other PRs still assign 14 or 76, and #784 assigns 24 and 81. Whichever look or
+render change lands later must renumber above the versions already on main.
+
+Reload from Disk refreshes catalog lens metadata. It enables a newly found
+profile for an untouched photo without an import preset; an edited photo keeps
+its settings, including an explicit off switch. Reload is required to update
+an older catalog's Optics metadata. A file profile takes precedence over a
+lens-database profile, so a Z 6 / Z 7 photo previously using database corrections
+can also change when its embedded profile is recognized. The production sweep
+above disables the optional database in both runs. Existing DNGs without these
+opcodes, other bodies and preview-only raw variants do not acquire this NEF correction.
+
 ## What's left out
 
-Only `NIKON Z 6_2`, `NIKON Z 8` and `NIKON Z f` are corrected, matched exactly. A matching tag on another body doesn't tell us its
+Only `NIKON Z 6`, `NIKON Z 7`, `NIKON Z 6_2`, `NIKON Z 8` and `NIKON Z f` are corrected, matched exactly. A matching tag on another body doesn't tell us its
 pixel pitch or image area, so other bodies can be added once someone checks their files. Only the full-frame 3:2
 image area is corrected, because the stored 21.6 mm radius is the FX half diagonal, so DX and other crops are skipped.
-The decoder also skips data it doesn't recognise (another layout, radius or term count, or no correction mode),
+The decoder also skips data it doesn't recognise (another layout, radius or term count, or a correction mode other than 1 or 3),
 values that are clearly wrong (coefficients past ±1, a zoom past ±0.5, a sensor shift over 5% of the frame) and any
 mapping that folds back on itself before the farthest corner.
 
@@ -99,3 +233,9 @@ and a DNG export. `nikon_in_file_distortion_is_limited_to_validated_bodies` chec
 warp and the D5100, D7000, D7500 and Coolpix B700 samples don't.
 
 None of my photos, crops or reference images are committed, only the numbers above.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-05 | minor | Z 6 / Z 7 distortion, correction-mode guards, reconnect-safe smart-preview rebuilds, cache-version collision audit and probe geometry guards; vignette model remains unshipped |

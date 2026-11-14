@@ -2708,7 +2708,11 @@ fn a_stale_refresh_never_rebuilds_a_proxy_from_itself() {
     let pixels = lightcraft_raster::Rgb32f::from_fn(48, 32, |x, y| [0.02 + (x % 9) as f32 * 0.05, 0.03 + (y % 7) as f32 * 0.04, 0.06]);
     let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 6.0, ..Default::default() };
     let (p, i) = (pixels.clone(), info.clone());
-    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _| Ok((p.clone(), i.clone()))));
+    s.media.file_loader = Some(std::sync::Arc::new(move |path, _max_edge, _| {
+        // A fresh attempt must fail while the original is offline, as a real decoder would.
+        std::fs::metadata(path).map_err(|error| error.to_string())?;
+        Ok((p.clone(), i.clone()))
+    }));
     s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     // a raw that takes the per-file camera look, so an older fit makes its proxy stale
