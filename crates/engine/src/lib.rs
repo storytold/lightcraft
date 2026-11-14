@@ -26,6 +26,7 @@ pub mod bounded_read;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod capture_one_catalog;
+pub mod capture_one_develop;
 pub mod change_report;
 pub mod chart_profiling;
 pub mod cmd;
