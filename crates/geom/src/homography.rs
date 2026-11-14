@@ -17,6 +17,7 @@ impl Default for Homography {
 impl Homography {
     pub const IDENTITY: Homography = Homography([1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
 
+    #[expect(clippy::many_single_char_names, reason = "Affine and homogeneous coefficients use conventional a–f matrix notation.")]
     pub fn from_affine(a: &Affine) -> Homography {
         let [a0, b, c, d, e, f] = a.0;
         Homography([a0, c, e, b, d, f, 0.0, 0.0, 1.0])
@@ -70,6 +71,7 @@ impl Homography {
     }
 
     /// The homography mapping `src[i]` → `dst[i]` (4 correspondences, DLT with h33 = 1).
+    #[expect(clippy::many_single_char_names, reason = "The DLT system uses conventional source/destination x/y/u/v notation.")]
     pub fn from_quads(src: &[Point; 4], dst: &[Point; 4]) -> Option<Homography> {
         // Failed feature matches and invalid perspective parameters can contain
         // non-finite coordinates. Do not return a transform that poisons rendering.
