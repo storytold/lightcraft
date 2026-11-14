@@ -640,7 +640,7 @@ fn render_left_navigator(
         let mini_rect = Rect::from_min_size(pos2(left_rect.left() + 8.0, ui.cursor().top()), vec2(mini_w, nav_h));
         let nav_resp = ui.allocate_rect(mini_rect, Sense::click_and_drag());
 
-        let nav_zoom = (*zoom - 3.5).clamp(1.0, (map_ui.provider.max_zoom() - 2) as f64);
+        let nav_zoom = map_ui.navigator_zoom.clamp(1.0, (map_ui.provider.max_zoom() - 2) as f64);
 
         if nav_resp.dragged() {
             let delta = nav_resp.drag_delta();
@@ -670,8 +670,8 @@ fn render_left_navigator(
         if nav_resp.hovered() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll.abs() > 0.5 {
-                let max_z = map_ui.provider.max_zoom() as f64;
-                *zoom = (*zoom + (scroll as f64 * 0.005)).clamp(1.0, max_z);
+                let max_z = (map_ui.provider.max_zoom() - 2) as f64;
+                map_ui.navigator_zoom = (map_ui.navigator_zoom + (scroll as f64 * 0.005)).clamp(1.0, max_z);
                 ui.ctx().request_repaint();
             }
         }
@@ -864,5 +864,22 @@ mod tests {
         assert_eq!(app.ui.map.center_lat, 45.57);
         assert_eq!(app.ui.map.center_lon, -73.2);
         assert_eq!(app.ui.map.zoom, 14.0);
+    }
+
+    #[test]
+    fn navigator_zoom_is_independent_from_map_zoom() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+        app.ui.view = ViewMode::Map;
+        app.ui.map.zoom = 14.0;
+        app.ui.map.navigator_zoom = 3.0;
+
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        view.run(raw, |ui| {
+            show(&mut app, ui);
+        });
+
+        assert_eq!(app.ui.map.zoom, 14.0);
+        assert_eq!(app.ui.map.navigator_zoom, 3.0);
     }
 }
