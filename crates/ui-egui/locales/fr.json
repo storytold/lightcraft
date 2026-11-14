@@ -3637,5 +3637,6 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Démarrez l'application avec --control 7980 (ou LIGHTCRAFT_CONTROL_PORT), puis lightcraft-cli mcp --connect y connecte un agent.",
   "Welcome": "Bienvenue",
   "Next": "Suivant",
-  "Get Started": "Commencer"
+  "Get Started": "Commencer",
+  "Keywords and presets apply to new files only, not to photos already in Local": "Les mots-clés et les préréglages ne s'appliquent qu'aux nouveaux fichiers, pas aux photos déjà dans Local"
 }
