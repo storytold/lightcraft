@@ -223,21 +223,18 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
     })
 }
 
-/// Ops that fill a photo's empty camera fields (camera, lens, exposure, GPS, capture time) from a fresh probe.
+/// Ops that fill a photo's empty camera fields (exposure, GPS, capture time) from a fresh probe, and give it the
+/// camera and lens names the file states now.
 fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
     let (mut m, src) = (ph.meta.clone(), &info.meta);
     let before = m.clone();
-    if m.camera.is_empty() {
-        m.camera = src.camera.clone();
-    }
-    if m.lens.is_empty() {
-        m.lens = src.lens.clone();
-    }
-    if m.make.is_empty() {
-        m.make = src.make.clone();
-    }
-    if m.lens_make.is_empty() {
-        m.lens_make = src.lens_make.clone();
+    // the camera and lens names only ever come from the file (no command edits them), so a name the file states
+    // replaces the catalog's: the file was corrected with an EXIF tool, or a Lightroom catalog named it differently
+    // (issue #4182). A file that states none keeps what the catalog has.
+    for (mine, file) in [(&mut m.camera, &src.camera), (&mut m.lens, &src.lens), (&mut m.make, &src.make), (&mut m.lens_make, &src.lens_make)] {
+        if !file.trim().is_empty() && mine != file {
+            mine.clone_from(file);
+        }
     }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
@@ -304,7 +301,7 @@ pub(crate) fn reload_ops(
 ) {
     let Some(ph) = cat.photo(id) else { return };
     // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
-    // nothing already set is overwritten
+    // nothing already set is overwritten, but for the camera and lens names, which follow the file
     let meta_ops = fill_missing_meta(id, ph, info);
     let mut mine: Vec<Op> =
         content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).collect();
@@ -397,7 +394,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, the camera and lens names follow the file, and so does the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
             has_selection,
             reload
         ),
@@ -438,6 +435,33 @@ mod tests {
         // nothing missing → nothing to do
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
+    }
+
+    /// Reload takes the camera and lens names the file states now (corrected with an EXIF tool since import, issue
+    /// #4182): no command edits them, so the catalog's copy is only ever stale. A file that states none keeps the
+    /// catalog's, and the fields the user edits are untouched.
+    #[test]
+    fn reload_takes_the_camera_and_lens_names_the_file_states_now() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.dng".into() }, "x.dng", "DNG", 1620, 1080, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        ph.meta.title = "Mine".into();
+        ph.meta.make = "OLYMPUS".into();
+        ph.meta.camera = "E-M5".into();
+        ph.meta.lens = "smc PENTAX-F 35-105mm F4-5.6".into();
+        ph.meta.lens_make = "Pentax".into();
+        ph.meta.iso = Some(800);
+        let mut info = crate::media::ProbeInfo::default();
+        info.meta.make = "OLYMPUS IMAGING CORP.".into();
+        info.meta.lens = "Tokina AF 80-200mm f/2.8 AT-X 828 Pro".into();
+        info.meta.iso = Some(400);
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let [Op::SetMeta { meta, .. }] = ops.as_slice() else { panic!("{ops:?}") };
+        assert_eq!((meta.make.as_str(), meta.lens.as_str()), ("OLYMPUS IMAGING CORP.", "Tokina AF 80-200mm f/2.8 AT-X 828 Pro"));
+        assert_eq!((meta.camera.as_str(), meta.lens_make.as_str()), ("E-M5", "Pentax"), "a name the file doesn't state is kept");
+        assert_eq!((meta.title.as_str(), meta.iso), ("Mine", Some(800)), "other set fields are kept");
+        // the same names again → nothing to do
+        ph.meta = (**meta).clone();
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
     }
 
