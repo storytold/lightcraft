@@ -1,2 +1,12 @@
 [alias]
 xtask = "run --package xtask --"
+
+# Plain `cargo test` runs at most 4 tests at once in each test binary, as `cargo xtask ci` does:
+# libtest's default of one per CPU ran the UI tests out of memory on a 16-core machine (#3059).
+# A RUST_TEST_THREADS already in the environment wins (`force = false`).
+# `cargo xtask` runs under this config too: the marker beside it holds the value set here, so xtask
+# can tell this default from a caller's setting and size `ci`'s test threads by available RAM. Keep
+# the two values equal (`xtask` tests it).
+[env]
+RUST_TEST_THREADS = { value = "4", force = false }
+LIGHTCRAFT_TEST_THREADS_DEFAULT = { value = "4", force = true }

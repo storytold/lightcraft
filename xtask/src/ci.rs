@@ -1,7 +1,9 @@
 use super::layers::cmd_layers;
 use super::raw_samples::RAW_SAMPLES;
 use super::wasm::{cmd_wasm, cmd_wasm_for};
-use super::{Command, Path, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, metadata, parity, root, roots, run};
+use super::{
+    Command, PathBuf, USAGE, assets, cargo, ci_lock, ci_quick, ci_report, deadline, metadata, parity, root, roots, run, run_tests, test, use_ci_caps,
+};
 
 /// CI build jobs: one per 1.5 GB of RAM available when CI starts, at most one per CPU, 4 when it
 /// is unknown. With line-table debuginfo, 4 jobs measured about 3 GB of RAM in use and 2 jobs
@@ -63,7 +65,7 @@ pub(crate) fn total_ram_gb() -> Option<u64> {
 const TEST_TARGETS: [&str; 3] = ["--lib", "--bins", "--tests"];
 
 /// `args` followed by [`TEST_TARGETS`].
-fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
+pub(crate) fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
     args.iter().copied().chain(TEST_TARGETS).collect()
 }
 
@@ -72,7 +74,7 @@ fn with_test_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
 /// are cached per process: libtest runs a binary's tests in one process and generates each scene
 /// once, while nextest's process per test regenerates them (measured: the ui-egui tests take about
 /// 30 min under nextest, under 5 min under cargo test).
-fn nextest() -> bool {
+pub(crate) fn nextest() -> bool {
     static FOUND: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *FOUND.get_or_init(|| {
         if std::env::var_os("LIGHTCRAFT_NEXTEST").is_none_or(|v| v != "1") {
@@ -86,6 +88,8 @@ fn nextest() -> bool {
             .is_ok_and(|s| s.success());
         if !found {
             eprintln!("note: LIGHTCRAFT_NEXTEST=1 but cargo-nextest is not installed, so the tests run under cargo test (cargo install cargo-nextest --locked)");
+        } else if let Some(note) = deadline::nextest_note(std::env::var_os(deadline::TEST_BINARY_TIMEOUT_ENV).as_deref()) {
+            eprintln!("{note}");
         }
         found
     })
@@ -108,67 +112,17 @@ fn doctests() -> (Command, String) {
     (c, "cargo test --no-fail-fast --workspace --doc".to_owned())
 }
 
-/// `ci --quick`'s tests: build every workspace test target, then run only the test binaries of
-/// `packages`. Building with `-p` instead would resolve features per selection: different
-/// artifacts from `ci`'s workspace build, so it would recompile ~130 crates. Doc tests are left to
-/// the full `ci`.
-fn test_selected(root: &Path, packages: &std::collections::BTreeSet<String>, skip_log: &Path) -> Result<(), String> {
-    let manifests: std::collections::BTreeMap<String, String> = metadata()?["packages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|p| Some((p["manifest_path"].as_str()?.to_owned(), p["name"].as_str()?.to_owned())))
-        .filter(|(_, name)| packages.contains(name))
-        .collect();
-    let what = "cargo test --workspace --no-run --lib --bins --tests";
-    eprintln!("$ {what} (then the test binaries of {})", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
-    let out = cargo()
-        .args(with_test_targets(&["test", "--workspace", "--no-run", "--message-format=json-render-diagnostics"]))
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .map_err(|e| format!("{what}: failed to spawn: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("{what}: exited with {}", out.status));
-    }
-    let mut binaries = Vec::new();
-    for line in String::from_utf8_lossy(&out.stdout).lines() {
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-        if msg["reason"] != "compiler-artifact" || msg["profile"]["test"] != true {
-            continue;
-        }
-        let (Some(exe), Some(manifest)) = (msg["executable"].as_str(), msg["manifest_path"].as_str()) else { continue };
-        if let Some(name) = manifests.get(manifest) {
-            binaries.push((name.clone(), manifest.to_owned(), exe.to_owned()));
-        }
-    }
-    if binaries.is_empty() {
-        println!("no test binaries in {}", packages.iter().map(String::as_str).collect::<Vec<_>>().join(", "));
-        return Ok(());
-    }
-    let mut failed = Vec::new();
-    for (name, manifest, exe) in &binaries {
-        let dir = Path::new(manifest).parent().unwrap_or(root);
-        let mut c = Command::new(exe);
-        c.current_dir(dir).env("CARGO_MANIFEST_DIR", dir).env("CARGO_PKG_NAME", name).env(ci_report::SKIP_LOG_ENV, skip_log);
-        if std::env::var_os("RUST_TEST_THREADS").is_none() {
-            // as the cargo runs of ci (`cargo()`): more threads make the frame-budget tests flaky
-            c.env("RUST_TEST_THREADS", std::thread::available_parallelism().map_or(4, |n| n.get()).min(4).to_string());
-        }
-        let file = Path::new(exe).file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-        if run(c, &format!("{name}: {file}")).is_err() {
-            failed.push(format!("{name} ({file})"));
-        }
-    }
-    if failed.is_empty() { Ok(()) } else { Err(format!("tests failed in {}", failed.join(", "))) }
-}
-
 /// The test that prints the messages each language lacks (shown in English); it always passes.
 const TRANSLATION_GAPS_TEST: &str = "i18n::tests::translation_gaps_report";
 
 /// Print the translation gaps report into the log: [`TRANSLATION_GAPS_TEST`] of lightcraft-ui-egui,
 /// run from the test binary the test step built (found with `--no-run` and the step's own
 /// arguments, so nothing rebuilds). A report that can't run is a note, never a failed step.
-fn translation_gaps() {
+fn translation_gaps(limit: Option<std::time::Duration>) {
+    if deadline::any_timed_out() {
+        eprintln!("\nnote: the translation gaps report is skipped: a test binary timed out in this run");
+        return;
+    }
     eprintln!("\n=== ci: translation gaps ===");
     let mut c = cargo();
     c.args(["test", "--no-run", "--message-format=json"]).args(with_test_targets(&["--workspace"]));
@@ -188,7 +142,9 @@ fn translation_gaps() {
     let ran = binary.and_then(|binary| {
         let mut c = Command::new(&binary);
         c.args(["--exact", TRANSLATION_GAPS_TEST, "--nocapture", "--quiet"]);
-        run(c, &format!("{} --exact {TRANSLATION_GAPS_TEST} --nocapture --quiet", binary.display()))
+        let what = format!("{} --exact {TRANSLATION_GAPS_TEST} --nocapture --quiet", binary.display());
+        eprintln!("$ {what}");
+        deadline::run_test_binary(c, "lightcraft-ui-egui (translation gaps)", limit).map_err(|e| format!("{what}: {e}"))
     });
     if let Err(e) = ran {
         eprintln!("note: the translation gaps report did not run: {e}");
@@ -211,10 +167,13 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     if base.is_some() && !quick {
         return Err("ci: --base only applies to --quick".into());
     }
+    // each test binary's time limit (deadline.rs); a bad value fails before the run waits for its slot
+    let limit = deadline::test_binary_timeout()?;
     let root = root();
     let command = std::iter::once("cargo xtask ci").chain(args.iter().copied()).collect::<Vec<_>>().join(" ");
     // held until ci returns: one run at a time per machine (ci_lock.rs)
-    let _slot = ci_lock::acquire(&root, &command)?;
+    let slot = ci_lock::acquire(&root, &command)?;
+    use_ci_caps(&slot);
     let plan = if quick {
         let (base, files) = ci_quick::changed_files(&root, base)?;
         let plan = ci_quick::plan(&files, &ci_quick::packages(&root, &metadata()?), base);
@@ -235,17 +194,21 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
     // target/ci/skips-<step>.jsonl: a file, so it works the same under nextest and cargo test
     let test = |(mut c, what): (Command, String), step: &str| {
         c.env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, step));
-        run(c, &what)
+        run_tests(c, &what, limit)
     };
     let gpu = std::cell::RefCell::new(serde_json::Value::Null);
     let hardware_runs = std::cell::RefCell::new(Vec::new());
     // What this machine offers the GPU tests, once, after the workspace tests (whose build the
     // probe reuses). Never fails the run: the report says what went wrong.
     let probe = || {
+        if gpu.borrow().is_null() && deadline::any_timed_out() {
+            eprintln!("\nnote: the GPU probe is skipped: a test binary timed out, and what hung it would hang the probe too");
+            *gpu.borrow_mut() = serde_json::json!({"error": "not probed: a test binary timed out in this run"});
+        }
         if gpu.borrow().is_null() {
             eprintln!("\n=== ci: GPU probe ===");
             let t = std::time::Instant::now();
-            let mut found = ci_report::gpu(probe_gpu, hardware);
+            let mut found = ci_report::gpu(|backend| probe_gpu(backend, limit), hardware);
             found["seconds"] = serde_json::json!(t.elapsed().as_secs_f64());
             *gpu.borrow_mut() = found;
         }
@@ -287,14 +250,15 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 c.args(["clippy", "-p", "lightcraft-codecs", "--features", "heif", "--all-targets", "--", "-D", "warnings"]);
                 run(c, "cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings")?;
                 test(tests(&with_test_targets(&["-p", "lightcraft-codecs", "--features", "lightcraft-codecs/heif"])), "heif")?;
-                // the engine's HEIC import test, with the decoder (the workspace run checks the error)
-                test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"]), "heif")
+                // the engine's HEIC import test, with the decoder (the workspace run checks the error);
+                // the filter after `--`, so a timeout's `--list` keeps to the tests it selects
+                test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "--", "heic"]), "heif")
             }),
         ),
         (
             "test",
             Box::new(|| match &plan {
-                Some(p) if !p.workspace_wide => test_selected(&root, &p.packages, &ci_report::skip_log(&root, "test")),
+                Some(p) if !p.workspace_wide => test::selected(&root, &p.packages, &ci_report::skip_log(&root, "test"), limit),
                 _ => test(tests(&with_test_targets(&["--workspace"])), "test").and_then(|()| test(doctests(), "test")),
             }),
         ),
@@ -316,7 +280,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                     let (mut c, what) = tests(&with_test_targets(&["-p", "lightcraft-gpu", "--features", "denoise"]));
                     c.env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
                     let t = std::time::Instant::now();
-                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}")).is_ok();
+                    let ok = run_tests(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}"), limit).is_ok();
                     hardware_runs.borrow_mut().push(serde_json::json!({
                         "backend": backend,
                         "adapter": adapter,
@@ -355,7 +319,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         if *name == "test" && plan.is_none() {
             // right after the workspace tests, before parity and wasm build other feature sets
             probe();
-            translation_gaps();
+            translation_gaps(limit);
         }
         if let Err(e) = r {
             failure = Some((*name, e));
@@ -425,22 +389,27 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
 /// backend's adapters. `--workspace`, like the test step, so its build is reused (every crate's `it`
 /// binary starts; only lightcraft-gpu's has the test). Its stdout, or why
 /// it failed (a driver that crashes while it is enumerated, issue #136, ends up here, not in xtask).
-fn probe_gpu(backend: Option<&str>) -> Result<String, String> {
+/// Run the GPU probe test (on `backend`, or the pipeline's choice) and return its output. Each
+/// test binary it starts may run for [`deadline::probe_limit`] of the test binaries' `limit`: the
+/// probe initialises the GPU, which is what hangs when a display server stops answering. Not run
+/// once a test binary has timed out in this xtask run.
+fn probe_gpu(backend: Option<&str>, limit: Option<std::time::Duration>) -> Result<String, String> {
+    let name = format!("gpu_probe {}", backend.map(|b| format!("{b} ")).unwrap_or_default());
+    if deadline::any_timed_out() {
+        return Err(format!("{name}not run: a test binary timed out earlier in this run"));
+    }
     let mut c = cargo();
     c.args(["test", "-q", "--workspace", "--test", "it", "--", "--ignored", "--exact", "gpu_probe::gpu_probe", "--nocapture"]);
     c.env("LIGHTCRAFT_GPU_PROBE", backend.unwrap_or(""));
-    let out = c.output().map_err(|e| format!("gpu_probe: {e}"))?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr);
-        let tail: Vec<&str> = err.lines().rev().filter(|l| !l.trim().is_empty()).take(3).collect();
-        return Err(format!(
-            "gpu_probe {}exited with {}: {}",
-            backend.map(|b| format!("{b} ")).unwrap_or_default(),
-            out.status,
-            tail.into_iter().rev().collect::<Vec<_>>().join(" / ")
-        ));
+    let out = deadline::capture_cargo(&c, deadline::probe_limit(limit)).map_err(|e| format!("gpu_probe: {e}"))?;
+    match out.status {
+        Ok(status) if status.success() => Ok(out.stdout),
+        Ok(status) => {
+            let tail: Vec<&str> = out.stderr_tail.iter().map(String::as_str).filter(|l| !l.trim().is_empty()).rev().take(3).collect();
+            Err(format!("{name}exited with {status}: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" / ")))
+        }
+        Err(timed_out) => Err(format!("{name}{timed_out}")),
     }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 #[cfg(test)]
@@ -457,5 +426,111 @@ mod ci_jobs_tests {
         assert_eq!(ci_jobs(Some(500), 8), 1, "at least one");
         assert_eq!(ci_jobs(None, 32), 4, "unknown RAM keeps the old default");
         assert_eq!(ci_jobs(None, 2), 2);
+    }
+
+    #[test]
+    fn caps_cover_build_and_test_threads_and_yield_to_explicit_settings() {
+        let caps = crate::ci_caps();
+        let keys: Vec<&str> = caps.iter().map(|(k, _)| *k).collect();
+        assert_eq!(keys, ["CARGO_PROFILE_DEV_DEBUG", "CARGO_BUILD_JOBS", "RUST_TEST_THREADS", "NEXTEST_TEST_THREADS"]);
+        for (key, value) in caps.iter().filter(|(k, _)| k.ends_with("TEST_THREADS")) {
+            let n: usize = value.parse().unwrap();
+            assert!((1..=4).contains(&n), "{key}={value}");
+        }
+        let set = crate::caps_to_set(caps, |key| key == "RUST_TEST_THREADS");
+        assert_eq!(set.iter().map(|(k, _)| *k).collect::<Vec<_>>(), ["CARGO_PROFILE_DEV_DEBUG", "CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"]);
+        assert!(crate::caps_to_set(caps, |_| true).is_empty());
+    }
+
+    /// An environment of `vars` for [`crate::set_by_caller`].
+    fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+        let vars: Vec<(String, String)> = vars.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect();
+        move |key| vars.iter().find(|(k, _)| k == key).map(|(_, v)| v.into())
+    }
+
+    #[test]
+    fn the_config_test_threads_default_is_not_a_callers_setting() {
+        use crate::set_by_caller;
+        const MARKER: &str = crate::TEST_THREADS_DEFAULT_MARKER;
+        let threads = "RUST_TEST_THREADS";
+        assert!(!set_by_caller(threads, env(&[])), "unset, outside cargo");
+        assert!(!set_by_caller(threads, env(&[(MARKER, "4")])), "unset (no RUST_TEST_THREADS at all)");
+        assert!(!set_by_caller(threads, env(&[(threads, "4"), (MARKER, "4")])), "the config default: ci sizes it by RAM");
+        assert!(set_by_caller(threads, env(&[(threads, "9"), (MARKER, "4")])), "RUST_TEST_THREADS=9 cargo xtask ci");
+        assert!(set_by_caller(threads, env(&[(threads, "2"), (MARKER, "4")])), "a lower explicit value wins too");
+        assert!(set_by_caller(threads, env(&[(threads, "4")])), "no marker: xtask run outside cargo, the value is the caller's");
+        assert!(set_by_caller(threads, env(&[(threads, "")])), "set, even if empty");
+        // the marker only speaks for RUST_TEST_THREADS
+        assert!(set_by_caller("NEXTEST_TEST_THREADS", env(&[("NEXTEST_TEST_THREADS", "4"), (MARKER, "4")])));
+        assert!(set_by_caller("CARGO_BUILD_JOBS", env(&[("CARGO_BUILD_JOBS", "4"), (MARKER, "4")])));
+        assert!(!set_by_caller("CARGO_BUILD_JOBS", env(&[(MARKER, "4")])));
+    }
+
+    /// The `RUST_TEST_THREADS` a capped run's test binaries get in environment `vars` when `ci`'s
+    /// RAM-aware value is `cap`: the cap where the caller didn't set it, else the environment's.
+    fn test_threads(vars: &[(&str, &str)], cap: &str) -> String {
+        let caps = [("RUST_TEST_THREADS", cap.to_owned())];
+        let get = env(vars);
+        let set = crate::caps_to_set(&caps, |key| crate::set_by_caller(key, &get));
+        match set.first() {
+            Some((_, value)) => (*value).to_owned(),
+            None => get("RUST_TEST_THREADS").unwrap().into_string().unwrap(),
+        }
+    }
+
+    #[test]
+    fn an_explicit_test_thread_count_wins_except_one_equal_to_the_config_default() {
+        const MARKER: &str = crate::TEST_THREADS_DEFAULT_MARKER;
+        let threads = "RUST_TEST_THREADS";
+        assert_eq!(test_threads(&[(threads, "9"), (MARKER, "4")], "2"), "9", "explicit 9 is kept");
+        assert_eq!(test_threads(&[(threads, "2"), (MARKER, "4")], "3"), "2", "explicit 2 is kept");
+        assert_eq!(test_threads(&[(threads, "4"), (MARKER, "4")], "2"), "2", "the config default yields to the RAM-aware cap");
+        // An explicit RUST_TEST_THREADS=4 looks the same as the config default (documented): it
+        // may be lowered, never raised.
+        assert_eq!(test_threads(&[(threads, "4"), (MARKER, "4")], "2"), "2", "explicit 4 under cargo is lowered like the default");
+        assert_eq!(test_threads(&[(threads, "4")], "2"), "4", "no marker (xtask run outside cargo): 4 is the caller's");
+        assert_eq!(test_threads(&[(MARKER, "4")], "3"), "3", "unset: the cap");
+    }
+
+    /// The quoted `value` of the `key = { value = "…", … }` line in `.cargo/config.toml`'s `[env]`.
+    fn config_env(config: &str, key: &str) -> Option<(String, String)> {
+        // only inside `[env]`: the same key in another table isn't an environment default
+        let mut in_env = false;
+        let line = config.lines().find(|l| {
+            if l.trim_start().starts_with('[') {
+                in_env = l.trim() == "[env]";
+                return false;
+            }
+            in_env && l.split('=').next().is_some_and(|k| k.trim() == key)
+        })?;
+        let value = line.split("value = \"").nth(1)?.split('"').next()?.to_owned();
+        // without a trailing comment, so a `# force = …` note can't stand in for the setting
+        Some((value, line.split('#').next().unwrap_or(line).to_owned()))
+    }
+
+    #[test]
+    fn config_env_reads_only_the_env_table() {
+        let k = "RUST_TEST_THREADS";
+        let line = |v: &str| format!("{k} = {{ value = \"{v}\", force = false }}");
+        assert_eq!(config_env(&format!("[env]\n{}\n", line("4")), k).map(|(v, _)| v).as_deref(), Some("4"));
+        assert_eq!(config_env(&format!("[build]\n{}\n[env]\n", line("4")), k), None, "another table's key");
+        assert_eq!(config_env(&format!("[env]\n[alias]\n{}\n", line("4")), k), None, "after [env] ends");
+        assert_eq!(config_env(&format!("{}\n[env]\nX = 1\n", line("4")), k), None, "before any table");
+        let commented = format!("[env]\n{k} = {{ value = \"4\", force = true }} # force = false\n");
+        assert!(!config_env(&commented, k).unwrap().1.contains("force = false"), "a comment isn't the setting");
+    }
+
+    #[test]
+    fn the_cargo_config_sets_the_test_threads_default_and_its_marker_to_one_value() {
+        let config = std::fs::read_to_string(super::root().join(".cargo/config.toml")).unwrap();
+        let (threads, line) = config_env(&config, "RUST_TEST_THREADS").expect("RUST_TEST_THREADS in [env]");
+        assert!(line.contains("force = false"), "an explicit RUST_TEST_THREADS must win: {line}");
+        let (marker, marker_line) = config_env(&config, crate::TEST_THREADS_DEFAULT_MARKER).expect("the marker in [env]");
+        // forced, so an inherited marker can't make a caller's equal value look like the default
+        assert!(marker_line.contains("force = true"), "cargo must overwrite an inherited marker: {marker_line}");
+        assert_eq!(threads, marker, "xtask tells the default apart by this marker");
+        let n: usize = threads.parse().unwrap();
+        assert!((1..=4).contains(&n), "{n}");
+        assert!(config.contains("[env]"));
     }
 }
