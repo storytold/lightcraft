@@ -51,11 +51,7 @@ pub fn merge_xmp(existing: &str, fresh: &str, rules: MergeRules) -> Result<Strin
     craft_metadata::merge_xmp(
         existing,
         fresh,
-        craft_metadata::MergeRules {
-            owned: rules.owned,
-            owned_if_present: rules.owned_if_present,
-            namespaces: &namespaces,
-        },
+        craft_metadata::MergeRules { owned: rules.owned, owned_if_present: rules.owned_if_present, namespaces: &namespaces },
     )
 }
 
