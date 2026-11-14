@@ -21,25 +21,34 @@ use serde::Serialize;
 /// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
 /// batch may, in addition, hold up to twice the budget in photos rendering side by side
 /// ([`export_gate`]): transient memory, given back when the batch ends. Default:
-/// a quarter of the machine's RAM, at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
+/// a quarter of the machine's RAM ([`total_ram`]: a container's or cgroup's memory limit when
+/// smaller), at most 1.5 GiB (`LIGHTCRAFT_MEMORY_MB` overrides it).
 pub fn default_budget() -> usize {
     if let Some(mb) = std::env::var("LIGHTCRAFT_MEMORY_MB").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|m| *m >= 64) {
         return mb << 20;
     }
+    budget_for(total_ram())
+}
+
+/// The automatic budget for `total` bytes the process may use: a quarter of it, at most 1.5 GiB
+/// (1.5 GiB when unknown). No floor: under a small cgroup limit (128 MiB) a floor above the quarter
+/// would let the caches alone outgrow the limit, and the kernel kills the process.
+fn budget_for(total: Option<usize>) -> usize {
     let cap = 3usize << 29; // 1.5 GiB
-    match total_ram() {
-        Some(ram) => (ram / 4).clamp(256 << 20, cap),
+    match total {
+        // at least a byte: 0 means "not computed yet" to [`budget`]
+        Some(ram) => (ram / 4).clamp(1, cap),
         None => cap,
     }
 }
 
-/// Physical memory (bytes), when the platform tells us without native calls.
+/// Memory the process may use (bytes), when the platform tells us without native calls: physical
+/// RAM, held on Linux to the memory limit of the process's cgroup (a container, a Flatpak, a
+/// systemd scope with `MemoryMax`, a CI runner) when that is smaller.
 pub(crate) fn total_ram() -> Option<usize> {
     #[cfg(target_os = "linux")]
     {
-        let s = std::fs::read_to_string("/proc/meminfo").ok()?;
-        let kb: usize = s.lines().find(|l| l.starts_with("MemTotal:"))?.split_whitespace().nth(1)?.parse().ok()?;
-        Some(kb * 1024)
+        lightcraft_sysmem::effective_total().map(|b| usize::try_from(b).unwrap_or(usize::MAX))
     }
     #[cfg(target_os = "macos")]
     {
@@ -70,6 +79,13 @@ pub fn budget() -> usize {
         }
         b => b,
     }
+}
+
+/// Back to the automatic budget ([`default_budget`], which may be under the 64 MiB an explicit
+/// budget needs: a quarter of a small cgroup limit). Returns it.
+pub fn reset_budget() -> usize {
+    BUDGET.store(0, Ordering::Relaxed);
+    budget()
 }
 
 /// Change the budget (bytes, at least 64 MiB) for the process: the decode gate and the GPU pool
@@ -320,5 +336,67 @@ impl crate::Session {
         let b = set_budget(bytes);
         self.media.set_budget(cache_share(b));
         b
+    }
+
+    /// [`reset_budget`] for the process, and this session's cache share with it.
+    pub fn reset_memory_budget(&mut self) -> usize {
+        let b = reset_budget();
+        self.media.set_budget(cache_share(b));
+        b
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Inside a container or a systemd scope with `MemoryMax`, the budget is sized from the limit,
+    /// not the machine's RAM (#3072).
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn total_ram_honours_the_cgroup_limit() {
+        let ram = total_ram().unwrap();
+        let info = std::fs::read_to_string("/proc/meminfo").unwrap();
+        let physical = lightcraft_sysmem::limits::meminfo_bytes(&info, "MemTotal").unwrap();
+        assert!(ram as u64 <= physical);
+        let Some(limit) = lightcraft_sysmem::limits::cgroup_memory().limit else {
+            lightcraft_testkit::skip!(System, "no cgroup memory limit on this process (run it under `systemd-run --user --scope -p MemoryMax=2G`)");
+            return;
+        };
+        assert!(ram as u64 <= limit, "total_ram {ram} above the cgroup limit {limit}");
+    }
+
+    /// The budget stays a quarter of a small limit, not raised to a floor above it (#3072).
+    #[test]
+    fn the_budget_is_a_quarter_of_the_total_at_most_1_5_gib() {
+        const MIB: usize = 1 << 20;
+        assert_eq!(budget_for(Some(128 * MIB)), 32 * MIB, "a 128 MiB cgroup limit");
+        assert_eq!(budget_for(Some(512 * MIB)), 128 * MIB);
+        // 4 GiB and up don't fit a 32-bit usize (wasm32)
+        #[cfg(target_pointer_width = "64")]
+        {
+            assert_eq!(budget_for(Some(4096 * MIB)), 1024 * MIB);
+            assert_eq!(budget_for(Some(64 * 1024 * MIB)), 1536 * MIB, "capped");
+        }
+        assert_eq!(budget_for(None), 1536 * MIB, "unknown");
+        assert_eq!(budget_for(Some(0)), 1, "never the 0 that means not computed");
+    }
+
+    /// Automatic (`app.memoryBudget {mb: 0}`) goes back to the default budget, which under a cgroup
+    /// limit below 256 MiB is less than the 64 MB an explicit budget needs (#3072).
+    #[test]
+    fn mb_0_goes_back_to_the_automatic_budget() {
+        let mut s = crate::Session::new();
+        let r = s.execute("app.memoryBudget", &serde_json::json!({"mb": 0}));
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!(budget(), default_budget());
+        assert!(s.execute("app.memoryBudget", &serde_json::json!({"mb": 32})).is_err(), "an explicit budget is still at least 64 MB");
+    }
+
+    /// Prints what the budget is sized from; run by hand inside and outside a limited scope.
+    #[test]
+    #[ignore = "diagnostic: prints the RAM and default budget this process sees"]
+    fn prints_the_default_budget() {
+        println!("total_ram {:?} MiB, default_budget {} MiB", total_ram().map(|b| b >> 20), default_budget() >> 20);
     }
 }

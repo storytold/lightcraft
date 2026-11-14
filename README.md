@@ -420,7 +420,9 @@ turn. `LIGHTCRAFT_CI_SLOTS=2` allows two; `LIGHTCRAFT_CI_LOCK=off` skips the loc
 CI defaults to line-table debug information and one build job per 1.5 GB of RAM
 available when it starts (at most one per CPU; 4 if memory can't be read), so an
 8 GB machine with 6 GB free builds with 4, and a busy machine with little free
-builds with fewer. Test threads follow, capped at 4.
+builds with fewer. Test threads follow, capped at 4. On Linux a container's or cgroup's memory
+limit (a CI runner, a systemd scope with `MemoryMax`) counts: RAM available is then at most the
+room left under it.
 Full-debuginfo linkers, one per CPU, otherwise exhaust RAM before any test runs. GPU coverage is
 unchanged. Explicit `CARGO_PROFILE_DEV_DEBUG`, `CARGO_BUILD_JOBS`, `RUST_TEST_THREADS` and
 `NEXTEST_TEST_THREADS` settings override these defaults. The tests run under
