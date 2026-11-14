@@ -831,7 +831,7 @@ pub fn quantizer(quality: u8) -> usize {
 /// the samples as they come out (in order: no frame reordering).
 pub struct Av1Encoder {
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    enc: craft_video::av1::encode::Encoder,
+    enc: craft_video::av1::Encoder,
     width: usize,
     height: usize,
     has_sample: bool,
@@ -845,7 +845,7 @@ impl Av1Encoder {
         }
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            use craft_video::av1::encode::{Encoder, EncoderConfig, RateControl};
+            use craft_video::av1::{Encoder, EncoderConfig, RateControl};
             let _ = c.speed;
             let mut ec = EncoderConfig::new(w as u32, h as u32, u32::from(c.fps), 1);
             ec.rate = RateControl::ConstantQ(quantizer(c.quality).clamp(1, 255) as u8);
@@ -888,7 +888,7 @@ impl Av1Encoder {
             let y16: Vec<u16> = y.into_iter().map(u16::from).collect();
             let u16_: Vec<u16> = u.into_iter().map(u16::from).collect();
             let v16: Vec<u16> = v.into_iter().map(u16::from).collect();
-            let frame = craft_video::av1::encode::Frame { y: &y16, u: &u16_, v: &v16, y_stride: self.width, uv_stride: self.width / 2 };
+            let frame = craft_video::av1::Frame { y: &y16, u: &u16_, v: &v16, y_stride: self.width, uv_stride: self.width / 2 };
             let pkt = self.enc.encode_with_key(&frame, key).map_err(|e| bad(format!("AV1: {e}")))?;
             self.has_sample = true;
             Ok(vec![Sample { data: pkt.data, key: pkt.keyframe, duration: periods.max(1) }])
