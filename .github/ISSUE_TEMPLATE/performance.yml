@@ -1,0 +1,50 @@
+name: Performance problem
+description: Report slow imports, rendering, navigation, or a large-library slowdown.
+title: "[Performance]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [existing issues](https://github.com/storytold/lightcraft/issues?q=is%3Aissue) first; add measurements to an existing report when possible.
+        Issues are public. Redact secrets, personal paths, and private photo metadata before sharing evidence.
+  - type: input
+    id: version
+    attributes:
+      label: LightCraft version
+      description: Copy the version from the About dialog, or give the commit hash for a source build.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Operating system and hardware
+      description: Include OS version, CPU, RAM, GPU or driver, and storage type (internal disk, USB, or network). For the web app, include the browser and version.
+    validations:
+      required: true
+  - type: textarea
+    id: workload
+    attributes:
+      label: Library and workload
+      description: Include the number of photos, file types or camera models, image dimensions, active edits, and the operation that is slow. Estimates are fine.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include whether this is the first run or a repeat with cached previews, and whether it happens on a small library too.
+    validations:
+      required: true
+  - type: textarea
+    id: timings
+    attributes:
+      label: Measured and expected performance
+      description: Give elapsed time or frame rate if possible, what you expected, and whether the UI freezes or can cancel the operation. Approximate measurements are fine.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs (optional)
+      description: Paste a small, redacted excerpt. Remove credentials and private file paths.
+      render: text
