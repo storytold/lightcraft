@@ -2448,5 +2448,9 @@
   "Zoom to Focus Point": "Didinti iki fokusavimo taško",
   "Zoom to page level": "Padidinti iki puslapio mastelio",
   "日本語": "Japonų",
-  "繁體中文（台灣）": "Tradicinė kinų (Taivanas)"
+  "繁體中文（台灣）": "Tradicinė kinų (Taivanas)",
+  "Perspective Guides": "Perspektyvos gairės",
+  "Guided Perspective": "Perspektyvos koregavimas pagal gaires",
+  "Perspective Correction": "Perspektyvos koregavimas",
+  "⌘-drag to straighten, ⇧G Guided Perspective, a grid while transforming.": "Vilkdami laikykite nuspaudę ⌘, kad ištiesintumėte; ⇧G – perspektyvos koregavimas pagal gaires, tinklelis rodomas transformuojant."
 }
