@@ -264,8 +264,9 @@ pub enum SourceRef {
         path: String,
         max_edge: usize,
         loader: Option<FileLoader>,
-        /// The photo's smart preview, used when the original can't be read (offline drive). The
-        /// UI thread never checks whether the original is there; the render worker finds out.
+        /// Where the photo's smart preview is made (its sharded path), used when the original can't be
+        /// read (offline drive). The UI thread never checks whether the original or the preview is
+        /// there; the render worker finds out, and looks in the older releases' flat folder too.
         fallback: Option<std::path::PathBuf>,
         /// The photo has a cached denoised picture: load it with the plain one (see [`PairLoader`]).
         denoise: Option<(DenoiseSpec, PairLoader)>,
@@ -352,8 +353,9 @@ impl SourceRef {
                 // An offline original renders from its smart preview (no decoder facts: header ones).
                 return match (r, fallback) {
                     #[cfg(not(target_arch = "wasm32"))]
-                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) && crate::smart::is_valid(sp) => {
-                        crate::smart::load(sp).map_err(|e2| format!("{e}; smart preview: {e2}"))
+                    (Err(e), Some(sp)) if denoise.as_ref().is_none_or(|(spec, _)| spec.make.is_none()) => {
+                        let sp = crate::smart::existing_beside_shard(sp);
+                        if crate::smart::is_valid(&sp) { crate::smart::load(&sp).map_err(|e2| format!("{e}; smart preview: {e2}")) } else { Err(e) }
                     }
                     (r, _) => r,
                 };
