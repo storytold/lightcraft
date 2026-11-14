@@ -170,7 +170,9 @@ pub fn display_time(iso: &str) -> String {
     let (Some(y), Some(mo), Some(d)) = (num(0..4), num(5..7), num(8..10)) else { return iso.to_string() };
     let Some(month) = MONTHS.get((mo as usize).wrapping_sub(1)) else { return iso.to_string() };
     let date = format!("{month} {d}, {y}");
-    match (num(11..13), num(14..16), num(17..19)) {
+    // seconds only after a `:` and as plain digits (not the hours of a `+02:00` zone or a `+0` sign)
+    let secs = iso.get(16..19).filter(|s| s.starts_with(':') && s[1..].bytes().all(|b| b.is_ascii_digit())).and_then(|_| num(17..19));
+    match (num(11..13), num(14..16), secs) {
         (Some(h), Some(mi), s) => {
             let (h12, ampm) = match h {
                 0 => (12, "AM"),
@@ -262,6 +264,14 @@ pub fn date_runs_of<K: AsRef<str>>(
 mod tests {
     use super::*;
     use crate::{Op, Photo, Source};
+
+    #[test]
+    fn display_time_ignores_zone_offset_without_seconds() {
+        assert_eq!(display_time("2022-03-30T22:11+02:00"), "March 30, 2022 at 10:11:00 PM");
+        assert_eq!(display_time("2022-03-30T22:11-05:00"), "March 30, 2022 at 10:11:00 PM");
+        assert_eq!(display_time("2022-03-30T22:11Z"), "March 30, 2022 at 10:11:00 PM");
+        assert_eq!(display_time("2022-03-30T22:11:11"), "March 30, 2022 at 10:11:11 PM");
+    }
 
     #[test]
     fn calendar() {
