@@ -229,7 +229,7 @@ pub enum TiffCompression {
 }
 
 /// Encode TIFF: 8/16-bit integer or 32-bit float, gray/RGB with optional (unassociated) alpha.
-/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `lightcraft-tiff`).
+/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `craft-tiff`).
 pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &EncodeMeta) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder};
     use tiff::tags::Predictor;
@@ -239,7 +239,7 @@ pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &Encod
     let comp = match compression {
         TiffCompression::None => Compression::Uncompressed,
         TiffCompression::Lzw => Compression::Lzw,
-        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Fast),
+        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Balanced),
         TiffCompression::PackBits => Compression::Packbits,
     };
     let float = matches!(img.samples, Samples::F32(_));
