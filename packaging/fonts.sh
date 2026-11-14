@@ -10,7 +10,7 @@ prepare_fonts() {
 
   if [[ -z "${CRAFT_FONTS_DIR:-}" ]] && [[ ! -e "$font_dir" ]]; then
     # Same revision as release.yml. Never update or reset an existing checkout.
-    local revision=b076417b5880bd4154bd22f00695b1d28c6bea83
+    local revision=c1db6d1a8ed772191241c3d185e2104be84d8691
     echo "==> downloading craft-fonts ($revision) to $font_dir"
     if ! git clone --no-checkout https://github.com/storytold/craft-fonts "$font_dir" ||
        ! git -C "$font_dir" checkout --detach "$revision"; then

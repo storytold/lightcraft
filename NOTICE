@@ -53,10 +53,11 @@ no darktable, RawSpeed, LibRaw or other GPL decoder/runtime code is included.
 
 Builds made with craft-fonts (the optional CRAFT_FONTS_DIR build input; all official releases)
 also embed the default fonts listed in
-https://github.com/storytold/craft-fonts/blob/b076417b5880bd4154bd22f00695b1d28c6bea83/ATTRIBUTION.md (BIZ UDPGothic, BIZ UDMincho,
+https://github.com/storytold/craft-fonts/blob/c1db6d1a8ed772191241c3d185e2104be84d8691/ATTRIBUTION.md (BIZ UDPGothic, BIZ UDMincho,
 Shippori Mincho, Noto Sans CJK SC, Noto Sans Arabic, Noto Sans Thai, Noto Sans Georgian,
-NanumGothic, Noto Sans Symbols, Noto Sans Symbols 2, Noto Sans Hebrew and
-Noto Sans Devanagari), under the SIL Open Font License 1.1. The opt-in LXGW WenKai Lite face
+NanumGothic, Noto Sans Symbols, Noto Sans Symbols 2, Noto Sans Hebrew, Noto Sans Devanagari,
+Noto Sans Bengali, Noto Sans Gurmukhi, Noto Sans Gujarati, Noto Sans Oriya, Noto Sans Tamil,
+Noto Sans Telugu, Noto Sans Kannada and Noto Sans Malayalam), under the SIL Open Font License 1.1. The opt-in LXGW WenKai Lite face
 (fonts/simplified-chinese-manifest.txt in craft-fonts) is not embedded. The web build embeds
 BIZ UDPGothic Regular, Noto Sans Thai Regular and Noto Sans Georgian Regular, and loads Noto Sans
 CJK SC separately. Release packages include each font's licence as OFL-<family>.txt; Windows
