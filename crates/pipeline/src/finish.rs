@@ -55,7 +55,7 @@ pub fn sharpen_term(det: f32, limit: f32, mask: f32) -> f32 {
 }
 
 /// Parametric region curve (encoded domain) composed with the master point curve.
-fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
+pub(crate) fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     let parametric = c.highlights != 0.0 || c.lights != 0.0 || c.darks != 0.0 || c.shadows != 0.0;
     let master = !ToneCurve::point_curve_is_identity(&c.master);
     let chans = [&c.red, &c.green, &c.blue].map(|p| !ToneCurve::point_curve_is_identity(p));
@@ -189,6 +189,41 @@ fn crystal_row(fp: &FinishParams, y: usize, w: usize) -> Vec<f32> {
         out.clear();
     }
     out
+}
+
+/// Film grain on display-encoded colour `e` at output pixel `(x, y)`, the model of the photo's
+/// process ([`GrainModel`]). `crystal_row`: that row's crystal grain ([`crystal_row`]; empty: the
+/// pixel takes it alone).
+#[inline]
+fn add_grain(fp: &FinishParams, crystal_row: &[f32], x: usize, y: usize, mut e: [f32; 3], hdr: bool) -> [f32; 3] {
+    let (out_to_norm, long) = (fp.out_to_norm, fp.ow.max(fp.oh));
+    match &fp.grain {
+        Some(GrainModel::Value(g)) => {
+            // V1/V2 (frozen): exactly the arithmetic those processes always had
+            let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
+            let sc = fp.px_per_long as f32 / g.cell;
+            let mut v = grain_noise(gx * sc, gy * sc, g.seed);
+            v = v * (1.0 - g.rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
+            let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+            if hdr {
+                lum = lum.clamp(0.0, 1.0);
+            }
+            let k = g.amt * v * (0.35 + 2.6 * lum * (1.0 - lum));
+            if k.is_finite() {
+                e = e.map(|v| v + k);
+            }
+        }
+        Some(GrainModel::Crystal(g)) => match crystal_row.get(x) {
+            Some(&f) => e = g.apply_field(e, f),
+            None => {
+                let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                e = g.apply(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32);
+            }
+        },
+        None => {}
+    }
+    e
 }
 
 /// Number of per-mask terms in [`mask_terms`].
@@ -435,7 +470,7 @@ pub(crate) fn finish(p: &Prepared, s: &DevelopSettings, frame: &Frame, info: &So
         fp.for_display(d, proof);
     }
     let trc = fp.out_trc;
-    let data = finish_with(p, &fp, false, |x, y, e| {
+    let data = finish_with(p, &fp, false, false, |x, y, e| {
         let d = bayer_dither_offset(x, y);
         match trc {
             OutputTrc::Srgb => [enc(e[0], d), enc(e[1], d), enc(e[2], d), 255],
@@ -468,18 +503,18 @@ pub(crate) fn finish_deep(p: &Prepared, s: &DevelopSettings, frame: &Frame, info
     let trc = fp.out_trc;
     let samples = match depth {
         OutputDepth::F32Linear => {
-            let v = finish_with(p, &fp, true, |_x, _y, e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
+            let v = finish_with(p, &fp, true, false, |_x, _y, e| e.map(|v| srgb_to_linear(v.clamp(0.0, 1.0))));
             DeepSamples::F32(v.into_flattened())
         }
         OutputDepth::F32Hdr => {
             // the sRGB curve extended past 1 (it is unbounded), so values up to `peak` survive
             let peak = fp.peak;
-            let v = finish_with(p, &fp, true, |_x, _y, e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
+            let v = finish_with(p, &fp, true, false, |_x, _y, e| e.map(|v| srgb_to_linear(v.max(0.0)).clamp(0.0, peak)));
             DeepSamples::F32(v.into_flattened())
         }
         _ => {
             let q = |v: f32| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
-            let v = finish_with(p, &fp, true, |_x, _y, e| match trc {
+            let v = finish_with(p, &fp, true, false, |_x, _y, e| match trc {
                 OutputTrc::Srgb => e.map(q),
                 t => e.map(|v| q(t.encode(srgb_to_linear(v.clamp(0.0, 1.0))))),
             });
@@ -496,14 +531,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     p: &Prepared,
     fp: &FinishParams,
     exact: bool,
+    stop_after_curves: bool,
     store: impl Fn(usize, usize, [f32; 3]) -> T + Sync + Send,
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams { light, curves, vig, to_out, out_luma, grain, .. } = fp;
+    let FinishParams { light, curves, vig, to_out, out_luma, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
-    let out_to_norm = fp.out_to_norm;
-    let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
     let (vx_u, vy_u) = (vx.round() as usize, vy.round() as usize);
     // the vignette belongs to the whole output frame, not to the window being drawn
@@ -651,32 +685,13 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            match grain {
-                Some(GrainModel::Value(g)) => {
-                    // V1/V2 (frozen): exactly the arithmetic those processes always had
-                    let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                    let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                    let sc = fp.px_per_long as f32 / g.cell;
-                    let mut v = grain_noise(gx * sc, gy * sc, g.seed);
-                    v = v * (1.0 - g.rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
-                    let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-                    if hdr {
-                        lum = lum.clamp(0.0, 1.0);
-                    }
-                    let k = g.amt * v * (0.35 + 2.6 * lum * (1.0 - lum));
-                    if k.is_finite() {
-                        e = e.map(|v| v + k);
-                    }
-                }
-                Some(GrainModel::Crystal(g)) => match crystal_row.get(x) {
-                    Some(&f) => e = g.apply_field(e, f),
-                    None => {
-                        let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                        e = g.apply(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32);
-                    }
-                },
-                None => {}
+            if stop_after_curves {
+                // A diagnostic supplies only the selected curve's predecessors. Do not include
+                // grain, a LUT profile, proof warning colours or final output re-encoding.
+                *px = store(vx_u + x, vy_u + y, e);
+                continue;
             }
+            e = add_grain(fp, &crystal_row, x, y, e, hdr);
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
                     // the LUT sees SDR values; the part above SDR white is carried over
@@ -958,14 +973,14 @@ const BAYER_8X8: [u8; 64] = [
 
 /// Returns the ordered Bayer 8×8 dither threshold offset in `0..1` for pixel `(x, y)`.
 #[inline]
-fn bayer_dither_offset(x: usize, y: usize) -> f32 {
+pub(crate) fn bayer_dither_offset(x: usize, y: usize) -> f32 {
     let idx = (y & 7) * 8 + (x & 7);
     (BAYER_8X8[idx] as f32 + 0.5) / 64.0
 }
 
 /// Quantizes display-curve-encoded value `v` (0..1) to 8-bit integer with 8×8 ordered Bayer dithering.
 #[inline]
-fn enc(v: f32, dither: f32) -> u8 {
+pub(crate) fn enc(v: f32, dither: f32) -> u8 {
     let y = v.clamp(0.0, 1.0) * 255.0;
     // Guard against floating point rounding error (e.g. sRGB <-> Rec.2020 matrix conversion)
     // where numerical white (1.0) evaluates to ~254.95.

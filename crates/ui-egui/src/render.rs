@@ -71,6 +71,8 @@ pub enum Slot {
     /// A slider drag's live HDR histogram: a small full-quality render of an HDR edit, beside the
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
+    /// Input of the selected Tone Curve. Strict request identity, no displayed texture.
+    CurveHistogram,
 }
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
@@ -290,6 +292,10 @@ pub struct Renderer {
     pub textures: HashMap<Slot, Tex>,
     /// The last [`Slot::HdrHistogram`] result: (photo, job key, histogram).
     pub live_hdr_histogram: Option<(PhotoId, u64, Histogram)>,
+    /// Current curve diagnostic: photo, request key and unquantized input histogram.
+    pub curve_histogram: Option<(PhotoId, u64, Histogram)>,
+    /// Last diagnostic job, so idle frames do not clone and hash the full edit again.
+    curve_input_request: Option<(u64, lightcraft_engine::pipeline::curve_input::CurveInput, RenderJob)>,
     pub last_main_ms: f64,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
@@ -419,6 +425,8 @@ impl Renderer {
             pending: HashMap::new(),
             textures: HashMap::new(),
             live_hdr_histogram: None,
+            curve_histogram: None,
+            curve_input_request: None,
             last_main_ms: 0.0,
             completed: 0,
             discarded: 0,
@@ -599,6 +607,7 @@ impl Renderer {
                 | Slot::CompareRegion(_)
                 | Slot::Second
                 | Slot::Slide(_)
+                | Slot::CurveHistogram
         )
     }
 
@@ -622,6 +631,20 @@ impl Renderer {
     /// Whether GPU-resident renders can be shown.
     pub fn has_screen_textures(&self) -> bool {
         self.screen.is_some()
+    }
+
+    pub fn curve_input_job(&mut self, job: RenderJob, input: lightcraft_engine::pipeline::curve_input::CurveInput) -> RenderJob {
+        if let Some((key, channel, prepared)) = &self.curve_input_request
+            && *key == job.key
+            && *channel == input
+            && prepared.origin == job.origin
+        {
+            return prepared.clone();
+        }
+        let key = job.key;
+        let prepared = job.with_curve_input(input);
+        self.curve_input_request = Some((key, input, prepared.clone()));
+        prepared
     }
 
     /// The display profile in use (id).
@@ -658,7 +681,9 @@ impl Renderer {
         if let Some(&(k, p)) = self.pending.get(&slot) {
             return k != key || (p != priority && self.is_queued(slot));
         }
-        !(self.textures.get(&slot).is_some_and(|t| t.key == key) || self.failed.get(&slot).is_some_and(|f| f.0 == key && f.2 == self.catalog_rev))
+        !((slot == Slot::CurveHistogram && self.curve_histogram.as_ref().is_some_and(|h| h.1 == key))
+            || self.textures.get(&slot).is_some_and(|t| t.key == key)
+            || self.failed.get(&slot).is_some_and(|f| f.0 == key && f.2 == self.catalog_rev))
     }
     /// Free a view slot's texture and stage cache (the view is no longer shown).
     pub fn release(&mut self, slot: Slot) {
@@ -715,7 +740,7 @@ impl Renderer {
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
         );
         // (an offload keeps its own per-view stage caches; the flag tells it to)
-        let job = if slot.is_view() { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
+        let job = if slot.is_view() || slot == Slot::CurveHistogram { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
         if self.offload.is_some() {
             self.seq += 1;
             self.queue.retain(|q| q.slot != slot);
@@ -976,6 +1001,8 @@ impl Renderer {
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
         self.textures.clear();
+        self.curve_histogram = None;
+        self.curve_input_request = None;
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -1266,6 +1293,21 @@ impl Renderer {
         finished
     }
 
+    /// Keep the result of a histogram-only slot ([`Slot::CurveHistogram`], [`Slot::HdrHistogram`]);
+    /// whether it changed anything.
+    fn keep_histogram(&mut self, slot: Slot, photo: PhotoId, key: u64, histogram: Histogram) -> bool {
+        if slot == Slot::CurveHistogram {
+            self.curve_histogram = Some((photo, key, histogram));
+            return true;
+        }
+        // (an HDR histogram slot whose render has no HDR histogram changes nothing)
+        let hdr = histogram.hdr.is_some();
+        if hdr {
+            self.live_hdr_histogram = Some((photo, key, histogram));
+        }
+        hdr
+    }
+
     /// The slot a finished job goes to. Made ahead for the photo the loupe is now waiting for, it is
     /// the loupe's stand-in (the loupe's own request for it, if one was started, is dropped when it
     /// arrives); also when the loupe's own request failed and it still wants that photo: the
@@ -1437,11 +1479,8 @@ impl Renderer {
             if matches!(slot, Slot::Prefetch(_)) {
                 continue;
             }
-            if slot == Slot::HdrHistogram {
-                if rendered.histogram.hdr.is_some() {
-                    self.live_hdr_histogram = Some((r.photo, r.key, rendered.histogram));
-                    changed = true;
-                }
+            if matches!(slot, Slot::CurveHistogram | Slot::HdrHistogram) {
+                changed |= self.keep_histogram(slot, r.photo, r.key, rendered.histogram);
                 continue;
             }
             if let Slot::ThumbQuick(id) = slot {

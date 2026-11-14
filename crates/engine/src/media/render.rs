@@ -45,6 +45,8 @@ pub struct RenderJob {
     /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
     /// small ratios and aliases it at large ones. The caches keep the full render.
     pub display_fit: Option<(usize, usize)>,
+    /// A bounded diagnostic at a Tone Curve input, never a cached photo render.
+    pub curve_input: Option<lightcraft_pipeline::curve_input::CurveInput>,
 }
 
 /// `img` shrunk to fit `max_w × max_h` with a Lanczos filter (see [`RenderJob::display_fit`]).
@@ -94,6 +96,26 @@ pub struct RenderResult {
 }
 
 impl RenderJob {
+    /// Sample the selected curve's input using this job's source. Frontends start with a
+    /// thumbnail job to reuse the thumbnail-level source. No rendered thumbnail or view cache is read
+    /// or written; changing this curve or a later one retains the same diagnostic key.
+    pub fn with_curve_input(mut self, input: lightcraft_pipeline::curve_input::CurveInput) -> Self {
+        let salt = |c: lightcraft_pipeline::curve_input::CurveInput| (c as u64 + 1).wrapping_mul(0xa24b_aed4_963e_e407);
+        if let Some(previous) = self.curve_input {
+            self.key ^= previous.settings_key(&self.settings) ^ salt(previous);
+        } else {
+            self.key ^= self.settings.hash64();
+        }
+        self.key ^= input.settings_key(&self.settings) ^ salt(input);
+        self.curve_input = Some(input);
+        self.cache = None;
+        self.view_cache = None;
+        self.preview_cut = None;
+        self.slide = None;
+        self.display_fit = None;
+        self
+    }
+
     /// Render at draft quality (interactive drags). Gets its own result key.
     /// Shrink the full-quality result to fit `w × h` pixels with a Lanczos filter (see
     /// [`Self::display_fit`]). Gets its own result key, so a change of drawn size renders again.
@@ -346,6 +368,22 @@ impl RenderJob {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
                 let src = &source.image_for(self.settings.denoise_amount());
                 let info = source.info_or(self.info);
+                if let Some(input) = self.curve_input {
+                    let rendered = lightcraft_pipeline::curve_input::render(src, &info, &self.settings, &self.request, self.stages.as_deref(), input);
+                    return RenderResult {
+                        request_id: self.request_id,
+                        source_key: self.source_key,
+                        photo: self.photo,
+                        level: self.level,
+                        key: self.key,
+                        rendered: Ok(rendered),
+                        gpu_fallback: None,
+                        loaded: (!was_loaded).then_some(source),
+                        quick: None,
+                        display: self.display.as_ref().map(|d| d.id()),
+                        frame: None,
+                    };
+                }
                 // Views and exports use the GPU when there is one (waiting for the device if it is
                 // still being created). Thumbnails (grid, filmstrip, preset and profile previews)
                 // use it once it is ready - ~20-30 % faster than the CPU at 256 px with six jobs
