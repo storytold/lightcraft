@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Select by a single star rating
+- Edit ▸ Select by now lists each rating on its own (★ only through ★★★★★ only) below the “and higher” rows,
+  next to Unrated. Choosing ★★★ only selects the photos in view rated exactly three stars, where before the menu
+  could only select three stars and up (#3311).
+
 ## Unreleased
 
 ### Flatpak updates
@@ -410,7 +417,6 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
-
 
 ## 2026-10-24
 
