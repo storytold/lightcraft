@@ -789,6 +789,25 @@ fn a_huge_keyword_field_is_cut_in_linear_time() {
 }
 
 #[test]
+fn times_are_calendar_times_within_four_digit_years() {
+    let scratch = Scratch::new("times");
+    let captured = |seconds: f64| {
+        let mut tables = sample(&scratch.0);
+        let image = &mut table(&mut tables, "ZIMAGE").rows[0];
+        image.retain(|(name, _)| *name != "ZEXP_DATE");
+        image.push(("ZEXP_DATE", V::R(seconds)));
+        read(&scratch.catalog(&tables)).unwrap().photos[0].captured.clone()
+    };
+    assert_eq!(captured(1_429_943_263.93).as_deref(), Some("2015-04-25T06:27:43"));
+    // before 1970, and the last second an ISO date holds
+    assert_eq!(captured(-86_400.5).as_deref(), Some("1969-12-31T00:00:00"));
+    assert_eq!(captured(253_402_300_799.0).as_deref(), Some("9999-12-31T23:59:59"));
+    assert_eq!(captured(253_402_300_800.0), None);
+    assert_eq!(captured(-62_135_596_799.0).as_deref(), Some("0001-01-01T00:00:01"));
+    assert_eq!((captured(-62_135_596_800.0), captured(-1.0e18), captured(0.0)), (None, None, None));
+}
+
+#[test]
 fn colour_tags_follow_capture_ones_order() {
     let names: Vec<_> = (0..8).map(|i| ColorTag::from_index(i).and_then(ColorTag::name)).collect();
     assert_eq!(names, [None, Some("Red"), Some("Orange"), Some("Yellow"), Some("Green"), Some("Blue"), Some("Pink"), Some("Purple")]);

@@ -8,6 +8,8 @@ use super::{CatalogPhoto, ColorTag, Iptc, OriginalKind, ReadError, keywords, pat
 
 /// Capture One's "no date": 0001-01-01 as Unix seconds.
 const NO_DATE: f64 = -62_135_596_800.0;
+/// 9999-12-31T23:59:59 as Unix seconds: the last time an ISO date with a four-digit year holds.
+const LAST_DATE: f64 = 253_402_300_799.0;
 /// The metadata columns with a field of their own in [`Iptc`], and the keyword field.
 const NAMED: &[&str] = &[
     "ZSTATUS_TITLE",
@@ -136,8 +138,8 @@ fn image_fields(image_id: i64, image: Row<'_>, location: Option<Row<'_>>, databa
         width: image.int("ZWIDTH").and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
         height: image.int("ZHEIGHT").and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
         file_size: image.int("ZFILE_SIZE").and_then(|n| u64::try_from(n).ok()).unwrap_or(0),
-        captured: time(image.real("ZEXP_DATE"), "%Y-%m-%dT%H:%M:%S"),
-        imported: time(image.real("ZIMPORTDATE"), "%Y-%m-%dT%H:%M:%SZ"),
+        captured: time(image.real("ZEXP_DATE"), ""),
+        imported: time(image.real("ZIMPORTDATE"), "Z"),
         camera_make: image.text("ZCAMERA_MAKE").trim().to_string(),
         camera_model: image.text("ZCAMERA_MODEL").trim().to_string(),
         lens: image.text("ZCAMERA_LENS").trim().to_string(),
@@ -151,12 +153,11 @@ fn image_fields(image_id: i64, image: Row<'_>, location: Option<Row<'_>>, databa
     }
 }
 
-/// Unix seconds as a calendar time in UTC; `None` for Capture One's "no date", zero and times
-/// the calendar can't hold.
-fn time(seconds: Option<f64>, format: &str) -> Option<String> {
-    let seconds = seconds.filter(|s| *s > NO_DATE && *s != 0.0)?;
-    let at = chrono::DateTime::from_timestamp(seconds.trunc() as i64, 0)?;
-    Some(at.naive_utc().format(format).to_string())
+/// Unix seconds as a calendar time in UTC (`YYYY-MM-DDTHH:MM:SS`) followed by `zone`; `None`
+/// for Capture One's "no date", zero and times outside the years 0001 to 9999.
+fn time(seconds: Option<f64>, zone: &str) -> Option<String> {
+    let seconds = seconds.filter(|s| *s > NO_DATE && *s != 0.0 && *s <= LAST_DATE)?;
+    Some(format!("{}{zone}", lightcraft_catalog::dates::civil(seconds.trunc() as i64)))
 }
 
 /// A value Capture One writes as a fraction (`-33/100`) or a plain number.
