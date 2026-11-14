@@ -714,8 +714,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     };
 
     let cfa = match (raw.u64s(t::CFA_REPEAT_PATTERN_DIM).as_deref(), raw.bytes(t::CFA_PATTERN_EP)) {
-        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => Cfa { width: 2, height: 2, pattern: p.to_vec() },
-        _ => Cfa::bayer_static("RGGB"),
+        (Some([2, 2]), Some(p)) if p.len() == 4 && p.iter().all(|&c| c <= 2) => {
+            Cfa { width: 2, height: 2, origin_x: 0, origin_y: 0, pattern: p.to_vec() }
+        }
+        _ => crate::bayer("RGGB"),
     };
     let default_black = if scale_bits >= 14 { 512.0 } else { 128.0 };
     // the decrypted SR2SubIFD, read once and only when a plain black level or white balance is missing
@@ -849,7 +851,7 @@ mod tests {
         raw.set(TONE_CURVE, Value::Short(vec![0; 4]));
         raw.set(BLACK_LEVEL, Value::Short(vec![512; 4]));
         raw.set(WB_RGGB, Value::Short(vec![2048, 1024, 1024, 2048]));
-        raw.set_image(ImageData::Tiles { tile_width: 4, tile_height: 4, tiles: vec![ljpeg::tests::fixture_420()] });
+        raw.set_image(ImageData::Tiles { tile_width: 4, tile_height: 4, tiles: vec![crate::ljpeg_fixtures::fixture_420()] });
         let file = TiffWriter::default().write(&[raw]).unwrap();
         let header = decode(&file, Mode::Header).unwrap();
         let full = decode(&file, Mode::Full).unwrap();

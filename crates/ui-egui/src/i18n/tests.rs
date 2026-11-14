@@ -1373,3 +1373,13 @@ fn polish_and_czech_whole_counts_use_the_cardinal_forms() {
     }
     assert_eq!(integer_plural_form(Locale::Cs, 1), "one");
 }
+
+#[test]
+fn perspective_labels_are_translated_in_every_shipped_locale() {
+    for locale in Locale::ALL.iter().filter(|locale| **locale != Locale::En) {
+        for source in ["Perspective Correction", "Guided Perspective", "Perspective Guides"] {
+            assert!(locale.catalog().contains_key(source), "{}: {source}", locale.code());
+            assert!(!locale.tr(source).contains("Upright"), "{}: {source}", locale.code());
+        }
+    }
+}

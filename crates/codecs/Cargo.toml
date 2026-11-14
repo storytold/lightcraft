@@ -13,6 +13,8 @@ lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
 craft-gainmap = { workspace = true }
+craft-gif = { workspace = true }
+craft-psd = { workspace = true }
 craft-heif = { workspace = true, optional = true }
 serde = { workspace = true }
 bytemuck = { workspace = true }
@@ -27,20 +29,18 @@ png = { workspace = true }
 tiff = { workspace = true }
 image-webp = { workspace = true }
 moxcms = { workspace = true }
-jxl-oxide = { workspace = true, optional = true }
+craft-jxl = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ravif = { workspace = true, optional = true }
 rav1e = { workspace = true, optional = true }
 avif-serialize = { workspace = true, optional = true }
-# spawns threads of its own (std::thread), which wasm32 has not got
-jixel = { workspace = true, optional = true }
 
 [features]
 default = ["parallel", "jxl", "avif"]
 parallel = ["dep:rayon", "lightcraft-raster/parallel", "jpeg-decoder/rayon"]
-## JPEG XL decode (jxl-oxide) and, on native targets, encode (jixel); both pure Rust.
-jxl = ["dep:jxl-oxide", "dep:jixel"]
+## JPEG XL decoding and encoding via the shared craft-jxl codec.
+jxl = ["dep:craft-jxl"]
 # HEIC/HEIF decode via the optional craft-heif crate (heic-rs, pure Rust). Off by default so
 # distributors choose it at build time (HEVC patents are a distributor's call, same policy as
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.

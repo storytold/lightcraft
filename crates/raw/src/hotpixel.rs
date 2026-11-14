@@ -140,7 +140,7 @@ impl RawImage {
         let black = self.black.mean();
         let RawData::U16(d) = &mut self.data else { return 0 };
         if self.cpp != 1
-            || !cfa.valid()
+            || !crate::cfa_valid(&cfa)
             || w.checked_mul(h) != Some(d.len())
             || a.width < 4 * MARGIN
             || a.height < 4 * MARGIN
