@@ -219,6 +219,14 @@
   breaks the masks added after it: new masks, duplicates and the masks of a preset each get an id no other mask has.
   Before, the next id wrapped around to 0, so a second new mask shared the first one's id (debug builds crashed).
 
+### Rating a photo in a big view no longer stalls the grid
+- The photo count the grid shows beside the source's name ("1,234 of 5,678") was worked out again from every photo in the
+  library after each edit, so in a library of hundreds of thousands of photos each rating, flag or label in a large
+  smart album or folder took about half a second to show. After an edit it now asks only the photos the edit touched, the
+  way the grid's list already did; an edit to many photos at once, to an album's rules or photos, or a source that
+  reads the clock is still counted from every photo. Opening a source with nothing narrowing it takes the count from the
+  pass that builds the grid instead of a second pass.
+
 ## 2026-10-29
 
 ### A person's page opens in seconds in a large library
