@@ -14,7 +14,7 @@ craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 # Canon CRW decoder shared with the other Craft apps
 craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "f3b62ec61f45534392376492fc5ad33047375205" }
-craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "d61671b6ded40929dcaacaaa658512d9f7981fc4", default-features = false, features = ["decode", "encode"] }
+craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "6d620e971e820b517b11a99cad040ebac670e1e2", default-features = false, features = ["decode", "encode"] }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
