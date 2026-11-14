@@ -422,12 +422,87 @@ fn xmp_warning_text(warning: &ImportWarning) -> String {
     }
 }
 
+/// The most warning lines the finish toast shows before a "+N more" line (#3050): the overlay
+/// must not grow with the import.
+const MAX_WARNING_LINES: usize = 6;
+
+/// The most field names one grouped line lists before a "+N more" line.
+const MAX_WARNING_FIELDS: usize = 8;
+
+/// Warnings that say the same thing about different photos, one entry per distinct message in
+/// first-seen order: the warning to render and how many photos it covers. A profile groups by
+/// name, Upright by mode, unmapped fields by the field set; a group of one keeps its photo's
+/// path in [`xmp_warning_text`].
+fn grouped_warnings(warnings: &[ImportWarning]) -> Vec<(&ImportWarning, usize)> {
+    let mut keys: Vec<String> = Vec::new();
+    let mut groups: Vec<(&ImportWarning, usize)> = Vec::new();
+    for w in warnings {
+        let key = match w.code {
+            ImportWarningCode::CameraProfile => format!("profile:{}", w.profile.as_deref().unwrap_or_default()),
+            ImportWarningCode::UprightGeometry => format!("upright:{:?}", w.mode),
+            ImportWarningCode::UnmappedXmp => {
+                let mut fields = w.fields.clone();
+                fields.sort_unstable();
+                format!("xmp:{}", fields.join("\u{1f}"))
+            }
+        };
+        match keys.iter().position(|k| *k == key) {
+            Some(i) => groups[i].1 = groups[i].1.saturating_add(1),
+            None => {
+                keys.push(key);
+                groups.push((w, 1));
+            }
+        }
+    }
+    groups
+}
+
+/// One line for a group of `n` photos the same warning covers: a single photo keeps the detailed
+/// per-photo message with its path; several collapse into the count instead of repeating (#3050).
+fn warning_line(w: &ImportWarning, n: usize) -> String {
+    if n == 1 {
+        return xmp_warning_text(w);
+    }
+    let s = crate::i18n::plural_s(n);
+    match w.code {
+        ImportWarningCode::CameraProfile => crate::i18n::tr_format!(
+            "XMP profile \"{profile}\" was not applied for {n} photo{s}; colors may differ from Lightroom.",
+            n = n,
+            profile = w.profile.as_deref().unwrap_or_default(),
+        ),
+        ImportWarningCode::UprightGeometry => {
+            let recalculated = |mode: &str| {
+                crate::i18n::tr_format!("Lightroom geometry was not preserved for {n} photo{s}; {mode} will be recalculated.", n = n, mode = mode,)
+            };
+            match w.mode.unwrap_or(ImportUprightMode::Unknown) {
+                ImportUprightMode::Auto => recalculated(crate::i18n::tr("Auto")),
+                ImportUprightMode::Level => recalculated(crate::i18n::tr("Level")),
+                ImportUprightMode::Vertical => recalculated(crate::i18n::tr("Vertical")),
+                ImportUprightMode::Full => recalculated(crate::i18n::tr("Full")),
+                _ => crate::i18n::tr_format!(
+                    "Lightroom geometry for {n} photo{s} was not preserved; the saved transform is unsupported or ignored.",
+                    n = n,
+                ),
+            }
+        }
+        ImportWarningCode::UnmappedXmp => {
+            let mut list = w.fields.iter().take(MAX_WARNING_FIELDS).cloned().collect::<Vec<_>>().join(", ");
+            if w.fields.len() > MAX_WARNING_FIELDS {
+                list.push_str(", ");
+                list.push_str(&crate::i18n::tr_format!("+{n} more", n = w.fields.len() - MAX_WARNING_FIELDS));
+            }
+            crate::i18n::tr_format!("XMP adjustments were not imported for {n} photo{s}: {fields}.", n = n, fields = list,)
+        }
+    }
+}
+
 fn xmp_warnings_text(warnings: &[ImportWarning]) -> String {
-    crate::i18n::tr_format!(
-        "Import warnings ({n}):\n{warnings}",
-        n = warnings.len(),
-        warnings = warnings.iter().map(xmp_warning_text).collect::<Vec<_>>().join("\n"),
-    )
+    let groups = grouped_warnings(warnings);
+    let mut lines: Vec<String> = groups.iter().take(MAX_WARNING_LINES).map(|(w, n)| warning_line(w, *n)).collect();
+    if groups.len() > MAX_WARNING_LINES {
+        lines.push(crate::i18n::tr_format!("+{n} more", n = groups.len() - MAX_WARNING_LINES));
+    }
+    crate::i18n::tr_format!("Import warnings ({n}):\n{warnings}", n = warnings.len(), warnings = lines.join("\n"),)
 }
 
 /// The name of the import's one undo step.
