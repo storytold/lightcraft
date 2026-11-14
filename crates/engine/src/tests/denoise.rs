@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use lightcraft_denoise::manifest::{DenoiserManifest, Domain, Gain};
 use lightcraft_denoise::run::TileRunner;
 use serde_json::{Value, json};
+use web_time::Duration;
 
 use crate::Session;
 use crate::denoise::{Loader, Model, PhotoState, RunOn};

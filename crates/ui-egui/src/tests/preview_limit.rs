@@ -748,7 +748,7 @@ mod in_the_loupe {
     #[test]
     fn pinch_display_fit_keeps_the_request_key_until_the_hold_expires() {
         let (mut h, native) = demo_detail_in([1400.0, 900.0]);
-        assert!(h.settle(super::ui_settle_timeout()), "the starting render must be complete");
+        assert!(h.settle(super::super::ui_settle_timeout()), "the starting render must be complete");
         let main = h.app.renderer.textures.get(&Slot::Main).unwrap();
         let (original_key, original_size) = (main.key, main.size);
         let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
