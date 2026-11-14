@@ -31,10 +31,7 @@ pub const SAM3_FILES: &[FileSpec] = &[
 pub const SAM3_WEIGHTS_SIZE: u64 = 3_439_938_512;
 
 /// Where LightCraft downloads the model from, in order: each is a base URL, and file `f` is at
-/// `<base>/<f>`. **Empty for now**: LightCraft has no download location of its own yet, so the
-/// in-app download needs the user's list (`LIGHTCRAFT_SAM3_MIRRORS` or the mirrors file, see
-/// [`mirrors`] and docs/ai-masks.md) until this is filled in.
-///
+/// `<base>/<f>`.
 /// Hugging Face's `facebook/sam3` can't be a default: it is gated (each user must accept the
 /// SAM License there and download with their own token).
 // TODO(maintainer): add LightCraft's CDN locations (https, primary first), e.g.
@@ -74,6 +71,12 @@ mod tests {
     fn sam3_mirrors_come_from_the_environment_the_file_and_the_defaults() {
         let m = mirrors(Some("https://a.example/x/"), Some(Path::new("/nonexistent/mirrors.txt")));
         assert_eq!(m.len(), 1 + DEFAULT_MIRRORS.len());
+        assert!(no_mirrors_message().contains(MIRRORS_ENV));
+    }
+
+    #[test]
+    fn without_a_configured_mirror_the_message_names_where_to_set_one() {
+        assert!(mirrors(None, None).is_empty(), "no download location is built in until the maintainer adds one");
         assert!(no_mirrors_message().contains(MIRRORS_ENV));
     }
 }
