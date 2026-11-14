@@ -4,7 +4,8 @@
 // (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms | light operator tables), out (packed RGBA8; a float render:
 // three words per pixel, see `F_DEEP`).
 
-fn tone_apply(y: f32) -> f32 {
+// `proraw::tone_eval`: the tone table at `aux` offset `o` (linear below its first entry).
+fn tone_at(o: u32, y: f32) -> f32 {
     if (y <= 0.0) {
         return 0.0;
     }
@@ -12,11 +13,15 @@ fn tone_apply(y: f32) -> f32 {
     let f = clamp((ev - TONE_MIN_EV) / (TONE_MAX_EV - TONE_MIN_EV), 0.0, 1.0) * f32(TONE_N - 1u);
     let i = min(u32(f), TONE_N - 2u);
     let t = f - f32(i);
-    let v = aux[i] + (aux[i + 1u] - aux[i]) * t;
+    let v = aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
     if (ev < TONE_MIN_EV) {
         return v * (y / (GREY * TONE_MIN_GAIN));
     }
     return v;
+}
+
+fn tone_apply(y: f32) -> f32 {
+    return tone_at(0u, y);
 }
 
 // The camera chroma curve follows the tone LUT in `aux` (`ToneMap::chroma_scale`).
@@ -120,6 +125,143 @@ fn light_ops(d: vec3<f32>) -> vec3<f32> {
         }
     }
     return mul3(PRO_TO_2020, p);
+}
+
+// `proraw::tone_rgb`: the table at `o` on linear ProPhoto `p`, hue-preserving (the largest and
+// smallest channel go through it, the middle one keeps its relative position between them).
+fn tone_rgb_at(o: u32, p: vec3<f32>) -> vec3<f32> {
+    let hi = max(p.x, max(p.y, p.z));
+    let lo = min(p.x, min(p.y, p.z));
+    let th = tone_at(o, hi);
+    let tl = tone_at(o, lo);
+    var q = vec3<f32>(th);
+    if (hi - lo > 1e-9) {
+        q = tl + (th - tl) * (p - lo) / (hi - lo);
+    }
+    return q;
+}
+
+// `proraw::tone_wb`: Whites / Blacks, hue-preserving moved towards a luminance gain by `ratio`.
+fn tone_wb_at(o: u32, ratio: f32, p: vec3<f32>) -> vec3<f32> {
+    let curve = tone_rgb_at(o, p);
+    if (ratio == 0.0) {
+        return curve;
+    }
+    let y = dot(p, PRO_Y);
+    var k = 0.0;
+    if (y > 1e-9) {
+        k = tone_at(o, y) / y;
+    }
+    return curve + ratio * (p * k - curve);
+}
+
+// `proraw::lr_knot` on the table at field offset `off`.
+fn lr_knot(off: u32, l: f32) -> f32 {
+    let f = clamp((l - LR_K0) / LR_KSTEP, 0.0, f32(LR_KN - 1u));
+    let i = min(u32(f), LR_KN - 2u);
+    let t = f - f32(i);
+    return pf(off + i) + (pf(off + i + 1u) - pf(off + i)) * t;
+}
+
+// `proraw::LrHs::gain`: log2 gain of a pixel at display log luminance `l` in a neighbourhood at `ctx`.
+fn lr_hs_gain(l: f32, ctx: f32) -> f32 {
+    var o = l;
+    let kh = pf(F_LR_HL);
+    if (kh != 0.0) {
+        o += kh * lr_knot(F_LR_HL_TAB, l + pf(F_LR_HL_ALPHA) * (ctx - l));
+    }
+    let ks = pf(F_LR_SH);
+    if (ks != 0.0) {
+        o += ks * lr_knot(F_LR_SH_TAB, l + pf(F_LR_SH_ALPHA) * (ctx - l));
+    }
+    return min(o, max(l, 0.0)) - l;
+}
+
+// `ProRawMap::apply_rgb_hs`: in linear ProPhoto RGB, hue-preserving; Lightroom's stages when Whites /
+// Blacks are set, with Highlights / Shadows between the base operator and them (`F_TONE_HS_IN`) for
+// a neighbourhood at display log luminance `ctx`.
+fn proraw_rgb(c: vec3<f32>, ctx: f32) -> vec3<f32> {
+    let p = mul3(PRO_FROM_2020, c);
+    var q = vec3<f32>(0.0);
+    if (pu(F_TONE_STAGED) != 0u) {
+        q = tone_rgb_at(pu(F_TONE_PRE_OFF), p);
+        if (pu(F_TONE_HS_IN) != 0u) {
+            let shown = tone_rgb_at(pu(F_TONE_PROF_OFF), q);
+            let yd = dot(shown, PRO_Y);
+            if (yd > 1e-9) {
+                let k = lr_hs_gain(log2(max(yd, 1e-6)), ctx);
+                if (k != 0.0) {
+                    let at = tone_at(pu(F_TONE_PROFINV_OFF), yd);
+                    if (at > 1e-12) {
+                        q = q * (tone_at(pu(F_TONE_PROFINV_OFF), yd * exp2(k)) / at);
+                    }
+                }
+            }
+        }
+        if (pu(F_TONE_WH) != 0u) {
+            q = tone_wb_at(pu(F_TONE_WH_OFF), pf(F_TONE_KW), q);
+        }
+        if (pu(F_TONE_BK) != 0u) {
+            q = tone_wb_at(pu(F_TONE_BK_OFF), pf(F_TONE_KB), q);
+        }
+        q = tone_rgb_at(pu(F_TONE_POST_OFF), q);
+    } else {
+        q = tone_rgb_at(0u, p);
+    }
+    return mul3(PRO_TO_2020, q);
+}
+
+// `ProRawMap::apply_hdr`: an HDR render's highlights lifted past white by the luminance ratio, the
+// colour pulled towards its luminance where a channel would pass the peak.
+fn proraw_hdr(c: vec3<f32>, d0: vec3<f32>) -> vec3<f32> {
+    let peak = pf(F_PEAK);
+    let up = tone_at(pu(F_TONE_HDR_OFF), lum2020(c));
+    if (up <= 0.0) {
+        return d0;
+    }
+    let o = lum2020(d0);
+    let lifted = min(o + up, peak);
+    var d = vec3<f32>(lifted);
+    if (o > 1e-9) {
+        d = d0 * lifted / o;
+    }
+    let mx = max(d.x, max(d.y, d.z));
+    if (mx > peak) {
+        let t = clamp((mx - peak) / max(mx - lifted, 1e-6), 0.0, 1.0);
+        d = d + (lifted - d) * t;
+    }
+    return d;
+}
+
+// `finish::proraw_tone`: Apple ProRAW's tone in Lightroom's chain on scene-linear `c`, with its
+// Highlights / Shadows read at the neighbourhood `base` (log2 over grey after exposure).
+fn proraw_tone(c: vec3<f32>, base: f32) -> vec3<f32> {
+    var d = vec3<f32>(0.0);
+    if (pu(F_LR_HS) == 0u) {
+        d = proraw_rgb(c, 0.0);
+    } else {
+        var cx = 0.0;
+        if (pu(F_TONE_HS_IN) != 0u) {
+            cx = tone_at(pu(F_TONE_CTX_OFF), GREY * exp2(base));
+        } else {
+            cx = tone_apply(GREY * exp2(base));
+        }
+        let ctx = log2(max(cx, 1e-6));
+        d = proraw_rgb(c, ctx);
+        if (pu(F_TONE_HS_IN) == 0u) {
+            let k = lr_hs_gain(log2(max(lum2020(d), 1e-6)), ctx);
+            if (k != 0.0) {
+                d = d * exp2(k);
+            }
+        }
+        if (pu(F_TONE_CON) != 0u) {
+            d = mul3(PRO_TO_2020, tone_rgb_at(pu(F_TONE_CON_OFF), mul3(PRO_FROM_2020, d)));
+        }
+    }
+    if (pu(F_TONE_HDR) != 0u) {
+        d = proraw_hdr(c, d);
+    }
+    return d;
 }
 
 fn band_weights(h: f32) -> array<f32, 8> {
@@ -642,21 +784,26 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         c = calibrate(c);
     }
 
-    // --- tone map on luminance, highlight desaturation
-    let yl = lum2020(c);
-    let o = tone_apply(yl);
+    // --- tone map: on luminance with highlight desaturation, or Apple ProRAW's in Lightroom's
+    // chain (per channel, with its Highlights / Shadows)
     var d = vec3<f32>(0.0);
-    if (yl > 1e-9) {
-        d = c * o / yl;
-    }
-    let k = chroma_scale(o);
-    if (k != 1.0) {
-        d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
-    }
-    let mx = max(d.x, max(d.y, d.z));
-    if (mx > peak) {
-        let t = clamp((mx - peak) / max(mx - o, 1e-6), 0.0, 1.0);
-        d = d + (o - d) * t;
+    if (pu(F_TONE_RGB) != 0u) {
+        d = proraw_tone(c, base);
+    } else {
+        let yl = lum2020(c);
+        let o = tone_apply(yl);
+        if (yl > 1e-9) {
+            d = c * o / yl;
+        }
+        let k = chroma_scale(o);
+        if (k != 1.0) {
+            d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
+        }
+        let mx = max(d.x, max(d.y, d.z));
+        if (mx > peak) {
+            let t = clamp((mx - peak) / max(mx - o, 1e-6), 0.0, 1.0);
+            d = d + (o - d) * t;
+        }
     }
 
     // --- process V4: calibrated Contrast, Blacks

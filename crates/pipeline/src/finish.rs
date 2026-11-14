@@ -148,8 +148,8 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 | Process::V8 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
-            Process::V7 | Process::V8 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 | Process::V9 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 | Process::V9 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
         }
     }
 }
@@ -242,6 +242,12 @@ pub struct FinishParams {
     /// Process V4's calibrated Contrast and Blacks on the camera-look path, applied after
     /// the tone map (`None`: another process or path, or both at 0; see [`crate::light_v3`]).
     pub light: Option<crate::light_v3::LightOps>,
+    /// Apple ProRAW's tone in Lightroom's chain from process V9 ([`crate::proraw`]): it replaces the
+    /// tone map, whose table is then the chain's on greys.
+    pub proraw: Option<crate::proraw::ProRawMap>,
+    /// Highlights / Shadows as Lightroom applies them there, after the tone map; the base plane is
+    /// then the neighbourhood blur ([`crate::proraw::LR_CONTEXT_SIGMA`]) and `hl` / `sh` are 0.
+    pub lr_hs: Option<crate::proraw::LrHs>,
     pub ops: ColorOps,
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
@@ -327,11 +333,18 @@ impl FinishParams {
         let grain = if effects && finite_frame { GrainModel::new(s, px_per_long, draft) } else { None };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
+        let l = &s.light;
+        let lr = crate::proraw::active(s, info);
+        let lr_hs = lr.and_then(|_| crate::proraw::LrHs::new(l.highlights, l.shadows));
+        let proraw = lr.map(|t| crate::proraw::ProRawMap::new(t, l.exposure, l.contrast, l.whites, l.blacks, lr_hs.is_some(), peak));
         FinishParams {
             peak,
             calib: if calibration { crate::colorops::calibration_matrix(&s.calibration) } else { None },
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
-            tone: base_tone(s, info, peak),
+            tone: match &proraw {
+                Some(map) => ToneMap::from_lut(map.lut().to_vec()),
+                None => base_tone(s, info, peak),
+            },
             light: crate::light_v3::LightOps::new(s, info),
             lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
             ops: ColorOps::new(s),
@@ -342,8 +355,10 @@ impl FinishParams {
             out_luma: space.luma(),
             out_trc: space.trc(),
             proof: None,
-            hl: (s.light.highlights / 100.0) as f32,
-            sh: (s.light.shadows / 100.0) as f32,
+            hl: if proraw.is_some() { 0.0 } else { (s.light.highlights / 100.0) as f32 },
+            sh: if proraw.is_some() { 0.0 } else { (s.light.shadows / 100.0) as f32 },
+            proraw,
+            lr_hs,
             clar,
             tex,
             dehaze,
@@ -407,7 +422,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
         // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 | Process::V7 | Process::V8 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V9 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -541,19 +556,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
             }
 
-            // --- tone map on luminance, highlight desaturation
-            let yl = luminance_2020(c);
-            let o = fp.tone.apply(yl);
-            let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
-            let k = fp.tone.chroma_scale(o);
-            if k != 1.0 {
-                d = d.map(|v| o + (v - o) * k);
-            }
-            let mx = d[0].max(d[1]).max(d[2]);
-            if mx > peak {
-                let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
-                d = d.map(|v| v + (o - v) * t);
-            }
+            // --- tone map: on luminance with highlight desaturation, or Apple ProRAW's in
+            // Lightroom's chain (per channel, with its Highlights / Shadows)
+            let mut d = match &fp.proraw {
+                Some(map) => proraw_tone(map, fp.lr_hs.as_ref(), c, base),
+                None => luminance_tone(&fp.tone, c, peak),
+            };
 
             // --- process V4: calibrated Contrast, Blacks (ProPhoto with the sRGB transfer)
             d = apply_light(d, light.as_ref(), preview_light.as_ref(), exact, srgb);
@@ -791,6 +799,45 @@ fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 
     let l0 = p.log_l.data[index] + fp.ev;
     let log_luminance = if dehaze != 0.0 || l_exp != 0.0 { log_lum(color) } else { l0 };
     (color, log_luminance)
+}
+
+/// The tone map on luminance, with the curve's chroma scale and desaturation above `peak`.
+fn luminance_tone(tone: &ToneMap, c: [f32; 3], peak: f32) -> [f32; 3] {
+    let yl = luminance_2020(c);
+    let o = tone.apply(yl);
+    let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+    let k = tone.chroma_scale(o);
+    if k != 1.0 {
+        d = d.map(|v| o + (v - o) * k);
+    }
+    let mx = d[0].max(d[1]).max(d[2]);
+    if mx > peak {
+        let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+        d = d.map(|v| v + (o - v) * t);
+    }
+    d
+}
+
+/// Apple ProRAW's tone in Lightroom's chain on scene-linear `c` ([`crate::proraw::ProRawMap`]),
+/// with Highlights / Shadows as Lightroom applies them there: a luminance gain read at the pixel's
+/// and its neighbourhood's display luminance (`base`: the base plane, log2 relative to grey after
+/// exposure), before Whites / Blacks (inside the map when those are set) and Contrast.
+#[inline]
+fn proraw_tone(map: &crate::proraw::ProRawMap, lr_hs: Option<&crate::proraw::LrHs>, c: [f32; 3], base: f32) -> [f32; 3] {
+    let Some(lr) = lr_hs else {
+        return map.apply_hdr(c, map.apply_rgb(c));
+    };
+    let ctx = map.apply_context(crate::tone::GREY * base.exp2()).max(1e-6).log2();
+    if map.hs_inside() {
+        return map.apply_hdr(c, map.apply_contrast_rgb(map.apply_rgb_hs(c, |y| lr.gain(y.max(1e-6).log2(), ctx))));
+    }
+    let mut d = map.apply_rgb(c);
+    let k = lr.gain(luminance_2020(d).max(1e-6).log2(), ctx);
+    if k != 0.0 {
+        let g = k.exp2();
+        d = d.map(|v| v * g);
+    }
+    map.apply_hdr(c, map.apply_contrast_rgb(d))
 }
 
 fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {

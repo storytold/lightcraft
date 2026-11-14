@@ -115,6 +115,41 @@ const FIELDS: &[(&str, usize)] = &[
     ("LIGHT_OFF", 1),
     // the render's peak over SDR white (`FinishParams::peak`; above 1: an HDR render)
     ("PEAK", 1),
+    // Apple ProRAW's tone in Lightroom's chain (`FinishParams::proraw`, `proraw::ProRawMap`): on
+    // (its table on greys is the tone LUT), then its stages (`proraw::ToneStages`, Whites / Blacks
+    // set): on, the stage tables' offsets in `aux` and the Blacks / Whites luminance-gain share
+    ("TONE_RGB", 1),
+    ("TONE_STAGED", 1),
+    ("TONE_PRE_OFF", 1),
+    ("TONE_BK", 1),
+    ("TONE_BK_OFF", 1),
+    ("TONE_KB", 1),
+    ("TONE_WH", 1),
+    ("TONE_WH_OFF", 1),
+    ("TONE_KW", 1),
+    ("TONE_POST_OFF", 1),
+    // Contrast as its own stage after Highlights / Shadows (`ProRawMap::apply_contrast_rgb`): on,
+    // and its table's offset in `aux`
+    ("TONE_CON", 1),
+    ("TONE_CON_OFF", 1),
+    // Highlights / Shadows inside the staged map (`ProRawMap::apply_rgb_hs`): on, the profile curve,
+    // its inverse and the neighbourhood (base operator + curve) tables' offsets in `aux`
+    ("TONE_HS_IN", 1),
+    ("TONE_PROF_OFF", 1),
+    ("TONE_PROFINV_OFF", 1),
+    ("TONE_CTX_OFF", 1),
+    // an HDR render's highlight lift over scene luminance (`ProRawMap::apply_hdr`): on, its offset
+    ("TONE_HDR", 1),
+    ("TONE_HDR_OFF", 1),
+    // Highlights / Shadows after the tone map (`proraw::LrHs`): on, then per slider its amount
+    // (relative to the reference), pixel / neighbourhood blend and table
+    ("LR_HS", 1),
+    ("LR_HL", 1),
+    ("LR_HL_ALPHA", 1),
+    ("LR_HL_TAB", lightcraft_pipeline::proraw::LR_KNOTS),
+    ("LR_SH", 1),
+    ("LR_SH_ALPHA", 1),
+    ("LR_SH_TAB", lightcraft_pipeline::proraw::LR_KNOTS),
     // a float render (`finish_deep`): the exact sRGB curve, and three words per pixel in `out`, each
     // a linear value with `DEEP_WRITTEN` set
     ("DEEP", 1),
@@ -183,8 +218,68 @@ pub struct Present {
     pub chroma: bool,
 }
 
+/// Apple ProRAW's Lightroom chain (process V9): its tables appended to `aux`, and the fields
+/// that switch the finish kernel to it and point at them.
+fn proraw_fields(p: &mut Block, aux: &mut Vec<f32>, fp: &FinishParams) {
+    let mut push = |t: &[f32]| {
+        let off = aux.len() as u32;
+        aux.extend_from_slice(t);
+        off
+    };
+    let proraw = fp.proraw.as_ref().map(|map| {
+        let stages = map
+            .stages()
+            .map(|s| (push(&s.pre), s.blacks.as_ref().map(|(t, k)| (push(t), *k)), s.whites.as_ref().map(|(t, k)| (push(t), *k)), push(&s.post)));
+        let contrast = map.contrast_table().map(&mut push);
+        let hs_in = map.stages().filter(|_| map.hs_inside()).map(|s| (push(&s.profile), push(&s.profile_inv), push(&s.context)));
+        let hdr = map.hdr().map(|(_, t)| push(t));
+        (stages, contrast, hs_in, hdr)
+    });
+    if let Some((stages, contrast, hs_in, hdr)) = proraw {
+        p.b("TONE_RGB", true);
+        if let Some((pre, blacks, whites, post)) = stages {
+            p.b("TONE_STAGED", true);
+            p.u("TONE_PRE_OFF", pre);
+            p.u("TONE_POST_OFF", post);
+            if let Some((off, k)) = blacks {
+                p.b("TONE_BK", true);
+                p.u("TONE_BK_OFF", off);
+                p.f("TONE_KB", k);
+            }
+            if let Some((off, k)) = whites {
+                p.b("TONE_WH", true);
+                p.u("TONE_WH_OFF", off);
+                p.f("TONE_KW", k);
+            }
+        }
+        if let Some(off) = contrast {
+            p.b("TONE_CON", true);
+            p.u("TONE_CON_OFF", off);
+        }
+        if let Some((prof, inv, ctx)) = hs_in {
+            p.b("TONE_HS_IN", true);
+            p.u("TONE_PROF_OFF", prof);
+            p.u("TONE_PROFINV_OFF", inv);
+            p.u("TONE_CTX_OFF", ctx);
+        }
+        if let Some(off) = hdr {
+            p.b("TONE_HDR", true);
+            p.u("TONE_HDR_OFF", off);
+        }
+    }
+    if let Some(lr) = &fp.lr_hs {
+        p.b("LR_HS", true);
+        p.f("LR_HL", lr.hl.1);
+        p.f("LR_HL_ALPHA", lr.hl.0.alpha);
+        p.fs("LR_HL_TAB", &lr.hl.0.tab);
+        p.f("LR_SH", lr.sh.1);
+        p.f("LR_SH_ALPHA", lr.sh.0.alpha);
+        p.fs("LR_SH_TAB", &lr.sh.0.tab);
+    }
+}
+
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms | light operator tables) for `fp` with `masks` (their local adjustments' terms). The crystal
+/// mask terms | light operator tables | ProRAW tone tables | LUT profile) for `fp` with `masks` (their local adjustments' terms). The crystal
 /// grain's tables go after `aux` in the kernel's buffer ([`crate::render`] copies them there).
 ///
 /// `deep`: the kernel writes float samples, as the pipeline's `finish_deep` does.
@@ -223,6 +318,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     for op in light {
         aux.extend_from_slice(&op.lut[..]);
     }
+    let mut p = Block::new();
+    proraw_fields(&mut p, &mut aux, fp);
     let lut_off = aux.len();
     if let Some((l, _)) = &fp.lut {
         aux.extend(l.data.iter().flatten());
@@ -238,7 +335,6 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         }
     }
 
-    let mut p = Block::new();
     p.u("LIGHT_OPS", light.len() as u32);
     p.u("LIGHT_OFF", light_off as u32);
     if let Some(i) = index("LIGHT_MODE") {

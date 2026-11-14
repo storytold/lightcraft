@@ -78,10 +78,11 @@ const ENC_FIELD: &str = "enc";
 /// settings or stored facts change, so proxies an older build wrote are rebuilt: a missing field
 /// reads as 0, which makes every proxy from before this version stale. Version 2 is the first to
 /// record the field at all (a version 1 proxy is stored at JPEG quality 92, which this build
-/// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail. A
-/// stale proxy whose original is offline is kept as it is (see [`is_stale`]).
+/// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail;
+/// version 4 adds Apple ProRAW's profile curve for Lightroom's tone chain (process V9). A stale
+/// proxy whose original is offline is kept as it is (see [`is_stale`]).
 /// Crate-visible so the look-marker test pins the marker format to it instead of to a literal.
-pub(crate) const ENCODE_VERSION: u64 = 3;
+pub(crate) const ENCODE_VERSION: u64 = 4;
 
 /// The decoder facts a render interprets its settings against, stored with the proxy's pixels so
 /// an offline original edits like it did online (the catalog's header facts cannot carry them).
@@ -97,6 +98,10 @@ struct SmartFacts {
     lens: Option<lightcraft_develop::EmbeddedLens>,
     camera_color: Option<lightcraft_pipeline::CameraColor>,
     local_tone: Option<lightcraft_pipeline::local_tone::LocalTone>,
+    /// Apple ProRAW's profile curve for Lightroom's tone chain (absent before version 4: such a
+    /// proxy renders ProRAW on the camera-curve path, as process V8 does).
+    #[serde(default)]
+    proraw: Option<lightcraft_pipeline::proraw::ProRawTone>,
     /// The semantic mattes whose bytes follow the facts, in this order.
     #[serde(default)]
     mattes: Vec<StoredMatte>,
@@ -197,6 +202,7 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
             lens: i.lens,
             camera_color: i.camera_color.as_deref().cloned(),
             local_tone: i.local_tone.as_deref().cloned(),
+            proraw: i.proraw.as_deref().cloned(),
             mattes: matte_list,
         };
         let facts = serde_json::to_vec(&facts).map_err(|e| e.to_string())?;
@@ -246,6 +252,7 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
         camera_tone: tone,
         mattes: (!mattes.is_empty()).then(|| Arc::new(mattes)),
         local_tone: f.local_tone.map(Arc::new),
+        proraw: f.proraw.map(Arc::new),
         native_long: None,
     });
     Ok((img, tone, info))

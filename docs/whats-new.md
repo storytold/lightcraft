@@ -13,6 +13,14 @@
   the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
   and a failed write (a full disk) could leave a cut-off file where an earlier export was.
 
+### iPhone ProRAW tone fitted to Lightroom (process V9)
+- On Apple ProRAW, Exposure, Contrast, Highlights, Shadows, Whites and Blacks follow Lightroom Classic's tone chain,
+  fitted to its renders of one iPhone 12 Pro photo, and the file's own tone curve applies to colour, not only
+  brightness, so iPhone photos are no longer washed out. New photos (and Reset) get it; photos you already edited
+  keep their look until Photo ▸ Update to Current Process. Other photos render on process 9 as on process 8.
+- Smart previews are rebuilt with the photo's tone curve while its original is available. A smart preview made by an
+  earlier version, used while the original is offline, renders the photo as process 8 does until then.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
