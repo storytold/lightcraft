@@ -1,5 +1,5 @@
 use crate::convert::{from_craft, to_craft};
-use crate::{Metadata, Orientation};
+use crate::{DateTime, Gps, Metadata, Orientation};
 use craft_tiff::{ParseOptions, Tiff, TiffError, tags as t};
 
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
