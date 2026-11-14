@@ -636,7 +636,7 @@ fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8
     let samples = if eight { craft_jxl::Samples::U8(&u8_buf) } else { craft_jxl::Samples::U16(px) };
     let img = craft_jxl::ImageRef { width: w as u32, height: h as u32, layout, samples };
     let opts = craft_jxl::EncodeOptions { lossless: true, ..Default::default() };
-    craft_jxl::encode(&img, &opts, &craft_jxl::Metadata::default()).unwrap()
+    craft_jxl::encode(&img, opts, &craft_jxl::Metadata::default()).unwrap()
 }
 
 /// A bare codestream wrapped in the ISO-BMFF container (signature, `ftyp`, `jxlc`).
@@ -777,7 +777,7 @@ fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
         samples: craft_jxl::Samples::U16(&with_alpha),
     };
     let opts = craft_jxl::EncodeOptions { lossless: true, ..Default::default() };
-    let tile = craft_jxl::encode(&img, &opts, &craft_jxl::Metadata::default()).unwrap();
+    let tile = craft_jxl::encode(&img, opts, &craft_jxl::Metadata::default()).unwrap();
     let one = |tile: Vec<u8>| {
         let mut raw = base_ifd(w, h, 12, 1, true);
         raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
