@@ -3551,3 +3551,28 @@ fn a_broken_link_before_dotdot_is_an_error() {
     assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Browsing a folder under automation roots: a folder outside is refused, a link out of the roots is passed over.
+#[cfg(unix)]
+#[test]
+fn browsing_stays_inside_the_automation_roots() {
+    use crate::file_access::{AutomationRoots, confine};
+    let dir = temp_dir("browse-roots");
+    let (root, outside) = (dir.join("root"), dir.join("outside"));
+    write_png(&root.join("a.png"), 1);
+    write_png(&outside.join("secret.png"), 2);
+    std::os::unix::fs::symlink(outside.join("secret.png"), root.join("link.png")).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let mut s = Session::new().with_fs();
+    let (input, _) = crate::import::ScanInput::new(&mut s, &[]);
+    let names = |v: Vec<String>| v.iter().map(|f| Path::new(f).file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>();
+    let (inside, away) = (root.to_string_lossy().to_string(), outside.to_string_lossy().to_string());
+    for sub in [false, true] {
+        confine(Some(&roots), || {
+            assert_eq!(names(crate::import::browse_files(&input, &inside, sub).unwrap()), ["a.png"]);
+            assert!(crate::import::browse_files(&input, &away, sub).is_err());
+        });
+    }
+    assert_eq!(names(crate::import::browse_files(&input, &inside, false).unwrap()), ["a.png", "link.png"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

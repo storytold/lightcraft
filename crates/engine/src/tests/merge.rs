@@ -250,3 +250,87 @@ fn a_photo_named_twice_is_merged_once() {
     assert_eq!(job.sources.iter().map(|(p, _)| p.0).collect::<Vec<_>>(), vec![a, b]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A reader the host installed is only asked for files inside the roots.
+#[test]
+fn a_hosts_reader_is_held_to_the_roots() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let dir = temp_dir("host-reader");
+    let (inside, outside) = (dir.join("in"), dir.join("outside"));
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let asked = Arc::new(AtomicUsize::new(0));
+    let count = asked.clone();
+    let reader: crate::merge::ByteReader = Arc::new(move |_| {
+        count.fetch_add(1, Ordering::Relaxed);
+        Ok(vec![])
+    });
+    let roots = crate::file_access::AutomationRoots::new(Some(&inside), None).unwrap().unwrap();
+    let there = outside.join("secret.jpg").to_string_lossy().to_string();
+    let mut s = Session::new();
+    s.media.file_bytes = Some(reader.clone());
+    let id = s.catalog.alloc_photo_id();
+    let photo = lightcraft_catalog::Photo::new(
+        id,
+        lightcraft_catalog::Source::File { path: there.clone() },
+        "secret.jpg",
+        "JPEG",
+        60,
+        40,
+        "2026-01-01T10:00:00",
+    );
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+    crate::file_access::confine(Some(&roots), || {
+        assert!(crate::merge::read_file(Some(&reader), &there).is_err());
+        assert!(s.execute("photo.allMetadata", &json!({"id": id.0})).is_err());
+        assert_eq!(asked.load(Ordering::Relaxed), 0, "the host's reader was asked");
+        assert!(crate::merge::read_file(Some(&reader), &inside.join("a.jpg").to_string_lossy()).is_ok());
+        assert_eq!(asked.load(Ordering::Relaxed), 1);
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A merge of a bare file name is written in the current folder.
+#[test]
+fn a_merge_of_a_bare_file_name_is_written_in_the_current_folder() {
+    assert_eq!(crate::merge::output_dir("IMG_0.dng"), std::path::Path::new("."));
+    assert_eq!(crate::merge::output_dir("in/IMG_0.dng"), std::path::Path::new("in"));
+}
+
+/// The merged file goes in the folder the first photo is named in, which a link to a photo inside
+/// the automation roots can put outside them: that folder is what has to be writable, when the
+/// merge is planned and when its file is written.
+#[cfg(unix)]
+#[test]
+fn a_link_from_outside_the_write_root_does_not_take_the_merge_out() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp_dir("link-out");
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let frames = lightcraft_merge::synth::bracket_dngs(96, 64, &[-1.0, 1.0]).unwrap();
+    std::fs::write(root.join("target.dng"), &frames[0]).unwrap();
+    std::fs::write(root.join("IMG_1.dng"), &frames[1]).unwrap();
+    let link = outside.join("IMG_0.dng");
+    std::os::unix::fs::symlink(root.join("target.dng"), &link).unwrap();
+    let paths = vec![link.to_string_lossy().to_string(), root.join("IMG_1.dng").to_string_lossy().to_string()];
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    let only_the_link = || std::fs::read_dir(&outside).unwrap().flatten().map(|e| e.file_name()).collect::<Vec<_>>() == ["IMG_0.dng"];
+
+    let mut s = Session::new().with_fs();
+    let ids = confine(Some(&roots), || import(&mut s, paths));
+    assert_eq!(ids.len(), 2, "the link is inside the read root once followed");
+    let e = confine(Some(&roots), || s.execute("merge.hdr", &json!({"ids": ids}))).expect_err("planned outside the write root");
+    assert!(e.to_string().contains("outside the write root"), "{e}");
+    assert!(only_the_link(), "nothing is created outside");
+
+    // planned before the roots came into force: the write itself is still refused
+    let (kind, finish) = crate::merge::parse("merge.hdr", &json!({})).unwrap();
+    let job = s.plan_merge(kind, finish, &ids.iter().copied().map(lightcraft_catalog::PhotoId).collect::<Vec<_>>(), false).unwrap();
+    let out = job.run(&|_, _| true).unwrap();
+    let e = confine(Some(&roots), || s.finish_merge(&job, out)).expect_err("written outside the write root");
+    assert!(e.to_string().contains("outside the write root"), "{e}");
+    assert!(only_the_link(), "nothing is created outside");
+    let _ = std::fs::remove_dir_all(&base);
+}

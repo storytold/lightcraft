@@ -86,3 +86,12 @@ sync_github_name = true
 [people.Peaperfish]
 real_name = "Yule Wang"
 display_name = "Brian Wang"
+
+[people.adikshan11]
+real_name = "Adithya Shankaran"
+display_name = "Adithya Shankaran"
+
+[people.ghanashyam03]
+real_name = "Ghanashyam V N"
+display_name = "Ghanashyam V N"
+consent_source = "Asked Adithya Shankaran on LinkedIn to be added in storytold/lightcraft#3744, whose branch carries their commits from #2176; a maintainer agreed."

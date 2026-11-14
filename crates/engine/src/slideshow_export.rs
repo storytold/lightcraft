@@ -382,7 +382,9 @@ struct PartFile {
 }
 
 impl PartFile {
+    /// Create a staging file beside the requested slideshow output.
     fn new(target: &Path) -> Result<(PartFile, std::fs::File), String> {
+        crate::file_access::check_write(target)?;
         if let Some(dir) = target.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
@@ -397,6 +399,7 @@ impl PartFile {
     }
 
     fn commit(mut self, guard: &OriginalGuard) -> Result<(), String> {
+        crate::file_access::check_write(&self.target)?;
         guard.check(&self.target)?;
         std::fs::rename(&self.part, &self.target).map_err(|e| format!("{}: {e}", self.target.display()))?;
         self.done = true;
@@ -760,4 +763,28 @@ pub fn run_to_end(prepared: Prepared, run: &ExportRun, task: &crate::activity::T
         .map(|o| o.json);
     *run.result.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(r);
     run.finished.store(true, Ordering::Relaxed);
+}
+
+#[cfg(all(test, unix))]
+mod link_tests {
+    use super::PartFile;
+    use crate::file_access::{AutomationRoots, confine};
+
+    /// The staging file goes next to the target's name, so a link standing outside the roots is refused.
+    #[test]
+    fn a_target_link_standing_outside_the_roots_is_refused() {
+        let base = std::env::temp_dir().join(format!("lc-part-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, outside) = (base.join("root"), base.join("outside"));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("show.mp4"), b"x").unwrap();
+        let link = outside.join("show.mp4");
+        std::os::unix::fs::symlink(root.join("show.mp4"), &link).unwrap();
+        let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+        let e = confine(Some(&roots), || PartFile::new(&link)).err().expect("refused");
+        assert!(e.contains("outside the write root"), "{e}");
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "no staging file beside the link");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

@@ -202,6 +202,9 @@ fn catalog_entry(entries: &[Entry]) -> Result<&Entry, String> {
 /// Whether the zip at `path` holds exactly one Lightroom catalog, by its central directory only
 /// (nothing is unpacked). Any read error means no.
 pub fn holds_catalog(path: &Path) -> bool {
+    if crate::file_access::check_read(path).is_err() {
+        return false;
+    }
     File::open(path).ok().and_then(|mut f| entries(&mut f).ok()).is_some_and(|all| catalog_entry(&all).is_ok())
 }
 
@@ -239,6 +242,7 @@ fn check_space(root: &Path, needed: u64, available: Option<u64>) -> Result<(), S
 /// Unpack the catalog of the backup `zip` into a new private folder under `root`, checking its
 /// size and CRC-32. Stops with an error when `cancel` is set; the folder is removed then too.
 pub fn extract(zip: &Path, root: &Path, cancel: &AtomicBool) -> Result<Extracted, String> {
+    crate::file_access::check_read(zip)?;
     let mut f = File::open(zip).map_err(|e| format!("{}: {e}", zip.display()))?;
     let all = entries(&mut f)?;
     let entry = catalog_entry(&all)?.clone();

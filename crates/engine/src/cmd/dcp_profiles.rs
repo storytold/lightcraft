@@ -62,11 +62,37 @@ pub fn register_all(s: &mut Session, profiles: Option<&Path>) {
     let loaded: Vec<(String, LoadedCameraProfile)> = s
         .dcp_profiles
         .iter()
-        .filter_map(|p| {
-            lightcraft_raw::dcp::read_dcp(Path::new(&p.file)).ok().and_then(|b| LoadedCameraProfile::parse(&b).ok()).map(|d| (p.id.clone(), d))
-        })
+        .filter_map(|p| read_allowed(profiles, Path::new(&p.file)).ok().and_then(|b| LoadedCameraProfile::parse(&b).ok()).map(|d| (p.id.clone(), d)))
         .collect();
     s.media.camera_profiles = loaded.into_iter().collect();
+}
+
+/// Whether `file` is the library's own copy: directly in its profiles folder `dir`, neither of them a link. The operator
+/// chose the library, so it isn't confined, wherever the automation roots are; a link there is judged like any other path.
+pub(super) fn library_owned(dir: Option<&Path>, file: &Path) -> bool {
+    let is_link = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink());
+    dir.is_some_and(|d| file.parent() == Some(d) && !is_link(d) && !is_link(file))
+}
+
+/// Whether the profile file `file` may be written or removed, with `dir` the library's profiles folder.
+pub(super) fn write_allowed(dir: Option<&Path>, file: &Path) -> std::result::Result<(), String> {
+    if library_owned(dir, file) {
+        // The folder is the operator's. A second name of the file may still lie outside the roots.
+        crate::file_access::reject_other_names(file)
+    } else {
+        crate::file_access::check_write(file)
+    }
+}
+
+/// The bytes of the profile file `file`, with `dir` the library's profiles folder; outside the automation roots a file
+/// that isn't the library's own counts as missing.
+fn read_allowed(dir: Option<&Path>, file: &Path) -> std::io::Result<Vec<u8>> {
+    if library_owned(dir, file) {
+        crate::file_access::reject_other_names(file).map_err(std::io::Error::other)?;
+    } else {
+        crate::file_access::check_read(file).map_err(std::io::Error::other)?;
+    }
+    lightcraft_raw::dcp::read_dcp(file)
 }
 
 /// The copy of saved profile file `file` in the open library's profiles folder `dir`, when it is there under the
@@ -103,7 +129,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
     let (mut imported, mut failed) = (Vec::new(), Vec::new());
     for f in dcp_files(paths) {
         let shown = f.display().to_string();
-        let bytes = match lightcraft_raw::dcp::read_dcp(&f) {
+        let bytes = match read_allowed(dir.as_deref(), &f) {
             Ok(b) => b,
             Err(e) => {
                 failed.push(json!([shown, e.to_string()]));
@@ -122,7 +148,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
         let name = if profile.name.trim().is_empty() { stem.clone() } else { profile.name.trim().to_string() };
         // the same profile imported again: keep the one there is
         let same = s.dcp_profiles.iter().find(|p| {
-            p.name == name && p.camera_model == profile.camera_model && lightcraft_raw::dcp::read_dcp(Path::new(&p.file)).is_ok_and(|b| b == bytes)
+            p.name == name && p.camera_model == profile.camera_model && read_allowed(dir.as_deref(), Path::new(&p.file)).is_ok_and(|b| b == bytes)
         });
         if let Some(p) = same {
             imported.push(json!({"id": p.id, "name": p.name, "cameraModel": p.camera_model, "existing": true}));
@@ -139,12 +165,13 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
         let file = match &dir {
             Some(d) => {
                 let to = d.join(format!("{}.dcp", id.trim_start_matches(DCP_PREFIX)));
+                if let Err(e) = write_allowed(Some(d), &to) {
+                    failed.push(json!([shown, format!("{}: {e}", to.display())]));
+                    continue;
+                }
                 // a copy that fails (disk full, no access) fails this file only: the profiles
                 // copied before it stay imported, and nothing half-written is left behind
-                if let Err(e) = std::fs::write(&to, &bytes) {
-                    if to.is_file() {
-                        let _ = std::fs::remove_file(&to);
-                    }
+                if let Err(e) = lightcraft_catalog::safe_file::write_atomic(&to, &bytes) {
                     failed.push(json!([shown, format!("{}: {e}", to.display())]));
                     continue;
                 }
@@ -160,6 +187,7 @@ pub fn import_files(s: &mut Session, paths: &[String]) -> Result<(Vec<Value>, Ve
     Ok((imported, failed))
 }
 
+/// Delete one imported camera profile from the library, including its file when that file is the library's copy.
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "profile.deleteCamera";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing id"))?.to_string();
@@ -174,6 +202,8 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
         && Path::new(&entry.file).starts_with(&d)
         && !Path::new(&entry.file).components().any(|c| c == std::path::Component::ParentDir)
     {
+        // (a `Profiles` folder that is a link isn't the library's own: it may lead out of the automation roots)
+        write_allowed(Some(&d), Path::new(&entry.file)).map_err(|e| bad(C, format!("{}: {e}", entry.file)))?;
         match std::fs::remove_file(&entry.file) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

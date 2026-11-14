@@ -334,6 +334,7 @@ fn a_smooth_proxy_keeps_the_scene_closer_than_the_old_quality() {
     );
 }
 
+/// Check that a proxy created by an older encoder version is stale.
 #[test]
 fn a_proxy_from_an_older_encode_is_stale() {
     let dir = temp("encode-version");
@@ -361,4 +362,94 @@ fn a_proxy_from_an_older_encode_is_stale() {
     std::fs::write(dir.join(LOOK_MARKER), "99\n").unwrap();
     assert!(!look_checked(&dir), "a look-only marker is not enough to skip the rebuild");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A shard link in the new folder can't send a preview out of the roots, and one in the old folder is left alone.
+#[cfg(unix)]
+#[test]
+fn a_shard_link_does_not_take_a_migration_out_of_the_roots() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = std::env::temp_dir().join(format!("lc-smart-shard-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (root, outside) = (base.join("root"), base.join("outside"));
+    let (old, new) = (root.join("old"), root.join("new"));
+    let name = format!("ab{}.lcsp", "0".repeat(30));
+    std::fs::create_dir_all(old.join("ab")).unwrap();
+    std::fs::create_dir_all(&new).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(old.join("ab").join(&name), b"preview").unwrap();
+    std::os::unix::fs::symlink(&outside, new.join("ab")).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+
+    let (moved, failed) = confine(Some(&roots), || migrate(&old, &new, Existing::Move));
+    assert_eq!(moved, 0);
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert!(failed[0].contains("outside the write root"), "{failed:?}");
+    assert!(old.join("ab").join(&name).is_file(), "the preview stays");
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0, "nothing goes outside");
+
+    // a link in the old folder isn't a preview: not removed, and what it points to isn't either
+    let secret = outside.join("secret.lcsp");
+    std::fs::write(&secret, b"secret").unwrap();
+    let linked = format!("cd{}.lcsp", "0".repeat(30));
+    std::fs::create_dir_all(old.join("cd")).unwrap();
+    std::os::unix::fs::symlink(&secret, old.join("cd").join(&linked)).unwrap();
+    let (discarded, failed) = confine(Some(&roots), || migrate(&old, &new, Existing::Discard));
+    assert_eq!((discarded, failed.len()), (1, 0), "{failed:?}");
+    assert!(old.join("cd").join(&linked).symlink_metadata().is_ok());
+    assert_eq!(std::fs::read(&secret).unwrap(), b"secret");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// The library folder is the operator's, so a smart preview is written there even when that folder
+/// is outside both roots. The source is a photo the catalog names: outside the roots it is not read.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_library_outside_the_roots_builds_its_smart_previews() {
+    use crate::file_access::{AutomationRoots, confine};
+    let base = temp("library-previews");
+    let (root, lib, outside) = (base.join("root"), base.join("lib"), base.join("outside"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&lib).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let png = |tint: u8| {
+        let img = lightcraft_raster::Rgba8::from_fn(32, 24, |x, y| [(x * 8) as u8, tint, (y * 8) as u8, 255]);
+        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()
+    };
+    let photo = root.join("a.png");
+    let secret = outside.join("secret.png");
+    std::fs::write(&photo, png(40)).unwrap();
+    std::fs::write(&secret, png(200)).unwrap();
+
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let roots = AutomationRoots::new(Some(&root), Some(&root)).unwrap().unwrap();
+    confine(Some(&roots), || s.execute("library.import", &serde_json::json!({"paths": [photo.to_string_lossy()]}))).unwrap();
+    let id = s
+        .catalog
+        .photos()
+        .find(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if path.ends_with("a.png")))
+        .map(|p| p.id.0)
+        .unwrap();
+    let built = confine(Some(&roots), || s.execute("library.smartPreviews", &serde_json::json!({"ids": [id]}))).unwrap();
+    assert_eq!(built["built"], 1, "{built}");
+    assert_eq!(built["failed"].as_array().map(|a| a.len()), Some(0), "{built}");
+    assert_eq!(stats(&dir(&lib)).0, 1, "the preview lands in the library, outside both roots");
+
+    let refused =
+        confine(Some(&roots), || s.execute("library.import", &serde_json::json!({"paths": [secret.to_string_lossy()]}))).unwrap_err().to_string();
+    assert!(refused.contains("automation"), "{refused}");
+    s.execute("library.import", &serde_json::json!({"paths": [secret.to_string_lossy()]})).unwrap();
+    let outside_id = s
+        .catalog
+        .photos()
+        .find(|p| matches!(&p.source, lightcraft_catalog::Source::File { path } if path.ends_with("secret.png")))
+        .map(|p| p.id.0)
+        .unwrap();
+    let again = confine(Some(&roots), || s.execute("library.smartPreviews", &serde_json::json!({"ids": [outside_id]}))).unwrap();
+    assert_eq!(again["built"], 0, "{again}");
+    let failed = again["failed"].to_string();
+    assert!(failed.contains("automation"), "{again}");
+    s.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&base);
 }

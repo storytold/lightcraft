@@ -77,6 +77,7 @@ fn pagination_usize(value: u64) -> usize {
     usize::try_from(value).unwrap_or(usize::MAX)
 }
 
+/// The catalog query commands and their parameter schemas.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "catalog.query", "Query Photos", [], None, "{filter?: Filter, sort?: Sort, offset?, limit?} — omit filter to list the current view", always, |s, p| {
@@ -132,18 +133,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let lightcraft_catalog::Source::File { path } = &ph.source else {
                 return Ok(json!({"exif": [], "xmp": [], "note": "a generated demo photo has no file"}));
             };
-            let bytes = match &s.media.file_bytes {
-                Some(r) => r(path),
-                None => std::fs::read(path).map_err(|e| format!("{path}: {e}")),
-            }
-            .map_err(|e| super::bad("photo.allMetadata", e))?;
+            let bytes = crate::merge::read_file(s.media.file_bytes.as_ref(), path).map_err(|e| super::bad("photo.allMetadata", e))?;
             let exif: Vec<Value> = lightcraft_meta::file_tag_rows(&bytes)
                 .into_iter()
                 .map(|r| json!({"group": r.group, "tag": r.tag, "name": r.name, "value": r.value}))
                 .collect();
             // Keep sidecar precedence; reuse the loaded bytes for embedded XMP.
             let packet = match s.sidecar_lookup(ph.id).find(path) {
-                Some(sc) => std::fs::read_to_string(sc).ok(),
+                Some(sc) => crate::file_access::check_read(&sc).ok().and_then(|()| std::fs::read_to_string(sc).ok()),
                 None => lightcraft_meta::embedded(&bytes).xmp,
             };
             let xmp: Vec<Value> = packet

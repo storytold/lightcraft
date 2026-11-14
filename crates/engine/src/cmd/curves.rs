@@ -300,6 +300,7 @@ pub fn to_file(presets: &[CurvePreset]) -> String {
     serde_json::to_string_pretty(&json!({"format": FILE_FORMAT, "version": 1, "presets": presets})).unwrap_or_default()
 }
 
+/// Import curve presets from the named preset files.
 fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "curve.importPresets";
     let mut paths: Vec<String> =
@@ -319,7 +320,11 @@ fn import_presets(s: &mut Session, p: &Value) -> Result<Value> {
         by_name.entry(x.name.to_ascii_lowercase()).or_insert(i);
     }
     for f in &paths {
-        match std::fs::read(f).map_err(|e| e.to_string()).and_then(|b| parse_file(&b)) {
+        match crate::file_access::check_read(f)
+            .map_err(|e| e.to_string())
+            .and_then(|_| std::fs::read(f).map_err(|e| e.to_string()))
+            .and_then(|b| parse_file(&b))
+        {
             Ok(list) => {
                 for mut preset in list {
                     preset.name = preset.name.trim().to_string();

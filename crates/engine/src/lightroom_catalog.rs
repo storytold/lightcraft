@@ -178,7 +178,9 @@ pub enum Original {
 impl CatalogPhoto {
     /// Whether the original is a file here; only a [`Original::Local`] path is looked at.
     pub fn original_is_file(&self) -> bool {
-        self.original == Original::Local && Path::new(&self.path).is_file()
+        // (a catalog names any path: outside the automation roots a file counts as missing, so
+        // what it names can't be used to ask whether a file exists there)
+        self.original == Original::Local && crate::file_access::check_read(&self.path).is_ok() && Path::new(&self.path).is_file()
     }
 }
 
@@ -244,6 +246,9 @@ pub(crate) struct ImportIndex {
 pub(crate) fn load_index(path: Option<&Path>) -> crate::Result<ImportIndex> {
     match path {
         Some(path) => {
+            if let Err(e) = crate::file_access::check_read(path) {
+                return Err(error(e));
+            }
             let file = match std::fs::File::open(path) {
                 Ok(file) => file,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ImportIndex::default()),
@@ -316,6 +321,8 @@ pub(crate) fn validate_for_job(data: &CatalogImport) -> Result<(), String> {
 
 fn bytes(path: &Path) -> Result<Vec<u8>, String> {
     use std::io::Read;
+    // The caller checked the catalog the operator named. This also reads the `-wal` beside an
+    // unpacked backup, which is a private copy, not a path an agent supplied.
     let f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let len = f.metadata().map_err(|e| e.to_string())?.len();
     if len > MAX_FILE {
@@ -489,6 +496,8 @@ pub fn read_source(
     total: &AtomicUsize,
     done: &AtomicUsize,
 ) -> Result<CatalogImport, String> {
+    // The file the operator named, before a backup is unpacked into a private folder.
+    crate::file_access::check_read(path)?;
     // 13 catalog tables plus one validation stage; ImportJob adds one unit per original path.
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
@@ -512,6 +521,11 @@ pub fn read_source(
 fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, done: &AtomicUsize) -> Result<CatalogImport, String> {
     let before = std::fs::metadata(path).map_err(|e| e.to_string())?;
     let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+    // The unpacked copy of a backup lives in a private folder. Its `-wal` is that copy's, not a
+    // path an agent named; the archive itself was checked in `read_source`.
+    if path == source {
+        crate::file_access::check_read(&wal_path)?;
+    }
     let wal_before = std::fs::metadata(&wal_path).ok().map(|m| (m.len(), m.modified().ok()));
     let main = FileSource::open(path)?;
     let wal = match std::fs::metadata(&wal_path) {
@@ -978,6 +992,9 @@ fn strip_xmp_sentinels(value: &mut Value) {
 /// Import into the current library. Existing edited records are preserved unless explicitly
 /// requested; missing originals remain catalogued for later relinking. The source catalog is read-only.
 pub fn import(s: &mut crate::Session, path: &Path, update_existing: bool) -> crate::Result<Value> {
+    crate::file_access::check_read(path).map_err(error)?;
+    let wal_path = PathBuf::from(format!("{}-wal", path.display()));
+    crate::file_access::check_read(&wal_path).map_err(error)?;
     let mut job = crate::lightroom_job::LightroomJob::new(s, path.to_path_buf(), update_existing)?;
     let cancel = AtomicBool::new(false);
     let prepared = job.prepare(&cancel)?;

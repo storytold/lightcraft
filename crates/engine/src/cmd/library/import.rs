@@ -4,6 +4,7 @@ use super::{AlbumId, PhotoId, Result, Selection, Session, Value, bad, bool_or, j
 /// The auto-import folder's visible files with their sizes (the file-system half of
 /// `library.autoImportScan`; the app lists on a worker thread and passes `listing`).
 pub fn list_auto_import_folder(folder: &str) -> std::result::Result<Vec<(String, u64)>, String> {
+    crate::file_access::check_read(folder).map_err(|e| format!("{folder}: {e}"))?;
     let rd = std::fs::read_dir(folder).map_err(|e| format!("{folder}: {e}"))?;
     Ok(rd
         .flatten()
@@ -33,6 +34,11 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         "move" => crate::import::ImportMode::Move,
         other => return Err(bad("library.import", format!("unknown mode `{other}` (add|copy|move)"))),
     };
+    if mode == crate::import::ImportMode::Move {
+        for path in &paths {
+            crate::file_access::check_write(path).map_err(|e| bad("library.import", e))?;
+        }
+    }
     let preset = match str_param(p, "preset").filter(|x| !x.is_empty()) {
         Some(id) => Some(s.presets.iter().find(|x| x.id == id).cloned().ok_or_else(|| bad("library.import", format!("unknown preset `{id}`")))?),
         None => None,

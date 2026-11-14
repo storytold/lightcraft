@@ -618,6 +618,9 @@ fn sidecar_has_news(labels: &Catalog, p: &Photo, naming: SidecarLookup, listing:
     if seen.is_some_and(|t| saved <= t) {
         return false;
     }
+    if crate::file_access::check_read(&file).is_err() {
+        return false;
+    }
     let Ok(text) = std::fs::read_to_string(&file) else { return false };
     let Ok(sc) = crate::sidecar::parse_sidecar(&text, crate::crs::Target::for_photo(p)) else { return false };
     let sc = sc.with_file_orientation(path).resolve_label(labels);
@@ -798,6 +801,7 @@ impl SyncWork {
 /// Read and parse photo file `path`'s XMP sidecar file.
 fn read_sidecar(path: &str, naming: SidecarLookup, target: crate::crs::Target) -> std::result::Result<crate::sidecar::SidecarData, String> {
     let file = naming.find(path).ok_or_else(|| "no XMP sidecar".to_string())?;
+    crate::file_access::check_read(&file)?;
     let len = std::fs::metadata(&file).map_err(|e| format!("{}: {e}", file.display()))?.len();
     if len > MAX_SIDECAR_BYTES {
         return Err(format!("{}: too large for an XMP sidecar", file.display()));

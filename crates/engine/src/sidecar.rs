@@ -397,6 +397,7 @@ impl SidecarData {
 /// ([`late_orientation`]). A WebP's or PNG's chunks are always walked, since the last Exif chunk is the one that counts
 /// ([`webp_orientation`], [`png_orientation`]).
 fn file_orientation(path: &str) -> Option<lightcraft_meta::Orientation> {
+    crate::file_access::check_read(path).ok()?;
     let mut file = std::fs::File::open(path).ok()?;
     let mut head = Vec::new();
     (&mut file).take(ORIENTATION_SPAN).read_to_end(&mut head).ok()?;
@@ -732,6 +733,7 @@ pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateC
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    crate::file_access::check_write(path).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
     lightcraft_catalog::safe_file::write_atomic(path, data)
 }
 
@@ -850,9 +852,13 @@ fn file_path(p: &Photo) -> Option<&str> {
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
     if let Some(sc) = lookup.find(original) {
+        if crate::file_access::check_read(&sc).is_err() {
+            return None;
+        }
         // A discovered sidecar keeps precedence even when reading it fails.
         return crate::read_file::read_regular(&sc, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
     }
+    crate::file_access::check_read(original).ok()?;
     if kind == MediaKind::Raw {
         let bytes = crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES).ok()?;
         let x = lightcraft_meta::embedded(&bytes).xmp?;
@@ -1132,6 +1138,9 @@ impl Session {
         self.save_sidecar_with(id, &StemOwners::among(&self.catalog, &[id]))
     }
 
+    /// Write photo `id`'s XMP sidecar, merged into an existing packet, using `owners` for the stem.
+    ///
+    /// The bytes go through `write_atomic` in this module. There is no writer argument.
     pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {
@@ -1167,6 +1176,7 @@ impl Session {
         let path = listed.or_else(|| existing.into_iter().next()).unwrap_or(preferred);
         self.validate_sidecar_packets_for_paths(std::slice::from_ref(&path), &crate::rename::RealFs)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
+        crate::file_access::check_write(&path).map_err(EngineError::Other)?;
         let err = |e: std::io::Error| EngineError::Other(format!("{}: {e}", path.display()));
         let (data, merged, backup) = sidecar_contents(&path, sidecar_packet(p, &self.catalog), &(self.clock)()).map_err(err)?;
         write_atomic(&path, data.as_bytes()).map_err(err)?;
