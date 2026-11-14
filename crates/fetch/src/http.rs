@@ -371,14 +371,15 @@ impl Stream {
                     }
                     match conn.reader().read(buf) {
                         Ok(n) => return Ok(n),
-                        // closed without close_notify: the caller checks the length it got
-                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Ok(0),
+                        // closed without close_notify: an attacker on the path can cut a TLS stream at will, so this is
+                        // never a clean end (a body whose length is known is complete before any further read)
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => return Err(HttpError::Tls(TRUNCATED.into())),
                         Err(e) if e.kind() == ErrorKind::WouldBlock => {}
                         Err(e) => return Err(HttpError::Tls(e.to_string())),
                     }
                     // no plaintext buffered: more TLS records from the socket
                     match conn.read_tls(sock) {
-                        Ok(0) => return Ok(0),
+                        Ok(0) => return Err(HttpError::Tls(TRUNCATED.into())),
                         Ok(_) => {
                             conn.process_new_packets().map_err(|e| HttpError::Tls(e.to_string()))?;
                             while conn.wants_write() {
@@ -551,8 +552,15 @@ impl Response {
     }
 }
 
+const TRUNCATED: &str = "the connection closed without a TLS close_notify: the response may be truncated";
+
 /// Send `GET url` with extra `headers` and read the status line and headers.
 pub fn get(url: &Url, headers: &[(&str, String)], limits: &Limits) -> Result<Response, HttpError> {
+    // `path` and `host` are public fields: nothing that could end the request line or a header may reach the wire
+    let plain = |s: &str| !s.bytes().any(|b| b <= 0x20 || b == 0x7f);
+    if !url.path.starts_with('/') || !plain(&url.path) || !plain(&url.host) {
+        return Err(HttpError::BadUrl("a space or control character in the host or path".into()));
+    }
     let mut req = format!(
         "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: LightCraft/{}\r\nAccept: */*\r\nAccept-Encoding: identity\r\nConnection: close\r\n",
         url.path,
@@ -656,6 +664,16 @@ mod tests_connect {
         let r = connect_any("blackhole", &addrs, Instant::now() + Duration::from_millis(400), &limits(&cancel));
         assert!(r.is_err());
         assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
+    }
+
+    /// A `Url` built by hand cannot put a line break or space into the request line or the Host header.
+    #[test]
+    fn a_path_or_host_with_a_line_break_is_refused_before_connecting() {
+        let cancel = AtomicBool::new(false);
+        for (host, path) in [("example.com", "/a b"), ("example.com", "/a\r\nX: y"), ("example.com", "a"), ("ex\r\nample", "/")] {
+            let url = Url { tls: false, host: host.into(), port: 9, path: path.into() };
+            assert!(matches!(get(&url, &[], &limits(&cancel)), Err(HttpError::BadUrl(_))), "{host:?} {path:?}");
+        }
     }
 
     /// Content-Length is `1*DIGIT`: a sign, hex prefix, trailing junk or empty value is refused, not read as a length.
