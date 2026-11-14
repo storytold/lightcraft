@@ -3281,7 +3281,6 @@ dependencies = [
  "byteorder-lite",
  "color_quant",
  "gif",
- "image-webp",
  "moxcms",
  "num-traits",
  "png",
@@ -4082,8 +4081,8 @@ dependencies = [
 name = "lightcraft-pipeline"
 version = "0.21.1"
 dependencies = [
+ "craft-image-codecs",
  "dhat",
- "image",
  "lightcraft-color",
  "lightcraft-develop",
  "lightcraft-geom",
@@ -4147,7 +4146,7 @@ dependencies = [
 name = "lightcraft-scenes"
 version = "0.21.1"
 dependencies = [
- "image",
+ "craft-image-codecs",
  "lightcraft-color",
  "lightcraft-raster",
  "rayon",
