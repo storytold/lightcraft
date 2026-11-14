@@ -87,21 +87,13 @@ libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
 # formats
-quick-xml = "0.41"
 miniz_oxide = "0.9"
 
 # codecs
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
-zune-jpeg = { version = "0.5", default-features = false, features = ["std", "x86", "neon"] }
-zune-core = { version = "0.5", default-features = false, features = ["std"] }
-jpeg-decoder = { version = "0.3", default-features = false }
-jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
 ab_glyph = { version = "0.2", default-features = false, features = ["std"] }  # Apache-2.0, pure Rust glyph rasterizer (export watermarks)
-png = "0.18"
-tiff = "0.11"
-image-webp = "0.2"
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
+zune-core = { version = "0.5", default-features = false, features = ["std"] }
 zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] } # MIT/Apache-2.0/Zlib lossless JXL encoder (test fixtures only)
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
 # HDR AVIF (PQ): ravif fixes the sRGB transfer curve, so HDR files drive its rav1e + avif-serialize directly
