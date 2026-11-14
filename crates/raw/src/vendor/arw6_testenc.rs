@@ -2,8 +2,8 @@
 //! Section names in italics refer to `docs/arw6-compression.md`.
 
 use crate::llvc::{Bands3, Plane, band_rows};
-use lightcraft_tiff::tags as t;
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+use craft_tiff::tags as t;
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
 /// Exact inverse of `dequant` on representable values: `sign(v) * (|v| >> qi)`.
 pub(crate) fn quantize(v: i32, qi: u32) -> i32 {
