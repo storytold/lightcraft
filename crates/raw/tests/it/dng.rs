@@ -631,18 +631,12 @@ fn malformed_profile_look_tags_are_ignored() {
 
 /// Lossless JPEG XL codestream of `px` (`w × h × cpp` interleaved), 16-bit unless `eight`.
 fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8> {
-    use zune_core::bit_depth::BitDepth;
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::EncoderOptions;
-    let cs = if cpp == 1 { ColorSpace::Luma } else { ColorSpace::RGB };
-    let (bytes, depth): (Vec<u8>, _) = if eight {
-        (px.iter().map(|&v| v as u8).collect(), BitDepth::Eight)
-    } else {
-        (px.iter().flat_map(|v| v.to_ne_bytes()).collect(), BitDepth::Sixteen)
-    };
-    let mut out = Vec::new();
-    zune_jpegxl::JxlSimpleEncoder::new(&bytes, EncoderOptions::new(w, h, cs, depth)).encode(&mut out).unwrap();
-    out
+    let layout = if cpp == 1 { craft_jxl::Layout::Gray } else { craft_jxl::Layout::Rgb };
+    let u8_buf: Vec<u8> = if eight { px.iter().map(|&v| v as u8).collect() } else { Vec::new() };
+    let samples = if eight { craft_jxl::Samples::U8(&u8_buf) } else { craft_jxl::Samples::U16(px) };
+    let img = craft_jxl::ImageRef { width: w as u32, height: h as u32, layout, samples };
+    let opts = craft_jxl::EncodeOptions { lossless: true, ..Default::default() };
+    craft_jxl::encode(&img, opts, &craft_jxl::Metadata::default()).unwrap()
 }
 
 /// A bare codestream wrapped in the ISO-BMFF container (signature, `ftyp`, `jxlc`).
@@ -773,14 +767,17 @@ fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
 #[test]
 fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
     use lightcraft_raw::RawError;
-    use zune_core::bit_depth::BitDepth;
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::EncoderOptions;
     let (w, h) = (512, 512);
     let grey: Vec<u16> = (0..w * h).map(|i| ((i % w) * 97 + (i / w) * 31) as u16 & 0x0fff).collect();
-    let with_alpha: Vec<u8> = grey.iter().flat_map(|&v| [v, 4095 - v]).flat_map(u16::to_ne_bytes).collect();
-    let mut tile = Vec::new();
-    zune_jpegxl::JxlSimpleEncoder::new(&with_alpha, EncoderOptions::new(w, h, ColorSpace::LumaA, BitDepth::Sixteen)).encode(&mut tile).unwrap();
+    let with_alpha: Vec<u16> = grey.iter().flat_map(|&v| [v, 4095 - v]).collect();
+    let img = craft_jxl::ImageRef {
+        width: w as u32,
+        height: h as u32,
+        layout: craft_jxl::Layout::GrayAlpha,
+        samples: craft_jxl::Samples::U16(&with_alpha),
+    };
+    let opts = craft_jxl::EncodeOptions { lossless: true, ..Default::default() };
+    let tile = craft_jxl::encode(&img, opts, &craft_jxl::Metadata::default()).unwrap();
     let one = |tile: Vec<u8>| {
         let mut raw = base_ifd(w, h, 12, 1, true);
         raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));

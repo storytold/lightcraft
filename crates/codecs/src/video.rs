@@ -831,13 +831,10 @@ pub fn quantizer(quality: u8) -> usize {
 /// the samples as they come out (in order: no frame reordering).
 pub struct Av1Encoder {
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    ctx: rav1e::Context<u8>,
-    /// Each frame sent so far: its duration (by input frame number).
-    #[cfg_attr(not(all(feature = "avif", not(target_arch = "wasm32"))), allow(dead_code))]
-    durations: Vec<u64>,
+    enc: craft_video::av1::Encoder,
     width: usize,
     height: usize,
-    seq_header: Option<Vec<u8>>,
+    has_sample: bool,
 }
 
 impl Av1Encoder {
@@ -848,30 +845,13 @@ impl Av1Encoder {
         }
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            use rav1e::prelude::*;
-            let mut ec = EncoderConfig::with_speed_preset(c.speed.clamp(1, 10));
-            ec.width = w;
-            ec.height = h;
-            ec.time_base = Rational::new(1, u64::from(c.fps));
-            ec.bit_depth = 8;
-            ec.chroma_sampling = ChromaSampling::Cs420;
-            ec.pixel_range = PixelRange::Limited;
-            ec.color_description = Some(ColorDescription {
-                color_primaries: ColorPrimaries::BT709,
-                transfer_characteristics: TransferCharacteristics::BT709,
-                matrix_coefficients: MatrixCoefficients::BT709,
-            });
-            // in order, one shown frame per packet: samples map 1:1 to the frames sent
-            ec.low_latency = true;
-            let q = quantizer(c.quality);
-            ec.quantizer = q;
-            ec.min_quantizer = q.min(255) as u8;
-            ec.min_key_frame_interval = 1;
-            ec.max_key_frame_interval = 120;
-            // tiles are what rav1e encodes in parallel (16 measured best for 1080p on 32 threads)
-            ec.tiles = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 16);
-            let ctx: Context<u8> = Config::new().with_encoder_config(ec).new_context().map_err(|e| bad(format!("AV1: {e}")))?;
-            Ok(Av1Encoder { ctx, durations: Vec::new(), width: w, height: h, seq_header: None })
+            use craft_video::av1::{Encoder, EncoderConfig, RateControl};
+            let _ = c.speed;
+            let mut ec = EncoderConfig::new(w as u32, h as u32, c.fps, 1);
+            ec.rate = RateControl::ConstantQ(quantizer(c.quality).clamp(1, 255) as u8);
+            ec.keyint = 120;
+            let enc = Encoder::new(ec).map_err(|e| bad(format!("AV1: {e}")))?;
+            Ok(Av1Encoder { enc, width: w, height: h, has_sample: false })
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
@@ -885,10 +865,17 @@ impl Av1Encoder {
         (self.width, self.height)
     }
 
-    /// The configuration record for the container ([`av1_config`]), once the first sample (with
-    /// the sequence header) has come out.
+    /// The configuration record for the container (`av1C`), once the first sample has come out.
     pub fn config_record(&self) -> Option<Vec<u8>> {
-        self.seq_header.as_ref().map(|s| av1_config(s))
+        #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+        {
+            self.has_sample.then(|| self.enc.av1c())
+        }
+        #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
+        {
+            let _ = self.has_sample;
+            None
+        }
     }
 
     /// Encode `rgba` (`width × height` of [`Self::size`]) shown for `periods` frame periods;
@@ -898,17 +885,13 @@ impl Av1Encoder {
         let (y, u, v) = yuv420(rgba, self.width, self.height)?;
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            let mut frame = self.ctx.new_frame();
-            for (plane, (data, w)) in frame.planes.iter_mut().zip([(&y, self.width), (&u, self.width / 2), (&v, self.width / 2)]) {
-                plane.copy_from_raw_u8(data, w, 1);
-            }
-            let params = rav1e::prelude::FrameParameters {
-                frame_type_override: if key { rav1e::prelude::FrameTypeOverride::Key } else { rav1e::prelude::FrameTypeOverride::No },
-                ..Default::default()
-            };
-            self.ctx.send_frame((frame, params)).map_err(|e| bad(format!("AV1: {e}")))?;
-            self.durations.push(periods.max(1));
-            self.drain()
+            let y16: Vec<u16> = y.into_iter().map(u16::from).collect();
+            let u16_: Vec<u16> = u.into_iter().map(u16::from).collect();
+            let v16: Vec<u16> = v.into_iter().map(u16::from).collect();
+            let frame = craft_video::av1::Frame { y: &y16, u: &u16_, v: &v16, y_stride: self.width, uv_stride: self.width / 2 };
+            let pkt = self.enc.encode_with_key(&frame, key).map_err(|e| bad(format!("AV1: {e}")))?;
+            self.has_sample = true;
+            Ok(vec![Sample { data: pkt.data, key: pkt.keyframe, duration: periods.max(1) }])
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
@@ -921,33 +904,10 @@ impl Av1Encoder {
     pub fn finish(&mut self) -> Result<Vec<Sample>> {
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            self.ctx.flush();
-            self.drain()
+            Ok(Vec::new())
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         Err(bad("AV1 video encoding is not available in this build"))
-    }
-
-    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    fn drain(&mut self) -> Result<Vec<Sample>> {
-        use rav1e::prelude::*;
-        let mut out = Vec::new();
-        loop {
-            match self.ctx.receive_packet() {
-                Ok(p) => {
-                    let (data, seq) = to_sample_data(&p.data)?;
-                    if self.seq_header.is_none() {
-                        self.seq_header = seq;
-                    }
-                    let duration = usize::try_from(p.input_frameno).ok().and_then(|i| self.durations.get(i)).copied().unwrap_or(1);
-                    out.push(Sample { data, key: p.frame_type == FrameType::KEY, duration });
-                }
-                Err(EncoderStatus::Encoded) => {}
-                Err(EncoderStatus::NeedMoreData | EncoderStatus::LimitReached) => break,
-                Err(e) => return Err(bad(format!("AV1: {e}"))),
-            }
-        }
-        Ok(out)
     }
 }
 

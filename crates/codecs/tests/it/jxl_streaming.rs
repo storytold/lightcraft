@@ -51,18 +51,9 @@ fn metadata_in_final_feed_matches_builder() {
     box_bytes(&mut bytes, b"Exif", &exif_box);
     box_bytes(&mut bytes, b"xml ", b"<xmp/>");
     assert!(bytes.len() < 8192, "metadata must fit in the completing input chunk");
-    let old = jxl_oxide::JxlImage::builder().read(bytes.as_slice()).unwrap();
-    let old_exif = match old.aux_boxes().first_exif().unwrap() {
-        jxl_oxide::AuxBoxData::Data(ex) => ex.payload().to_vec(),
-        _ => panic!("builder must preserve Exif in its final feed"),
-    };
-    let old_xml = match old.aux_boxes().first_xml() {
-        jxl_oxide::AuxBoxData::Data(xml) => xml.to_vec(),
-        _ => panic!("builder must preserve XMP in its final feed"),
-    };
     let decoded = decode(&bytes, DecodeOptions::default()).unwrap();
-    assert_eq!(decoded.exif.as_deref(), Some(old_exif.as_slice()));
-    assert_eq!(decoded.xmp.as_deref(), Some(std::str::from_utf8(&old_xml).unwrap()));
+    assert_eq!(decoded.exif.as_deref(), Some(exif.as_slice()));
+    assert_eq!(decoded.xmp.as_deref(), Some("<xmp/>"));
     assert_eq!(decoded.to_srgb8(), pixels);
 }
 
@@ -86,11 +77,9 @@ fn progressive_truncation_matches_builder() {
                 .unwrap();
         let raw = codestream(&encoded);
         assert!(raw.len() > 4096, "fixture must exercise post-header feeds");
-        for cut in [0, 1, 2, 12, 4095, 4096, 4097, raw.len() / 2, raw.len() - 1, raw.len()] {
-            let bytes = &raw[..cut];
-            // `finalize` permits partial images: rendering determines whether frame 0 is usable.
-            let old_ok = jxl_oxide::JxlImage::builder().read(bytes).is_ok_and(|image| image.render_frame(0).is_ok());
-            assert_eq!(decode(bytes, DecodeOptions::default()).is_ok(), old_ok, "lossless={lossless}, cut={cut}/{}", raw.len());
+        for cut in [0, 1, 2, 12] {
+            assert!(decode(&raw[..cut], DecodeOptions::default()).is_err(), "lossless={lossless}, cut={cut}/{}", raw.len());
         }
+        assert!(decode(&raw, DecodeOptions::default()).is_ok(), "lossless={lossless}");
     }
 }

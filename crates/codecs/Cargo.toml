@@ -26,9 +26,8 @@ rayon = { workspace = true, optional = true }
 craft-jxl = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-ravif = { workspace = true, optional = true }
-rav1e = { workspace = true, optional = true }
-avif-serialize = { workspace = true, optional = true }
+craft-video = { workspace = true, optional = true }
+craft-image-codecs = { workspace = true, features = ["avif"] }
 
 [features]
 default = ["parallel", "jxl", "avif"]
@@ -39,14 +38,12 @@ jxl = ["dep:craft-jxl"]
 # distributors choose it at build time (HEVC patents are a distributor's call, same policy as
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.
 heif = ["dep:craft-heif"]
-## AVIF encoding via ravif/rav1e (pure Rust, BSD). Native targets only; a no-op on wasm32.
-avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
+## AVIF/AV1 encoding via craft-image-codecs / craft-video (pure Rust). Native targets only; a no-op on wasm32.
+avif = ["dep:craft-video"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
-# JPEG XL tests read encoded samples without our colour conversion
-jxl-oxide = { workspace = true }
 proptest = { workspace = true }
 # Lossless synthetic HEIC files for the `heif` feature's tests.
 craft-heif = { workspace = true, features = ["testdata"] }
