@@ -1266,8 +1266,9 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             missing.push(src.path.clone());
         }
         // A refused path must not become a library record the app would look at later; its
-        // virtual copies go with it.
-        if refused.contains(&src.source_id) || refused.contains(&master) {
+        // virtual copies go with it. (`masterImage` is 0 for a master, so a refused id of 0, from
+        // a malformed catalog, must not refuse every master.)
+        if refused.contains(&src.source_id) || (master != 0 && refused.contains(&master)) {
             continue;
         }
         let indexed = index
