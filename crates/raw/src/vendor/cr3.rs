@@ -54,7 +54,7 @@ fn cfa(pattern: u8) -> Option<Cfa> {
         3 => "BGGR",
         _ => return None,
     };
-    Some(Cfa::bayer_static(name))
+    Some(crate::bayer(name))
 }
 
 /// Inclusive offsets, clipped to the sample dimensions (some Canon crop-mode files record right

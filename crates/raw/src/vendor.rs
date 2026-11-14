@@ -1,4 +1,5 @@
-//! Vendor raw formats (TIFF-based) and helpers shared by them.
+//! The vendor raw formats still decoded here (CR3, ARW, RAF, RW2, ORF; the others are `craft-raw`'s) and helpers
+//! shared by them.
 
 pub mod arw;
 pub mod arw6;
@@ -7,27 +8,16 @@ mod arw6_curve;
 pub(crate) mod arw6_testenc;
 mod arw_lens;
 pub(crate) mod arw_lens_rm6;
-pub mod cr2;
 pub mod cr3;
-pub mod crw;
 pub mod crx;
 pub(crate) mod crx_wavelet;
-pub mod erf;
-pub(crate) mod hasselblad;
-pub mod kodak;
-pub mod mef;
-pub mod mrw;
-pub mod nef;
-mod nef_lens;
-pub mod nefc;
+pub(crate) mod huffman;
 pub mod orf;
-pub mod pef;
 pub mod raf;
 mod raf_lens;
 mod rafc;
 pub mod rw2;
 mod sr2;
-pub mod srw;
 
 use crate::{BlackLevel, Cfa, Rect};
 use craft_tiff::Tiff;
@@ -48,7 +38,7 @@ pub(crate) fn cfa_from_exif(tiff: &Tiff) -> Option<Cfa> {
         [1, 2, 0, 1] => "GBRG",
         _ => return None,
     };
-    (two(c0, c1) && two(r0, r1)).then(|| Cfa::bayer_static(name))
+    (two(c0, c1) && two(r0, r1)).then(|| crate::bayer(name))
 }
 
 /// Black level per 2×2 CFA position (anchored at the active area origin) from masked sensor columns `cols` over
