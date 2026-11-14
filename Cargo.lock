@@ -5211,6 +5211,7 @@ dependencies = [
  "lcc-brand",
  "lcc-testkit",
  "log",
+ "nix",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -6148,6 +6149,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
