@@ -21,7 +21,7 @@ fn stand_in_image(bytes: &[u8], covering: Option<usize>) -> Option<std::borrow::
     if let Some(jpeg) = jpeg {
         return Some(std::borrow::Cow::Owned(jpeg));
     }
-    let undecodable = lightcraft_raw::probe(bytes).is_some_and(|f| !f.is_supported());
+    let undecodable = lightcraft_raw::probe(bytes).is_some_and(|f| !lightcraft_raw::is_supported(f));
     (undecodable && lightcraft_codecs::sniff(bytes).is_some_and(|f| f == lightcraft_codecs::Format::Tiff))
         .then_some(std::borrow::Cow::Borrowed(bytes))
 }
@@ -46,6 +46,7 @@ fn decode_stand_in(bytes: &[u8], jpeg: &[u8], opts: lightcraft_codecs::DecodeOpt
             let space = match space {
                 lightcraft_raw::PreviewColorSpace::Srgb => lightcraft_codecs::NamedSpace::Srgb,
                 lightcraft_raw::PreviewColorSpace::AdobeRgb => lightcraft_codecs::NamedSpace::AdobeRgb,
+                lightcraft_raw::PreviewColorSpace::ProPhoto => lightcraft_codecs::NamedSpace::ProPhoto,
             };
             lightcraft_codecs::decode_jpeg_with_fallback(jpeg, opts, space).ok()
         }
