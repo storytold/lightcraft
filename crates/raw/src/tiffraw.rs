@@ -318,16 +318,11 @@ fn chunk_dims(info: &ImageInfo, c: &Chunk) -> (usize, usize, usize, usize) {
     (cw, ch, vw, vh)
 }
 
-#[cfg(feature = "jxl")]
-use crate::jxl::{check as jxl_chunk_check, decode as jxl_chunk};
-
-#[cfg(not(feature = "jxl"))]
 #[allow(clippy::too_many_arguments)]
 fn jxl_chunk(_: &[u8], _: usize, _: usize, _: usize, _: usize, _: usize, _: u32, _: bool) -> Result<ChunkPx> {
-    Err(RawError::Unsupported("JPEG XL DNG (built without the `jxl` feature)".into()))
+    Err(RawError::Unsupported("JPEG XL outside a DNG".into()))
 }
 
-#[cfg(not(feature = "jxl"))]
 #[allow(clippy::too_many_arguments)]
 fn jxl_chunk_check(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits: u32, float: bool) -> Result<()> {
     jxl_chunk(src, cw, ch, vw, vh, cpp, bits, float).map(|_| ())
