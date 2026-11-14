@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{CommandSpec, bad, cmd, has_active, has_selection};
 use crate::{Result, Session};
 
-/// `<stem>.dng`, then `<stem>-2.dng`, `<stem>-3.dng`… next to `path`.
+/// `<stem>.dng`, then `<stem>-2.dng`, `<stem>-3.dng`ΓÇª next to `path`.
 fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
     let p = Path::new(path);
     let dir = p.parent().unwrap_or(Path::new("")).to_path_buf();
@@ -23,7 +23,7 @@ fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
 ///
 /// The DNG is checked before anyone relies on it (Convert to DNG relinks the photo to it, Copy as
 /// DNG deletes the raw copy): the encoded file must decode to the same raw data, and it is
-/// written to a temp file, synced, read back identical and only then given its name — never
+/// written to a temp file, synced, read back identical and only then given its name ΓÇö never
 /// replacing an existing file. On any failure no DNG is left behind and the raw stays in use.
 pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::result::Result<String, String> {
     write_dng_with(s.media.file_bytes.as_ref(), path, packet)
@@ -114,7 +114,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Convert to DNG",
         ["Photo"],
         None,
-        "{ids?} — write each raw photo as a lossless DNG next to it (settings embedded) and relink the photo to it; originals are kept → {converted: [{id, path, original}], skipped}",
+        "{ids?} ΓÇö write each raw photo as a lossless DNG next to it (settings embedded) and relink the photo to it; originals are kept ΓåÆ {converted: [{id, path, original}], skipped}",
         has_selection,
         convert
     )]
@@ -242,15 +242,8 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
         m.exposure_time = src.exposure_time;
-    } else if m.exposure_time.is_none()
-        && let Some(t) = src.exposure_time
-        && (m.shutter.trim() == src.shutter || legacy_shutter_text(t).is_some_and(|old| m.shutter.trim() == old))
-    {
-        // a photo imported before the exact time was kept: its shutter text is still the one import
-        // wrote then (rounded: 0.4 s as `1/2`, 2.5 s as `2`), so it takes the file's exact time and the
-        // text shown for it now; a shutter speed typed by hand that the file doesn't give is kept
-        m.shutter = src.shutter.clone();
-        m.exposure_time = Some(t);
+    } else {
+        repair_legacy_shutter(&mut m, src);
     }
     m.focal_mm = m.focal_mm.or(src.focal_mm);
     m.aperture = m.aperture.or(src.aperture);
@@ -273,6 +266,20 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
         ops.push(Op::SetCaptured { id, captured: info.captured.clone() });
     }
     ops
+}
+
+/// Repair only the shutter data an old import wrote, keeping independently edited metadata.
+fn repair_legacy_shutter(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
+    if m.exposure_time.is_none()
+        && let Some(t) = src.exposure_time
+        && (m.shutter.trim() == src.shutter || legacy_shutter_text(t).is_some_and(|old| m.shutter.trim() == old))
+    {
+        m.shutter = src.shutter.clone();
+        m.exposure_time = Some(t);
+        true
+    } else {
+        false
+    }
 }
 
 /// The shutter text an import wrote before the exact exposure time was kept (#1619): whole seconds at
@@ -330,8 +337,16 @@ pub(crate) fn reload_ops(
     }
     // virtual copies share the file
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        let mut meta = c.meta.clone();
+        // Copies share the source file but may have independently edited metadata. Repair only
+        // recognizable legacy shutter values, not every missing field on the copy.
+        let shutter_op = repair_legacy_shutter(&mut meta, &info.meta).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) });
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(shutter_op)
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
@@ -341,7 +356,7 @@ pub(crate) fn reload_ops(
 
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
 /// dimensions and content hash, cached sources dropped. The app runs the same steps
-/// ([`crate::cmd::reload`]) with the files read on a worker thread. → {reloaded: [ids]}
+/// ([`crate::cmd::reload`]) with the files read on a worker thread. ΓåÆ {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     use crate::cmd::reload as r;
     let items = r::plan(s, p)?;
@@ -352,7 +367,7 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Duplicate: copy the file next to itself (`<name>-copy`, never overwriting) and add it with the
-/// same settings, metadata, rating, flag, label and albums. → {ids}
+/// same settings, metadata, rating, flag, label and albums. ΓåÆ {ids}
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.duplicate";
     let mut made = Vec::new();
@@ -404,7 +419,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Duplicate",
             ["Photo"],
             None,
-            "{ids?} — copy each photo's file next to it (`-copy`) and add it with the same settings, metadata and albums (a real file, unlike a virtual copy) → {ids}",
+            "{ids?} ΓÇö copy each photo's file next to it (`-copy`) and add it with the same settings, metadata and albums (a real file, unlike a virtual copy) ΓåÆ {ids}",
             has_selection,
             duplicate
         ),
@@ -413,7 +428,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
+            "{ids?} ΓÇö re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` ΓåÆ {reloaded}",
             has_selection,
             reload
         ),
@@ -422,7 +437,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Edit Copy for External Editor",
             [],
             None,
-            "{ids?, colorSpace?: adobeRgb (default) | proPhoto | displayP3 | srgb, format?: tiff (default) | psd, bitDepth?: 16 (default) | 8, dir?} — render each selected photo (or `ids`, at most 50) with its edits as `<name>-Edit.tif` (or `.psd`, flat, which PhotoCraft saves back to in place) next to it, add each stacked on its original and select the copies → {path, id, original (the first copy), copies: [{path, id, original}]} (the app then opens them in the external editor)",
+            "{ids?, colorSpace?: adobeRgb (default) | proPhoto | displayP3 | srgb, format?: tiff (default) | psd, bitDepth?: 16 (default) | 8, dir?} ΓÇö render each selected photo (or `ids`, at most 50) with its edits as `<name>-Edit.tif` (or `.psd`, flat, which PhotoCraft saves back to in place) next to it, add each stacked on its original and select the copies ΓåÆ {path, id, original (the first copy), copies: [{path, id, original}]} (the app then opens them in the external editor)",
             has_active,
             edit_external
         ),
@@ -451,7 +466,7 @@ mod tests {
         assert_eq!((meta.camera.as_str(), meta.lens.as_str(), meta.aperture), ("Canon EOS R6 Mark III", "RF24-105mm", Some(6.3)));
         assert_eq!((meta.title.as_str(), meta.iso), ("Mine", Some(800)), "set fields are kept");
         assert!(matches!(ops.get(1), Some(Op::SetCaptured { captured: Some(_), .. })));
-        // nothing missing → nothing to do
+        // nothing missing ΓåÆ nothing to do
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
@@ -474,7 +489,7 @@ mod tests {
             let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{t}: {ops:?}") };
             assert_eq!((meta.shutter.as_str(), meta.exposure_time), (shown, Some(t)), "{t}");
             assert_eq!(meta.shutter_seconds(), Some(t), "{t}");
-            // repaired → nothing more to do
+            // repaired ΓåÆ nothing more to do
             ph.meta = (**meta).clone();
             assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "{t}");
         }
@@ -488,6 +503,45 @@ mod tests {
         ph.meta.shutter = "1/2".into();
         ph.meta.exposure_time = Some(0.4);
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a photo with an exact time is left alone");
+    }
+
+    #[test]
+    fn reload_repairs_legacy_shutter_on_copies_without_replacing_edits() {
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let mut source = Photo::new(PhotoId(1), Source::File { path: "/x.nef".into() }, "x.nef", "NEF", 6000, 4000, "");
+        source.meta.shutter = "1/2".into();
+        cat.apply(Op::AddPhoto { photo: Box::new(source.clone()) }).unwrap();
+        for (id, text, exact) in [(2, "1/2", None), (3, "0.4", None), (4, "1/8", None), (5, "1/2", Some(0.4))] {
+            let mut copy = source.clone();
+            copy.id = PhotoId(id);
+            copy.copy_of = Some(source.id);
+            copy.meta.shutter = text.into();
+            copy.meta.exposure_time = exact;
+            copy.meta.title = "My copy".into();
+            cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        }
+        let mut info = crate::media::ProbeInfo::default();
+        info.meta.shutter = "0.4".into();
+        info.meta.exposure_time = Some(0.4);
+        info.meta.title = "File title".into();
+        let mut ops = Vec::new();
+        let mut changed = Vec::new();
+        reload_ops(&cat, source.id, &info, &mut ops, &mut changed);
+        for op in ops {
+            cat.apply(op).unwrap();
+        }
+        for id in [1, 2, 3] {
+            let m = &cat.photo(PhotoId(id)).unwrap().meta;
+            assert_eq!((m.shutter.as_str(), m.exposure_time), ("0.4", Some(0.4)));
+            assert_eq!(m.shutter_seconds(), Some(0.4));
+        }
+        for (id, text, exact) in [(4, "1/8", None), (5, "1/2", Some(0.4))] {
+            let m = &cat.photo(PhotoId(id)).unwrap().meta;
+            assert_eq!((m.shutter.as_str(), m.exposure_time), (text, exact));
+        }
+        for id in [2, 3, 4, 5] {
+            assert_eq!(cat.photo(PhotoId(id)).unwrap().meta.title, "My copy");
+        }
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
