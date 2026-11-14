@@ -2377,5 +2377,7 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Keys are in the sidebar: arrows move, Enter opens, type to find, Esc goes back to the photos": "Klawisze działają na pasku bocznym: strzałki przesuwają, Enter otwiera, pisz, aby szukać, Esc wraca do zdjęć",
+  "This row has no name to change": "Ten wiersz nie ma nazwy do zmiany"
 }
