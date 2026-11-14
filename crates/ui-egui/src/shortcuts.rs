@@ -590,6 +590,18 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         up_down_key(app, ctx, f);
         return;
     }
+    if matches!(f, "library.nextUnrated" | "library.prevUnrated") {
+        use crate::panels::compare;
+        if compare::culling(app) {
+            return;
+        }
+        if let Ok(result) = app.run(f, json!({})) {
+            if all_rated_toast(&result) {
+                app.toast(ctx, crate::i18n::tr("No unrated photos in this view"));
+            }
+        }
+        return;
+    }
     // an export that can't start (e.g. no folder) says why instead of doing nothing
     if let Err(e) = app.run(f, json!({}))
         && matches!(f, "app.export" | "app.exportPrevious")
@@ -845,3 +857,99 @@ mod enable_filters_tests;
 #[cfg(test)]
 #[path = "shortcuts/tests_filter_bar_key.rs"]
 mod filter_bar_key_tests;
+
+/// Whether a `library.nextUnrated` / `library.prevUnrated` result should show the
+/// "all rated" toast: only the distinct `allRated` result, not an empty view or a move.
+fn all_rated_toast(v: &Value) -> bool {
+    v.get("allRated").and_then(Value::as_bool) == Some(true)
+}
+
+#[cfg(test)]
+mod next_unrated_shortcut_tests {
+    use super::{Keymap, all_rated_toast, assign, fire_command, parse, shortcut_of};
+    use serde_json::json;
+
+    fn app_with(ratings: &[(u64, u8)]) -> crate::LightcraftApp {
+        use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+        let mut session = lightcraft_engine::Session::new();
+        for (id, rating) in ratings {
+            let mut photo = Photo::new(
+                PhotoId(*id),
+                Source::File { path: format!("/lightcraft-next-unrated-toast/{id}.jpg") },
+                &format!("{id}.jpg"),
+                "JPEG",
+                40,
+                30,
+                "2026-10-09",
+            );
+            photo.rating = *rating;
+            session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        }
+        session.execute("library.sort", &json!({"key": "fileName", "ascending": true})).unwrap();
+        if let Some((id, _)) = ratings.first() {
+            session.execute("library.select", &json!({"ids": [*id]})).unwrap();
+        }
+        crate::LightcraftApp::new(session, crate::Services { png: None, ..Default::default() })
+    }
+
+    #[test]
+    fn next_and_prev_unrated_have_cmd_arrow_defaults() {
+        let keymap = Keymap::new();
+        assert_eq!(shortcut_of(&keymap, "library.nextUnrated"), Some("Cmd+Right"));
+        assert_eq!(shortcut_of(&keymap, "library.prevUnrated"), Some("Cmd+Left"));
+        // The two directions are distinct keys, so native ownership of one
+        // (checked per shortcut string in `pressed_commands`) cannot suppress the other.
+        assert_ne!(parse("Cmd+Right"), parse("Cmd+Left"));
+    }
+
+    #[test]
+    fn rebinding_or_removing_next_unrated_drops_cmd_right() {
+        let mut keymap = Keymap::new();
+        assign(&mut keymap, "library.nextUnrated", Some("Alt+N")).unwrap();
+        assert_eq!(shortcut_of(&keymap, "library.nextUnrated"), Some("Alt+N"));
+        assert_ne!(shortcut_of(&keymap, "library.nextUnrated"), Some("Cmd+Right"));
+        assign(&mut keymap, "library.nextUnrated", None).unwrap();
+        assert_eq!(shortcut_of(&keymap, "library.nextUnrated"), None);
+    }
+
+    #[test]
+    fn rebinding_or_removing_prev_unrated_drops_cmd_left() {
+        let mut keymap = Keymap::new();
+        assign(&mut keymap, "library.prevUnrated", Some("Alt+P")).unwrap();
+        assert_eq!(shortcut_of(&keymap, "library.prevUnrated"), Some("Alt+P"));
+        assert_ne!(shortcut_of(&keymap, "library.prevUnrated"), Some("Cmd+Left"));
+        assign(&mut keymap, "library.prevUnrated", None).unwrap();
+        assert_eq!(shortcut_of(&keymap, "library.prevUnrated"), None);
+    }
+
+    #[test]
+    fn all_rated_toast_only_for_all_rated_result() {
+        assert!(all_rated_toast(&json!({"allRated": true})));
+        assert!(!all_rated_toast(&json!({"active": 3})));
+        assert!(!all_rated_toast(&json!({})));
+        assert!(!all_rated_toast(&json!({"allRated": false})));
+    }
+
+    #[test]
+    fn fire_command_shows_all_rated_toast_only_for_all_rated_result() {
+        let ctx = egui::Context::default();
+        for f in ["library.nextUnrated", "library.prevUnrated"] {
+            let mut app = app_with(&[(1, 5), (2, 5)]);
+            fire_command(&mut app, &ctx, f, false);
+            assert_eq!(app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("No unrated photos in this view"), "{f}");
+            assert_eq!(app.session.active(), Some(lightcraft_catalog::PhotoId(1)), "{f}");
+        }
+    }
+
+    #[test]
+    fn fire_command_shows_no_toast_for_a_move_or_an_empty_view() {
+        let ctx = egui::Context::default();
+        let mut app = app_with(&[(1, 5), (2, 0)]);
+        fire_command(&mut app, &ctx, "library.nextUnrated", false);
+        assert_eq!(app.session.active(), Some(lightcraft_catalog::PhotoId(2)));
+        assert!(app.ui.toast.is_none(), "a move shows no toast");
+        let mut app = app_with(&[]);
+        fire_command(&mut app, &ctx, "library.nextUnrated", false);
+        assert!(app.ui.toast.is_none(), "an empty view shows no toast");
+    }
+}
