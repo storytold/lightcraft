@@ -8,6 +8,7 @@
 use egui::RichText;
 
 use crate::LightcraftApp;
+use crate::keymap_profiles::{CLASSIC, CLASSIC_ALIASES, KeyProfile, LIGHTROOM, profile_default};
 use crate::shortcuts::{self, Bindable};
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -43,13 +44,25 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         d.insert_temp(search_id, search.clone());
         d.insert_temp(all_id, show_all);
     });
+    // which set of defaults the rows resolve against; the choice travels with the UI state
+    let profile = app.ui.settings.profile();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(crate::i18n::tr("Keymap Profile")).size(11.0).color(t.text_dim));
+        let items = [(KeyProfile::Lightroom.label(), LIGHTROOM), (KeyProfile::Classic.label(), CLASSIC)];
+        let active = Some(usize::from(profile == KeyProfile::Classic));
+        if let Some(i) = crate::widgets::segmented(ui, "keymapProfile", &items, active, 2)
+            && items[i].1 != app.ui.settings.keymap_profile
+        {
+            let _ = app.run("app.setKeymapProfile", serde_json::json!({"profile": items[i].1}));
+        }
+    });
     ui.label(RichText::new(crate::i18n::tr("Click a shortcut, then press the new keys (Esc cancels).")).size(11.0).color(t.text_dim));
     ui.add_space(4.0);
 
     let needle = search.trim().to_lowercase();
     let mut rows: Vec<(&'static Bindable, Option<String>)> = shortcuts::bindable()
         .iter()
-        .map(|b| (b, shortcuts::binding(&app.ui.settings.keymap, b.id, b.default).map(str::to_string)))
+        .map(|b| (b, shortcuts::binding(app.ui.settings.profile(), &app.ui.settings.keymap, b.id, b.default).map(str::to_string)))
         .filter(|(b, sc)| show_all || sc.is_some() || app.recording_shortcut.as_deref() == Some(b.id))
         .filter(|(b, sc)| {
             needle.is_empty()
@@ -120,7 +133,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
         if r.clicked() {
             apply(app, ui.ctx(), serde_json::json!({"id": b.id, "shortcut": null}));
         }
-        let r = ui.add_enabled(changed, egui::Button::new("↺").small()).on_hover_text(match b.default {
+        // ↺ restores the active profile's key, which may not be the declared one
+        let restore = profile_default(app.ui.settings.profile(), b.id, b.default);
+        let r = ui.add_enabled(changed, egui::Button::new("↺").small()).on_hover_text(match restore {
             Some(d) => crate::i18n::tr_format!("Restore {}", menu_text(d, mac)),
             None => crate::i18n::tr("Restore (no shortcut)").to_string(),
         });
@@ -136,8 +151,10 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, b: &Bindable, sc:
 /// Keys that aren't a command's own shortcut (ratings, labels, secondary keys): listed, not editable.
 /// One the user gave to a command shows struck through.
 fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &str) {
+    let profile = app.ui.settings.profile();
+    let profile_aliases: &[(&str, &str, &str)] = if profile == KeyProfile::Classic { CLASSIC_ALIASES } else { &[] };
     let mut fixed: Vec<(String, &str)> = Vec::new();
-    for (sc, id, _) in shortcuts::ALIASES {
+    for (sc, id, _) in shortcuts::ALIASES.iter().chain(profile_aliases) {
         let label = shortcuts::find_bindable(id).map_or(*id, |b| b.label);
         fixed.push((sc.to_string(), label));
     }
@@ -179,7 +196,18 @@ fn fixed_keys(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, mac: bool, nee
     ui.add_space(8.0);
     ui.label(RichText::new(crate::i18n::tr("Fixed keys")).font(t.semibold(12.5)).color(t.text));
     // keys saved for commands this build knows: an entry for an unknown command takes no key
-    let taken: Vec<_> = shortcuts::saved_keys(&app.ui.settings.keymap).map(|(_, k)| k).collect();
+    let taken: Vec<_> = app
+        .ui
+        .settings
+        .keymap
+        .values()
+        .filter_map(|s| shortcuts::parse(s))
+        .chain(
+            shortcuts::bindable()
+                .iter()
+                .filter_map(|b| shortcuts::binding(profile, &app.ui.settings.keymap, b.id, b.default).and_then(shortcuts::parse)),
+        )
+        .collect();
     egui::Grid::new("shortcuts-fixed").striped(true).num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
         for (sc, label) in fixed {
             ui.label(RichText::new(crate::i18n::tr(label)).color(t.text_label));

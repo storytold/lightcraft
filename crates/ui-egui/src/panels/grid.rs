@@ -268,7 +268,11 @@ impl GridCache {
 /// and as it is bound (the menu bar's own text), `None` when it is unbound.
 pub(crate) fn import_way_in(keymap: &crate::shortcuts::Keymap, mac: bool) -> (&'static str, Option<String>) {
     let way = crate::i18n::tr("Import photos with File → Import Photos…, or drop them here");
-    (way, crate::shortcuts::shortcut_of(keymap, "file.addPhotos").map(|sc| crate::menubar::shortcut_text(sc, mac)))
+    (
+        way,
+        crate::shortcuts::shortcut_of(crate::keymap_profiles::KeyProfile::Lightroom, keymap, "file.addPhotos")
+            .map(|sc| crate::menubar::shortcut_text(sc, mac)),
+    )
 }
 
 /// Width / height of a photo's cell: its cropped, oriented shape.

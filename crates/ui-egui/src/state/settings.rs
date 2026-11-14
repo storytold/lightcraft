@@ -176,6 +176,9 @@ pub struct AppSettings {
     pub background_prep: lightcraft_engine::prep::PrepSettings,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
+    /// Which set of default shortcuts commands use (`app.setKeymapProfile`; "lightroom" |
+    /// "classic"). The user's `keymap` sits above it. An unknown saved value is the default.
+    pub keymap_profile: String,
     /// Auto (follow the system), Dark or Light.
     pub appearance_mode: AppearanceMode,
     /// The theme of the dark appearance.
@@ -249,6 +252,7 @@ impl Default for AppSettings {
             loupe_messages: true,
             background_prep: Default::default(),
             keymap: Default::default(),
+            keymap_profile: crate::keymap_profiles::LIGHTROOM.to_string(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
             light_theme: LightTheme::Silver,
@@ -261,6 +265,13 @@ impl Default for AppSettings {
             lightroom_import: LightroomImport::Ask,
             lens_database: Default::default(),
         }
+    }
+}
+
+impl AppSettings {
+    /// The active keymap profile; an unknown saved `keymap_profile` is the default keymap.
+    pub fn profile(&self) -> crate::keymap_profiles::KeyProfile {
+        crate::keymap_profiles::KeyProfile::parse_id(&self.keymap_profile)
     }
 }
 

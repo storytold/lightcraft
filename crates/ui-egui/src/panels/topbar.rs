@@ -177,7 +177,7 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
     let cloud_tip = unsaved.as_deref().unwrap_or_default();
     // Import Photos… beside Export, always one click away, with the key it is bound to now
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let import_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "file.addPhotos") {
+    let import_tip = match crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, "file.addPhotos") {
         Some(sc) => format!("{} ({})", crate::i18n::tr("Import Photos…"), crate::menubar::shortcut_text(sc, mac)),
         None => crate::i18n::tr("Import Photos…").to_string(),
     };
