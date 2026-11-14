@@ -132,6 +132,11 @@ impl LightroomTask {
         })
     }
 
+    /// The program whose catalog this is, for messages that are not translated.
+    fn program(&self) -> &'static str {
+        if self.capture_one { "Capture One" } else { "Lightroom" }
+    }
+
     fn cancel(&mut self) {
         self.cancelled = true;
         self.cancel.store(true, Ordering::Relaxed);
@@ -146,7 +151,7 @@ impl Drop for LightroomTask {
 
 #[cfg(target_arch = "wasm32")]
 fn unsupported_wasm() -> Result<Value, String> {
-    Err("Lightroom catalog import is unavailable in browser builds; open the catalog in the native LightCraft app".into())
+    Err("Lightroom and Capture One catalog import is unavailable in browser builds; open the catalog in the native LightCraft app".into())
 }
 
 /// Tests: a catalog import that never ends while the returned value lives, so a drop meets it pending.
@@ -170,10 +175,24 @@ pub fn is_running(app: &LightcraftApp) -> bool {
     app.lightroom.is_some()
 }
 
+/// The program whose catalog the running task reads (`None`: no task runs), for messages.
+pub fn running_program(app: &LightcraftApp) -> Option<&'static str> {
+    app.lightroom.as_ref().map(|task| task.program())
+}
+
+/// What stops photos from being added while a catalog import runs, in the UI language.
+pub fn finish_first(app: &LightcraftApp) -> &'static str {
+    crate::i18n::tr(if running_program(app) == Some("Capture One") {
+        "Finish Capture One catalog import before adding photos"
+    } else {
+        "Finish Lightroom catalog import before adding photos"
+    })
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn busy(app: &LightcraftApp) -> Result<(), String> {
-    if app.lightroom.is_some() {
-        return Err("a Lightroom catalog task is already running".into());
+    if let Some(program) = running_program(app) {
+        return Err(format!("a {program} catalog task is already running"));
     }
     if app.import.is_some() || app.scan.is_some() {
         return Err("an import is running".into());
@@ -513,7 +532,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
             return;
         }
         Err(mpsc::TryRecvError::Disconnected) => {
-            terminal(app, ctx, &task, json!({"error": "Lightroom worker stopped unexpectedly"}));
+            terminal(app, ctx, &task, json!({"error": format!("{} worker stopped unexpectedly", task.program())}));
             return;
         }
     };
@@ -547,7 +566,7 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
                     if task.cancel.load(Ordering::Relaxed) {
                         json!({"cancelled": true})
                     } else {
-                        json!({"error": "Lightroom import belongs to a different open library"})
+                        json!({"error": format!("{} import belongs to a different open library", task.program())})
                     },
                 );
                 return;
@@ -566,7 +585,8 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
             let (tx, rx) = mpsc::channel();
             let commit_error = committed.as_ref().err().map(ToString::to_string);
             let Some(finalization) = finalization else {
-                terminal(app, ctx, &task, json!({"error": commit_error.clone().unwrap_or_else(|| "Lightroom import did not commit".into())}));
+                let error = commit_error.clone().unwrap_or_else(|| format!("{} import did not commit", task.program()));
+                terminal(app, ctx, &task, json!({"error": error}));
                 return;
             };
             if let Err(e) = spawn_finalize(finalization, tx, ctx.clone()) {

@@ -33,6 +33,11 @@ pub(crate) fn read_for_import(path: &Path, cancel: &AtomicBool) -> Result<Catalo
     Ok(data)
 }
 
+/// The program whose catalog `data` was read from, for the import's own messages.
+pub(crate) fn program(data: &CatalogImport) -> &'static str {
+    if is_capture_one(data) { "Capture One" } else { "Lightroom" }
+}
+
 /// Whether `data` was read from a Capture One catalog.
 pub(crate) fn is_capture_one(data: &CatalogImport) -> bool {
     data.catalog_id.as_deref().is_some_and(|id| id.starts_with(PREFIX)) || super::locate::is_database_name(&data.source)

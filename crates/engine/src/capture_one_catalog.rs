@@ -282,12 +282,13 @@ impl fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-/// Whether `path` is for this reader: a `.cocatalogdb` file (or its `.backup`), a folder holding
-/// one or more, or a folder named `.cocatalog`. The database is not opened, so [`read`] may still
-/// refuse it.
+/// Whether `path` is for this reader: a path named like a catalog's database (`.cocatalogdb`, or
+/// the `.backup` an upgrade leaves) or package (`.cocatalog`), or a folder holding a database.
+/// The database is not opened, and a path that is only named like one need not exist: [`read`]
+/// says what is wrong with it, in this reader's words.
 pub fn is_catalog(path: &Path) -> bool {
-    let package = path.is_dir() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cocatalog"));
-    package || !matches!(locate::locate(path), Err(ReadError::NotFound(_)))
+    let package = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cocatalog"));
+    package || is_database_path(path) || !matches!(locate::locate(path), Err(ReadError::NotFound(_)))
 }
 
 /// The database file of the catalog at `path` (see [`read`] for what `path` may be).

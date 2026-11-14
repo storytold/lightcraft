@@ -1074,6 +1074,7 @@ fn stage_collections(
     warnings: &mut Vec<String>,
 ) -> crate::Result<usize> {
     let rows = first_of_each_collection(data, warnings);
+    let program = crate::capture_one_catalog::convert::program(data);
     let mut albums = HashMap::new();
     // Two collections never share an album. An index that names one album for two gives the second a new one; the
     // counter saturates, so a damaged one hands out an id that's taken, and that stops the import instead.
@@ -1093,9 +1094,9 @@ fn stage_collections(
         if data.catalog_id.is_none()
             && [Some(&path_key), original_key.as_ref()].into_iter().flatten().any(|k| index.collection_owners.contains_key(k))
         {
-            return Err(error(
-                "the Lightroom catalog has no stable identity and its path was previously associated with a catalog; cannot safely match collections",
-            ));
+            return Err(error(format!(
+                "the {program} catalog has no stable identity and its path was previously associated with a catalog; cannot safely match collections"
+            )));
         }
         // a key recorded for another catalog (by its id) is not this one, whatever its path
         let mine = |k: &String| match (data.catalog_id.as_ref(), index.collection_owners.get(k)) {
@@ -1203,7 +1204,7 @@ fn stage_collections(
             {
                 album.parent = None;
                 warnings.push(format!(
-                    "{}: its collection set could not be created first; imported at the top level (Lightroom collection {})",
+                    "{}: its collection set could not be created first; imported at the top level ({program} collection {})",
                     album.name,
                     number(collection, "id_local")
                 ));
@@ -1216,7 +1217,7 @@ fn stage_collections(
                         Some(a) if text(r, "creationId").contains("group") => {
                             format!("its collection set “{}” is the album “{}” in this library, which isn't a folder", text(r, "name"), a.name)
                         }
-                        _ => format!("Lightroom keeps it inside “{}”, which isn't a collection set", text(r, "name")),
+                        _ => format!("{program} keeps it inside “{}”, which isn't a collection set", text(r, "name")),
                     },
                 };
                 // the set's name in this library: the user may have renamed it since an earlier import
@@ -1226,7 +1227,7 @@ fn stage_collections(
                     (None, None) => "at the top level".to_string(),
                 };
                 // the Lightroom id tells apart collections that share a name (#2165)
-                warnings.push(format!("{}: {why}; imported {to} (Lightroom collection {})", album.name, number(collection, "id_local")));
+                warnings.push(format!("{}: {why}; imported {to} ({program} collection {})", album.name, number(collection, "id_local")));
             }
             if album.folder {
                 added_folders.insert(id);
@@ -1456,7 +1457,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 Op::SetMeta { id: p.id, meta: Box::new(p.meta.clone()) },
                 Op::SetCaptured { id: p.id, captured: p.captured.clone() },
             ]);
-            ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
+            let label = format!("{} catalog", crate::capture_one_catalog::convert::program(&data));
+            ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label, edited: p.edited.clone() });
         } else {
             imported += 1;
             ops.push(Op::AddPhoto { photo: Box::new(p) });

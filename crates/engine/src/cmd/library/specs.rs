@@ -1307,8 +1307,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
             let (cancel, total, done) = Default::default();
             let temp = crate::lightroom_catalog::backup_temp_root(s);
+            // (a Capture One catalog that can't be read is not a wrong parameter of this command)
+            let capture_one = crate::capture_one_catalog::is_catalog(std::path::Path::new(path));
             let data = crate::lightroom_catalog::read_source(std::path::Path::new(path), temp.as_deref(), &cancel, &total, &done)
-                .map_err(|e| bad("library.inspectLightroom",e))?;
+                .map_err(|e| if capture_one { crate::EngineError::Other(e) } else { bad("library.inspectLightroom",e) })?;
             Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !p.original_is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings,"skipped":data.skipped}))
         }),
         cmd!(

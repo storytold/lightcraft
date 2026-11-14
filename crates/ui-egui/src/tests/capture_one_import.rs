@@ -86,6 +86,7 @@ fn the_menu_item_asks_where_the_catalog_goes_and_words_the_import_for_capture_on
     assert!(*capture_one && first.is_none());
     assert!(summary.starts_with("Capture One import failed: "), "{summary}");
     assert!(summary.contains("not a readable Capture One catalog"), "{summary}");
+    assert!(!summary.contains("Lightroom"), "a Capture One import is not worded as Lightroom's: {summary}");
     shots(&mut h, "capture-one-result");
     assert_eq!(h.app.lightroom_last.clone().unwrap_or_default()["path"], json!(database));
     assert_eq!(names(&package), before, "the catalog is only read");

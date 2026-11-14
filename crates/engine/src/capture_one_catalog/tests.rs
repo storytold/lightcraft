@@ -956,15 +956,14 @@ fn inspecting_a_catalog_adds_nothing() {
     assert_eq!((report["photos"].as_u64(), report["collections"].as_u64()), (Some(4), Some(5)));
     assert_eq!(report["missing"].as_array().unwrap().len(), 3, "the raw, its second variant and the other system's photo: {report}");
     assert!(s.catalog.is_empty());
-    // a catalog the reader refuses says why, in Capture One's terms
+    // a catalog the reader refuses says why, in Capture One's words, also when it is not there
     let error = s.execute("library.inspectLightroom", &serde_json::json!({ "path": scratch.0.join("Missing.cocatalogdb") })).unwrap_err();
-    assert!(
-        error.to_string().contains("not a readable") || error.to_string().contains("Lightroom") || error.to_string().contains("No such file"),
-        "{error}"
-    );
+    assert!(error.to_string().ends_with("Missing.cocatalogdb: no Capture One catalog database (.cocatalogdb) found"), "{error}");
+    assert!(!error.to_string().contains("Lightroom"), "{error}");
     std::fs::create_dir_all(scratch.0.join("Empty.cocatalog")).unwrap();
     let error = s.execute("library.importLightroom", &serde_json::json!({ "path": scratch.0.join("Empty.cocatalog") })).unwrap_err();
     assert!(error.to_string().contains("no Capture One catalog database (.cocatalogdb) found"), "{error}");
+    assert!(!error.to_string().contains("Lightroom"), "a Capture One catalog fails in its own words: {error}");
 }
 
 #[test]
