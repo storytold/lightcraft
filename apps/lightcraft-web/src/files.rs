@@ -47,6 +47,9 @@ enum Dirty {
 #[derive(Default)]
 struct Mirror {
     files: BTreeMap<String, Vec<u8>>,
+    /// Folders start-up found beside the files (not files themselves: never dirty, never
+    /// flushed), e.g. a `segments` folder the catalog store's `has_folder` check asks about.
+    folders: std::collections::BTreeSet<String>,
     /// Dirty files, least recently modified first.
     dirty: Vec<(String, Dirty)>,
     /// Why the last flush to browser storage failed (quota, eviction…), until one succeeds.
@@ -82,6 +85,21 @@ impl Files {
 
     pub fn get(&self, name: &str) -> Option<Vec<u8>> {
         self.lock().files.get(name).cloned()
+    }
+
+    /// Note a folder start-up found in browser storage beside the library files (not a file:
+    /// it is never flushed back). The catalog's unknown-layout check (#3962) asks the store
+    /// about it through [`Store::has_folder`].
+    pub fn preload_folder(&self, name: &str) {
+        self.lock().folders.insert(name.to_string());
+    }
+
+    /// Is there a folder called `name` among the stored library entries? A folder start-up
+    /// noted with [`Files::preload_folder`], or a stored entry under `name/` (the mirror's
+    /// way of holding a folder's files, like `MemStore`).
+    pub fn has_folder(&self, name: &str) -> bool {
+        let m = self.lock();
+        m.folders.contains(name) || m.files.keys().any(|k| k.starts_with(&format!("{name}/")))
     }
 
     /// Replace a file.
@@ -193,6 +211,11 @@ impl Store for FilesStore {
     fn describe(&self) -> String {
         "browser storage".into()
     }
+    /// The mirror knows the folders start-up found in browser storage (#3962): without this
+    /// the trait default (`false`) would let a `segments` library open and be overwritten.
+    fn has_folder(&mut self, name: &str) -> io::Result<bool> {
+        Ok(self.0.has_folder(name))
+    }
 }
 
 /// Names of the library files read at start-up.
@@ -202,6 +225,54 @@ pub const LIBRARY_FILES: [&str; 6] = ["catalog.snap", "catalog.log", "presets.js
 /// `NotFoundError` is; anything else (security, type mismatch, an unreadable store) is a failure.
 pub fn is_not_found(dom_exception_name: Option<&str>) -> bool {
     dom_exception_name == Some("NotFoundError")
+}
+
+/// Does an OPFS failure to open `path` as a directory, by its `DOMException` name, mean "no folder
+/// there"? `NotFoundError` (nothing at the path) and `TypeMismatchError` (a regular file of that
+/// name, which is not a folder) do. Anything else (security, an unreadable or evicted store) says
+/// nothing about the folder: the probe is an error, never "absent" (#1507, #3962).
+pub fn means_no_folder(dom_exception_name: Option<&str>) -> bool {
+    is_not_found(dom_exception_name) || dom_exception_name == Some("TypeMismatchError")
+}
+
+/// The exclusive upper bound of an IndexedDB key range holding every key that starts with
+/// `prefix`, and no other: `prefix` with its last character bumped to the next one (`segments/`
+/// → `segments0`). IndexedDB orders string keys by UTF-16 code units, and a key that extends
+/// `prefix` sorts below that bound whatever follows the prefix; `prefix` + `\u{ffff}` instead
+/// would miss a key such as `segments/\u{ffff}part`, which starts with the prefix but sorts after
+/// it. An empty `prefix`, or one ending in a character with no next `char`, is returned unchanged
+/// (no folder probe asks for one: theirs end in `/`).
+pub fn key_range_end(prefix: &str) -> String {
+    let mut end = prefix.to_string();
+    if let Some(last) = end.pop() {
+        end.push(char::from_u32(u32::from(last) + 1).unwrap_or(last));
+    }
+    end
+}
+
+/// Take start-up's answer to "is there a `segments` folder beside the library files?" (#3962):
+/// a folder is noted on the mirror, so the catalog store's `has_folder` check refuses the library
+/// before anything is written; no folder (a regular file of that name included) changes nothing;
+/// a probe that failed stops start-up with the reason, like an unreadable library file (#1507),
+/// rather than risk overwriting a library it couldn't see.
+pub fn note_segments_probe(files: &Files, probe: Result<bool, String>) -> Result<(), String> {
+    match probe {
+        Ok(true) => {
+            files.preload_folder("segments");
+            Ok(())
+        }
+        Ok(false) => Ok(()),
+        Err(e) => Err(format!("couldn't check browser storage for a segments folder beside the library ({e})")),
+    }
+}
+
+/// What start-up read about the library, taken in the order it is checked: the library files
+/// ([`preload_library`]), then the `segments` probe ([`note_segments_probe`]). `Err`: start-up
+/// stops with the reason, and the web host doesn't open the library (`load_error`), so nothing
+/// in browser storage changes. The reads run at the same time; only their outcomes are ordered.
+pub fn preload_start_up(files: &Files, reads: Vec<(&str, Result<Option<Vec<u8>>, String>)>, segments: Result<bool, String>) -> Result<(), String> {
+    preload_library(files, reads)?;
+    note_segments_probe(files, segments)
 }
 
 /// Preload the library files read at start-up (`None`: the file doesn't exist yet). A file that
@@ -353,6 +424,184 @@ mod tests {
         let reads = vec![("catalog.snap", Ok(Some(b"snap".to_vec()))), ("catalog.log", Ok(None))];
         preload_library(&files, reads).unwrap();
         assert_eq!(files.get("catalog.snap").as_deref(), Some(&b"snap"[..]));
+    }
+
+    /// A `segments` folder in browser storage is a layout this version doesn't read (#3962):
+    /// opening through [`FilesStore`] refuses it untouched, like the native and memory
+    /// stores — before the fix `FilesStore` reported no folders, so the stored snapshot
+    /// would have been replaced by a partial catalog and its log reset.
+    #[test]
+    fn segments_folder_in_browser_storage_is_refused_untouched() {
+        // a saved library, copied the way a reload would read it back
+        let mut disk = BTreeMap::new();
+        let files = Files::default();
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).unwrap();
+        flush(&files, &mut disk);
+        let snap_before = disk.get("catalog.snap").cloned().unwrap();
+        let log_before = disk.get("catalog.log").cloned().unwrap();
+
+        // the same files, with a `segments` folder beside them in browser storage
+        let files2 = Files::default();
+        for (k, v) in &disk {
+            files2.preload(k, v.clone());
+        }
+        files2.preload_folder("segments");
+        let mut store = files2.store();
+        assert!(store.has_folder("segments").unwrap());
+        assert!(!store.has_folder("originals").unwrap());
+        let mut s2 = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files2.store()), files: Box::new(files2.store()), on_disk: false };
+        let Err(e) = s2.open_library_in(stores, true) else { panic!("refused") };
+        let msg = e.to_string();
+        assert!(msg.contains("segments") && msg.contains("layout isn't one this version reads"), "{msg}");
+        assert_eq!(files2.get("catalog.snap").as_deref(), Some(&snap_before[..]), "snapshot untouched");
+        assert_eq!(files2.get("catalog.log").as_deref(), Some(&log_before[..]), "log untouched");
+        assert!(!files2.is_dirty(), "nothing was written");
+    }
+
+    /// The other way a folder shows up in browser storage: a file key under it
+    /// (`segments/…`) without an explicit folder entry. `has_folder` sees the key,
+    /// and the open is refused the same way.
+    #[test]
+    fn segments_file_key_in_browser_storage_is_refused_untouched() {
+        let mut disk = BTreeMap::new();
+        let files = Files::default();
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).unwrap();
+        flush(&files, &mut disk);
+        let snap_before = disk.get("catalog.snap").cloned().unwrap();
+
+        let files2 = Files::default();
+        for (k, v) in &disk {
+            files2.preload(k, v.clone());
+        }
+        files2.preload("segments/0001.seg", b"segment".to_vec());
+        let mut store = files2.store();
+        assert!(store.has_folder("segments").unwrap());
+        let mut s2 = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files2.store()), files: Box::new(files2.store()), on_disk: false };
+        let Err(e) = s2.open_library_in(stores, true) else { panic!("refused") };
+        assert!(e.to_string().contains("segments"), "{e}");
+        assert_eq!(files2.get("catalog.snap").as_deref(), Some(&snap_before[..]), "snapshot untouched");
+        assert!(!files2.is_dirty(), "nothing was written");
+    }
+
+    /// A saved library as a reload reads it back: its files in a fresh mirror.
+    fn saved_library() -> (Files, BTreeMap<String, Vec<u8>>) {
+        let mut disk = BTreeMap::new();
+        let files = Files::default();
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).unwrap();
+        flush(&files, &mut disk);
+        let files2 = Files::default();
+        for (k, v) in &disk {
+            files2.preload(k, v.clone());
+        }
+        (files2, disk)
+    }
+
+    fn open(files: &Files) -> Result<(), String> {
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    /// Control for #3962: a stored *file* named `segments` (no `segments/…` key, no folder noted)
+    /// is not a folder in browser storage, so the library opens and the file keeps its bytes.
+    #[test]
+    fn lone_segments_file_in_browser_storage_is_no_folder() {
+        let (files, _) = saved_library();
+        files.preload("segments", b"not a folder".to_vec());
+        assert!(!files.store().has_folder("segments").unwrap());
+        open(&files).unwrap();
+        assert_eq!(files.get("segments").as_deref(), Some(&b"not a folder"[..]));
+    }
+
+    /// A `segments` folder in browser storage with no library files beside it is refused too
+    /// (#3962), with the layout message, and no `catalog.snap` or `catalog.log` is created: a new
+    /// library would otherwise be written beside the folder.
+    #[test]
+    fn segments_folder_without_a_snapshot_in_browser_storage_is_refused() {
+        for noted in [true, false] {
+            let files = Files::default();
+            if noted {
+                files.preload_folder("segments");
+            } else {
+                files.preload("segments/0001.seg", b"segment".to_vec());
+            }
+            let e = open(&files).unwrap_err();
+            assert!(e.contains("\"segments\" folder") && e.contains("layout isn't one this version reads"), "noted {noted}: {e}");
+            assert_eq!(files.get("catalog.snap"), None, "noted {noted}: no snapshot created");
+            assert_eq!(files.get("catalog.log"), None, "noted {noted}: no log created");
+            assert!(!files.is_dirty(), "noted {noted}: nothing to flush");
+        }
+    }
+
+    /// OPFS folder probe: a missing entry and a regular file of the name (`TypeMismatchError`
+    /// when opened as a directory) are "no folder"; any other failure is an error (#1507, #3962).
+    #[test]
+    fn only_not_found_and_type_mismatch_mean_no_folder() {
+        assert!(means_no_folder(Some("NotFoundError")));
+        assert!(means_no_folder(Some("TypeMismatchError")));
+        for name in [Some("SecurityError"), Some("NotReadableError"), Some("InvalidStateError"), Some("UnknownError"), Some(""), None] {
+            assert!(!means_no_folder(name), "{name:?}");
+        }
+    }
+
+    /// IndexedDB folder probe: the key range `[prefix, key_range_end(prefix))`, compared the way
+    /// IndexedDB compares string keys (UTF-16 code units), holds every key under `segments/` and
+    /// nothing else — not the lone `segments` file key, nor neighbours that sort next to it.
+    #[test]
+    fn key_range_end_bounds_exactly_the_keys_under_the_prefix() {
+        let prefix = "segments/";
+        let end = key_range_end(prefix);
+        assert_eq!(end, "segments0");
+        let in_range = |k: &str| k.encode_utf16().ge(prefix.encode_utf16()) && k.encode_utf16().lt(end.encode_utf16());
+        for k in ["segments/", "segments/0001.seg", "segments/a/b", "segments/\u{ffff}part", "segments/\u{10ffff}", "segments/~"] {
+            assert!(in_range(k), "{k:?} is under the prefix");
+        }
+        for k in ["segments", "segments.bak", "segments0", "segments00", "segmentsA", "segment", "catalog.snap", "thumbs/x.jpg"] {
+            assert!(!in_range(k), "{k:?} is not under the prefix");
+        }
+        assert_eq!(key_range_end(""), "");
+    }
+
+    /// Start-up as the web host runs it (#3962): the library files are taken first, then the
+    /// `segments` probe. A folder is noted and the open refused untouched; no folder opens; a
+    /// probe that failed stops start-up with its reason (the host then opens nothing); and an
+    /// unreadable library file still stops it first, naming the file.
+    #[test]
+    fn segments_probe_at_start_up() {
+        let (_, disk) = saved_library();
+        let reads = || disk.iter().map(|(k, v)| (k.as_str(), Ok::<_, String>(Some(v.clone())))).collect::<Vec<_>>();
+
+        let files = Files::default();
+        preload_start_up(&files, reads(), Ok(true)).unwrap();
+        assert!(files.has_folder("segments"));
+        let e = open(&files).unwrap_err();
+        assert!(e.contains("layout isn't one this version reads"), "{e}");
+        assert_eq!(files.get("catalog.snap"), disk.get("catalog.snap").cloned(), "snapshot untouched");
+        assert!(!files.is_dirty(), "nothing written");
+
+        let files = Files::default();
+        preload_start_up(&files, reads(), Ok(false)).unwrap();
+        assert!(!files.has_folder("segments"));
+        open(&files).unwrap();
+
+        let files = Files::default();
+        let e = preload_start_up(&files, reads(), Err("UnknownError: the storage backend didn't answer".into())).unwrap_err();
+        assert!(e.contains("segments folder") && e.contains("UnknownError"), "{e}");
+        assert!(!files.has_folder("segments") && !files.is_dirty());
+
+        let files = Files::default();
+        let mut bad = reads();
+        bad.push(("prefs.json", Err("NotReadableError: no".into())));
+        let e = preload_start_up(&files, bad, Err("UnknownError".into())).unwrap_err();
+        assert!(e.contains("prefs.json") && e.contains("NotReadableError"), "{e}");
     }
 
     #[test]
