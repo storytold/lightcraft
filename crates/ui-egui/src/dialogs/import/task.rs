@@ -434,7 +434,7 @@ const MAX_WARNING_FIELDS: usize = 8;
 /// name, Upright by mode, unmapped fields by the field set; a group of one keeps its photo's
 /// path in [`xmp_warning_text`].
 fn grouped_warnings(warnings: &[ImportWarning]) -> Vec<(&ImportWarning, usize)> {
-    let mut keys: Vec<String> = Vec::new();
+    let mut by_key: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut groups: Vec<(&ImportWarning, usize)> = Vec::new();
     for w in warnings {
         let key = match w.code {
@@ -446,10 +446,10 @@ fn grouped_warnings(warnings: &[ImportWarning]) -> Vec<(&ImportWarning, usize)> 
                 format!("xmp:{}", fields.join("\u{1f}"))
             }
         };
-        match keys.iter().position(|k| *k == key) {
-            Some(i) => groups[i].1 = groups[i].1.saturating_add(1),
+        match by_key.get(&key) {
+            Some(&i) => groups[i].1 = groups[i].1.saturating_add(1),
             None => {
-                keys.push(key);
+                by_key.insert(key, groups.len());
                 groups.push((w, 1));
             }
         }
