@@ -199,6 +199,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
 
+    // 4.5. Render active / matching saved location boundary circle
+    for loc in &app.session.saved_locations {
+        if (loc.lat - center.lat).abs() < 0.0001 && (loc.lon - center.lon).abs() < 0.0001 {
+            let loc_coord = LatLon { lat: loc.lat, lon: loc.lon };
+            let screen_pos = lat_lon_to_screen(loc_coord, zoom, center);
+            let meters_per_px = (40075016.686 * (loc.lat.to_radians().cos().abs())) / (256.0 * 2.0_f64.powf(zoom));
+            if meters_per_px > 0.0 {
+                let radius_px = (loc.radius / meters_per_px) as f32;
+                if radius_px > 4.0 && radius_px < 8000.0 {
+                    painter.circle_filled(screen_pos, radius_px, Color32::from_rgba_unmultiplied(255, 204, 0, 20));
+                    painter.circle_stroke(screen_pos, radius_px, Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 204, 0, 160)));
+                }
+            }
+        }
+    }
+
     // 5. Top Location Filter Bar & Breadcrumb
     if map_ui.show_filter_bar {
         render_top_filter_bar(app, ui, canvas_rect, &mut map_ui, center);
@@ -214,7 +230,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     // 8. Left Navigator Mini-Map and Saved Locations Panel
     if map_ui.navigator_open {
-        render_left_navigator(app, ui, rect, (left_w, navigator_h), center, &mut zoom, &mut map_ui);
+        render_left_navigator(app, ui, (rect, canvas_rect), (left_w, navigator_h), &mut center, &mut zoom, &mut map_ui);
     }
 
     // Update persistent state
@@ -574,15 +590,34 @@ fn render_loupe_popover(app: &mut LightcraftApp, ui: &mut egui::Ui, pin_pos: Pos
     });
 }
 
+fn zoom_from_radius(radius_meters: f64) -> f64 {
+    if radius_meters <= 300.0 {
+        16.5
+    } else if radius_meters <= 800.0 {
+        15.5
+    } else if radius_meters <= 2000.0 {
+        14.0
+    } else if radius_meters <= 5000.0 {
+        12.5
+    } else if radius_meters <= 15000.0 {
+        11.0
+    } else if radius_meters <= 50000.0 {
+        9.5
+    } else {
+        8.0
+    }
+}
+
 fn render_left_navigator(
     app: &mut LightcraftApp,
     ui: &mut egui::Ui,
-    rect: Rect,
+    rects: (Rect, Rect),
     nav_dims: (f32, f32),
-    center: LatLon,
+    center: &mut LatLon,
     zoom: &mut f64,
     map_ui: &mut crate::state::MapUi,
 ) {
+    let (rect, canvas_rect) = rects;
     let (left_w, nav_h) = nav_dims;
     let t = Tokens::get(ui.ctx());
     let left_rect = Rect::from_min_size(rect.min, vec2(left_w, rect.height()));
@@ -600,21 +635,76 @@ fn render_left_navigator(
             ui.label(egui::RichText::new("Navigator").strong().color(Color32::WHITE));
         });
 
-        let mini_rect = Rect::from_min_size(pos2(left_rect.left() + 8.0, left_rect.top() + 32.0), vec2(left_w - 16.0, nav_h));
-        ui.painter().rect_filled(mini_rect, 4.0, Color32::from_rgb(40, 50, 60));
+        ui.add_space(4.0);
+        let mini_w = left_w - 16.0;
+        let mini_rect = Rect::from_min_size(pos2(left_rect.left() + 8.0, ui.cursor().top()), vec2(mini_w, nav_h));
+        let nav_resp = ui.allocate_rect(mini_rect, Sense::click_and_drag());
+
+        let nav_zoom = (*zoom - 3.5).clamp(1.0, (map_ui.provider.max_zoom() - 2) as f64);
+
+        if nav_resp.dragged() {
+            let delta = nav_resp.drag_delta();
+            let delta_tx = delta.x as f64 / TILE_SIZE as f64;
+            let delta_ty = delta.y as f64 / TILE_SIZE as f64;
+            let n = 2.0_f64.powf(nav_zoom.clamp(0.0, 24.0));
+            let (cur_tx, cur_ty) = center.to_tile_coords(nav_zoom);
+            let new_tx = (cur_tx + delta_tx).rem_euclid(n);
+            let new_ty = (cur_ty + delta_ty).clamp(0.0, n);
+            *center = LatLon::from_tile_coords(new_tx, new_ty, nav_zoom);
+            ui.ctx().request_repaint();
+        } else if nav_resp.clicked()
+            && let Some(pos) = nav_resp.interact_pointer_pos()
+        {
+            let offset_x = pos.x - mini_rect.center().x;
+            let offset_y = pos.y - mini_rect.center().y;
+            let delta_tx = offset_x as f64 / TILE_SIZE as f64;
+            let delta_ty = offset_y as f64 / TILE_SIZE as f64;
+            let n = 2.0_f64.powf(nav_zoom.clamp(0.0, 24.0));
+            let (cur_tx, cur_ty) = center.to_tile_coords(nav_zoom);
+            let new_tx = (cur_tx + delta_tx).rem_euclid(n);
+            let new_ty = (cur_ty + delta_ty).clamp(0.0, n);
+            *center = LatLon::from_tile_coords(new_tx, new_ty, nav_zoom);
+            ui.ctx().request_repaint();
+        }
+
+        if nav_resp.hovered() {
+            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
+            if scroll.abs() > 0.5 {
+                let max_z = map_ui.provider.max_zoom() as f64;
+                *zoom = (*zoom + (scroll as f64 * 0.005)).clamp(1.0, max_z);
+                ui.ctx().request_repaint();
+            }
+        }
+
+        let nav_painter = ui.painter().with_clip_rect(mini_rect);
+        nav_painter.rect_filled(mini_rect, 4.0, Color32::from_rgb(18, 22, 26));
+
+        // Render overview map tiles
+        render_tile_grid(&nav_painter, mini_rect, mini_rect.center(), *center, nav_zoom, map_ui.provider);
+
+        // Viewport rectangle showing the visible area on the main map
+        let scale_diff = 2.0_f64.powf(nav_zoom - *zoom);
+        let box_w = (canvas_rect.width() as f64 * scale_diff) as f32;
+        let box_h = (canvas_rect.height() as f64 * scale_diff) as f32;
+        let box_w_clamped = box_w.clamp(6.0, mini_rect.width() * 1.5);
+        let box_h_clamped = box_h.clamp(6.0, mini_rect.height() * 1.5);
+        let view_rect = Rect::from_center_size(mini_rect.center(), vec2(box_w_clamped, box_h_clamped));
+
+        nav_painter.rect_filled(view_rect, 1.0, Color32::from_white_alpha(35));
+        nav_painter.rect_stroke(view_rect, 1.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Middle);
+        nav_painter.circle_filled(mini_rect.center(), 2.0, Color32::from_rgb(255, 204, 0));
+
+        // Frame
         ui.painter().rect_stroke(mini_rect, 4.0, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
 
-        // Center dot on mini-map
-        ui.painter().circle_filled(mini_rect.center(), 3.0, Color32::RED);
-
         // Saved Locations header
-        ui.add_space(nav_h + 16.0);
+        ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
             ui.label(egui::RichText::new("Saved Locations").strong().color(Color32::WHITE));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
-                if ui.button("+").clicked() {
+                if ui.button("+").on_hover_text("Save current map location").clicked() {
                     let _ = app.run(
                         "map.savedLocations.create",
                         json!({
@@ -629,18 +719,40 @@ fn render_left_navigator(
         });
 
         ui.add_space(8.0);
+        let mut delete_id = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for loc in &app.session.saved_locations {
+            if app.session.saved_locations.is_empty() {
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
-                    if ui.selectable_label(false, &loc.name).clicked() {
-                        map_ui.center_lat = loc.lat;
-                        map_ui.center_lon = loc.lon;
-                        *zoom = 14.0;
-                    }
+                    ui.label(egui::RichText::new("No saved locations. Click + to save.").small().italics().color(Color32::GRAY));
                 });
+            } else {
+                for loc in &app.session.saved_locations {
+                    let is_active = (loc.lat - center.lat).abs() < 0.0001 && (loc.lon - center.lon).abs() < 0.0001;
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        let resp = ui.selectable_label(is_active, &loc.name);
+                        if resp.clicked()
+                            && let Some(target) = LatLon::new(loc.lat, loc.lon)
+                        {
+                            *center = target;
+                            *zoom = zoom_from_radius(loc.radius);
+                            ui.ctx().request_repaint();
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(8.0);
+                            if ui.small_button("✕").on_hover_text("Delete location").clicked() {
+                                delete_id = Some(loc.id.clone());
+                            }
+                        });
+                    });
+                }
             }
         });
+        if let Some(id) = delete_id {
+            let _ = app.run("map.savedLocations.delete", json!({"id": id}));
+            ui.ctx().request_repaint();
+        }
     });
 }
 
@@ -717,5 +829,40 @@ mod tests {
         assert!(app.ui.map.center_lon.is_finite());
         assert!((app.ui.map.center_lat - 45.57).abs() < 1.0);
         assert!((app.ui.map.center_lon - (-73.2)).abs() < 1.0);
+    }
+
+    #[test]
+    fn saved_location_selection_updates_map_center() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+        app.ui.view = ViewMode::Map;
+        app.ui.map.center_lat = 0.0;
+        app.ui.map.center_lon = 0.0;
+        app.ui.map.zoom = 5.0;
+
+        let _ = app.run(
+            "map.savedLocations.create",
+            json!({
+                "name": "Beloeil",
+                "lat": 45.57,
+                "lon": -73.2,
+                "radius": 1500.0,
+            }),
+        );
+
+        let mut view = HeadlessView::new();
+        let raw = HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        view.run(raw, |ui| {
+            show(&mut app, ui);
+        });
+
+        assert_eq!(app.session.saved_locations.len(), 1);
+        let loc = &app.session.saved_locations[0];
+        app.ui.map.center_lat = loc.lat;
+        app.ui.map.center_lon = loc.lon;
+        app.ui.map.zoom = zoom_from_radius(loc.radius);
+
+        assert_eq!(app.ui.map.center_lat, 45.57);
+        assert_eq!(app.ui.map.center_lon, -73.2);
+        assert_eq!(app.ui.map.zoom, 14.0);
     }
 }
