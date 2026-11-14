@@ -36,18 +36,30 @@ use crate::{EngineError, LibrarySource, Result, Selection, Session};
 /// Library directory name inside the user's Pictures folder.
 pub const DEFAULT_NAME: &str = "LightCraft Library";
 
+/// Whether `name` is one of a library folder's own files (`catalog.snap`, `catalog.log`, `catalog.lock`,
+/// `presets.json`, `view.json`, `prefs.json`), in any letter case.
+pub fn is_own_file(name: &str) -> bool {
+    [
+        lightcraft_catalog::journal::SNAPSHOT,
+        lightcraft_catalog::journal::LOG,
+        lightcraft_catalog::lock::LOCK,
+        "presets.json",
+        "view.json",
+        "prefs.json",
+    ]
+    .iter()
+    .any(|own| name.eq_ignore_ascii_case(own))
+}
+
 /// The library folder `path` names. A library is a folder; naming one of its own files
-/// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other
+/// ([`is_own_file`]) means the folder that holds it. Any other
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
 /// folder.
 pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
     if !path.is_file() {
         return Ok(path.to_path_buf());
     }
-    let own = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| [lightcraft_catalog::journal::SNAPSHOT, lightcraft_catalog::journal::LOG, lightcraft_catalog::lock::LOCK].contains(&n));
+    let own = path.file_name().and_then(|n| n.to_str()).is_some_and(is_own_file);
     if !own {
         return Err(EngineError::Other(format!("{} is a file; a library is a folder", path.display())));
     }
@@ -1105,6 +1117,44 @@ mod resolve_tests {
         let e = Session::new().with_fs().open_library(&other, false).err().unwrap().to_string();
         assert!(e.contains("is a file"), "{e}");
         assert!(!e.contains("File exists"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A library's settings files (`presets.json`, `view.json`, `prefs.json`) name the folder that
+    /// holds them, like its catalog files do.
+    #[test]
+    fn a_library_settings_file_opens_its_folder() {
+        let dir = std::env::temp_dir().join(format!("lc-resolve-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["presets.json", "view.json", "prefs.json", "PREFS.JSON"] {
+            let file = dir.join(name);
+            std::fs::write(&file, b"{}").unwrap();
+            assert_eq!(resolve_dir(&file).ok(), Some(dir.clone()), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Opening a library session with a settings file path (`presets.json`, `view.json`, `prefs.json`)
+    /// opens the library folder that holds them, the same as opening its catalog files do.
+    #[test]
+    fn opening_a_library_via_a_settings_file_opens_the_library_folder() {
+        let dir = std::env::temp_dir().join(format!("lc-open-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Session::new().with_fs();
+        s.open_library(&dir, false).unwrap();
+        s.close_library().unwrap();
+        drop(s);
+        assert!(is_library(&dir));
+        for name in ["presets.json", "view.json", "prefs.json", "PREFS.JSON"] {
+            std::fs::write(dir.join(name), b"{}").unwrap();
+            let mut s = Session::new().with_fs();
+            s.open_library(dir.join(name), false).unwrap();
+            assert_eq!(s.library.as_ref().map(|l| l.dir.clone()), Some(dir.clone()), "{name}");
+            s.close_library().unwrap();
+            drop(s);
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
