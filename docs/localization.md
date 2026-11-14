@@ -84,6 +84,21 @@ tr_format!("Added {n} photo{} to “{}”", if n == 1 { "" } else { "s" }, album
   `tr_format!` call whose message is in no catalog formats the English source (the macro's last
   arm). A new message builds with no catalog entry.
 
+### Whole-number plural forms
+
+A count message can be an object with `one`, `few`, `many`, and `other` strings instead of a
+single format string. Its English forms go in `locales/en-formats.json`; every translated
+format catalog carries the same forms. Use `tr_format!("Photos: {count}", count = count)` with
+`count` first and a whole, nonnegative number. Additional named arguments follow it.
+
+The generated formatter selects a whole-number cardinal form for the active language and
+checks every form's arguments at compile time. Russian and Ukrainian distinguish 1, 2 and 5,
+including 21 and 22; Japanese and Chinese always use `other`. These rules are for photo and
+file counts, not fractions or ordinal numbers. Languages that do not use a category repeat
+their applicable form in that entry. A new language whose cardinal rules go beyond `one` and
+`other` also needs an arm in `integer_plural_form` in `crates/ui-egui/src/i18n.rs`. A native
+speaker should review translated wording.
+
 ## Testing and looking at it
 
 ```sh

@@ -1,6 +1,7 @@
 //! The integration tests, one module per file, linked into one test binary.
 //! `tests/sr2_heap.rs` stays a binary of its own: it installs dhat as the global allocator.
 
+mod balanced;
 mod body_corpus;
 mod canon_pentax_corpus;
 mod corpus;
