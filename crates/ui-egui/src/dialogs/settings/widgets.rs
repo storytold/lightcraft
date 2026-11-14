@@ -84,7 +84,7 @@ pub(crate) fn row<R>(ui: &mut egui::Ui, t: &Tokens, label: &str, add: impl FnOnc
 }
 
 pub(crate) fn hint(ui: &mut egui::Ui, t: &Tokens, text: &str) {
-    ui.label(RichText::new(crate::i18n::tr(text)).size(11.0).color(t.text_dim));
+    ui.label(RichText::new(crate::i18n::tr(text)).font(t.caption()).color(t.text_dim));
 }
 
 /// A checkbox addressable as `check:{id}`; true when toggled.
