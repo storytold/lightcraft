@@ -31,7 +31,7 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 6 | 2 | 1 | 25/28 (89%) | 14/15 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 43 | 6 | 2 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 419 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 420 | 71 | 56 | 35 | 193/203 (95%) | 147/163 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 546 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.0% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.3%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 57.2% of 180.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -224,6 +224,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-GEOM-GRID | Grid while transforming | P2 | ✅ | `crates/ui-egui/src/panels/detail.rs` | a fine grid over the photo while a geometry slider is dragged |
 | LR-EDIT-LENSBLUR | Lens blur | P2 | 🟡 | `ctl:lensBlur.amount`, `ctl:lensBlur.boost`, `ctl:lensBlur.transition`, `cmd:section.lensBlur`, `cmd:lensBlur.brushStroke`, `cmd:lensBlur.brushReset`, `cmd:lensBlur.findSubject`, `crates/pipeline/src/lens_blur.rs`, `crates/ui-egui/src/panels/edit.rs` (`lens_blur`) | Lens Blur section: Apply, Blur Amount, Boost (bokeh highlights), what stays in focus (the subject: person mattes, else the saliency heuristic; or any mask, e.g. an SAM 3 Object mask; Find Subject makes one, clicked where the camera focused when the file records it, else at the likeliest subject, only when asked) and Brush Refinement (Focus / Blur brushes with Amount, Size, Feather, Flow, Auto Mask, ⌥ erases, Reset). Transition: the blur grows with the distance from the focus (a stand-in for depth), not a cut-out edge. Without a focus mask, Shape picks the focus area: Auto (the subject estimate), Round, Horizontal or Vertical oval, centred in the crop, and Move & Resize drags it on the photo (centre pin, side and bottom handles; one undo step per drag) (beyond Lightroom). The focus controls are disabled while Apply is off. Disc (circle) bokeh without halos, CPU for both renderers, zoomed windows match the whole render. Missing: an AI depth map (so Focal Range, the focus picker and Visualize Depth), bokeh shapes, crs XMP mapping |
 | LR-EDIT-CALIB | Calibration [Classic] | P1 | ✅ | `ctl:calibration.*` | shadows tint, red/green/blue primary hue and saturation; read/written in XMP |
+| LR-EDIT-CHANNEL-MIXER | RGB channel mixer (beyond Lightroom) | P2 | ✅ | `ctl:channelMixer.*`, `cmd:develop.mixerNeutralPick`, `cmd:develop.mixerSwapRB`, `cmd:tool.mixerPicker` | each output row (red, green, blue) takes a per-cent share of each source channel, −200..+200, identity by default — swap red and blue for infrared, or pull a channel down white balance can't (issue #2158); the section's Neutral eyedropper (`develop.mixerNeutralPick`) makes the clicked spot neutral at the mixer's input, keeping any mix already set — for infrared, click foliage, then Swap Red and Blue (`develop.mixerSwapRB`); its own copy / sync / preset group (`channelMixer`), and Auto Sync sends the nine values together; runs in scene-linear light composed with the calibration matrix, on the CPU and the GPU; no `crs:` mapping (Lightroom has none) |
 | LR-EDIT-SECTION-TOGGLE | Section on/off | P1 | ✅ | `cmd:develop.sectionEnabled`, `crates/develop/src/lib.rs` (`effective`) | the eye on a section header hides its adjustments: Light (with the curve), Color (white balance, presence, mixers, grading, point colour), Effects, Detail, Optics, Geometry, Calibration; masks stay on (issue #316 fixed Light, Color and Detail, which had no effect) |
 | LR-EDIT-SECTION-SOLO | Solo Mode for Edit sections | P2 | ✅ | `cmd:view.soloSections`, `cmd:section.calibration`, `crates/ui-egui/src/state.rs` (`toggle_section`, `set_single_panel`, `solo_section`), `crates/ui-egui/src/panels/edit.rs` (`section`), `crates/ui-egui/src/tests/solo_sections.rs` | Lightroom Classic's panel Solo Mode: while it is on, opening one Edit section (a header click or ⌘1–⌘5) closes the others. Window ▸ Edit Sections ▸ Solo Mode (checked while on) or a right-click on any section header (`sectionMenu:solo`) turns it on and off; turning it on keeps only the section opened last. ⌥-click on a header opens just that section once, without turning the mode on (agents: `section.<id>` `{solo: true}`, refused for a section the Edit panel has not got; header clicks run `section.<id>` too, Calibration included). `view.soloSections` `{on?}` (no params toggles) answers `{soloSections}`. Kept with the UI state (`singlePanel`) |
 | LR-EDIT-RESET | Reset all / section / slider | P0 | ✅ | `cmd:develop.reset`, `cmd:develop.resetSection`, `cmd:develop.resetControl`, `crates/ui-egui/src/widgets.rs` (double-click) | no "reset to open" |
@@ -802,6 +803,8 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | patch | LR-EDIT-CHANNEL-MIXER: the mixer is its own copy / sync / preset group (was carried by Color Mixer); Auto Sync sends the whole mixer, not only the coefficients that changed; a recipe that resets the mixer is stored; a spot the picker refuses leaves it armed. Status and feature counts unchanged. |
+| 2026-11-07 | minor | LR-EDIT-CHANNEL-MIXER new (✅, P2): an RGB channel mixer row (#2158), with a Neutral picker and Swap Red and Blue on the row |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | patch | LRC-LIB-CATALOG-LOCK: a library is written only to the folder it was opened from (on Unix, where the system gives a folder an identity, it is checked before every write of the catalog, settings, lock note and thumbnails; a share mounted over it, or a replaced folder, is refused and nothing is written; a folder that holds this session's lock note counts as the opened one, so a drive mounted again keeps saving; on Windows only that the path is still a folder is checked, so a replaced folder or a share mounted at the same path is not caught), a Move import removes its originals only once the catalog log is on disk, and dropping the lock removes only the owner note it wrote itself (#3240); status unchanged |
 | 2026-11-05 | minor | LR-EDIT-LENSBLUR: ⬜ → 🟡 (Lens Blur section: Apply, Blur Amount, Boost, focus on the subject or a mask; no depth map yet); LR-MASK-SLIDERS: a Lens Blur block in every mask (selection or outside, Amount, Boost, Transition); KEY-SECTIONS: ⌘6 opens Lens Blur |

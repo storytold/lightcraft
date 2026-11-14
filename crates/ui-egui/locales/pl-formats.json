@@ -275,6 +275,7 @@
   "Delete “{name}”?": "Usunąć „{name}”?",
   "Updated {name}": "Zaktualizowano {name}",
   "Exported to {path}": "Wyeksportowano do {path}",
+  "Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed": "Ciemniej o {ev:.1} EV, aby miks zmieścił się w zakresie: w razie potrzeby podnieś Ekspozycję",
   "Saved template {name}": "Zapisano szablon {name}",
   "Imported {name}": "Zaimportowano {name}",
   "Skipped {problem}": "Pominięto: {problem}",

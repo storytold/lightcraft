@@ -286,6 +286,7 @@
   "Delete “{name}”?": "Удалить «{name}»?",
   "Updated {name}": "Обновлено: {name}",
   "Exported to {path}": "Экспортировано в {path}",
+  "Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed": "Темнее на {ev:.1} EV, чтобы смесь уместилась в диапазон: при необходимости поднимите Экспозицию",
   "Saved template {name}": "Шаблон {name} сохранён",
   "Imported {name}": "Импортировано: {name}",
   "Skipped {problem}": "Пропущено: {problem}",

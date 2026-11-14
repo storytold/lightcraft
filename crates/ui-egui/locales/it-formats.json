@@ -284,6 +284,7 @@
   "Create the keyword “{name}”": "Crea la parola chiave “{name}”",
   "{n} JPEG files": "File JPEG: {n}",
   "Exported {} effect preset{}": "Preset effetto esportati: {}{:.0}",
+  "Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed": "Più scuro di {ev:.1} EV per far rientrare il mix nell'intervallo: aumenta l'Esposizione se serve",
   "Imported {name}": "{name} importato",
   "{n} pages": "Pagine: {n}",
   " · kept, not applied: {}": " · conservato, non applicato: {}",

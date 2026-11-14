@@ -1217,7 +1217,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "mixerPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
@@ -1251,6 +1251,53 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
             let n = map.norm(q);
             let _ = app.run("develop.wbPick", json!({"x": n.x, "y": n.y}));
             app.ui.tool.clear();
+        }
+        return;
+    }
+    if app.ui.tool == "mixerPicker" {
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            // a spot the maths refuses (too dark, too saturated) says why; a mixer scaled down to
+            // fit the sliders left the photo darker, and says by how much (Exposure is the
+            // photographer's: the picker never changes it)
+            let mut pick_again = false;
+            match app.run_typed("develop.mixerNeutralPick", json!({"x": n.x, "y": n.y})) {
+                Ok(r) => {
+                    let darker = r["darker"].as_f64().unwrap_or(0.0);
+                    if darker >= 0.05 {
+                        app.toast(
+                            ui.ctx(),
+                            crate::i18n::tr_format!("Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed", ev = darker),
+                        );
+                    }
+                }
+                Err(e) => {
+                    // the maths' refusals (bad parameters) show the picker's advice — a mixer no
+                    // spot can fix its own, spot-dependent one the plain advice; anything else (a
+                    // source that could not be loaded) says its own message
+                    if e.kind == lightcraft_engine::ErrorKind::BadParams {
+                        if e.message.contains(lightcraft_engine::pipeline::colorops::MIXER_IMPOSSIBLE_ERROR) {
+                            app.toast_error(
+                                ui.ctx(),
+                                crate::i18n::tr(
+                                    "The Channel Mixer's current mix can't be made neutral at any spot: change or reset the mixer, then pick again",
+                                ),
+                            );
+                        } else {
+                            app.toast_error(ui.ctx(), crate::i18n::tr("This spot can't be made neutral: pick a brighter, less saturated area"));
+                            // the advice is to pick another spot: the eyedropper stays armed for it
+                            pick_again = true;
+                        }
+                    } else {
+                        app.toast_error(ui.ctx(), e.message);
+                    }
+                }
+            }
+            if !pick_again {
+                app.ui.tool.clear();
+            }
         }
         return;
     }

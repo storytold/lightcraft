@@ -290,6 +290,7 @@
   "Delete “{name}”?": "删除“{name}”？",
   "Updated {name}": "已更新 {name}",
   "Exported to {path}": "已导出到 {path}",
+  "Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed": "为使混合保持在范围内，画面暗了 {ev:.1} EV：如有需要请提高曝光",
   "Saved template {name}": "已保存模板 {name}",
   "Imported {name}": "已导入 {name}",
   "Skipped {problem}": "已跳过：{problem}",

@@ -1019,7 +1019,9 @@ impl Session {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        // (Remove Hot Pixels, omitted when off, is stated: switching it off is a change)
+        // (Remove Hot Pixels, omitted when off, and an identity channel mixer, omitted from stored
+        // JSON, are stated on both sides as `hdr` below: switching either back is a change the synced
+        // photos receive, not a key the delta silently drops)
         let mut old_json = old.to_json_for_merge();
         let mut new_json = new.to_json_for_merge();
         // False is omitted from stored profile JSON. Keep it explicit for this comparison so
@@ -1033,6 +1035,12 @@ impl Session {
         if let Some(o) = delta.as_object_mut() {
             for k in ["spots", "red_eye", "version", "process"] {
                 o.remove(k);
+            }
+            // The channel mixer is one matrix, so it goes over whole. The delta is leaf-wise: a pick or
+            // a swap on the active photo would send only the coefficients that changed there, and a
+            // photo whose mixer was different would keep its others, a matrix neither photo had.
+            if o.contains_key("channel_mixer") {
+                o.insert("channel_mixer".into(), new_json["channel_mixer"].clone());
             }
             if o.is_empty() {
                 return Vec::new();

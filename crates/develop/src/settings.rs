@@ -164,6 +164,10 @@ pub struct DevelopSettings {
     pub enhance: Enhance,
     /// Camera calibration: shadows tint and primary hue/saturation (applied before tone mapping).
     pub calibration: Calibration,
+    /// RGB channel mixer; see [`ChannelMixer`] for where it runs and how it is stored (left out of the JSON while it
+    /// is the identity).
+    #[serde(skip_serializing_if = "ChannelMixer::is_identity")]
+    pub channel_mixer: ChannelMixer,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
     pub disabled_sections: Vec<String>,
 }
@@ -198,6 +202,7 @@ impl Default for DevelopSettings {
             lens_blur: LensBlur::default(),
             enhance: Enhance::default(),
             calibration: Calibration::default(),
+            channel_mixer: ChannelMixer::default(),
             disabled_sections: Vec::new(),
         }
     }
@@ -582,6 +587,69 @@ impl Calibration {
     }
     pub fn is_neutral(&self) -> bool {
         *self == Calibration::default()
+    }
+}
+
+/// One output channel of the [`ChannelMixer`]: how much of the red, green and blue input it takes, in percent.
+/// Each field ranges over −200..200 (the `channelMixer.*` controls); 100 is all of that input, 0 none of it, and a
+/// negative value subtracts it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MixRow {
+    /// Share of the red input, in percent (−200..200).
+    pub red: f64,
+    /// Share of the green input, in percent (−200..200).
+    pub green: f64,
+    /// Share of the blue input, in percent (−200..200).
+    pub blue: f64,
+}
+
+impl Default for MixRow {
+    fn default() -> Self {
+        MixRow { red: 0.0, green: 0.0, blue: 0.0 }
+    }
+}
+
+/// RGB channel mixer (issue #2158): each output channel as a weighted sum of the input channels, in percent
+/// (−200..200). Mainly for infrared, where it swaps red and blue or pulls down a channel white balance can't reach.
+///
+/// This is the one place its behaviour is described:
+/// - **Working space:** scene-linear Rec.2020, after white balance and Exposure.
+/// - **Order:** the mixer matrix is applied before the calibration matrix, and both before the tone map.
+/// - **Identity and storage:** the default is the identity (each output 100 % of its own input, 0 % of the others),
+///   which leaves the photo as it is. [`DevelopSettings::channel_mixer`] is not serialized while it is the identity,
+///   so settings that never used the mixer keep their JSON and `hash64`, and every cached preview stays valid.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChannelMixer {
+    /// The red output channel.
+    pub red: MixRow,
+    /// The green output channel.
+    pub green: MixRow,
+    /// The blue output channel.
+    pub blue: MixRow,
+}
+
+impl Default for ChannelMixer {
+    fn default() -> Self {
+        ChannelMixer {
+            red: MixRow { red: 100.0, ..MixRow::default() },
+            green: MixRow { green: 100.0, ..MixRow::default() },
+            blue: MixRow { blue: 100.0, ..MixRow::default() },
+        }
+    }
+}
+
+impl ChannelMixer {
+    /// Whether this is the default mixer (each output 100 % of its own input), which renders as no mixer at all and
+    /// is left out of the stored settings.
+    pub fn is_identity(&self) -> bool {
+        *self == ChannelMixer::default()
+    }
+    /// The mixer as a 3×3 matrix of percentages: rows are the red, green and blue outputs; within a row, columns
+    /// are the red, green and blue inputs (−200..200; divide by 100 for the linear matrix the pipeline applies).
+    pub fn rows(&self) -> [[f64; 3]; 3] {
+        [self.red, self.green, self.blue].map(|r| [r.red, r.green, r.blue])
     }
 }
 

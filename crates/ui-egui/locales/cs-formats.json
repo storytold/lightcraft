@@ -281,6 +281,7 @@
   "Delete “{name}”?": "Odstranit „{name}“?",
   "Updated {name}": "Aktualizováno: {name}",
   "Exported to {path}": "Exportováno do {path}",
+  "Darker by {ev:.1} EV to fit the mix in range: raise Exposure if needed": "Tmavší o {ev:.1} EV, aby se mix vešel do rozsahu: v případě potřeby zvyšte Expozici",
   "Saved template {name}": "Uložena šablona {name}",
   "Imported {name}": "Importováno: {name}",
   "Skipped {problem}": "Přeskočeno: {problem}",
