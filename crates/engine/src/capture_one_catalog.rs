@@ -290,6 +290,17 @@ pub fn is_catalog(path: &Path) -> bool {
     package || !matches!(locate::locate(path), Err(ReadError::NotFound(_)))
 }
 
+/// The database file of the catalog at `path` (see [`read`] for what `path` may be).
+pub fn database(path: &Path) -> Result<std::path::PathBuf, ReadError> {
+    locate::locate(path).map(|found| found.database)
+}
+
+/// Whether `path` is named like a catalog's database (`.cocatalogdb`, or the `.backup` an
+/// upgrade leaves). Nothing on disk is looked at.
+pub fn is_database_path(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| locate::is_database_name(&name.to_string_lossy()))
+}
+
 /// Read the catalog at `path`: a `.cocatalog` package or folder, a catalog backup folder, or the
 /// `.cocatalogdb` file itself.
 pub fn read(path: &Path) -> Result<CaptureOneCatalog, ReadError> {

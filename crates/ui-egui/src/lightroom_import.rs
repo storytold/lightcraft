@@ -43,6 +43,8 @@ pub struct LightroomTask {
     phase: Phase,
     cancelled: bool,
     guard: TaskGuard,
+    /// The catalog is Capture One's (told by its file name): the task is worded for it.
+    capture_one: bool,
 }
 
 impl LightroomTask {
@@ -55,12 +57,15 @@ impl LightroomTask {
         progress: LightroomProgress,
         rx: mpsc::Receiver<Message>,
     ) -> Self {
-        let label = match kind {
-            Kind::Inspect => "Reading Lightroom catalog",
-            Kind::Import => "Importing Lightroom catalog",
+        let capture_one = lightcraft_engine::capture_one_catalog::is_database_path(&path);
+        let label = match (kind, capture_one) {
+            (Kind::Inspect, false) => "Reading Lightroom catalog",
+            (Kind::Import, false) => "Importing Lightroom catalog",
+            (Kind::Inspect, true) => "Reading Capture One catalog",
+            (Kind::Import, true) => "Importing Capture One catalog",
         };
         let guard = s.activity.start("lightroom", label, Cancel::Flag(cancel.clone()));
-        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard };
+        let task = Self { kind, path, cancel, progress, rx, phase: Phase::Reading, cancelled: false, guard, capture_one };
         task.refresh();
         task
     }
@@ -77,13 +82,17 @@ impl LightroomTask {
     /// then what is being done.
     fn refresh(&self) {
         let (step, done, total) = self.progress.step();
+        let tr = crate::i18n::tr;
         let detail = match (self.phase, self.kind, step) {
             (Phase::Reading, Kind::Inspect, _) => "",
-            (Phase::Reading, Kind::Import, LightroomStep::Catalog) => crate::i18n::tr("Reading Lightroom catalog…"),
-            (Phase::Reading, Kind::Import, LightroomStep::ReadPhotos) => crate::i18n::tr("Reading photos…"),
-            (Phase::Reading, Kind::Import, LightroomStep::AddPhotos) => crate::i18n::tr("Adding photos…"),
-            (Phase::Committing, ..) => crate::i18n::tr("Adding Lightroom photos…"),
-            (Phase::Finalizing, ..) => crate::i18n::tr("Saving Lightroom import index…"),
+            (Phase::Reading, Kind::Import, LightroomStep::Catalog) if self.capture_one => tr("Reading Capture One catalog…"),
+            (Phase::Reading, Kind::Import, LightroomStep::Catalog) => tr("Reading Lightroom catalog…"),
+            (Phase::Reading, Kind::Import, LightroomStep::ReadPhotos) => tr("Reading photos…"),
+            (Phase::Reading, Kind::Import, LightroomStep::AddPhotos) => tr("Adding photos…"),
+            (Phase::Committing, ..) if self.capture_one => tr("Adding Capture One photos…"),
+            (Phase::Committing, ..) => tr("Adding Lightroom photos…"),
+            (Phase::Finalizing, ..) if self.capture_one => tr("Saving Capture One import index…"),
+            (Phase::Finalizing, ..) => tr("Saving Lightroom import index…"),
         };
         if self.phase == Phase::Reading {
             self.guard.progress(done as u64, total as u64);
@@ -267,7 +276,23 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
             o.entry("library").or_insert_with(|| json!(library.dir.to_string_lossy()));
         }
     }
-    let message = if let Some(e) = value.get("error").and_then(Value::as_str) {
+    let message = if task.capture_one { capture_one_summary(kind, &value) } else { lightroom_summary(kind, &value) };
+    if matches!(kind, Kind::Import) && value.get("cancelled") != Some(&Value::Bool(true)) {
+        let mut result = result_dialog(&value, &message, &app.session.catalog);
+        if let crate::state::Dialog::LightroomResult { capture_one, .. } = &mut result {
+            *capture_one = task.capture_one;
+        }
+        app.lightroom_result = Some(result);
+        show_result(app);
+    }
+    app.lightroom_last = Some(value);
+    app.lightroom = None;
+    app.toast_for(ctx, message, 6.0);
+}
+
+/// How a Lightroom task went, in a line.
+fn lightroom_summary(kind: Kind, value: &Value) -> String {
+    if let Some(e) = value.get("error").and_then(Value::as_str) {
         let warning = value.get("indexWarning").and_then(Value::as_str).map_or(String::new(), |w| format!("; index warning: {w}"));
         if matches!(kind, Kind::Inspect) {
             crate::i18n::tr_format!("Lightroom inspection failed: {e}{warning}", e = e, warning = warning)
@@ -287,7 +312,7 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
             missing = missing
         )
     } else {
-        let report = value.get("report").unwrap_or(&value);
+        let report = value.get("report").unwrap_or(value);
         let imported = report["imported"].as_u64().unwrap_or(0);
         let failed = report["failed"].as_array().map_or(0, Vec::len);
         let warning = value.get("indexWarning").and_then(Value::as_str);
@@ -302,14 +327,47 @@ fn terminal(app: &mut LightcraftApp, ctx: &egui::Context, task: &LightroomTask, 
         } else {
             crate::i18n::tr_format!("Lightroom import complete: {imported} photos added, {failed} failed", imported = imported, failed = failed)
         }
-    };
-    if matches!(kind, Kind::Import) && value.get("cancelled") != Some(&Value::Bool(true)) {
-        app.lightroom_result = Some(result_dialog(&value, &message, &app.session.catalog));
-        show_result(app);
     }
-    app.lightroom_last = Some(value);
-    app.lightroom = None;
-    app.toast_for(ctx, message, 6.0);
+}
+
+/// How a Capture One task went, in a line: [`lightroom_summary`] in that catalog's name.
+fn capture_one_summary(kind: Kind, value: &Value) -> String {
+    if let Some(e) = value.get("error").and_then(Value::as_str) {
+        let warning = value.get("indexWarning").and_then(Value::as_str).map_or(String::new(), |w| format!("; index warning: {w}"));
+        if matches!(kind, Kind::Inspect) {
+            crate::i18n::tr_format!("Capture One inspection failed: {e}{warning}", e = e, warning = warning)
+        } else {
+            crate::i18n::tr_format!("Capture One import failed: {e}{warning}", e = e, warning = warning)
+        }
+    } else if value.get("cancelled").and_then(Value::as_bool).unwrap_or(false) {
+        crate::i18n::tr(if matches!(kind, Kind::Inspect) { "Capture One inspection cancelled" } else { "Capture One import cancelled" }).into()
+    } else if matches!(kind, Kind::Inspect) {
+        let photos = value["photos"].as_u64().unwrap_or(0);
+        let collections = value["collections"].as_u64().unwrap_or(0);
+        let missing = value["missing"].as_array().map_or(0, Vec::len);
+        crate::i18n::tr_format!(
+            "Capture One catalog inspected: {photos} photos, {collections} collections, {missing} missing",
+            photos = photos,
+            collections = collections,
+            missing = missing
+        )
+    } else {
+        let report = value.get("report").unwrap_or(value);
+        let imported = report["imported"].as_u64().unwrap_or(0);
+        let failed = report["failed"].as_array().map_or(0, Vec::len);
+        let warning = value.get("indexWarning").and_then(Value::as_str);
+        if let Some(warning) = warning {
+            crate::i18n::tr_format!(
+                "Capture One import complete: {imported} photos added; index warning: {warning}",
+                imported = imported,
+                warning = warning
+            )
+        } else if failed == 0 {
+            crate::i18n::tr_format!("Capture One import complete: {imported} photos added", imported = imported)
+        } else {
+            crate::i18n::tr_format!("Capture One import complete: {imported} photos added, {failed} failed", imported = imported, failed = failed)
+        }
+    }
 }
 
 fn show_result(app: &mut LightcraftApp) {
@@ -377,6 +435,7 @@ fn result_dialog(value: &Value, summary: &str, catalog: &lightcraft_catalog::Cat
         library: report["library"].as_str().or_else(|| value["library"].as_str()).map(str::to_string),
         details,
         first,
+        capture_one: false,
     }
 }
 

@@ -230,6 +230,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // {path?, into?: open | new, name?, location?}: asks where the catalog goes unless `into` (or
     // Settings) says (#2672, `lightroom_destination`)
     ("file.importLightroom", "Import Lightroom Catalog…", None, "File"),
+    // {path?: the .cocatalog folder or its .cocatalogdb, into?, name?, location?}: the same import
+    // and the same question, for a Capture One catalog (#4250)
+    ("file.importCaptureOne", "Import Capture One Catalog…", None, "File"),
     ("file.addFromDevice", "Import from Device", None, ""),
     ("file.findMissing", "Find Missing Photos…", None, "File"),
     ("file.backupLibrary", "Back Up Library…", None, "File"),

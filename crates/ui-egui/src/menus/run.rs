@@ -1369,9 +1369,40 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                 None => Ok(Value::Null),
             }
         }
+        "file.importCaptureOne" => import_capture_one(app, id, p),
         _ => return None,
     };
     Some(r)
+}
+
+/// `file.importCaptureOne {path?, into?, name?, location?}`: File ▸ Import Capture One Catalog….
+/// The catalog is a folder (a package on macOS) around its database: the dialog takes either, and
+/// the import goes on with the database file, as `file.importLightroom` does with a `.lrcat`.
+fn import_capture_one(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+    let req = crate::lightroom_destination::Request::parse(p)?;
+    let path = match p.get("path").and_then(Value::as_str).map(str::to_string) {
+        Some(path) => Some(path),
+        None => {
+            let req = PickRequest::file(
+                crate::i18n::tr("Import Capture One Catalog"),
+                crate::i18n::tr("Capture One Catalog"),
+                &["cocatalog", "cocatalogdb"],
+            );
+            // (a host without a file dialog of its own has none for this)
+            match crate::pick::ask(app, id, p, "path", req, |_| None) {
+                Picked::Now(v) => v.into_iter().next(),
+                Picked::Later | Picked::Unavailable => None,
+            }
+        }
+    };
+    let Some(path) = path else { return Ok(Value::Null) };
+    // (the browser build can't read a folder: the import itself says it is unavailable there)
+    let database = if cfg!(target_arch = "wasm32") {
+        path
+    } else {
+        lightcraft_engine::capture_one_catalog::database(std::path::Path::new(&path)).map_err(|e| e.to_string())?.to_string_lossy().into_owned()
+    };
+    crate::lightroom_destination::import(app, &database, &req)
 }
 
 /// Part 11 of 12 of the UI commands; `None` means the id is not one of this part's.

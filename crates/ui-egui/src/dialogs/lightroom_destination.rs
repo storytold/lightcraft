@@ -204,6 +204,11 @@ pub fn confirm(app: &mut LightcraftApp, dialog: &Dialog) -> Result<Value, String
     Ok(r)
 }
 
+/// Whether the catalog a window is about is Capture One's, told by its database's file name.
+pub fn is_capture_one(catalog: &str) -> bool {
+    lightcraft_engine::capture_one_catalog::is_database_path(Path::new(catalog))
+}
+
 /// After a failed confirm the window stays open to be corrected (a folder that isn't empty, a
 /// name a folder can't have), unless the library it named has gone.
 pub fn keeps_open_on_error(app: &LightcraftApp, dialog: &Dialog) -> bool {
@@ -224,7 +229,11 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, dialog: &mut Dialog) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let tr = crate::i18n::tr;
     let file = Path::new(catalog.as_str()).file_name().map_or_else(|| catalog.clone(), |n| n.to_string_lossy().into_owned());
-    ui.label(crate::i18n::tr_format!("Where should the Lightroom catalog “{catalog}” go?", catalog = file));
+    ui.label(if is_capture_one(catalog) {
+        crate::i18n::tr_format!("Where should the Capture One catalog “{catalog}” go?", catalog = file)
+    } else {
+        crate::i18n::tr_format!("Where should the Lightroom catalog “{catalog}” go?", catalog = file)
+    });
     ui.label(egui::RichText::new(catalog.as_str()).color(t.text_dim));
     ui.add_space(4.0);
     let n = *photos;
