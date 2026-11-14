@@ -1035,7 +1035,7 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
 }
 
 /// Part 8 of 12 of the UI commands; `None` means the id is not one of this part's.
-fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+fn ui_commands_8(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let r: Result<Value, String> = match id {
         s if s.starts_with("section.") => bool_param(s, p, "solo").and_then(|solo| {
             // only the Edit sections listed above: an unknown one would close the real ones
@@ -1091,10 +1091,19 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.tool = "brush".into();
                 }
                 "linear" | "radial" => {
+                    // {op?: add | subtract | intersect}: nothing is made yet; the next drag on the photo
+                    // draws a new mask (or, with `op`, a component of the selected one), as in Lightroom
+                    // (#2311). `mask.add` / `mask.addComponent` place one without a drag. A bad `op` is
+                    // refused before anything changes.
+                    let op = match p.get("op") {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(op)) if matches!(op.as_str(), "add" | "subtract" | "intersect") => Some(op.as_str()),
+                        Some(other) => return Some(Err(format!("{s}: unknown op {other} (add|subtract|intersect)"))),
+                    };
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
-                    app.ui.tool = tool.into();
-                    return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
+                    app.ui.tool = op.map_or_else(|| tool.to_string(), |op| format!("{tool}:{op}"));
+                    app.toast(ctx, crate::i18n::tr("Drag on the photo to draw the gradient · Esc cancels"));
                 }
                 "wbPicker" => {
                     app.ui.right = RightPanel::Edit;

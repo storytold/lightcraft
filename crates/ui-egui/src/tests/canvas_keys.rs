@@ -145,3 +145,36 @@ fn gradient_handles_and_pins_move_by_keyboard() {
     key(&mut h, "right", true);
     assert!(rx(&h) > rx0, "{rx0} -> {}", rx(&h));
 }
+
+/// #2311: a pointer draws a picked gradient by dragging, but by keyboard it is placed at once where `mask.add` puts
+/// one: Space on the Create New Mask tile, or Return on the canvas stand-in once L / R picked the tool.
+#[test]
+fn gradients_are_placed_by_keyboard() {
+    let mut h = detail("panel.masking");
+    let tile = h.app.widgets.iter().find(|(id, _)| id == "maskNew:linear").expect("the Linear tile").1;
+    let on_tile = |h: &Headless| h.view.ctx.memory(|m| m.focused()).and_then(|id| h.view.ctx.read_response(id)).is_some_and(|r| r.rect == tile);
+    for _ in 0..300 {
+        if on_tile(&h) {
+            break;
+        }
+        key(&mut h, "tab", false);
+    }
+    assert!(on_tile(&h), "Tab reaches the Linear tile");
+    key(&mut h, "space", false);
+    let d = develop(&h);
+    assert_eq!(d.masks.len(), 1, "Space on the tile places the gradient");
+    let MaskShape::Linear { start, end } = d.masks[0].components[0].shape.clone() else { panic!("linear") };
+    assert_eq!((start.x, start.y, end.x, end.y), (0.5, 0.25, 0.5, 0.6), "where mask.add puts it");
+    assert!(h.app.ui.tool.is_empty(), "no tool left waiting for a drag");
+    // Radial Gradient (R, or Window ▸ Tools) picks the tool and places nothing; Return on its stand-in places the ellipse
+    exec(&mut h, "tool.radial", json!({}));
+    h.step();
+    assert_eq!((h.app.ui.tool.as_str(), develop(&h).masks.len()), ("radial", 1));
+    focus(&mut h, "mask:new");
+    key(&mut h, "enter", false);
+    let d = develop(&h);
+    assert_eq!(d.masks.len(), 2, "Return places it");
+    let MaskShape::Radial { center, rx, ry, .. } = d.masks[1].components[0].shape.clone() else { panic!("radial") };
+    assert_eq!((center.x, center.y, rx, ry), (0.5, 0.5, 0.22, 0.16));
+    assert!(h.app.ui.tool.is_empty());
+}

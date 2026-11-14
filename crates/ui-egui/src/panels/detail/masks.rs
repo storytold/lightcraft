@@ -267,8 +267,19 @@ fn seg_center(seg: &lightcraft_develop::SegMask) -> Option<Point> {
     Some(Point::new(x0 + u * (x1 - x0), y0 + v * (y1 - y0)))
 }
 
+/// The gradient a drag on the photo draws while the Linear or Radial Gradient tool is picked: its
+/// kind, and the operation when it is a component of the selected mask (`tool` = `linear`,
+/// `radial`, `linear:subtract`, …).
+pub(crate) fn gradient_tool(tool: &str) -> Option<(&str, Option<&str>)> {
+    let (kind, op) = match tool.split_once(':') {
+        Some((kind, op)) => (kind, Some(op)),
+        None => (tool, None),
+    };
+    matches!(kind, "linear" | "radial").then_some((kind, op))
+}
+
 /// `shape` moved by `dn` (normalized); `handle` 1/2 = a linear gradient's start/end set to `at`.
-fn moved_shape(shape: &MaskShape, handle: u8, dn: Point, at: Point, map: &CanvasMap, alt: bool) -> MaskShape {
+fn moved_shape(shape: &MaskShape, handle: u8, dn: Point, at: Point, map: &CanvasMap, alt: bool, shift: bool) -> MaskShape {
     let mv = |p: Point| Point::new(p.x + dn.x, p.y + dn.y);
     match shape.clone() {
         MaskShape::Radial { center, rx, ry, angle, feather, invert } => match handle {
@@ -309,11 +320,21 @@ fn moved_shape(shape: &MaskShape, handle: u8, dn: Point, at: Point, map: &Canvas
                 let new_angle = dy.atan2(dx).to_degrees();
                 MaskShape::Radial { center, rx, ry, angle: new_angle, feather, invert }
             }
+            6 => {
+                // being drawn, from where the drag began to the pointer
+                let (center, rx, ry) = drawn_radial(Point::new(at.x - dn.x, at.y - dn.y), at, map, alt, shift);
+                MaskShape::Radial { center, rx, ry, angle, feather, invert }
+            }
             _ => MaskShape::Radial { center: mv(center), rx, ry, angle, feather, invert },
         },
         MaskShape::Linear { start, end } => match handle {
             1 => MaskShape::Linear { start: at, end },
             2 => MaskShape::Linear { start, end: at },
+            7 => {
+                // being drawn, from where the drag began to the pointer
+                let (start, end) = drawn_linear(Point::new(at.x - dn.x, at.y - dn.y), at, map, alt, shift);
+                MaskShape::Linear { start, end }
+            }
             _ => MaskShape::Linear { start: mv(start), end: mv(end) },
         },
         MaskShape::Brush { mut strokes } => {
@@ -396,8 +417,17 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
             }
         }
     }
-    mask_keys(app, ui, map, d, &grips);
+    // Linear / Radial Gradient picked: the arrows don't move another mask's handle meanwhile
+    let armed = gradient_tool(&app.ui.tool).map(|(kind, op)| (kind.to_string(), op.map(str::to_string)));
+    if armed.is_none() {
+        mask_keys(app, ui, map, d, &grips);
+    }
     object_marks(app, p, map, d, active);
+    // …and a drag on the photo draws it
+    if let Some((kind, op)) = armed {
+        draw_gradient(app, ui, resp, map, &kind, op.as_deref());
+        return;
+    }
     // Colour Range "Pick": the Masking panel owns the loupe's clicks (general_interaction
     // never runs while it is open), so the eyedropper is handled here too.
     if app.ui.tool == "colorRange" {
@@ -807,13 +837,129 @@ fn grip_gestures(
         let press_origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(q);
         let n0 = map.norm(press_origin);
         let dn = Point::new(n.x - n0.x, n.y - n0.y);
-        let alt = ui.input(|i| i.modifiers.alt);
-        let new_shape = moved_shape(&original_shape, handle, dn, n, map, alt);
+        let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+        let new_shape = moved_shape(&original_shape, handle, dn, n, map, alt, shift);
         let _ = app.run("mask.update", json!({"id": mask, "component": comp, "shape": new_shape}));
     }
     if resp.drag_stopped() && matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
         app.gesture = None;
         let _ = app.run("develop.endInteraction", json!({}));
+    }
+}
+
+/// The Linear or Radial Gradient tool, picked and not drawn yet (#2311): over the photo the pointer
+/// is a crosshair, and a drag makes the gradient once the pointer has moved, as [`drawn_linear`] and
+/// [`drawn_radial`] place it, with ⇧ and ⌥ / Alt as in Lightroom Classic. The rest of the drag goes
+/// on drawing it, all one undo step, and the tool is put down. `op` makes it a component of the
+/// selected mask. For the keyboard, a stand-in at the photo's centre: Return places the gradient
+/// where `mask.add` puts one by default.
+fn draw_gradient(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, kind: &str, op: Option<&str>) {
+    let name = if kind == "linear" { "New linear gradient (Return adds it)" } else { "New radial gradient (Return adds it)" };
+    let keys = crate::canvas_keys::handle(
+        ui,
+        "mask:new",
+        crate::i18n::tr(name),
+        crate::canvas_keys::position_text(0.5, 0.5),
+        map.screen(Point::new(0.5, 0.5)),
+    );
+    let mut params = serde_json::Map::new();
+    params.insert("kind".into(), json!(kind));
+    if let Some(op) = op {
+        params.insert("op".into(), json!(op));
+    }
+    let command = if op.is_some() { "mask.addComponent" } else { "mask.add" };
+    if keys.activated {
+        app.ui.tool.clear();
+        if let Err(e) = app.run(command, params.into()) {
+            app.toast(ui.ctx(), e);
+        }
+        return;
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    // a click that never moved makes nothing either: say again how to draw one
+    if resp.clicked() {
+        app.toast(ui.ctx(), crate::i18n::tr("Drag on the photo to draw the gradient · Esc cancels"));
+        return;
+    }
+    // a press held still makes nothing until the pointer moves
+    let (Some(a), Some(b)) = (ui.input(|i| i.pointer.press_origin()), resp.interact_pointer_pos()) else { return };
+    if !resp.dragged() || a.distance(b) < 2.0 {
+        return;
+    }
+    app.ui.tool.clear();
+    let _ = app.run("develop.beginInteraction", json!({"label": if op.is_some() { "Edit Mask" } else { "Add Mask" }}));
+    // in the mask's coordinates: a new mask's are on the photo, before lens and perspective
+    // corrections (and a component's mask is on the photo once the interaction began)
+    let on_photo = op.is_none() || app.session.active_mask.and_then(|m| current_on_photo(app, m)).unwrap_or(true);
+    let map = &map.for_mask(on_photo);
+    let (a, b) = (map.norm(a), map.norm(b));
+    let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+    let handle = if kind == "linear" {
+        let (start, end) = drawn_linear(a, b, map, alt, shift);
+        params.insert("start".into(), json!([start.x, start.y]));
+        params.insert("end".into(), json!([end.x, end.y]));
+        7
+    } else {
+        let (center, rx, ry) = drawn_radial(a, b, map, alt, shift);
+        params.insert("center".into(), json!([center.x, center.y]));
+        params.insert("rx".into(), json!(rx));
+        params.insert("ry".into(), json!(ry));
+        6
+    };
+    if let Err(e) = app.run(command, params.into()) {
+        let _ = app.run("develop.endInteraction", json!({}));
+        app.toast(ui.ctx(), e);
+        return;
+    }
+    // the rest of the drag moves what was just made: the selected mask's last component
+    let made = app.session.active_mask.and_then(|mid| {
+        let d = app.session.develop_of(app.session.active()?)?;
+        let m = d.masks.iter().find(|m| m.id == mid)?;
+        Some((mid, m.components.len().checked_sub(1)?, m.components.last()?.shape.clone()))
+    });
+    match made {
+        Some((mask, comp, original_shape)) => app.gesture = Some(Gesture::MaskHandle { mask, comp, handle, original_shape }),
+        None => {
+            let _ = app.run("develop.endInteraction", json!({}));
+        }
+    }
+}
+
+/// The start and end of a linear gradient drawn from `a`, where the drag began, to the pointer `b`,
+/// as Lightroom Classic draws one: from `a` (full effect) to `b`. ⇧ keeps it horizontal or vertical,
+/// whichever the drag is nearer, and ⌥ / Alt draws it out from `a` both ways.
+fn drawn_linear(a: Point, b: Point, map: &CanvasMap, alt: bool, shift: bool) -> (Point, Point) {
+    let mut end = b;
+    if shift {
+        // compared in long-edge units, which are as long across the photo as down it
+        let l = frame_long_norm(map);
+        if ((b.x - a.x) / l.0).abs() >= ((b.y - a.y) / l.1).abs() {
+            end.y = a.y;
+        } else {
+            end.x = a.x;
+        }
+    }
+    let start = if alt { Point::new(2.0 * a.x - end.x, 2.0 * a.y - end.y) } else { a };
+    (start, end)
+}
+
+/// The centre and radii (long-edge units, at least 0.01) of an upright ellipse drawn from `a`, where
+/// the drag began, to the pointer `b`, as Lightroom Classic draws one: centred on `a` with a corner of
+/// its bounding box at `b`. ⌥ / Alt puts `a` and `b` at opposite corners instead, and ⇧ makes it a
+/// circle.
+fn drawn_radial(a: Point, b: Point, map: &CanvasMap, alt: bool, shift: bool) -> (Point, f64, f64) {
+    let l = frame_long_norm(map);
+    let (mut dx, mut dy) = ((b.x - a.x) / l.0, (b.y - a.y) / l.1);
+    if shift {
+        let side = dx.abs().max(dy.abs());
+        (dx, dy) = (side.copysign(dx), side.copysign(dy));
+    }
+    if alt {
+        (Point::new(a.x + dx / 2.0 * l.0, a.y + dy / 2.0 * l.1), (dx / 2.0).abs().max(0.01), (dy / 2.0).abs().max(0.01))
+    } else {
+        (a, dx.abs().max(0.01), dy.abs().max(0.01))
     }
 }
 
@@ -860,7 +1006,7 @@ fn mask_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
         };
         let at = map.norm(q);
         let to = Point::new(at.x + dx, at.y + dy);
-        let new_shape = moved_shape(&shape, handle, Point::new(dx, dy), to, &map, false);
+        let new_shape = moved_shape(&shape, handle, Point::new(dx, dy), to, &map, false, false);
         let _ = app.run("mask.update", json!({"id": mid, "component": ci, "shape": new_shape}));
         let _ = app.run("develop.endInteraction", json!({}));
     }
