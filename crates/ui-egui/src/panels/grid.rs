@@ -1215,13 +1215,12 @@ pub fn toast_skipped(app: &mut LightcraftApp, ctx: &egui::Context, r: &serde_jso
     }
 }
 
-/// "Set Color Label" items for the active photo, shared by context menus.
+/// "Set Color Label" items for the active photo, shared by context menus. Like the rating and flag rows it runs as
+/// the Photo menu's rows do (`menubar::run_item`): the active photo only in Compare and Survey, then Auto Advance.
 pub fn label_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let current = app.session.active().and_then(|id| app.session.catalog.photo(id)).and_then(|p| p.label);
     if let Some(l) = label_items(app, ui, current, "photoLabel") {
-        let mut params = json!({"label": label_param(l)});
-        crate::panels::compare::target_active(app, &mut params);
-        let _ = app.run("photo.label", params);
+        let _ = crate::menubar::run_item(app, "photo.label", json!({"label": label_param(l)}));
         ui.close();
     }
 }
@@ -1358,21 +1357,28 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
 }
 
 fn context_menu_rate(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    crate::widgets::menu_button(ui, crate::i18n::tr("Set Rating"), |ui| {
+    let rating = crate::widgets::menu_button(ui, crate::i18n::tr("Set Rating"), |ui| {
         for r in 0..=5 {
-            if ui.button(if r == 0 { crate::i18n::tr("No Stars").to_string() } else { "★".repeat(r) }).clicked() {
-                let _ = app.run("photo.rate", json!({"rating": r}));
+            let item = ui.button(if r == 0 { crate::i18n::tr("No Stars").to_string() } else { "★".repeat(r) });
+            register(ui, format!("button:contextRate:{r}"), item.rect);
+            if item.clicked() {
+                let _ = crate::menubar::run_item(app, "photo.rate", json!({"rating": r}));
             }
         }
     });
-    crate::widgets::menu_button(ui, crate::i18n::tr("Set Flag"), |ui| {
+    register(ui, "button:contextSetRating", rating.response.rect);
+    let flag = crate::widgets::menu_button(ui, crate::i18n::tr("Set Flag"), |ui| {
         for (l, f) in [("Pick", "pick"), ("Reject", "reject"), ("Unflagged", "none")] {
-            if ui.button(crate::i18n::tr(l)).clicked() {
-                let _ = app.run("photo.flag", json!({"flag": f}));
+            let item = ui.button(crate::i18n::tr(l));
+            register(ui, format!("button:contextFlag:{f}"), item.rect);
+            if item.clicked() {
+                let _ = crate::menubar::run_item(app, "photo.flag", json!({"flag": f}));
             }
         }
     });
-    crate::widgets::menu_button(ui, crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
+    register(ui, "button:contextSetFlag", flag.response.rect);
+    let label = crate::widgets::menu_button(ui, crate::i18n::tr("Set Color Label"), |ui| label_menu(app, ui));
+    register(ui, "button:contextSetLabel", label.response.rect);
     // the keyword shortcut (Set Keyword Shortcut…), given to the selected photos
     let keywords = app.session.catalog.keyword_shortcut();
     if !keywords.is_empty() {

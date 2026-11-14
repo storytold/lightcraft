@@ -66,9 +66,13 @@ when you gave the same key to a command in Help → Keyboard Shortcuts, where th
 Fixed keys.
 
 Grid actions apply to all selected photos and support Undo / Redo. In Compare and Survey, culling
-actions apply to the active photo. Auto Advance moves forward after an action; holding Shift with
+actions apply to the active photo; a right-click on a selected photo there (or on its filmstrip
+thumbnail) makes it the active one, so the rating, flag and colour label rows of its menu act on
+that photo alone. Auto Advance moves forward
+after an action, from the keys and from those menu rows alike; holding Shift with
 Auto Advance on still advances only once. The last photo stays selected. Text fields keep their
-keyboard input, and `X` in the Crop panel swaps the crop aspect.
+keyboard input. With the Crop panel open `P` and `U` still pick and unflag (Auto Advance and the
+Compare / Survey rule apply), and `X` swaps the crop aspect instead of rejecting.
 Shifted number keys also use the physical number key when the keyboard reports punctuation
 (for example, `Shift+1` as `!`). Letter shortcuts continue to follow the keyboard layout.
 
