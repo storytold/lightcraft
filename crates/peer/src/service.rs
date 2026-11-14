@@ -434,6 +434,7 @@ fn my_beacon(inner: &Inner) -> Option<Beacon> {
         key: store.identity.public_key().ok()?,
         port: inner.tcp_port,
         pairing: inner.finding.load(Ordering::Relaxed),
+        proto: beacon::PROTO,
     })
 }
 
@@ -819,6 +820,7 @@ mod tests {
             key: "k".into(),
             port: 4000,
             pairing,
+            proto: beacon::PROTO,
         };
         advert(&b, &beacon::service_type(), ttl)
     }
