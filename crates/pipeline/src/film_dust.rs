@@ -263,7 +263,7 @@ pub fn infrared_map(ir: &Plane, sensitivity: f32, expand: i32) -> Option<Plane> 
     let f = ((long / 650.0).round() as usize).clamp(1, 8);
     let small = shrink(&sm, f);
     let r = (((0.004 * long) / f as f32).round() as usize).max(2);
-    let lvl_small = rank(&rank(&small, r, true), r, false);
+    let lvl_small = closing(&small, r);
     let mut sorted: Vec<f32> = lvl_small.data.iter().copied().filter(|v| v.is_finite()).collect();
     sorted.sort_by(f32::total_cmp);
     let typical = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
@@ -343,6 +343,21 @@ fn round_rank(src: &Plane, r: usize, max: bool) -> Plane {
         }
     }
     out
+}
+
+/// A grey closing (a maximum, then a minimum, over a square of side `2r + 1`) of `p`, padded once
+/// with its own edge values first: padding each pass on its own would repeat the maximum's border
+/// value in the minimum's pass, so a dark strip along the image's edge (a scanner's gate) next to
+/// bright film would be filled in.
+fn closing(p: &Plane, r: usize) -> Plane {
+    let (w, h) = (p.width, p.height);
+    if r == 0 || w == 0 || h == 0 {
+        return p.clone();
+    }
+    let (pw, ph) = (w + 2 * r, h + 2 * r);
+    let padded = Plane::from_fn(pw, ph, |x, y| p.get(x.saturating_sub(r).min(w - 1), y.saturating_sub(r).min(h - 1)));
+    let closed = rank(&rank(&padded, r, true), r, false);
+    Plane::from_fn(w, h, |x, y| closed.get(x + r, y + r))
 }
 
 /// `p` reduced by a whole factor `f` (the mean of each `f`×`f` cell; a partial cell at the edge too).
@@ -1137,6 +1152,24 @@ mod tests {
         assert!(pb.0 <= 199 && pb.2 >= 201 && pb.1 <= 149 && pb.3 >= 151, "the speck itself: {pb:?}");
         assert!(gb.0 + 3 >= pb.0 && gb.2 <= pb.2 + 3 && gb.1 + 3 >= pb.1 && gb.3 <= pb.3 + 3, "grown only around the mark: {gb:?} vs {pb:?}");
         assert_eq!(infrared_map(&Plane::from_fn(w, h, |_, _| 0.6), 50.0, 5).unwrap().data.iter().filter(|v| **v > 0.0).count(), 0);
+    }
+
+    /// A grainy pass with a dark scanner gate along the left edge (its border a few pixels from
+    /// bright film, the layout of a real scan): nothing in the gate is marked, and a speck on the film is.
+    #[test]
+    fn the_scanner_gate_is_never_marked() {
+        let (w, h) = (600, 400);
+        let noise = |x: usize, y: usize| (((x * 7919 + y * 104_729) % 97) as f32 / 97.0 - 0.5) * 0.03;
+        let mut ir = Plane::from_fn(w, h, |x, y| if x < 24 { 0.02 } else { 0.6 + noise(x, y) });
+        for dy in 0..3 {
+            for dx in 0..3 {
+                ir.data[(200 + dy) * w + 300 + dx] = 0.05;
+            }
+        }
+        let m = infrared_map(&ir, 100.0, 2).unwrap();
+        let in_gate = (0..h).flat_map(|y| (0..24).map(move |x| (x, y))).filter(|(x, y)| m.get(*x, *y) > 0.0).count();
+        assert_eq!(in_gate, 0, "marks in the gate");
+        assert!(m.get(301, 201) > 0.0, "the speck on the film");
     }
 
     #[test]
