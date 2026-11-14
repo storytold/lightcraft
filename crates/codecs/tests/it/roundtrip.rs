@@ -776,9 +776,10 @@ fn pq_png_is_16_bit_rec2020_pq_with_cicp_and_content_light() {
     let brightest = rgb.iter().copied().fold(0.0f32, f32::max) * HDR_REFERENCE_WHITE_NITS;
     assert!((max_cll - brightest.ceil()).abs() <= 1.0, "{max_cll} vs {brightest}");
     let max_fall = u32::from_be_bytes(bytes[at + 8..at + 12].try_into().unwrap()) / 10_000;
-    let expected_max_fall = (rgb.chunks_exact(3).map(|p| f64::from(p.iter().copied().fold(0.0f32, f32::max) * HDR_REFERENCE_WHITE_NITS)).sum::<f64>()
-        / f64::from(w * h))
-    .ceil() as u32;
+    let expected_max_fall =
+        (rgb.as_chunks::<3>().0.iter().map(|p| f64::from(p.iter().copied().fold(0.0f32, f32::max) * HDR_REFERENCE_WHITE_NITS)).sum::<f64>()
+            / f64::from(w * h))
+        .ceil() as u32;
     assert_eq!(max_fall, expected_max_fall, "MaxFALL uses CTA-861.3-A's per-pixel maximum channel");
     assert!(bytes.windows(17).any(|w| w == b"XML:com.adobe.xmp"), "XMP kept");
     assert!(bytes.windows(4).any(|w| w == b"pHYs"), "print resolution kept");
