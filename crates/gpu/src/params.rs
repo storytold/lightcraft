@@ -2,13 +2,17 @@
 //! `finish` kernel reads (`F_*` constants, generated from [`FIELDS`]), plus its auxiliary tables.
 
 use lightcraft_develop::VignetteStyle;
-use lightcraft_pipeline::colorops::POINT_WORDS;
+use lightcraft_pipeline::colorops::{POINT_WORDS, PointK};
 use lightcraft_pipeline::finish::{FinishParams, GrainModel, MASK_TERMS, srgb_lut};
 
 use crate::ctx::{FailKind, fail};
 
 /// Entries per tone-curve table (`lightcraft_pipeline::finish` builds them at this size).
 pub const CURVE_N: u32 = 1024;
+
+/// Most Point Color samples the masks of one render may carry together (the table [`finish_block`] puts in `aux`);
+/// [`crate::draws`] sends a photo with more to the CPU.
+pub const MAX_MASK_POINTS: usize = 128;
 
 /// Set on every word of a float render's output: the values are at least 0, so the sign bit is
 /// free, and it tells a written 0 from a word the kernel never reached.
@@ -20,6 +24,9 @@ const FIELDS: &[(&str, usize)] = &[
     ("H", 1),
     ("NMASK", 1),
     ("MASK_OFF", 1),
+    // the masks' own Point Color table in `aux` (counts per mask, then the samples), 0 = none
+    ("HAS_MPC", 1),
+    ("MPC_OFF", 1),
     ("SRGB_OFF", 1),
     ("CURVE_OFF", 1),
     ("CURVES", 1),
@@ -82,6 +89,10 @@ const FIELDS: &[(&str, usize)] = &[
     ("GRAIN_ROUGH", 1),
     ("GRAIN_SEED", 1),
     ("GRAIN_AFF", 6),
+    // local grain (`FinishParams::grain_local`): the model is at Amount 100 and each pixel scales it by
+    // clamp(GRAIN_BASE + the masks' summed grain term, 0, 1)
+    ("GRAIN_LOCAL", 1),
+    ("GRAIN_BASE", 1),
     ("REFINE_SAT", 1),
     ("CALIB", 1),
     ("CALIB_M", 9),
@@ -184,14 +195,21 @@ pub struct Present {
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms | light operator tables) for `fp` with `masks` (their local adjustments' terms). The crystal
+/// mask terms | mask Point Color | light operator tables) for `fp` with `masks` (their local adjustments' terms) and
+/// `mask_points` (each mask's Point Color samples, in the same order). The crystal
 /// grain's tables go after `aux` in the kernel's buffer ([`crate::render`] copies them there).
 ///
 /// `deep`: the kernel writes float samples, as the pipeline's `finish_deep` does.
 ///
 /// A curve whose length is not [`CURVE_N`] fails the render ([`FailKind::Fatal`]) and returns an
 /// empty parameter block with a truncated aux table, which the caller discards (CPU fallback).
-pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Present, deep: bool) -> (Vec<u32>, Vec<f32>) {
+pub fn finish_block(
+    fp: &FinishParams,
+    masks: &[[f32; MASK_TERMS]],
+    mask_points: &[&[PointK]],
+    present: &Present,
+    deep: bool,
+) -> (Vec<u32>, Vec<f32>) {
     let mut aux: Vec<f32> = fp.tone.lut().to_vec();
     aux.extend_from_slice(fp.tone.chroma_lut());
     let srgb_off = aux.len();
@@ -216,6 +234,17 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let mask_off = aux.len();
     for m in masks {
         aux.extend_from_slice(m);
+    }
+    // the masks' own Point Color: one sample count per mask, then every mask's samples in mask order
+    let mpc_off = aux.len();
+    let total: usize = mask_points.iter().map(|k| k.len()).sum();
+    if total > MAX_MASK_POINTS {
+        fail(FailKind::Fatal, format!("{total} mask Point Color samples, at most {MAX_MASK_POINTS}"));
+        return (Vec::new(), aux);
+    }
+    if total > 0 {
+        aux.extend((0..masks.len()).map(|m| mask_points.get(m).map_or(0, |k| k.len()) as f32));
+        aux.extend(mask_points.iter().take(masks.len()).flat_map(|k| k.iter().flat_map(|k| k.words())));
     }
     let light_off = aux.len();
     let light = fp.light.as_ref().map_or(&[][..], |l| &l.ops[..]);
@@ -255,6 +284,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("H", fp.h as u32);
     p.u("NMASK", masks.len() as u32);
     p.u("MASK_OFF", mask_off as u32);
+    p.b("HAS_MPC", total > 0);
+    p.u("MPC_OFF", mpc_off as u32);
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
@@ -349,6 +380,8 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     }
     if let Some(model) = &fp.grain {
         p.b("GRAIN", true);
+        p.b("GRAIN_LOCAL", fp.grain_local);
+        p.f("GRAIN_BASE", fp.grain_base);
         match model {
             GrainModel::Value(g) => {
                 p.u("GRAIN_MODEL", 0);

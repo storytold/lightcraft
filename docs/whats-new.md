@@ -96,6 +96,27 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Grain inside a mask
+- Each mask has a Grain slider (0 to 100) that adds film grain where the mask is, fading with its edges and Amount, on
+  top of the Effects panel's Grain. Size and Roughness stay the Effects panel's, as in Lightroom Classic. Effect presets
+  carry it, and Lightroom's `LocalGrain` is imported. Photos without local grain render as before.
+
+### Mask section eyes (control protocol)
+- `mask.sectionEnabled` switches off a mask's Tone, Color, Point Color, Effects or Detail adjustments without resetting
+  them, and back on. In the Masking panel the selected mask's sliders sit under Light, Color, Effects and Detail
+  headers, and the Point Color block has a header too, each with an eye like the Edit panel's; a section that is off
+  keeps its sliders and values. The Point Color eyedropper now works in the full-screen preview and switches off when
+  its block closes or no mask is selected.
+
+### Point Color inside a mask (control protocol)
+- Each mask can carry its own Point Color samples (up to 8, the same Hue, Saturation, Luminance, Variance and Range as
+  the photo's), added with `mask.pointColor.pick`, changed with `mask.pointColor.set` and removed with
+  `mask.pointColor.delete` or `mask.pointColor.clear`. They apply inside the mask, fading with its edges and Amount, like
+  Lightroom Classic's mask Point Color, and the mask's Point Color eye (`mask.sectionEnabled`) switches them. They are
+  rendered on the GPU. Lightroom's `LocalPointColors` is reported when a sidecar has it, not imported. The Masking
+  panel has a Point Color block for the selected mask (the eyedropper, the samples, Hue, Saturation and Luminance
+  shifts, Variance and Range; no Visualize range yet); photos without mask Point Color render as before.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens

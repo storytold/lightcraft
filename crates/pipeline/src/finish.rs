@@ -7,7 +7,7 @@ use lightcraft_develop::{DevelopSettings, LocalAdjustments, Process, ToneCurve, 
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgba8;
 
-use crate::colorops::ColorOps;
+use crate::colorops::{ColorOps, PointK};
 use crate::geometry::Frame;
 use crate::local::log_lum;
 use crate::output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc};
@@ -79,6 +79,25 @@ fn curve_luts(c: &ToneCurve) -> Option<[Lut1; 3]> {
     }))
 }
 
+/// `d` (linear Rec.2020) with each mask's Point Color samples (`points`, by mask) applied `alpha` of the way at pixel
+/// `i`, in mask order (mixed in OkLab, which has no hue seam; an alpha above 1 extrapolates, as the slider terms do).
+#[inline]
+fn apply_masks_points(d: [f32; 3], masks: &[crate::masks::Evaluated], points: &[&[PointK]], i: usize) -> [f32; 3] {
+    use lightcraft_color::perceptual::{lab_to_lch, lch_to_lab, oklab_from_2020, oklab_to_2020};
+    let mut d = d;
+    for (m, points) in masks.iter().zip(points) {
+        let alpha = m.alpha.data[i];
+        if points.is_empty() || alpha <= 0.0 {
+            continue;
+        }
+        let lab = oklab_from_2020(d);
+        let lch = points.iter().fold(lab_to_lch(lab), |lch, k| k.apply(lch));
+        let to = lch_to_lab(lch);
+        d = oklab_to_2020(std::array::from_fn(|c| lab[c] + alpha * (to[c] - lab[c])));
+    }
+    d
+}
+
 /// Vignette (post-crop) parameters.
 #[derive(Clone, Copy, Debug)]
 pub struct Vig {
@@ -137,7 +156,13 @@ impl GrainModel {
     /// The grain `s` renders with at `px_per_long` output pixels per long edge (`None`: none);
     /// `draft`: for a drag ([`crate::crystal::CrystalGrain::draft`]).
     pub fn new(s: &DevelopSettings, px_per_long: f64, draft: bool) -> Option<GrainModel> {
-        let g = &s.grain;
+        Self::with_amount(s, s.grain.amount, px_per_long, draft)
+    }
+
+    /// [`Self::new`] with the Amount `amount` (0..100) instead of the photo's: both models are linear
+    /// in it, so one built at 100 serves every per-pixel amount (local grain, [`FinishParams::grain_local`]).
+    pub fn with_amount(s: &DevelopSettings, amount: f64, px_per_long: f64, draft: bool) -> Option<GrainModel> {
+        let g = &lightcraft_develop::Grain { amount, ..s.grain };
         match s.process.process() {
             Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 => (g.amount > 0.0).then(|| {
                 let cell = (0.0006 + (g.size / 100.0) as f32 * 0.0024) * px_per_long as f32;
@@ -192,14 +217,14 @@ fn crystal_row(fp: &FinishParams, y: usize, w: usize) -> Vec<f32> {
 }
 
 /// Number of per-mask terms in [`mask_terms`].
-pub const MASK_TERMS: usize = 21;
+pub const MASK_TERMS: usize = 22;
 
 /// Number of alpha-weighted terms at the start of [`mask_terms`].
-pub const MASK_SUMS: usize = 17;
+pub const MASK_SUMS: usize = 18;
 
 /// A mask's local adjustments as the per-pixel stage uses them (alpha-weighted sums), in order:
 /// exposure, temp, tint, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze,
-/// saturation, hue, sharpness, noise, moiré, defringe, then the colour overlay: on (0/1), cos and
+/// saturation, hue, sharpness, noise, moiré, defringe, grain, then the colour overlay: on (0/1), cos and
 /// sin of its OkLCh hue, and its strength.
 pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
     let (on, cos, sin, amt) = if j.color_sat > 0.0 {
@@ -226,6 +251,7 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
         (j.noise / 100.0) as f32,
         (j.moire / 100.0) as f32,
         (j.defringe / 100.0) as f32,
+        (j.grain / 100.0) as f32,
         on,
         cos,
         sin,
@@ -250,6 +276,10 @@ pub struct FinishParams {
     pub curves: Option<[Lut1; 3]>,
     /// Refine Saturation as 0..1 (1 = the curves' own saturation).
     pub refine_sat: f32,
+    /// The visible masks' own Point Color samples that change something, by [`crate::masks::Evaluated::id`]; empty
+    /// for a photo without any (and for a black & white one, which has no Point Color), which then renders exactly
+    /// as before.
+    pub mask_points: Vec<(u32, Vec<PointK>)>,
     pub vig: Option<Vig>,
     /// Linear Rec.2020 → linear output RGB, the output's luminance weights (gamut mapping) and its
     /// encoding curve (see [`crate::output`]).
@@ -278,6 +308,11 @@ pub struct FinishParams {
     pub ev: f32,
     /// Film grain: the model of the photo's process ([`GrainModel`]).
     pub grain: Option<GrainModel>,
+    /// A visible mask carries local grain: `grain` is then built at Amount 100 and each pixel scales it by
+    /// `clamp(grain_base + Σ αᵢ·grainᵢ, 0, 1)`. Otherwise `grain` has the photo's own Amount (scale 1).
+    pub grain_local: bool,
+    /// The global Amount as 0..1 (0 when the Effects eye is off); read only with `grain_local`.
+    pub grain_base: f32,
     /// Output px → normalized oriented coordinates.
     pub out_to_norm: lightcraft_geom::Affine,
     pub ow: f64,
@@ -324,7 +359,16 @@ impl FinishParams {
             && frame.oh.is_finite()
             && frame.ow.max(frame.oh) > 0.0
             && out_to_norm.0.iter().all(|v| v.is_finite());
-        let grain = if effects && finite_frame { GrainModel::new(s, px_per_long, draft) } else { None };
+        // Local grain is not gated by the Effects eye (it belongs to the mask); size, roughness and seed are global.
+        let grain_local = finite_frame && s.masks.iter().any(|m| m.visible && !m.components.is_empty() && m.adjust.grain > 0.0);
+        let grain_base = if effects { (s.grain.amount / 100.0).clamp(0.0, 1.0) as f32 } else { 0.0 };
+        let grain = if grain_local {
+            GrainModel::with_amount(s, 100.0, px_per_long, draft)
+        } else if effects && finite_frame {
+            GrainModel::new(s, px_per_long, draft)
+        } else {
+            None
+        };
         let calibration = s.section_enabled("calibration");
         let peak = s.hdr.peak();
         FinishParams {
@@ -337,6 +381,26 @@ impl FinishParams {
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
+            mask_points: if crate::is_bw(s) {
+                Vec::new()
+            } else {
+                s.masks
+                    .iter()
+                    .filter(|m| m.visible && !m.components.is_empty())
+                    .map(|m| {
+                        (
+                            m.id,
+                            m.point_colors
+                                .iter()
+                                .take(lightcraft_develop::MAX_POINT_COLORS)
+                                .filter(|p| !p.is_neutral())
+                                .map(PointK::new)
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .filter(|(_, k)| !k.is_empty())
+                    .collect()
+            },
             vig: if effects { vignette(s) } else { None },
             to_out: space.from_working(),
             out_luma: space.luma(),
@@ -361,6 +425,8 @@ impl FinishParams {
             gain,
             ev,
             grain,
+            grain_local,
+            grain_base,
             out_to_norm,
             ow: frame.ow,
             oh: frame.oh,
@@ -500,10 +566,15 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 ) -> Vec<T> {
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
-    let FinishParams { light, curves, vig, to_out, out_luma, grain, .. } = fp;
+    let FinishParams { light, curves, vig, to_out, out_luma, grain, grain_local, grain_base, .. } = fp;
     let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
-    let out_to_norm = fp.out_to_norm;
-    let long = fp.ow.max(fp.oh);
+    // each evaluated mask's own Point Color samples (empty slice: none), in mask order; no list at all for a photo
+    // without any, which then costs the per-pixel stage nothing
+    let mut mask_points: Vec<&[PointK]> =
+        p.masks.iter().map(|m| fp.mask_points.iter().find(|(id, _)| *id == m.id).map_or(&[][..], |(_, k)| k.as_slice())).collect();
+    if mask_points.iter().all(|k| k.is_empty()) {
+        mask_points.clear();
+    }
     let [vx, vy, vw, vh] = fp.view;
     let (vx_u, vy_u) = (vx.round() as usize, vy.round() as usize);
     // the vignette belongs to the whole output frame, not to the window being drawn
@@ -564,6 +635,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let lab = lightcraft_color::perceptual::oklab_from_2020(d);
                 d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
             }
+
+            // the masks' own Point Color, in mask order, each weighted by its alpha
+            d = apply_masks_points(d, &p.masks, &mask_points, i);
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
@@ -651,32 +725,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            match grain {
-                Some(GrainModel::Value(g)) => {
-                    // V1/V2 (frozen): exactly the arithmetic those processes always had
-                    let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                    let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
-                    let sc = fp.px_per_long as f32 / g.cell;
-                    let mut v = grain_noise(gx * sc, gy * sc, g.seed);
-                    v = v * (1.0 - g.rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
-                    let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
-                    if hdr {
-                        lum = lum.clamp(0.0, 1.0);
-                    }
-                    let k = g.amt * v * (0.35 + 2.6 * lum * (1.0 - lum));
-                    if k.is_finite() {
-                        e = e.map(|v| v + k);
-                    }
-                }
-                Some(GrainModel::Crystal(g)) => match crystal_row.get(x) {
-                    Some(&f) => e = g.apply_field(e, f),
-                    None => {
-                        let n = out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-                        e = g.apply(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32);
-                    }
-                },
-                None => {}
-            }
+            // 1 with the photo's own Amount; with local grain the per-pixel amount (the model is at 100)
+            let grain_scale = if *grain_local { (*grain_base + local.values[17]).clamp(0.0, 1.0) } else { 1.0 };
+            e = apply_grain(fp, grain.as_ref(), &crystal_row, (x, y), e, grain_scale, hdr);
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
                     // the LUT sees SDR values; the part above SDR white is carried over
@@ -713,6 +764,47 @@ fn apply_light(
     }
 }
 
+/// Display-encoded `e` of output pixel (`x`, `y`) with grain of strength `scale` (1: the model's own Amount).
+fn apply_grain(
+    fp: &FinishParams,
+    grain: Option<&GrainModel>,
+    crystal_row: &[f32],
+    (x, y): (usize, usize),
+    mut e: [f32; 3],
+    scale: f32,
+    hdr: bool,
+) -> [f32; 3] {
+    let long = fp.ow.max(fp.oh);
+    match grain {
+        Some(_) if scale <= 0.0 => {}
+        Some(GrainModel::Value(g)) => {
+            // V1/V2 (frozen): exactly the arithmetic those processes always had
+            let n = fp.out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            let (gx, gy) = ((n.x * fp.ow) as f32 / long as f32, (n.y * fp.oh) as f32 / long as f32);
+            let sc = fp.px_per_long as f32 / g.cell;
+            let mut v = grain_noise(gx * sc, gy * sc, g.seed);
+            v = v * (1.0 - g.rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, g.seed ^ 0x55) * g.rough * 0.7;
+            let mut lum = 0.2126 * e[0] + 0.7152 * e[1] + 0.0722 * e[2];
+            if hdr {
+                lum = lum.clamp(0.0, 1.0);
+            }
+            let k = g.amt * scale * v * (0.35 + 2.6 * lum * (1.0 - lum));
+            if k.is_finite() {
+                e = e.map(|v| v + k);
+            }
+        }
+        Some(GrainModel::Crystal(g)) => match crystal_row.get(x) {
+            Some(&f) => e = g.apply_field_scaled(e, f, scale),
+            None => {
+                let n = fp.out_to_norm.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+                e = g.apply_scaled(e, (n.x * fp.ow / long) as f32, (n.y * fp.oh / long) as f32, scale);
+            }
+        },
+        None => {}
+    }
+    e
+}
+
 struct PixelLocalTerms {
     values: [f32; MASK_SUMS],
     tint: Option<([f32; 3], f32)>,
@@ -737,7 +829,7 @@ fn pixel_local_terms(p: &Prepared, terms: &[[f32; MASK_TERMS]], index: usize) ->
 }
 
 fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
-    let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe] = local.values;
+    let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe, _] = local.values;
     let mut color = if fp.gain == 1.0 { raw } else { raw.map(|value| value * fp.gain) };
 
     let moire = (l_moire + 0.5 * l_noise.max(0.0)).clamp(-1.0, 1.0);
@@ -794,7 +886,7 @@ fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 
 }
 
 fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
-    let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
+    let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _, _] = local.values;
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {

@@ -242,7 +242,9 @@ impl LightcraftApp {
         {
             self.ui.tool.clear();
         }
-        if r.is_ok() && id == "mask.adjust" {
+        if r.is_ok()
+            && matches!(id, "mask.adjust" | "mask.pointColor.pick" | "mask.pointColor.set" | "mask.pointColor.delete" | "mask.pointColor.clear")
+        {
             // Judge local adjustments on the photo, without the selection overlay obscuring them.
             // Keep it hidden after release; O / the overlay eye can show it again.
             self.ui.mask_overlay = false;

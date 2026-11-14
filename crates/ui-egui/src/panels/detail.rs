@@ -197,7 +197,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let overlay = view_overlay(app, &d);
     // a drag drafts at full size where the GPU draws the view (by the GPU's own rule, `handles`;
     // `ready` first: `available` would wait for a device still being created)
-    let gpu = interacting && gpu_draws_view(app, overlay);
+    let gpu = interacting && gpu_draws_view(app, overlay, &d);
     let shown = app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == id && t.quick.is_none()).map(|t| (t.key, t.ms));
     let drag = app.session.interaction.as_ref().map(|i| (i.photo, i.label.as_str()));
     let now = ui.input(|i| i.time);
@@ -707,14 +707,16 @@ fn visible_texture_aspect(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings,
         .map(|tex| tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32)
 }
 
-/// Whether the GPU draws the view (by the GPU's own rule, `handles`; `ready` first: `available`
-/// would wait for a device still being created).
-fn gpu_draws_view(app: &LightcraftApp, overlay: lightcraft_pipeline::Overlay) -> bool {
-    lightcraft_engine::gpu::handles(
-        lightcraft_pipeline::OutputDepth::U8,
-        app.ui.soft_proof && lightcraft_pipeline::proof_profile(app.ui.proof.profile).is_some(),
-        overlay,
-    ) && lightcraft_engine::gpu::ready()
+/// Whether the GPU draws the view (by the GPU's own rules, `handles` and `draws` of the photo's settings; `ready`
+/// first: `available` would wait for a device still being created).
+fn gpu_draws_view(app: &LightcraftApp, overlay: lightcraft_pipeline::Overlay, d: &DevelopSettings) -> bool {
+    lightcraft_engine::gpu::draws(d)
+        && lightcraft_engine::gpu::handles(
+            lightcraft_pipeline::OutputDepth::U8,
+            app.ui.soft_proof && lightcraft_pipeline::proof_profile(app.ui.proof.profile).is_some(),
+            overlay,
+        )
+        && lightcraft_engine::gpu::ready()
         && lightcraft_engine::gpu::available()
 }
 
@@ -1217,7 +1219,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "colorRange" | "pointColor" | "maskPointColor" => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {
@@ -1272,6 +1274,11 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
             }
             app.ui.tool.clear();
         }
+        return;
+    }
+    if app.ui.tool == "maskPointColor" {
+        // (full-screen preview: the Masking panel is shut, but the armed eyedropper still samples into the selected mask)
+        masks::mask_point_color_pick(app, ui, resp, map);
         return;
     }
     click_zoom_and_pan(app, resp, img, canvas);

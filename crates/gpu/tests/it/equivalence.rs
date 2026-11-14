@@ -237,6 +237,18 @@ fn grain_patterns_in_turn_match() {
     }
 }
 
+fn local_grain(s: &mut DevelopSettings) {
+    let radial = MaskShape::Radial { center: Point::new(0.4, 0.6), rx: 0.3, ry: 0.25, angle: 0.0, feather: 50.0, invert: false };
+    let linear = MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.7) };
+    let m =
+        |shape, adjust| Mask { components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], adjust, ..Default::default() };
+    use lightcraft_develop::LocalAdjustments as L;
+    s.grain.amount = 25.0;
+    s.grain.size = 40.0;
+    s.grain.roughness = 60.0;
+    s.masks = vec![m(radial, L { grain: 70.0, exposure: 0.2, ..Default::default() }), m(linear, L { grain: 40.0, ..Default::default() })];
+}
+
 fn cases() -> Vec<(&'static str, Edit)> {
     vec![
         ("default", |_| {}),
@@ -517,6 +529,16 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 m(radial, L { noise: 80.0, moire: 60.0, defringe: 100.0, ..Default::default() }),
                 m(linear, L { noise: -60.0, moire: -40.0, ..Default::default() }),
             ];
+        }),
+        // local grain: the global grain, a radial mask adding to it and a linear one grain-only (crystals, then V6's value noise)
+        ("masks (local grain)", local_grain),
+        ("masks (local grain, process V6)", |s| {
+            s.process = Process::V6.version();
+            local_grain(s);
+        }),
+        ("masks (local grain, no global grain)", |s| {
+            local_grain(s);
+            s.grain.amount = 0.0;
         }),
         ("masks (auto mask brush)", |s| {
             let st = |pts: &[(f64, f64)], auto_mask, erase| BrushStroke {
@@ -1062,6 +1084,50 @@ fn tint_directions_match_cpu_for_raw_and_rendered_sources() {
             check("tint direction", &src, &info, &s, &RenderRequest::fit(64, 64));
         }
     }
+}
+
+/// Each mask's own Point Color: two masks with different samples, the second overlapping the first (the masks'
+/// samples apply in mask order, each weighted by its alpha), match the CPU; a black & white photo has none, on both.
+#[test]
+fn mask_point_color_matches() {
+    use lightcraft_develop::{LocalAdjustments, PointColor};
+    if !gpu() {
+        return;
+    }
+    let radial = |x, rx| MaskShape::Radial { center: Point::new(x, 0.5), rx, ry: 0.4, angle: 0.0, feather: 60.0, invert: false };
+    let mask = |id, shape, point_colors| Mask {
+        id,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+        point_colors,
+        ..Default::default()
+    };
+    let warm =
+        PointColor { lum: 0.62, chroma: 0.09, hue: 60.0, hue_shift: 60.0, sat_shift: 40.0, lum_shift: 20.0, range: 90.0, ..Default::default() };
+    let cool =
+        PointColor { lum: 0.5, chroma: 0.12, hue: 270.0, variance: -60.0, sat_shift: -40.0, hue_range: 80.0, range: 90.0, ..Default::default() };
+    let grey = PointColor { lum: 0.4, chroma: 0.01, hue: 0.0, lum_shift: -30.0, range: 80.0, ..Default::default() };
+    let mut s = DevelopSettings::default();
+    s.light.exposure = 0.2;
+    s.masks = vec![
+        // ahead of the masks with samples, so a wrong table offset or mask index would show: one with no samples of
+        // its own (only a tone slider), a hidden one and one whose Point Color section is off, both with samples
+        Mask { adjust: LocalAdjustments { exposure: 0.3, ..Default::default() }, ..mask(3, radial(0.5, 0.5), Vec::new()) },
+        Mask { visible: false, ..mask(4, radial(0.3, 0.3), vec![cool]) },
+        Mask { disabled_sections: vec!["pointColor".into()], ..mask(5, radial(0.7, 0.3), vec![grey]) },
+        mask(1, radial(0.35, 0.4), vec![warm, grey]),
+        mask(2, radial(0.6, 0.35), vec![cool, warm]),
+    ];
+    let src = scene(0, 960, 640);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    check("mask point colour", &src, &raw, &s, &req);
+    // it does something: the same photo without the samples differs
+    let mut plain = s.clone();
+    plain.masks.iter_mut().for_each(|m| m.point_colors.clear());
+    let (mean, _, _) = diff(&render(&src, &raw, &s, &req).image, &render(&src, &raw, &plain, &req).image);
+    assert!(mean > 0.05, "the samples change the render ({mean:.4})");
+    s.treatment = Treatment::Bw;
+    check("mask point colour, B&W", &src, &raw, &s, &req);
 }
 
 /// Issue #323: windows of a zoomed frame. The GPU renders the window like the CPU does: the
