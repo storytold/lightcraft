@@ -946,7 +946,7 @@ fn mask_ifd(w: usize, h: usize, name: &str, px: Vec<u8>) -> IfdBuilder {
 /// developed image (default crop of the active area), and doesn't disturb the raw decode.
 #[test]
 fn semantic_masks_are_read_and_placed() {
-    use lightcraft_raw::semantic::MaskSubArea;
+    use lightcraft_raw::semantic::{MaskSubArea, SemanticMaskExt};
     for order in [ByteOrder::Little, ByteOrder::Big] {
         let bytes = profile_dng(order, |ifd0| {
             // a 4 × 2 crop at (top 1, left 2) of an 8 × 4 mask over the 8 × 6 image
@@ -985,6 +985,7 @@ fn semantic_masks_are_read_and_placed() {
 /// doesn't fit; the raw image still decodes.
 #[test]
 fn malformed_semantic_masks_are_skipped() {
+    use lightcraft_raw::semantic::SemanticMaskExt;
     let bytes = profile_dng(ByteOrder::Little, |ifd0| {
         ifd0.add_sub_ifd(mask_ifd(2, 2, "", vec![1, 2, 3, 4])); // no SemanticName
         let mut rgb = mask_ifd(2, 2, "rgb", vec![0; 12]);
