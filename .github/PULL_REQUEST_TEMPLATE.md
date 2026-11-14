@@ -64,6 +64,8 @@ Fixes #
       free in `docs/library-shortcuts.md`
 - [ ] The feature's rows in `docs/parity-checklist.md` and its entry in `docs/gaps.md` are updated, honestly (🟡 when
       it is partial), in the same commit
-- [ ] New code has a caller: no command, module or setting that nothing reaches yet
+- [ ] New code has a caller, or is a tested core whose caller comes in the next pull request, named here (`caller:
+      #123`, or the feature when that pull request isn't open yet): no command, module or setting that nothing
+      reaches or will reach
 - [ ] Every new image, icon or other asset has its entry in `assets/ATTRIBUTION.md`; no font or media files added
 - [ ] Ready to merge (otherwise open it as a draft)
