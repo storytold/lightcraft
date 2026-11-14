@@ -75,12 +75,22 @@ fn metadata(bytes: &[u8], format: RawFormat, camera: &craft_raw::Camera, size: (
             ..Metadata::default()
         }
     } else {
-        // an MRW keeps its Exif TIFF in the `TTW` block
-        let tiff = match format {
-            RawFormat::Mrw => lightcraft_meta::mrw::parse(bytes).and_then(|m| m.block(b"TTW")).and_then(|b| Tiff::parse(b).ok()),
-            _ => Tiff::parse_with(bytes, &craft_tiff::ParseOptions { max_ifds: 256, ..Default::default() }).ok(),
-        };
-        tiff.as_ref().map(lightcraft_meta::from_tiff).unwrap_or_default()
+        // CR3 (ISO BMFF) and RAF (Fuji container) do not start with a TIFF header; lightcraft_meta::extract handles them.
+        // An MRW keeps its Exif TIFF in the `TTW` block.
+        match format {
+            RawFormat::Cr3 | RawFormat::Raf => lightcraft_meta::extract(bytes),
+            RawFormat::Mrw => lightcraft_meta::mrw::parse(bytes)
+                .and_then(|m| m.block(b"TTW"))
+                .and_then(|b| Tiff::parse(b).ok())
+                .as_ref()
+                .map(lightcraft_meta::from_tiff)
+                .unwrap_or_default(),
+            _ => Tiff::parse_with(bytes, &craft_tiff::ParseOptions { max_ifds: 256, ..Default::default() })
+                .ok()
+                .as_ref()
+                .map(lightcraft_meta::from_tiff)
+                .unwrap_or_default(),
+        }
     };
     m.width = Some(size.0 as u32);
     m.height = Some(size.1 as u32);
@@ -147,7 +157,7 @@ fn image(r: craft_raw::RawImage, metadata: Metadata) -> RawImage {
         pixel_aspect: r.pixel_aspect,
         opcodes: r.opcodes,
         metadata,
-        lens_metadata: Default::default(),
+        lens_metadata: r.lens_metadata,
     }
 }
 
@@ -172,7 +182,7 @@ fn header_image(i: craft_raw::RawInfo, metadata: Metadata) -> RawImage {
         pixel_aspect: i.pixel_aspect,
         opcodes: i.opcodes,
         metadata,
-        lens_metadata: Default::default(),
+        lens_metadata: i.lens_metadata,
     }
 }
 

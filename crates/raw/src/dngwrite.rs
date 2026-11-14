@@ -357,10 +357,10 @@ pub fn write_dng(raw: &RawImage, opts: &DngWriteOptions) -> Result<Vec<u8>> {
                             }
                         }
                     }
-                    let mut out = Vec::new();
-                    jpeg_encoder::Encoder::new(&mut out, quality)
-                        .encode(&buf, tile as u16, tile as u16, jpeg_encoder::ColorType::Rgb)
-                        .map(|()| out)
+                    let ic_img = craft_image_codecs::Image::from_u8(tile as u32, tile as u32, craft_image_codecs::ChannelLayout::Rgb, buf)
+                        .map_err(|e| RawError::Corrupt(format!("lossy JPEG tile: {e}")))?;
+                    let opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality, ..Default::default() };
+                    craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Jpeg, &opts)
                         .map_err(|e| RawError::Corrupt(format!("lossy JPEG tile: {e}")))
                 })
                 .collect::<Result<_>>()?;
