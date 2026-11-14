@@ -8,10 +8,14 @@ use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
+/// The id the top bar's whole rectangle is registered under (`LightcraftApp::widgets`); the desktop
+/// host reads it to size the macOS window buttons to the bar.
+pub const TITLEBAR_REGION: &str = "region:titlebar";
+
 /// The bar doubles as the window's title bar: dragging its empty space moves the window and a
 /// double-click acts as the system setting says. Made before the bar's widgets so they win the click.
 fn window_handle(ui: &mut egui::Ui, bar: Rect) {
-    register(ui, "region:titlebar", bar);
+    register(ui, TITLEBAR_REGION, bar);
     let resp = craft_window::title_bar::empty_area(ui, bar);
     crate::widgets::announce(&resp, crate::i18n::tr("Title bar"));
 }
