@@ -75,7 +75,7 @@ from the checklist sections and the deep-dive documents.
 | Remove, heal, Enhance (denoise, Raw Details, Super Resolution, Lens Blur) | 7% | 45% | 30% | 70–130 h | checklist I 75%, P 0% |
 | Presets, profiles, versions, history, sync | 5% | 95% | 85% | 8–15 h | |
 | Export | 6% | 89% | 75% | 15–30 h | checklist S 88.9% |
-| Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (no HDR display) |
+| Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 63% (HDR limitations, gap 29; panorama and HDR panorama verification in moving scenes, gap 31), HDR 70% (no HDR display) |
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
 | Classic output modules (Map, Book, Slideshow, Print, Web, publish, tethering) | 4% | 15% | 10% | 90–150 h | Classic extras 48% counts many small keys; the modules themselves are mostly ⬜ |
 | Video | 1% | 0% | 0% | 25–45 h | catalogued only |
@@ -308,6 +308,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 | 2026-10-19 | patch | Stability note: tests run in CI on Linux x64 (every PR) as well as FreeBSD; macOS and Windows remain (gap 9) |
 | 2026-10-19 | minor | Localization ~55% → ~64% (mean of the 12 key languages): Indonesian (`id`) catalog, every message but What's New; full target 61.2% → 61.5% (still ~61%) |
 | 2026-10-19 | patch | Platforms: the Windows installer is no longer listed as unverified (the 0.9.1 x64 MSI is tested on Windows 11; a confirmation after uninstalling from Settings → Apps, #892, remains); #790 noted as fixed in 0.9.1; percentages and hours unchanged |
+| 2026-10-21 | minor | Panorama and HDR panorama marked partial (#1765): omitted photos are reported; verification remains unresolved. Checklist recount 83.5% to 83.3% (543 rows); refreshed the stale headline from the checklist. Readiness estimates unchanged |
 | 2026-10-14 | minor | Localization ~52% → ~55% (mean of the 12 key languages): de, es, fr, ja and uk catalogs filled |
 | 2026-10-12 | minor | UI/UX remaining 34–58 h → 32–54 h (canvas tools by keyboard); headline numbers unchanged |
 | 2026-10-14 | minor | Merge and HDR: merge 100% → 88% (LR-MERGE-HDR ✅ → 🟡 after testing on real 67 MP brackets; gap 29); area percentages unchanged |
