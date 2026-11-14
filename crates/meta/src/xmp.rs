@@ -43,24 +43,7 @@ const NAMESPACES: &[(&str, &str)] = &[
 /// The camera-raw-settings namespace URI (prefix `crs`), read for interchange only.
 pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
 
-/// XMP read failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum XmpError {
-    Xml(String),
-    /// Nesting / size limits exceeded.
-    TooComplex,
-}
-
-impl std::fmt::Display for XmpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            XmpError::Xml(e) => write!(f, "XMP is not well-formed XML: {e}"),
-            XmpError::TooComplex => write!(f, "XMP packet too deeply nested or too large"),
-        }
-    }
-}
-
-impl std::error::Error for XmpError {}
+pub use craft_metadata::XmpError;
 
 /// Result of [`parse_xmp`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -180,11 +163,6 @@ pub(crate) fn check_scopes(scopes: &[Vec<(String, String)>]) -> Result<(), XmpEr
         return Err(XmpError::TooComplex);
     }
     Ok(())
-}
-
-/// Names canonicalised by namespace URI (see [`NAMESPACES`]); conflicting foreign prefixes are opaque.
-pub(crate) fn canonical_name(qname: &str, scopes: &[Vec<(String, String)>], opaque_budget: &mut usize) -> Result<String, XmpError> {
-    canonical(qname, scopes, opaque_budget)
 }
 
 fn canonical(qname: &str, scopes: &[Vec<(String, String)>], opaque_budget: &mut usize) -> Result<String, XmpError> {
