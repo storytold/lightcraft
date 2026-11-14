@@ -193,4 +193,6 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 | 2026-10-24 | patch | LR-META-XMP: sidecar keywords are written as names in `dc:subject` and paths in `lr:hierarchicalSubject`, so other DAMs can search them; ranked gaps and estimates unchanged |
 | 2026-10-20 | minor | Opt-in Windows DirectComposition preference added; VRR hardware verification pending; parity counts unchanged |
 | 2026-10-25 | minor | Gap 1: first chart-calibrated model, the Canon EOS D60 (ColorChecker Classic under tungsten and sun, `crates/raw/src/chart_table.rs`); the gap stays open, hours unchanged |
+| 2026-11-02 | patch | Gap 1: a partial look (full JPEG fit failed) of a model with spectral matrices takes their colour instead of the generic one (EOS R50 LED night shot: ΔE00 7.1 → 4.9); ranked gaps and estimates unchanged |
+| 2026-11-08 | patch | Gap 1: a partial look (full JPEG fit failed) of a model with a camera profile takes the profile's colour, matrix and table, instead of the generic one (Sony ZV-E10 stage photo: ΔE00 14.2 → 8.9, colourfulness 0.32 → 1.02); ranked gaps and estimates unchanged |
 | 2026-11-05 | minor | Gap 9: a Windows leg runs clippy and the tests of the crates with Windows-only code when a pull request or push changes that code, or a pull request is labelled `full-ci`; gap not closed (macOS, GPU tests) |
