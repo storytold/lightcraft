@@ -40,7 +40,7 @@ impl<'a> Rd<'a> {
     }
 }
 
-/// The header (`craft-psd`), colour mode data and image resources, with a reader at the layer and mask section.
+/// The header, colour mode data and image resources (`craft-psd`), with a reader at the layer and mask section.
 struct Start<'a> {
     psb: bool,
     channels: usize,
@@ -48,8 +48,7 @@ struct Start<'a> {
     height: usize,
     depth: u16,
     mode: u16,
-    color_mode_data: &'a [u8],
-    resources: Vec<craft_psd::ImageResource>,
+    head: craft_psd::Head,
     r: Rd<'a>,
 }
 
@@ -58,17 +57,13 @@ fn start<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<Start<'a>> {
     if let (Some(&[h0, h1, h2, h3]), Some(&[w0, w1, w2, w3])) = (bytes.get(14..18), bytes.get(18..22)) {
         check_size(F, u64::from(u32::from_be_bytes([w0, w1, w2, w3])), u64::from(u32::from_be_bytes([h0, h1, h2, h3])), opts)?;
     }
-    let h = craft_psd::Header::from_bytes(bytes).map_err(|e| match e {
+    let head = craft_psd::Head::from_bytes(bytes).map_err(|e| match e {
         craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
         e => err(&e.to_string()),
     })?;
-    let mut r = Rd { b: bytes, p: 26 };
-    let cm_len = r.u32()? as usize;
-    let color_mode_data = r.take(cm_len)?;
-    let res_len = r.u32()? as usize;
-    r.take(res_len)?;
-    // a resource section that doesn't parse is left out: the picture still decodes, without its profile and metadata
-    let resources = craft_psd::Head::from_bytes(bytes).map(|head| head.resources).unwrap_or_default();
+    let h = &head.header;
+    check_size(F, u64::from(h.width), u64::from(h.height), opts)?;
+    let p = usize::try_from(head.layer_section_offset).map_err(|_| err("truncated"))?;
     Ok(Start {
         psb: h.version.is_psb(),
         channels: usize::from(h.channels),
@@ -76,15 +71,15 @@ fn start<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<Start<'a>> {
         height: h.height as usize,
         depth: h.depth,
         mode: h.color_mode.as_u16(),
-        color_mode_data,
-        resources,
-        r,
+        r: Rd { b: bytes, p },
+        head,
     })
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    let Start { psb, channels, width, height, depth, mode, color_mode_data, resources: res, mut r } = start(bytes, opts)?;
-    let (icc, exif, xmp) = resources(&res);
+    let Start { psb, channels, width, height, depth, mode, head, mut r } = start(bytes, opts)?;
+    let color_mode_data = head.color_mode_data.as_slice();
+    let (icc, exif, xmp) = resources(&head);
 
     // Layer and mask information: only the layer count sign matters (merged transparency).
     let lm_len = if psb { r.u64()? } else { u64::from(r.u32()?) };
@@ -357,8 +352,9 @@ fn packbits(src: &[u8], out: &mut Vec<u8>) {
 /// depth, colour mode or compression, or merged image data that runs past the end of the file
 /// (truncated). The run-length data itself is not unpacked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let Start { psb, channels, width, height, depth, mode, color_mode_data, resources: res, mut r } = start(bytes, &DecodeOptions::default())?;
-    let (_, exif, _) = resources(&res);
+    let Start { psb, channels, width, height, depth, mode, head, mut r } = start(bytes, &DecodeOptions::default())?;
+    let color_mode_data = head.color_mode_data.as_slice();
+    let (_, exif, _) = resources(&head);
     let lm_len = if psb { r.u64()? as usize } else { r.u32()? as usize };
     r.take(lm_len)?;
     let compression = r.u16()?;
@@ -439,8 +435,8 @@ fn unpackbits(mut src: &[u8], row: &mut [u8]) -> Result<()> {
 }
 
 /// ICC (1039), EXIF (1058, without its optional `Exif\0\0` prefix) and XMP (1060) resources; the last of each id.
-fn resources(res: &[craft_psd::ImageResource]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) {
-    let last = |id: u16| res.iter().rev().find(|r| r.id == id).map(|r| r.data.as_slice());
+fn resources(head: &craft_psd::Head) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) {
+    let last = |id: u16| head.resources.iter().rev().find(|r| r.id == id).map(|r| r.data.as_slice());
     let icc = last(1039).map(<[u8]>::to_vec);
     let exif = last(1058).map(|d| d.strip_prefix(b"Exif\0\0").unwrap_or(d).to_vec());
     let xmp = last(1060).map(|d| String::from_utf8_lossy(d).trim_end_matches('\0').to_string());
@@ -514,15 +510,14 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_resource_section_is_left_out() {
-        // a resource section of 4 bytes that is not an `8BIM` record: the picture decodes without it
+    fn a_damaged_resource_section_is_malformed() {
+        // a resource section of 4 bytes that is not an `8BIM` record
         let mut b = header(3, 1, 1, 8, 3, 0);
         b[30..34].copy_from_slice(&4u32.to_be_bytes());
         b.splice(34..34, *b"JUNK");
-        b.extend_from_slice(&[1, 2, 3]);
-        let d = decode(&b, &DecodeOptions::default()).unwrap();
-        assert_eq!((d.width, d.height, d.icc.is_none()), (1, 1, true));
-        assert_eq!(super::header(&b).unwrap(), (1, 1, 1));
+        let e = decode(&b, &DecodeOptions::default()).unwrap_err();
+        assert!(matches!(e, Error::Malformed(_, ref m) if m.contains("signature")), "{e:?}");
+        assert!(super::header(&b).is_err());
     }
 
     #[test]

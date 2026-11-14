@@ -11,7 +11,5 @@ workspace = true
 [dependencies]
 lightcraft-raster = { workspace = true }
 siphasher = { workspace = true }
-jpeg-encoder = { workspace = true }
-zune-jpeg = { workspace = true }
-zune-core = { workspace = true }
+craft-image-codecs = { workspace = true }
 log = { workspace = true }

@@ -122,11 +122,11 @@ fn tiny_gif_and_bmp_declaring_a_gigapixel_canvas_are_refused_before_allocating()
 fn large_gif_and_bmp_sizes_come_from_the_header() {
     let (w, h) = (2_100u32, 2_000u32);
     let rgb = vec![90u8; (w * h * 3) as usize];
-    let mut bmp = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut bmp).encode(&rgb, w, h, image::ExtendedColorType::Rgb8).unwrap();
-    let mut gif = Vec::new();
-    let frame = image::RgbaImage::from_pixel(w, h, image::Rgba([90, 90, 90, 255]));
-    image::codecs::gif::GifEncoder::new(&mut gif).encode_frame(image::Frame::new(frame)).unwrap();
+    let bmp_img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgb, rgb).unwrap();
+    let bmp = craft_image_codecs::encode(&bmp_img, craft_image_codecs::Format::Bmp, &craft_image_codecs::EncodeOptions::default()).unwrap();
+    let rgba = [90, 90, 90, 255].repeat((w * h) as usize);
+    let gif_img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, rgba).unwrap();
+    let gif = craft_image_codecs::encode(&gif_img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap();
     for (name, bytes) in [("bmp", bmp), ("gif", gif)] {
         let header = read_header(&bytes).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!((header.width, header.height, header.orientation), (w, h, 1), "{name}");

@@ -9,13 +9,11 @@
 //!
 //! All conversions are relative colorimetric: the display's white is the image's white.
 
-use std::sync::Arc;
-
 use crate::icc;
 use crate::space::Trc;
+use craft_cms::{Builtin, ColorSpace, Intent, Pcs, Profile, Transform, TransformOptions};
 use lightcraft_color::{D50, D65, Mat3, REC2020, bradford};
 use lightcraft_raster::Rgba8;
-use moxcms::{ColorProfile, DataColorSpace, Layout, RenderingIntent, Transform8BitExecutor, TransformOptions, Xyzd};
 
 /// Largest profile file accepted (monitor profiles are a few KB; LUT profiles up to a few MB).
 pub const MAX_PROFILE_BYTES: usize = 32 << 20;
@@ -46,7 +44,7 @@ enum Correction {
     /// Per-channel tables (matrix/TRC profile: same primaries, other curves).
     Curves(Box<[[u8; 256]; 3]>),
     /// A full CMS transform (LUT-based profile).
-    Cms(Arc<Transform8BitExecutor>),
+    Cms(Box<Transform>),
 }
 
 /// A parsed display profile with its transforms (built once, applied to every preview).
@@ -59,8 +57,8 @@ pub struct DisplayProfile {
     /// Linear display RGB → linear Rec.2020 (D65; display white → (1, 1, 1)).
     pub to_rec2020: Mat3,
     correction: Correction,
-    from_srgb: Arc<Transform8BitExecutor>,
-    to_srgb: Arc<Transform8BitExecutor>,
+    from_srgb: Transform,
+    to_srgb: Transform,
 }
 
 impl std::fmt::Debug for DisplayProfile {
@@ -75,11 +73,7 @@ impl std::fmt::Debug for DisplayProfile {
 }
 
 fn opts() -> TransformOptions {
-    TransformOptions { rendering_intent: RenderingIntent::RelativeColorimetric, ..TransformOptions::default() }
-}
-
-fn xyzd(v: [f64; 3]) -> Xyzd {
-    Xyzd { x: v[0], y: v[1], z: v[2] }
+    TransformOptions { intent: Intent::RelativeColorimetric, bpc: false, precise_float: true }
 }
 
 /// Linear Rec.2020 → XYZ relative to D50 (the ICC PCS), Bradford-adapted.
@@ -100,11 +94,6 @@ fn hash(bytes: &[u8]) -> u64 {
     h.finish() | 1
 }
 
-/// Runs a moxcms call that may panic on a hostile profile.
-fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok().flatten()
-}
-
 impl DisplayProfile {
     /// Parse a display profile (an RGB ICC profile, matrix/TRC or LUT-based) and build its
     /// transforms. Errors say what is wrong with the file; nothing here panics.
@@ -112,11 +101,11 @@ impl DisplayProfile {
         if bytes.len() > MAX_PROFILE_BYTES {
             return Err(format!("the profile is too large ({} MB)", bytes.len() >> 20));
         }
-        let p = guarded(|| ColorProfile::new_from_slice(bytes).ok()).ok_or("not a valid ICC profile")?;
-        if p.color_space != DataColorSpace::Rgb {
+        let p = Profile::parse(bytes).map_err(|_| "not a valid ICC profile")?;
+        if p.color_space != ColorSpace::Rgb {
             return Err("not an RGB profile (a display profile describes an RGB device)".into());
         }
-        if !matches!(p.pcs, DataColorSpace::Xyz | DataColorSpace::Lab) {
+        if !matches!(p.pcs, Pcs::Xyz | Pcs::Lab) {
             return Err("unsupported profile connection space".into());
         }
         let info = icc::parse(bytes).ok_or("not a valid ICC profile")?;
@@ -127,11 +116,8 @@ impl DisplayProfile {
             .filter(|d| !d.is_empty())
             .unwrap_or("Display profile")
             .to_string();
-        let has_lut = p.lut_a_to_b_colorimetric.is_some()
-            || p.lut_a_to_b_perceptual.is_some()
-            || p.lut_b_to_a_colorimetric.is_some()
-            || p.lut_b_to_a_perceptual.is_some();
-        let srgb = ColorProfile::new_srgb();
+        let has_lut = p.a2b[0].is_some() || p.a2b[1].is_some() || p.b2a[0].is_some() || p.b2a[1].is_some();
+        let srgb = Builtin::Srgb.profile().clone();
 
         // the primaries the pipeline renders into
         let (kind, to_xyz_d50, curves) = match &info.kind {
@@ -147,17 +133,14 @@ impl DisplayProfile {
 
         // the proxy: the display's primaries (as the pipeline targets them), sRGB curve
         let proxy_xyz = rec2020_to_xyz_d50().mul(&to_rec2020).0;
-        let mut proxy = ColorProfile::new_srgb();
-        proxy.cicp = None;
-        proxy.red_colorant = xyzd([proxy_xyz[0][0], proxy_xyz[1][0], proxy_xyz[2][0]]);
-        proxy.green_colorant = xyzd([proxy_xyz[0][1], proxy_xyz[1][1], proxy_xyz[2][1]]);
-        proxy.blue_colorant = xyzd([proxy_xyz[0][2], proxy_xyz[1][2], proxy_xyz[2][2]]);
+        let mut proxy = Builtin::Srgb.profile().clone();
+        proxy.matrix = Some(proxy_xyz);
 
-        let transform = |src: &ColorProfile, dst: &ColorProfile| guarded(|| src.create_transform_8bit(Layout::Rgba, dst, Layout::Rgba, opts()).ok());
+        let transform = |src: &Profile, dst: &Profile| Transform::with_options(src, dst, opts()).ok();
         let correction = match curves {
             Some(trc) if trc.iter().all(|t| t.approx_eq(&Trc::Srgb, 2e-4)) => Correction::None,
             Some(trc) => Correction::Curves(Box::new(curve_tables(&trc))),
-            None => Correction::Cms(transform(&proxy, &p).ok_or("the profile's tables can't be applied")?),
+            None => Correction::Cms(Box::new(transform(&proxy, &p).ok_or("the profile's tables can't be applied")?)),
         };
         let from_srgb = transform(&srgb, &p).ok_or("can't convert sRGB to this profile")?;
         let to_srgb = transform(&proxy, &srgb).ok_or("can't convert this profile to sRGB")?;
@@ -205,12 +188,12 @@ impl DisplayProfile {
 
 /// Device RGB → PCS (XYZ D50) of the pure primaries, measured through the profile's tables
 /// (LUT-only profiles have no colorant tags).
-fn measured_to_xyz_d50(p: &ColorProfile) -> Result<Mat3, String> {
+fn measured_to_xyz_d50(p: &Profile) -> Result<Mat3, String> {
     let lin = icc::linear_rec2020_profile();
-    let x = guarded(|| p.create_transform_f32(Layout::Rgb, &lin, Layout::Rgb, opts()).ok()).ok_or("the profile's tables can't be applied")?;
+    let x = Transform::with_options(p, &lin, opts()).map_err(|_| "the profile's tables can't be applied")?;
     let src = [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
     let mut dst = [0f32; 9];
-    guarded(|| x.transform(&src, &mut dst).ok()).ok_or("the profile's tables can't be applied")?;
+    x.convert_f32(&src, 3, &mut dst, 3, false).map_err(|_| "the profile's tables can't be applied")?;
     let c = |i: usize| [dst[i] as f64, dst[i + 3] as f64, dst[i + 6] as f64];
     // columns: each primary in linear Rec.2020
     let m = Mat3([c(0), c(1), c(2)]);
@@ -247,10 +230,10 @@ fn from_linear(t: &Trc, y: f32) -> f32 {
     0.5 * (lo + hi)
 }
 
-fn apply(x: &Arc<Transform8BitExecutor>, img: &mut Rgba8) -> Result<(), String> {
+fn apply(x: &Transform, img: &mut Rgba8) -> Result<(), String> {
     const CHUNK: usize = 1 << 14; // pixels
     let src = img.data.clone();
-    let run = |s: &[[u8; 4]], d: &mut [[u8; 4]]| guarded(|| x.transform(s.as_flattened(), d.as_flattened_mut()).ok()).is_some();
+    let run = |s: &[[u8; 4]], d: &mut [[u8; 4]]| x.convert_u8(s.as_flattened(), 4, d.as_flattened_mut(), 4, true).is_ok();
     #[cfg(feature = "parallel")]
     let ok = {
         use rayon::prelude::*;
@@ -340,9 +323,8 @@ mod tests {
     fn rejects_bad_profiles() {
         assert!(DisplayProfile::from_icc(&[]).is_err());
         assert!(DisplayProfile::from_icc(&[0u8; 300]).is_err());
-        let mut gray = ColorProfile::new_gray_with_gamma(2.2);
-        gray.cicp = None;
-        assert!(DisplayProfile::from_icc(&gray.encode().unwrap()).is_err());
+        let gray = Builtin::GrayGamma22.profile().to_bytes();
+        assert!(DisplayProfile::from_icc(&gray).is_err());
         // truncated / corrupted real profiles never panic
         let good = icc::write_named(NamedSpace::DisplayP3);
         for n in [10, 128, 140, 200, good.len() - 1] {
@@ -359,55 +341,50 @@ mod tests {
     /// Display P3 panel with a gamma 2.2 response): the primaries are measured through the tables
     /// and every preview goes through the CMS.
     fn lut_only_p3_gamma22() -> Vec<u8> {
-        use moxcms::{LutMultidimensionalType, LutWarehouse, Matrix3d, ProfileClass, ToneReprCurve, Vector3d};
+        use craft_cms::Curve;
+        use craft_cms::pipeline::Stage;
+        use craft_cms::profile::{Lut, LutKind};
         let m = crate::space::rgb_to_xyz_d50(&DISPLAY_P3).0;
         let inv = crate::space::rgb_to_xyz_d50(&DISPLAY_P3).inverse().unwrap().0;
-        let curves = |v: Vec<f32>| vec![ToneReprCurve::Parametric(v.clone()), ToneReprCurve::Parametric(v.clone()), ToneReprCurve::Parametric(v)];
-        let ident = || curves(vec![1.0]);
-        // mAB: A → CLUT → M → matrix → B (no CLUT: M curves linearize, the matrix goes to XYZ)
-        let a2b = LutWarehouse::Multidimensional(LutMultidimensionalType {
-            num_input_channels: 3,
-            num_output_channels: 3,
-            grid_points: [0; 16],
-            clut: None,
-            a_curves: vec![],
-            m_curves: curves(vec![2.2]),
-            matrix: Matrix3d { v: m.map(|r| r.map(|v| v * 32768.0 / 65535.0)) },
-            b_curves: ident(),
-            bias: Vector3d::default(),
-        });
-        let b2a = LutWarehouse::Multidimensional(LutMultidimensionalType {
-            num_input_channels: 3,
-            num_output_channels: 3,
-            grid_points: [0; 16],
-            clut: None,
-            a_curves: vec![],
-            m_curves: curves(vec![1.0 / 2.2]),
-            matrix: Matrix3d { v: inv.map(|r| r.map(|v| v * 65535.0 / 32768.0)) },
-            b_curves: ident(),
-            bias: Vector3d::default(),
-        });
-        let mut p = ColorProfile::new_srgb();
-        p.cicp = None;
-        p.profile_class = ProfileClass::DisplayDevice;
-        p.red_colorant = Xyzd::default();
-        p.green_colorant = Xyzd::default();
-        p.blue_colorant = Xyzd::default();
-        p.red_trc = None;
-        p.green_trc = None;
-        p.blue_trc = None;
-        p.lut_a_to_b_colorimetric = Some(a2b.clone());
-        p.lut_a_to_b_perceptual = Some(a2b);
-        p.lut_b_to_a_colorimetric = Some(b2a.clone());
-        p.lut_b_to_a_perceptual = Some(b2a);
-        p.encode().unwrap()
+        let flat = |m: [[f64; 3]; 3], scale: f64| -> Vec<f64> { m.iter().flatten().map(|&v| v * scale).collect() };
+        let curves = |g: f64| vec![Curve::Gamma(g), Curve::Gamma(g), Curve::Gamma(g)];
+        let ident = || vec![Curve::Identity, Curve::Identity, Curve::Identity];
+        let a2b = Lut {
+            kind: LutKind::Ab,
+            inputs: 3,
+            outputs: 3,
+            stages: vec![
+                Stage::Curves(curves(2.2)),
+                Stage::Matrix { rows: 3, cols: 3, m: flat(m, 32768.0 / 65535.0), offset: vec![0.0; 3] },
+                Stage::Curves(ident()),
+            ],
+        };
+        let b2a = Lut {
+            kind: LutKind::Ab,
+            inputs: 3,
+            outputs: 3,
+            stages: vec![
+                Stage::Curves(ident()),
+                Stage::Matrix { rows: 3, cols: 3, m: flat(inv, 65535.0 / 32768.0), offset: vec![0.0; 3] },
+                Stage::Curves(curves(1.0 / 2.2)),
+            ],
+        };
+        let mut p = Builtin::Srgb.profile().clone();
+        p.class = craft_cms::ProfileClass::Display;
+        p.matrix = None;
+        p.trc = None;
+        p.a2b[0] = Some(a2b.clone());
+        p.a2b[1] = Some(a2b);
+        p.b2a[0] = Some(b2a.clone());
+        p.b2a[1] = Some(b2a);
+        p.with_encoded_bytes().to_bytes().to_vec()
     }
 
     #[test]
     fn lut_profile_goes_through_the_cms() {
         let bytes = lut_only_p3_gamma22();
-        let parsed = ColorProfile::new_from_slice(&bytes).unwrap();
-        assert!(!parsed.is_matrix_shaper() && parsed.lut_b_to_a_colorimetric.is_some(), "a LUT-only profile");
+        let parsed = Profile::parse(&bytes).unwrap();
+        assert!(!parsed.is_matrix_shaper() && parsed.b2a[1].is_some(), "a LUT-only profile");
         let d = DisplayProfile::from_icc(&bytes).unwrap();
         assert_eq!(d.kind, DisplayKind::Lut);
         assert!(d.needs_correction());

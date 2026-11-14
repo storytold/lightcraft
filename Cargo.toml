@@ -13,18 +13,21 @@ repository = "https://github.com/storytold/lightcraft"
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 # Canon CRW decoder shared with the other Craft apps
-craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "f3b62ec61f45534392376492fc5ad33047375205" }
-craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "68b8171b0d2c133d4a99ed3ae621e9ebb74a703f", features = ["frames"] }
-craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "d61671b6ded40929dcaacaaa658512d9f7981fc4", default-features = false, features = ["decode", "encode"] }
+craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "b77af389f30bb10de10d8436ca9b39fe94e3bb67", features = ["frames"] }
+craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "b77af389f30bb10de10d8436ca9b39fe94e3bb67", default-features = false, features = ["decode", "encode"] }
 # Photo metadata: EXIF, IPTC-IIM, XMP packets and GPX track logs (craft-libs#949)
-craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "68b8171b0d2c133d4a99ed3ae621e9ebb74a703f" }
+craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
 craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
 # HDR gain maps: ISO 21496-1 and hdrgm metadata, compute and apply (moved from crates/codecs; craft-libs#904).
-craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "430a908f68819bf23d14fe73ab9b18d8f4fd4e5d" }
+craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93" }
 # PSD/PSB: the header, colour mode data and image resources (craft-libs#885).
-craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "68b8171b0d2c133d4a99ed3ae621e9ebb74a703f" }
+craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93" }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }
@@ -35,7 +38,10 @@ lightcraft-wincolor = { path = "crates/wincolor" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 # TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
-craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "430a908f68819bf23d14fe73ab9b18d8f4fd4e5d" }
+craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+# Camera raw files, the format layer: every maker but CR3, ARW, RAF, RW2 and ORF (craft-libs#862 and the maker PRs).
+# On the same commit as craft-tiff: its errors and IFDs are shared.
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }
@@ -54,7 +60,7 @@ lightcraft-ui-egui = { path = "crates/ui-egui" }
 lightcraft-mcp = { path = "crates/mcp" }
 lightcraft-fetch = { path = "crates/fetch" }
 # HEIC/HEIF: the shared decoder (moved from crates/heif; craft-libs#784).
-craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "430a908f68819bf23d14fe73ab9b18d8f4fd4e5d" }
+craft-heif = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93" }
 lightcraft-segment = { path = "crates/segment" }
 lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }
@@ -81,21 +87,13 @@ libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
 # formats
-quick-xml = "0.41"
 miniz_oxide = "0.9"
 
 # codecs
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
-zune-jpeg = { version = "0.5", default-features = false, features = ["std", "x86", "neon"] }
-zune-core = { version = "0.5", default-features = false, features = ["std"] }
-jpeg-decoder = { version = "0.3", default-features = false }
-jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
 ab_glyph = { version = "0.2", default-features = false, features = ["std"] }  # Apache-2.0, pure Rust glyph rasterizer (export watermarks)
-png = "0.18"
-tiff = "0.11"
-image-webp = "0.2"
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
+zune-core = { version = "0.5", default-features = false, features = ["std"] }
 zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] } # MIT/Apache-2.0/Zlib lossless JXL encoder (test fixtures only)
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
 # HDR AVIF (PQ): ravif fixes the sRGB transfer curve, so HDR files drive its rav1e + avif-serialize directly
@@ -185,12 +183,12 @@ lightcraft-color = { opt-level = 3 }
 lightcraft-develop = { opt-level = 3 }
 lightcraft-geom = { opt-level = 3 }
 lightcraft-raw = { opt-level = 3 }
+craft-raw = { opt-level = 3 }
 lightcraft-codecs = { opt-level = 3 }
 lightcraft-scenes = { opt-level = 3 }
 lightcraft-preview = { opt-level = 3 }
 zune-jpeg = { opt-level = 3 }
 zune-core = { opt-level = 3 }
-jpeg-decoder = { opt-level = 3 }
 jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
