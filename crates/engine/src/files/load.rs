@@ -314,9 +314,12 @@ impl WbScaleOf {
         let model = meta.model.as_deref().filter(|_| fitted);
         let camera = model.and_then(|model| lightcraft_raw::spectral::find(meta.make.as_deref(), model));
         let presets = camera.is_none() && model.is_some_and(|model| lightcraft_raw::kelvin_presets::covers(meta.make.as_deref(), model));
+        // samples already balanced (Sony M / S ARWs) carry unit multipliers; As Shot is the white they were balanced to
+        // (issue #4078: the unit multipliers read through the camera's matrices as a very warm, green white)
+        let as_shot = color.balanced_with.or(wb_multipliers);
         let scale_white = match camera {
-            Some(c) => lightcraft_raw::spectral::as_shot_white_through(c, color, wb_multipliers),
-            None if presets => lightcraft_raw::kelvin_presets::as_shot_white(color, wb_multipliers),
+            Some(c) => lightcraft_raw::spectral::as_shot_white_through(c, color, as_shot),
+            None if presets => lightcraft_raw::kelvin_presets::as_shot_white(color, as_shot),
             None => None,
         };
         let covered = camera.is_some() || presets;

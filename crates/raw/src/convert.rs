@@ -124,6 +124,7 @@ fn color(c: craft_raw::ColorData) -> ColorData {
         baseline_sharpness: c.baseline_sharpness,
         profile: c.profile,
         kelvin_presets: c.kelvin_presets.and_then(|k| crate::kelvin_presets::KelvinPresets::new(k.points().iter().copied())),
+        balanced_with: None,
     }
 }
 

@@ -72,6 +72,26 @@ fn crw_probes_name_their_camera_from_the_ciff_records() {
 /// fitted-look file is absolute through its camera's measured matrices, which only read the as-shot
 /// multipliers as Kelvin; any other raw stays relative (6500 / 0 = as shot). The catalog's decision from the
 /// format and camera string agrees.
+/// Issue #4078: a Sony downsized (M / S) ARW stores linear YCbCr already balanced to as shot, so it hands over unit
+/// multipliers. Its As Shot is the white it was balanced to, as for the full-size file with those multipliers, not
+/// the unit multipliers read through the camera's matrices (an ILCE-7M4 file showed 1691 K / -190).
+#[test]
+fn a_pre_balanced_raw_reads_as_shot_from_the_white_it_was_balanced_to() {
+    use lightcraft_raw::{ColorData, RawFormat};
+    let meta = lightcraft_meta::Metadata { make: Some("SONY".into()), model: Some("ILCE-7M4".into()), ..Default::default() };
+    let d65 = lightcraft_color::D65;
+    let mul = [2.2f32, 1.0, 1.6];
+    let full = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), Some(mul), &meta).as_shot(d65);
+    let balanced = ColorData { balanced_with: Some(mul), ..Default::default() };
+    let small = WbScaleOf::new(RawFormat::Arw, &balanced, Some([1.0; 3]), &meta);
+    assert!(!small.relative && small.legacy_relative, "the camera's Kelvin scale, as the catalog decides from its name");
+    assert_eq!(small.as_shot(d65), full);
+    assert!((3500.0..7000.0).contains(&full.0) && full.1.abs() < 30.0, "{full:?}");
+    // without the white it was balanced to, the unit multipliers read as a very warm, green white
+    let unit = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), Some([1.0; 3]), &meta).as_shot(d65);
+    assert!(unit.0 < 2500.0 && unit.1 < -100.0, "{unit:?}");
+}
+
 #[test]
 fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
     use lightcraft_raw::{ColorData, RawFormat};
