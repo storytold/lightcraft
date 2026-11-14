@@ -217,6 +217,27 @@ impl Activity {
     pub fn running_cancellable(&self) -> Vec<TaskInfo> {
         lock(&self.inner.tasks).iter().filter(|e| e.is_cancellable() && !e.is_cancelled()).map(|e| e.info()).collect()
     }
+
+    /// Why the machine should stay awake for the work in flight, or `None` when nothing needs it: the label of the
+    /// oldest job the person started, with `+ N more` when others run too. A job asked to stop no longer counts, and
+    /// neither does housekeeping the person did not ask for ([`holds_awake`]). The label is English: it is for the
+    /// system's logs and tools (`pmset -g assertions`), not for the window.
+    pub fn wake_reason(&self) -> Option<String> {
+        let tasks = lock(&self.inner.tasks);
+        let mut holding = tasks.iter().filter(|e| holds_awake(e.kind) && !e.is_cancelled());
+        let first = holding.next()?;
+        Some(match holding.count() {
+            0 => first.label.clone(),
+            more => format!("{} + {more} more", first.label),
+        })
+    }
+}
+
+/// Whether a task of `kind` is work the person started and would not want cut short by the machine sleeping. The
+/// thumbnail cache tidy, the GPU check, the focus-point reading, the face scan and the checks of recent libraries and
+/// of raw files start by themselves (and the first can hang on an offline share).
+fn holds_awake(kind: &str) -> bool {
+    !matches!(kind, "cache" | "facesGpu" | "focus" | "faces" | "library" | "recheck")
 }
 
 /// A task's place in the list, held by whoever owns the job; dropping it removes the row.
@@ -300,6 +321,66 @@ impl TaskHandle {
     /// after turning it off: a cancel accepted before is seen then, any later one is refused.
     pub fn set_cancellable(&self, yes: bool) {
         self.entry.set_cancellable(yes);
+    }
+}
+
+#[cfg(test)]
+mod wake_tests {
+    use super::*;
+
+    #[test]
+    fn nothing_running_needs_no_wake() {
+        assert_eq!(Activity::default().wake_reason(), None);
+    }
+
+    #[test]
+    fn a_running_export_names_itself() {
+        let a = Activity::default();
+        let _g = a.start("export", "Exporting", Cancel::Yes);
+        assert_eq!(a.wake_reason().as_deref(), Some("Exporting"));
+    }
+
+    #[test]
+    fn housekeeping_the_person_did_not_ask_for_does_not_count() {
+        let a = Activity::default();
+        let _c = a.start("cache", "Tidying the thumbnail cache", Cancel::Yes);
+        let _f = a.start("facesGpu", "Checking the GPU for faces", Cancel::No);
+        let _s = a.start("faces", "Finding faces", Cancel::No);
+        let _p = a.start("focus", "Reading focus points", Cancel::Yes);
+        let _l = a.start("library", "Checking recent libraries", Cancel::No);
+        let _r = a.start("recheck", "Checking raw files", Cancel::Yes);
+        assert_eq!(a.wake_reason(), None);
+        let _e = a.start("import", "Importing", Cancel::Yes);
+        assert_eq!(a.wake_reason().as_deref(), Some("Importing"));
+    }
+
+    #[test]
+    fn several_jobs_name_the_oldest_and_count_the_rest() {
+        let a = Activity::default();
+        let _x = a.start("export", "Exporting", Cancel::Yes);
+        let _c = a.start("cache", "Tidying the thumbnail cache", Cancel::Yes);
+        let _i = a.start("import", "Importing", Cancel::Yes);
+        let _p = a.start("previews", "Building previews", Cancel::Yes);
+        assert_eq!(a.wake_reason().as_deref(), Some("Exporting + 2 more"));
+    }
+
+    #[test]
+    fn the_hold_ends_when_the_last_job_ends() {
+        let a = Activity::default();
+        let x = a.start("export", "Exporting", Cancel::Yes);
+        let i = a.start("import", "Importing", Cancel::Yes);
+        drop(x);
+        assert_eq!(a.wake_reason().as_deref(), Some("Importing"));
+        drop(i);
+        assert_eq!(a.wake_reason(), None);
+    }
+
+    #[test]
+    fn a_job_that_was_asked_to_stop_no_longer_holds() {
+        let a = Activity::default();
+        let x = a.start("export", "Exporting", Cancel::Yes);
+        a.cancel(x.id()).unwrap();
+        assert_eq!(a.wake_reason(), None);
     }
 }
 
