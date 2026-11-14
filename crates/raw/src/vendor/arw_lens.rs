@@ -25,7 +25,7 @@ use crate::lens_metadata::{
     SonySource,
 };
 use crate::{Opcode, Rect};
-use lightcraft_tiff::{ByteOrder, FieldType, Ifd, Value};
+use craft_tiff::{ByteOrder, FieldType, Ifd, Value};
 
 /// Each component's setting and table tags, `(raw IFD, SR2SubIFD)`.
 const SHADING: Tags = Tags { setting: (0x7031, 0x797c), table: (0x7032, 0x797d) };
@@ -545,8 +545,8 @@ mod tests {
     use crate::lens_metadata::SonyCopy::{Absent, Rejected, Valid};
     use crate::lens_metadata::SonyFieldError::*;
     use crate::{LensMetadata, Mode, RawImage};
-    use lightcraft_tiff::ByteOrder::{Big, Little};
-    use lightcraft_tiff::{IfdBuilder, ImageData, Tiff, TiffWriter, Value, tags as t};
+    use craft_tiff::ByteOrder::{Big, Little};
+    use craft_tiff::{IfdBuilder, ImageData, Tiff, TiffWriter, Value, tags as t};
 
     const TELE: [i16; 16] = [-2, 1, 7, 17, 31, 48, 68, 93, 120, 152, 187, 225, 265, 309, 356, 403];
     const WIDE: [i16; 16] = [14, 0, -27, -59, -106, -158, -223, -291, -367, -440, -519, -593, -667, -731, -792, -839];
@@ -1324,7 +1324,7 @@ mod tests {
             for (tag, value) in plain(&TELE, 17) {
                 raw.set(tag, value);
             }
-            raw.set_image(ImageData::Tiles { tile_width: 4, tile_height: 4, tiles: vec![crate::ljpeg::tests::fixture_420()] });
+            raw.set_image(ImageData::Tiles { tile_width: 4, tile_height: 4, tiles: vec![crate::ljpeg_fixtures::fixture_420()] });
             let img = decode(&TiffWriter::new(order, false).write(&[raw]).unwrap());
             let s = sony(&img);
             assert!(s.geometry.linear_ycbcr && s.geometry.native_3_2);
