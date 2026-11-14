@@ -67,6 +67,28 @@ fn metadata_in_final_feed_matches_builder() {
 }
 
 #[test]
+fn exif_payload_starts_at_declared_tiff_header() {
+    let pixels = Rgba8::from_fn(8, 8, |x, y| [(x * 20) as u8, (y * 20) as u8, 80, 255]);
+    let encoded = encode_jxl(&EncodeImage::rgba8(&pixels), &JxlOptions { lossless: true, ..Default::default() }, &EncodeMeta::default()).unwrap();
+    let raw = codestream(&encoded);
+    let exif = minimal_exif(1);
+    for offset in [0u32, 6, 64] {
+        let mut exif_box = offset.to_be_bytes().to_vec();
+        exif_box.resize(4 + offset as usize, 0xab);
+        exif_box.extend_from_slice(&exif);
+        let mut bytes = b"\0\0\0\x0cJXL \x0d\x0a\x87\x0a".to_vec();
+        box_bytes(&mut bytes, b"ftyp", b"jxl \0\0\0\0jxl ");
+        box_bytes(&mut bytes, b"jxlc", &raw);
+        box_bytes(&mut bytes, b"Exif", &exif_box);
+        box_bytes(&mut bytes, b"xml ", b"<xmp/>");
+        let decoded = decode(&bytes, DecodeOptions::default()).unwrap();
+        assert_eq!(decoded.exif.as_deref(), Some(exif.as_slice()), "TIFF header offset {offset}");
+        assert_eq!(decoded.xmp.as_deref(), Some("<xmp/>"));
+        assert_eq!(decoded.to_srgb8(), pixels);
+    }
+}
+
+#[test]
 fn progressive_truncation_matches_builder() {
     let pixels = Rgba8::from_fn(96, 64, |x, y| {
         let mut seed = (y * 96 + x + 1) as u32;
