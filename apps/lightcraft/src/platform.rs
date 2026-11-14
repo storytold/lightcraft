@@ -1,3 +1,46 @@
+/// The desktop `open_url` service: an `https://` link goes to the default browser through
+/// [`open_url_command`], started by [`launch`] and not waited for.
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("only https links are opened".into());
+    }
+    launch(open_url_command(url))
+}
+
+/// The command that opens `url` in the default browser on this system.
+pub(crate) fn open_url_command(url: &str) -> std::process::Command {
+    if cfg!(target_os = "macos") {
+        let mut c = std::process::Command::new("open");
+        c.arg(url);
+        c
+    } else if cfg!(target_os = "windows") {
+        windows_open_url_command(url)
+    } else {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(url);
+        c
+    }
+}
+
+/// Start `cmd` (a link opener: `open`, `xdg-open`, `rundll32`) and return without waiting for it.
+/// One that can't start is an error, as before; its exit is waited for on a thread of its own, so
+/// it is reaped, and a failure is logged. Waiting on the UI thread froze LightCraft for as long as
+/// an opener that stays attached to the browser ran (some `xdg-open` set-ups do; review of #3694).
+pub(crate) fn launch(mut cmd: std::process::Command) -> Result<(), String> {
+    let program = cmd.get_program().to_string_lossy().to_string();
+    let mut child = cmd.spawn().map_err(|e| format!("{program}: {e}"))?;
+    let waiter = std::thread::Builder::new().name("lc-open-url".into()).spawn(move || match child.wait() {
+        Ok(s) if !s.success() => log::warn!("{program} exited with {s}"),
+        Err(e) => log::warn!("{program}: {e}"),
+        Ok(_) => {}
+    });
+    if let Err(e) = waiter {
+        // the opener runs anyway; it is only not reaped until LightCraft exits
+        log::warn!("open: no thread to wait for the opener ({e})");
+    }
+    Ok(())
+}
+
 /// The Windows command that opens `url` in the default browser. `explorer <url>` opened File
 /// Explorer instead for links with a query or fragment, like the Map button's OpenStreetMap link
 /// (issue #234). The URL protocol handler hands the URL to the browser as is; no shell runs, so
