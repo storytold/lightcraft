@@ -1394,6 +1394,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-web-api"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=39ba66c11ecea2c397ce51d9e343d25394857e3c#39ba66c11ecea2c397ce51d9e343d25394857e3c"
+dependencies = [
+ "js-sys",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "craft-window"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -4239,6 +4250,7 @@ dependencies = [
 name = "lightcraft-web"
 version = "0.21.1"
 dependencies = [
+ "craft-web-api",
  "crc32fast",
  "eframe",
  "egui",
