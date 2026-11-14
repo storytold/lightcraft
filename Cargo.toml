@@ -15,6 +15,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # Canon CRW decoder shared with the other Craft apps
 craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "f3b62ec61f45534392376492fc5ad33047375205" }
 craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "68b8171b0d2c133d4a99ed3ae621e9ebb74a703f", features = ["frames"] }
+craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "d61671b6ded40929dcaacaaa658512d9f7981fc4", default-features = false, features = ["decode", "encode"] }
 # Photo metadata: EXIF, IPTC-IIM, XMP packets and GPX track logs (craft-libs#949)
 craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "68b8171b0d2c133d4a99ed3ae621e9ebb74a703f" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
@@ -95,7 +96,6 @@ tiff = "0.11"
 image-webp = "0.2"
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
-jixel = "=0.3.4" # BSD-3-Clause OR Apache-2.0, pure-Rust JPEG XL encoder (export; port of libjxl-tiny)
 zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] } # MIT/Apache-2.0/Zlib lossless JXL encoder (test fixtures only)
 ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
 # HDR AVIF (PQ): ravif fixes the sRGB transfer curve, so HDR files drive its rav1e + avif-serialize directly
