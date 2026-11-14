@@ -48,9 +48,28 @@ optional; blank lines are skipped). Anything else — text that isn't JSON, a JS
 it on that connection runs. This keeps an HTTP request (for example a web page's cross-origin `fetch` to
 `127.0.0.1:<port>`) from smuggling a command in its body: its request line is rejected first. Junk never reaches the
 UI thread, and at most 16 connections are served at once (further ones get an error line and are closed). Clients
-that hit an error reply should reconnect. The port has no authentication, so only enable it when you need it. The MCP server's connect
+that hit an error reply should reconnect. The MCP server's connect
 mode ([mcp.md](mcp.md)) is a thin layer over this channel. Implementation:
 `crates/ui-egui/src/control.rs` (methods) and `apps/lightcraft/src/control_server.rs` (transport).
+
+## Authentication
+
+Loopback only keeps other machines out, not other programs on this one, so every connection must prove it
+knows a token. Its first line is an `auth` request; the server answers it, then serves the connection as above:
+
+```text
+→ {"id": 0, "method": "auth", "params": {"token": "…"}}
+← {"id": 0, "ok": true, "result": "authenticated"}
+```
+
+Anything else as the first line (a command, junk, a wrong token) gets one error reply and the connection is closed
+before any command runs. The token is `--control-token T` or `LIGHTCRAFT_CONTROL_TOKEN`; with neither, the app
+generates 128 random bits per run and writes them to `<home>/.lightcraft/control-<port>.token` (owner-only
+permissions on Unix; on Windows it relies on the default ACL of the user profile, so on a machine where the profile
+directory is shared give the token with `--control-token` / `LIGHTCRAFT_CONTROL_TOKEN` instead). `lightcraft-cli` (`mcp --connect`, `run`) reads the same variable or file and sends the token
+for you, and only to a loopback address. Setting `LIGHTCRAFT_CONTROL_NO_AUTH=1` on the app starts it without a token
+(and removes that port's token file); set it for `lightcraft-cli` too, because a client that holds a token and meets
+an app that does not ask for one stops with an error instead of silently connecting unauthenticated.
 
 ## Isolated automation profiles
 
@@ -283,9 +302,13 @@ Only changed settings propagate; spot removal, red eye and the rendering process
 During an interaction, propagation occurs when it ends. Re-read affected photos after the edit.
 `develop.autoSync {}` toggles the mode; it is not a state query.
 
-For example, send these requests one at a time and read each reply before sending the next:
+For example, send these requests one at a time and read each reply before sending the next. The first line
+of every connection is the `auth` request (see [Authentication](#authentication)); it is answered with
+`{"id":0,"ok":true,"result":"authenticated"}`. Without a token (the app and the controller both started with
+`LIGHTCRAFT_CONTROL_NO_AUTH=1`) leave that line out:
 
 ```json
+{"id":0,"method":"auth","params":{"token":"<the token>"}}
 {"id":1,"method":"engine.commands"}
 {"id":2,"method":"engine.execute","params":{"command":"photo.inspect"}}
 {"id":3,"method":"engine.execute","params":{"command":"develop.controls","params":{"section":"light"}}}
