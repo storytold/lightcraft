@@ -382,6 +382,9 @@ impl std::fmt::Debug for PlansMemo {
 /// leaves the mask empty — it renders nothing, like any other damaged grid. Data present on the
 /// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
 fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize) -> usize {
+    if !refers_to_grids(settings) {
+        return dangling;
+    }
     let mut dangling = dangling;
     Arc::make_mut(settings).visit_seg_masks_mut(&mut |m| {
         if let Some(i) = m.grid.take() {
@@ -393,6 +396,14 @@ fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling
         }
     });
     dangling
+}
+
+/// Whether a settings holder has a mask that refers to a snapshot's grid table (see [`resolve_grids`]);
+/// resolving copies the settings it changes, so a holder without one is left alone.
+fn refers_to_grids(settings: &DevelopSettings) -> bool {
+    let mut any = false;
+    settings.visit_seg_masks(&mut |m| any |= m.grid.is_some());
+    any
 }
 
 /// A short memory of what the latest ops changed, so that what is derived from the catalog (the grid's list) can
@@ -1229,6 +1240,11 @@ impl Catalog {
         let grids = std::mem::take(&mut self.grids);
         let mut dangling = 0usize;
         for p in self.photos.values_mut() {
+            // (only a photo with a reference to resolve: `Arc::make_mut` copies what is shared, as the
+            // photos of a catalog are with a clone of it)
+            if !p.settings_holders().any(|s| refers_to_grids(s)) {
+                continue;
+            }
             let photo = Arc::make_mut(p);
             for settings in photo.settings_holders_mut() {
                 dangling = resolve_grids(settings, &grids, dangling);
