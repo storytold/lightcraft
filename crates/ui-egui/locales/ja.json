@@ -1167,6 +1167,7 @@
   "Rendering": "描画",
   "Rendering…": "描画中…",
   "Reset": "リセット",
+  "Delete Control Point": "コントロールポイントを削除",
   "Reset All Curves": "すべてのカーブをリセット",
   "Reset Before to Import State": "編集前を読み込み時の状態に戻す",
   "Reset Control": "設定をリセット",
