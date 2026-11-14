@@ -192,8 +192,9 @@ pub fn format(m: Modifiers, k: Key) -> Option<String> {
     if m.command || m.mac_cmd {
         s.push_str("Cmd+");
     }
-    // off macOS Ctrl *is* Cmd; on macOS it is the separate Control key
-    if m.ctrl && (m.mac_cmd || !m.command) {
+    // off macOS Ctrl *is* Cmd; on macOS it is the separate Control key (⌃⌘F is both, `parse` makes it
+    // `command` without `mac_cmd`)
+    if m.ctrl && (m.mac_cmd || !m.command || cfg!(target_os = "macos")) {
         s.push_str("Ctrl+");
     }
     if m.alt {
@@ -301,8 +302,11 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
         };
         // `Ctrl` is the physical Control key (on macOS distinct from Cmd; elsewhere Cmd = Ctrl);
         // "Delete" (⌫ = Backspace) also matches forward-delete
-        let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || modifiers.command };
-        let cmd_ok = m.ctrl || modifiers.command == m.command;
+        // and a Ctrl+Cmd binding (⌃⌘F) wants both keys; on macOS ⌃⌘F is not ⌘F with Control held (there
+        // `mac_cmd` is ⌘, and Control held is no ⌘)
+        let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || (modifiers.command && !modifiers.mac_cmd) };
+        // with ⌘ held on macOS (`mac_cmd`) a Control binding needs the ⌘ in it too; elsewhere Ctrl is Command
+        let cmd_ok = if m.ctrl && !modifiers.mac_cmd { !m.command || modifiers.command } else { modifiers.command == m.command };
         // winit can report shifted digits as punctuation (Shift+1 = `!`). Recognize the
         // physical number key for culling, without changing layout-aware letter shortcuts.
         let shifted_digit = m.shift
