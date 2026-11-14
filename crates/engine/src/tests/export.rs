@@ -1128,16 +1128,15 @@ fn hdr_jxl_export_is_pq_rec2020() {
     s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
     let hdr = export_photo(&mut s, id, &o, 1).unwrap();
     let encoding = |b: &[u8]| {
-        let img = jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(b)).unwrap();
-        let m = &img.image_header().metadata;
-        (format!("{:?}", m.colour_encoding), m.bit_depth.bits_per_sample())
+        let dec = craft_jxl::decode(b, &craft_jxl::DecodeLimits::default()).unwrap();
+        (dec.rendered_cicp, dec.bit_depth)
     };
-    let (c, bits) = encoding(&hdr.bytes);
-    assert!(c.contains("Bt2100") && c.contains("Pq"), "{c}");
+    let (cicp, bits) = encoding(&hdr.bytes);
+    assert_eq!(cicp, Some([9, 16, 0, 1]), "{cicp:?}");
     assert_eq!(bits, 16);
     // a photo without an HDR edit exports as an ordinary SDR file
-    let (c, _) = encoding(&sdr.bytes);
-    assert!(!c.contains("Pq"), "{c}");
+    let (cicp, _) = encoding(&sdr.bytes);
+    assert_ne!(cicp.map(|c| c[1]), Some(16), "{cicp:?}");
 }
 
 #[test]

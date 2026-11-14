@@ -915,17 +915,14 @@ fn jxl_hdr_pq() {
     for lossless in [false, true] {
         let o = JxlOptions { lossless, quality: 95, colour: JxlColour::Rec2020Pq, ..Default::default() };
         let b = encode_jxl(&EncodeImage::new(w as u32, h as u32, 3, Samples::F32(&px)), &o, &EncodeMeta::default()).unwrap();
-        // the file's own samples: PQ code values for 203 and 812 cd/m²
-        let img = jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&b)).unwrap();
-        let m = &img.image_header().metadata;
-        assert_eq!(m.tone_mapping.intensity_target, 10_000.0);
-        assert!(format!("{:?}", m.colour_encoding).contains("Pq"), "{:?}", m.colour_encoding);
-        let r = img.render_frame(0).unwrap();
-        let fb = r.image_all_channels();
-        let at = |x: usize| fb.buf()[((h / 2) * w + x) * fb.channels() + 1];
-        for (x, nits) in [(w / 4, HDR_REFERENCE_WHITE_NITS), (w * 3 / 4, 4.0 * HDR_REFERENCE_WHITE_NITS)] {
-            let (got, want) = (at(x), lightcraft_codecs::encode::pq_encode(nits));
-            assert!((got - want).abs() < 0.005, "lossless={lossless}: {nits} cd/m² written as {got}, want {want}");
+        // the file's own samples: linear Rec. 2020 (1.0 = 203 cd/m², 4.0 = 812 cd/m²) and PQ CICP
+        let dec = craft_jxl::decode(&b, &craft_jxl::DecodeLimits::default()).unwrap();
+        assert_eq!(dec.rendered_cicp, Some([9, 16, 0, 1]));
+        let ch = dec.layout.channels();
+        let at = |x: usize| dec.pixels[((h / 2) * w + x) * ch + 1];
+        for (x, want) in [(w / 4, 1.0f32), (w * 3 / 4, 4.0f32)] {
+            let got = at(x);
+            assert!((got - want).abs() < 0.05, "lossless={lossless}: linear value {got}, want {want}");
         }
     }
     // float samples are HDR only
