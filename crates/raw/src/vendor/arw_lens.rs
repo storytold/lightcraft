@@ -1324,7 +1324,7 @@ mod tests {
             for (tag, value) in plain(&TELE, 17) {
                 raw.set(tag, value);
             }
-            raw.set_image(ImageData::Tiles { tile_width: 4, tile_height: 4, tiles: vec![crate::ljpeg::tests::fixture_420()] });
+            raw.set_image(ImageData::Tiles { tile_width: 4, tile_height: 4, tiles: vec![crate::ljpeg_fixtures::fixture_420()] });
             let img = decode(&TiffWriter::new(order, false).write(&[raw]).unwrap());
             let s = sony(&img);
             assert!(s.geometry.linear_ycbcr && s.geometry.native_3_2);
