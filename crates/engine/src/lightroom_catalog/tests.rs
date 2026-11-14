@@ -1308,11 +1308,18 @@ fn record(values: &[SqlValue]) -> Vec<u8> {
                 body.extend(n.to_be_bytes());
                 6
             }
+            SqlValue::Real(n) => {
+                body.extend(n.to_be_bytes());
+                7
+            }
             SqlValue::Text(s) => {
                 body.extend(s.as_bytes());
                 13 + 2 * s.len() as u64
             }
-            _ => panic!("unexpected SqlValue in a test record: {value:?}"),
+            SqlValue::Blob(b) => {
+                body.extend(b);
+                12 + 2 * b.len() as u64
+            }
         };
         header.extend(varint(serial));
     }
@@ -1731,4 +1738,171 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// A side-table row whose `image` is missing, NULL, text or not a whole number names no photo. It used to read as
+/// photo 0 (or 2.5 as photo 2), so a catalog with a photo whose `id_local` is 0 gave that photo other rows' keywords,
+/// develop settings, XMP, history, snapshots and album membership. Such rows are left out with a warning per table;
+/// the rows that name photo 0 still go to it. Every table is checked before the test fails, so each one shows.
+#[test]
+fn side_table_rows_without_a_photo_id_go_to_no_photo() {
+    use SqlValue::{Integer as I, Null as N, Real as R, Text as T};
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-side-image-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("side.lrcat");
+    let mut tables = one_row(photo_tables(("/catalog/", "")));
+    tables[2].2.push(vec![I(2), I(1), T("two.ARW".into())]);
+    tables[3].2 = vec![
+        vec![I(0), T("zero".into()), I(1), T("ARW".into()), I(20), I(10), I(1), I(0)],
+        vec![I(2), T("two".into()), I(2), T("ARW".into()), I(20), I(10), I(2), I(0)],
+    ];
+    let xmp = |title: &str| {
+        T(format!(
+            "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\
+             <rdf:Description rdf:about=\"\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title><rdf:Alt>\
+             <rdf:li xml:lang=\"x-default\">{title}</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>"
+        ))
+    };
+    // each table: photo 0's own row first, then rows that name no photo (a later row for the same key used to win)
+    tables.extend([
+        (
+            "Adobe_imageDevelopSettings",
+            "id_local INTEGER PRIMARY KEY, image, text",
+            vec![vec![N, I(0), T("s = { Exposure2012 = 0.5 }".into())], vec![N, N, T("s = { Exposure2012 = 1.75 }".into())]],
+        ),
+        (
+            "Adobe_AdditionalMetadata",
+            "id_local INTEGER PRIMARY KEY, image, xmp",
+            vec![vec![N, I(0), xmp("Own title")], vec![N, T("x".into()), xmp("Stray title")]],
+        ),
+        (
+            "AgLibraryKeyword",
+            "id_local INTEGER PRIMARY KEY, name",
+            ["Own", "Two", "StrayNull", "StrayText", "StrayReal"].iter().map(|k| vec![N, T((*k).into())]).collect(),
+        ),
+        (
+            "AgLibraryKeywordImage",
+            "id_local INTEGER PRIMARY KEY, image, tag",
+            vec![vec![N, I(0), I(1)], vec![N, I(2), I(2)], vec![N, N, I(3)], vec![N, T("abc".into()), I(4)], vec![N, R(2.5), I(5)]],
+        ),
+        (
+            "Adobe_libraryImageDevelopHistoryStep",
+            "id_local INTEGER PRIMARY KEY, image, name",
+            vec![vec![N, I(0), T("Own step".into())], vec![N, N, T("Stray step".into())]],
+        ),
+        (
+            "Adobe_libraryImageDevelopSnapshot",
+            "id_local INTEGER PRIMARY KEY, image, name",
+            vec![vec![N, I(0), T("Own snapshot".into())], vec![N, N, T("Stray snapshot".into())]],
+        ),
+        ("AgLibraryCollection", "id_local INTEGER PRIMARY KEY, name", vec![vec![N, T("Own album".into())], vec![N, T("Stray album".into())]]),
+        ("AgLibraryCollectionImage", "id_local INTEGER PRIMARY KEY, collection, image", vec![vec![N, I(1), I(0)], vec![N, I(2), N]]),
+    ]);
+    std::fs::write(&path, native_catalog_rows(&tables, None)).unwrap();
+    let catalog = read(&path).unwrap();
+    let photo = |id: i64| catalog.photos.iter().find(|p| p.source_id == id).unwrap();
+    let names = |rows: &[Row]| rows.iter().map(|r| text(r, "name").to_string()).collect::<Vec<_>>();
+    let mut wrong = Vec::new();
+    let mut check = |what: &str, ok: bool, got: String| {
+        if !ok {
+            wrong.push(format!("{what}: {got}"));
+        }
+    };
+    check("photo 0 keywords", photo(0).keywords == ["Own"], format!("{:?}", photo(0).keywords));
+    check("photo 0 develop", photo(0).settings == "s = { Exposure2012 = 0.5 }", photo(0).settings.clone());
+    check("photo 0 XMP", photo(0).xmp.contains("Own title") && !photo(0).xmp.contains("Stray"), photo(0).xmp.clone());
+    check("photo 0 history", names(&photo(0).history) == ["Own step"], format!("{:?}", names(&photo(0).history)));
+    check("photo 0 snapshots", names(&photo(0).snapshots) == ["Own snapshot"], format!("{:?}", names(&photo(0).snapshots)));
+    check("photo 2 keywords", photo(2).keywords == ["Two"], format!("{:?}", photo(2).keywords));
+    let expected = [
+        "Adobe_imageDevelopSettings: 1 record skipped; its image is not a photo id",
+        "Adobe_AdditionalMetadata: 1 record skipped; its image is not a photo id",
+        "AgLibraryKeywordImage: 3 records skipped; their image is not a photo id",
+        "Adobe_libraryImageDevelopHistoryStep: 1 record skipped; its image is not a photo id",
+        "Adobe_libraryImageDevelopSnapshot: 1 record skipped; its image is not a photo id",
+        "AgLibraryCollectionImage: 1 record added to no album; its image is not a photo id",
+    ];
+    check("warnings", catalog.warnings == expected, format!("{:?}", catalog.warnings));
+    let mut s = crate::Session::new();
+    let report = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+    let zero = PhotoId(report["mapping"]["0"].as_u64().unwrap());
+    check("Own album", album_named(&s, "Own album").photos == [zero], format!("{:?}", album_named(&s, "Own album").photos));
+    check("Stray album", album_named(&s, "Stray album").photos.is_empty(), format!("{:?}", album_named(&s, "Stray album").photos));
+    let keywords = &s.catalog.photo(zero).unwrap().meta.keywords;
+    check("imported photo 0 keywords", *keywords == ["Own"], format!("{keywords:?}"));
+    std::fs::remove_dir_all(dir).unwrap();
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// A photo's `id_local` is read through f64 ([`number`]), so past 2^53 it is rounded. Its side-table rows are rounded
+/// the same way and still find it, with no warning, as before this check existed.
+#[test]
+fn side_table_rows_find_a_photo_whose_id_is_past_f64_precision() {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-large-image-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("large.lrcat");
+    for id in [9_007_199_254_740_993_i64, 1_152_921_504_606_846_977, i64::MAX] {
+        let mut tables = one_row(photo_tables(("/catalog/", "")));
+        tables[3].2 = vec![vec![I(id), T("big".into()), I(1), T("ARW".into()), I(20), I(10), I(1), I(0)]];
+        tables.extend([
+            ("Adobe_imageDevelopSettings", "id_local INTEGER PRIMARY KEY, image, text", vec![vec![N, I(id), T("s = { Exposure2012 = 0.5 }".into())]]),
+            ("AgLibraryKeyword", "id_local INTEGER PRIMARY KEY, name", vec![vec![N, T("Own".into())]]),
+            ("AgLibraryKeywordImage", "id_local INTEGER PRIMARY KEY, image, tag", vec![vec![N, I(id), I(1)]]),
+            ("Adobe_libraryImageDevelopSnapshot", "id_local INTEGER PRIMARY KEY, image, name", vec![vec![N, I(id), T("Own snapshot".into())]]),
+            ("AgLibraryCollection", "id_local INTEGER PRIMARY KEY, name", vec![vec![N, T("Own album".into())]]),
+            ("AgLibraryCollectionImage", "id_local INTEGER PRIMARY KEY, collection, image", vec![vec![N, I(1), I(id)]]),
+        ]);
+        std::fs::write(&path, native_catalog_rows(&tables, None)).unwrap();
+        let catalog = read(&path).unwrap();
+        let photo = &catalog.photos[0];
+        assert_eq!(
+            (photo.keywords.as_slice(), photo.settings.as_str(), photo.snapshots.len()),
+            (&["Own".to_string()][..], "s = { Exposure2012 = 0.5 }", 1),
+            "{id}"
+        );
+        assert!(catalog.warnings.is_empty(), "{id}: {:?}", catalog.warnings);
+        let mut s = crate::Session::new();
+        s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+        assert_eq!(album_named(&s, "Own album").photos.len(), 1, "{id}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// An XMP packet that can't be decoded is reported under its photo's id; a row that names no photo is reported under
+/// its table, not as photo 0's.
+#[test]
+fn an_undecodable_xmp_packet_is_reported_under_its_own_image() {
+    use SqlValue::{Blob as B, Integer as I, Null as N};
+    let mut tables = one_row(photo_tables(("/catalog/", "")));
+    tables.push((
+        "Adobe_AdditionalMetadata",
+        "id_local INTEGER PRIMARY KEY, image, xmp",
+        vec![vec![N, I(1), B(b"bad".to_vec())], vec![N, N, B(b"bad".to_vec())]],
+    ));
+    let catalog = read_tables(&tables, "xmp-label");
+    assert_eq!(
+        catalog.warnings,
+        [
+            "image 1: truncated XMP header",
+            "Adobe_AdditionalMetadata: truncated XMP header",
+            "Adobe_AdditionalMetadata: 1 record skipped; its image is not a photo id"
+        ]
+    );
+}
+
+#[test]
+fn a_side_table_row_names_a_photo_only_by_a_whole_number() {
+    let image = |v: Value| image_of(&row(json!({"image": v})));
+    assert_eq!(image(json!(2)), Some(2));
+    assert_eq!(image(json!(0)), Some(0));
+    assert_eq!(image(json!(2.0)), Some(2));
+    assert_eq!(image(json!(-3)), Some(-3));
+    // as `number` reads a photo's `id_local`: rounded through f64, saturating at i64::MAX
+    assert_eq!(image(json!(9_007_199_254_740_993_i64)), Some(9_007_199_254_740_992));
+    assert_eq!(image(json!(i64::MAX)), Some(i64::MAX));
+    for bad in [json!(null), json!(2.5), json!("2"), json!(1e19), json!(-1e19), json!(u64::MAX)] {
+        assert_eq!(image(bad.clone()), None, "{bad}");
+    }
+    assert_eq!(image_of(&row(json!({"tag": 1}))), None);
 }
