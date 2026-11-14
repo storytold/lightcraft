@@ -54,10 +54,6 @@ impl<'a> EncodeImage<'a> {
         }
         Ok(())
     }
-
-    fn has_alpha(&self) -> bool {
-        self.channels == 2 || self.channels == 4
-    }
 }
 
 /// Metadata to embed.

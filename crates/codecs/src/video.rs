@@ -847,7 +847,7 @@ impl Av1Encoder {
         {
             use craft_video::av1::{Encoder, EncoderConfig, RateControl};
             let _ = c.speed;
-            let mut ec = EncoderConfig::new(w as u32, h as u32, u32::from(c.fps), 1);
+            let mut ec = EncoderConfig::new(w as u32, h as u32, c.fps, 1);
             ec.rate = RateControl::ConstantQ(quantizer(c.quality).clamp(1, 255) as u8);
             ec.keyint = 120;
             let enc = Encoder::new(ec).map_err(|e| bad(format!("AV1: {e}")))?;
