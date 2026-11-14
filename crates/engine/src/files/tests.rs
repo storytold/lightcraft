@@ -92,6 +92,30 @@ fn a_pre_balanced_raw_reads_as_shot_from_the_white_it_was_balanced_to() {
     assert!(unit.0 < 2500.0 && unit.1 < -100.0, "{unit:?}");
 }
 
+/// With an imported camera profile the scale has no white of its own and reads As Shot from the profile's matrices:
+/// a pre-balanced raw's is the white its samples were balanced to there too, not the unit multipliers'.
+#[test]
+fn a_pre_balanced_raw_under_a_camera_profile_reads_the_white_it_was_balanced_to() {
+    use lightcraft_raw::ColorData;
+    let camera = lightcraft_raw::spectral::find(Some("SONY"), "ILCE-7M4").unwrap();
+    // a colour model with matrices, standing in for an imported profile's
+    let mut color = ColorData::default();
+    assert!(camera.fill(&mut color));
+    let mul = [2.2f32, 1.0, 1.6];
+    let unit = lightcraft_raw::color::as_shot_white_of(&color, Some([1.0; 3]));
+    let balanced = ColorData { balanced_with: Some(mul), ..color.clone() };
+    let white = super::load::balanced_white(&balanced, unit);
+    assert_eq!(white, lightcraft_raw::color::as_shot_white_of(&color, Some(mul)));
+    assert_ne!(white, unit);
+    // nothing recorded, or nothing usable: the white given
+    assert_eq!(super::load::balanced_white(&color, unit), unit);
+    let broken = ColorData { balanced_with: Some([0.0, 1.0, 1.0]), ..color.clone() };
+    assert_eq!(super::load::balanced_white(&broken, unit), unit);
+    // the file's own as-shot tag comes first
+    let tagged = ColorData { as_shot_neutral: Some([0.5, 1.0, 0.7]), ..balanced };
+    assert_eq!(super::load::balanced_white(&tagged, unit), lightcraft_raw::color::as_shot_white_of(&tagged, None));
+}
+
 #[test]
 fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
     use lightcraft_raw::{ColorData, RawFormat};

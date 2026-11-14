@@ -246,7 +246,7 @@ fn load_bytes_now(
             kept_tone,
         );
         let local_tone = local_tone(&raw);
-        let (temp, tint) = scale.as_shot(xy);
+        let (temp, tint) = scale.as_shot(balanced_white(&raw.color, xy));
         return Ok((
             img,
             twin,
@@ -358,6 +358,17 @@ impl WbScaleOf {
         }
         let (t, tint) = xy_to_temp_tint(self.scale_white.unwrap_or(own));
         (t.round(), tint.round())
+    }
+}
+
+/// The as-shot white `xy` (read from the file's tags or its multipliers) unless the samples were balanced before
+/// they reached us ([`lightcraft_raw::ColorData::balanced_with`], Sony M / S ARWs): then the white they were balanced
+/// to, through `color`'s matrices, explicit as-shot tags first. [`WbScaleOf`] does this through the camera's measured
+/// matrices; this covers an imported camera profile's, where the scale has no white of its own (issue #4078).
+pub(super) fn balanced_white(color: &lightcraft_raw::ColorData, xy: lightcraft_color::Xy) -> lightcraft_color::Xy {
+    match color.balanced_with.filter(|m| m.iter().all(|v| *v > 0.0 && v.is_finite())) {
+        Some(m) => lightcraft_raw::color::as_shot_white_of(color, Some(m)),
+        None => xy,
     }
 }
 
