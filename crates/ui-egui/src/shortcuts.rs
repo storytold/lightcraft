@@ -26,6 +26,9 @@ pub struct Bindable {
     pub default: Option<&'static str>,
 }
 
+// Provider saves borrow these engine defaults only while their provider is available.
+const PROVIDER_SAVE_FALLBACKS: &[(&str, &str)] = &[("file.saveLibrary", "photo.saveMetadataToFile"), ("file.saveLibraryAs", "version.create")];
+
 /// Every command that can have a shortcut: UI commands, then engine commands (one entry per id).
 pub fn bindable() -> &'static [Bindable] {
     static ALL: OnceLock<Vec<Bindable>> = OnceLock::new();
@@ -36,7 +39,11 @@ pub fn bindable() -> &'static [Bindable] {
                 v.push(Bindable { id, label, default: *sc });
             }
         }
-        let ui_keys: Vec<(Modifiers, Key)> = v.iter().filter_map(|b| b.default.and_then(parse)).collect();
+        let ui_keys: Vec<(Modifiers, Key)> = v
+            .iter()
+            .filter(|b| !PROVIDER_SAVE_FALLBACKS.iter().any(|(provider, _)| *provider == b.id))
+            .filter_map(|b| b.default.and_then(parse))
+            .collect();
         for c in lightcraft_engine::command_specs() {
             if v.iter().any(|b| b.id == c.id) {
                 continue;
@@ -83,10 +90,30 @@ pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
     find_bindable(id).and_then(|b| binding(keymap, id, b.default))
 }
 
-/// Engine commands that intentionally share a key and are disambiguated by context in [`handle`]:
-/// the X pair by the Crop panel, A by whether it is open (Visualize Spots everywhere, the aspect
-/// lock under the Crop panel).
-pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect"), ("view.visualizeSpots", "crop.lockAspect")];
+/// The live accelerator shared by the keyboard collector and menu model. Provider-only saves
+/// borrow an engine key only while available and still bound to that same key. Saved custom
+/// bindings, explicit removals and all other UI/engine collision rules retain their ownership.
+pub(crate) fn effective_shortcut<'a>(app: &'a LightcraftApp, id: &str) -> Option<&'a str> {
+    let keymap = &app.ui.settings.keymap;
+    let shortcut = shortcut_of(keymap, id)?;
+    if PROVIDER_SAVE_FALLBACKS.iter().any(|(provider, _)| *provider == id) {
+        return crate::menus::ui_enabled(app, id).then_some(shortcut);
+    }
+    let overridden = PROVIDER_SAVE_FALLBACKS.iter().any(|(provider, engine)| {
+        *engine == id && crate::menus::ui_enabled(app, provider) && shortcut_of(keymap, provider).and_then(parse) == parse(shortcut)
+    });
+    (!overridden).then_some(shortcut)
+}
+
+/// Commands that intentionally share a key: the X/A pairs follow the Crop panel in [`handle`],
+/// and provider saves borrow their engine partners' keys only while available. Rebinding or
+/// resetting one partner keeps the other's binding for its own context.
+pub const CONTEXTUAL: &[(&str, &str)] = &[
+    ("photo.reject", "crop.rotateAspect"),
+    ("view.visualizeSpots", "crop.lockAspect"),
+    ("file.saveLibrary", "photo.saveMetadataToFile"),
+    ("file.saveLibraryAs", "version.create"),
+];
 
 /// Commands other than `id` whose shortcut is the key `sc` (contextual partners excepted).
 pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
@@ -445,7 +472,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
         // a held Space repeats: it toggles the zoom (or takes the hand) once per press
         let space_repeat = !i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Space, pressed: true, repeat: false, .. }));
         for b in bindable() {
-            if let Some(sc) = binding(keymap, b.id, b.default)
+            if let Some(sc) = effective_shortcut(app, b.id)
                 && let Some((m, k)) = parse(sc)
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)

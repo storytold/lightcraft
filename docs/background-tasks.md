@@ -63,6 +63,7 @@ guard.detail(&file_name);
 | Reload from Disk | `crates/ui-egui/src/reload.rs`, `crates/engine/src/cmd/reload.rs` | a command split into plan / probe / apply so the app reads the files on a worker thread (`tasks::spawn_tracked`: progress and `Cancel::Flag`); the result is committed through `Session::execute_fn` (undo step, save, XMP auto-write), and dropped for a photo a later-started reload has already updated; `wait: true` runs it in place |
 | Find Similar Photos | `crates/ui-egui/src/find_similar.rs`, `crates/engine/src/cmd/similar.rs` | a command split into plan / measure / apply, whose reads are kept when it is stopped; a control request is answered when it ends (`Outcome::Later`) |
 | Reading focus points | `crates/engine/src/focus_scan.rs` | a worker paced by the UI's per-frame pump (`focus.pump {pace}`); `Cancel::Flag`; commits in batches without undo steps |
+| Optional web library providers | `apps/lightcraft-web/src/web/provider.rs` | `providerSave` / `providerOpen` use the existing translated Exporting / Importing labels and the ZIP filename as detail; guards own capture, flush wait, asynchronous ZIP work and application completion, including failure; operations remain noncancellable because repair/activation and delivery have no safe interruption point |
 
 ## Testing
 

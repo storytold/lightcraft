@@ -92,6 +92,11 @@ impl Originals {
         path
     }
 
+    /// Picked files already stored but not yet admitted to the current catalog.
+    pub fn imports_waiting(&self) -> bool {
+        !self.lock().pending.is_empty()
+    }
+
     /// Bytes for a catalog path, if in memory. A miss for a stored original queues its load.
     pub fn get(&self, path: &str) -> Option<Arc<[u8]>> {
         let hash = hash_of_path(path)?;

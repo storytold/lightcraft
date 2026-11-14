@@ -378,6 +378,7 @@ impl LightcraftApp {
         }
         self.widgets = std::mem::take(&mut self.next_widgets);
         self.widget_hits = std::mem::take(&mut self.next_widget_hits);
+        widgets::library_input::finish_pass(ctx);
         // a frame without the loupe (grid, Compare, Survey, slideshow…) ends the loupe's step timing
         self.loupe_timing.end_frame(ctx.input(|i| i.time));
         panels::notices::finish_ui_pass(self, ctx);

@@ -448,10 +448,16 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-CLOUD-SYNC | Cloud sync | OOS | 🚫 | | |
+| LR-CLOUD-SYNC | Cloud sync | OOS | 🚫 | | The optional browser library-provider capability below transfers native ZIP backups; it does not implement Lightroom cloud sync. |
 | LR-CLOUD-SMARTPREVIEW | Editable proxies | P2 | ✅ | `cmd:library.smartPreviews`, `cmd:library.smartPreviewsLocation`, `cmd:photo.smartPreview`, `crates/engine/src/smart.rs`, `crates/ui-egui/src/dialogs/settings.rs` | File ▸ Previews ▸ Build / Discard Smart Previews (on a worker thread, progress and Stop like Build Previews): ~1 MB proxies in the library; with the original offline the photo renders, edits and exports (at proxy size) from its proxy; Info shows the status; the proxy folder is chosen per library (Settings → Performance → Smart previews, saved in the library): the effective path, count and size are shown, changing it needs a choice for the proxies already built (move / leave / delete), and an unavailable or unwritable folder is an error, never a fallback to the library drive; proxies are written atomically and a damaged one (cut short by a crash or a full drive) doesn't count as built, is rebuilt (`repaired`) and is never moved over a good one (issue #106). Each proxy records the version of the camera-look fit that wrote it (`look_version`, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, bumped whenever the fit changes); only raws with the per-file camera look go stale (JPEG / PNG / DNG proxies are never rebuilt for it); one from an older fit is rebuilt from its original by a background scan the first time the library is opened at a new version (a `look-version` marker in the proxy folder keeps it to once per version) and by Build Smart Previews, and kept as it is while the original is offline (`docs/camera-preview-colour.md`). The thumbnail cache stays in the library |
 | LR-AI-UPDATE-INDICATOR | AI-settings update indicator | P2 | ⬜ | | |
 | LR-AI-CREDITS | Generative credits | OOS | 🚫 | | |
+
+### Optional host capabilities (outside Lightroom parity counts)
+
+| Capability | Status | Evidence | Limits |
+|---|---|---|---|
+| Web library providers | 🟡 implemented; merged-candidate validation pending | `apps/lightcraft-web/src/web/provider.rs`, `crates/ui-egui/src/file_providers.rs`, `docs/web-file-providers.md` | Explicit host registration only, off by default. Opens and captures complete native library ZIPs up to 80 MiB; the host owns authentication, authorization, durable writes and conflicts. No cloud-sync or reference-application parity claim. |
 
 ## X. Cross-cutting behaviours (BEHAV)
 
@@ -802,6 +808,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Record the optional web library-provider capability separately from Lightroom parity; cloud sync remains out of scope and feature counts are unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | patch | LRC-LIB-CATALOG-LOCK: a library is written only to the folder it was opened from (on Unix, where the system gives a folder an identity, it is checked before every write of the catalog, settings, lock note and thumbnails; a share mounted over it, or a replaced folder, is refused and nothing is written; a folder that holds this session's lock note counts as the opened one, so a drive mounted again keeps saving; on Windows only that the path is still a folder is checked, so a replaced folder or a share mounted at the same path is not caught), a Move import removes its originals only once the catalog log is on disk, and dropping the lock removes only the owner note it wrote itself (#3240); status unchanged |
 | 2026-11-05 | minor | LR-EDIT-LENSBLUR: ⬜ → 🟡 (Lens Blur section: Apply, Blur Amount, Boost, focus on the subject or a mask; no depth map yet); LR-MASK-SLIDERS: a Lens Blur block in every mask (selection or outside, Amount, Boost, Transition); KEY-SECTIONS: ⌘6 opens Lens Blur |

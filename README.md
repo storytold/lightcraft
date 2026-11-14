@@ -643,6 +643,8 @@ windows file drag-and-drop; set `LIGHTCRAFT_WAYLAND=1` to use native Wayland (sh
 |---|---|---|
 | Static site | `lightcraft-web-<ver>.zip` | Runs in a modern browser; host it on any static server |
 
+Web hosts may opt in to the [external library-provider bridge](docs/web-file-providers.md), disabled by default.
+
 <br>
 
 ## The Crafting Apps
