@@ -4,6 +4,7 @@ use super::{
     Align2, Color32, DevelopSettings, Icon, LightcraftApp, Mesh, PARAM_AMOUNTS, ParametricCurve, PhotoId, Point, Pos2, Rect, RichText, Sense, Stroke,
     Tokens, Vertex, controls, hex, json, paint, pos2, register, text_button, vec2,
 };
+use crate::widgets::release_settle::ReleaseSettle;
 
 // ------------------------------------------------------------------------------ tone curve
 
@@ -63,12 +64,35 @@ pub(crate) const CURVE_SAMPLES: i32 = 96;
 /// run). A dangling interaction would make every later edit a silent preview — Undo would then
 /// appear to do nothing at all. Returns whether the drag is over, so the caller clears its state.
 fn commit_interaction(app: &mut LightcraftApp, ui: &egui::Ui, dragging: bool, stopped: bool) -> bool {
-    let released = ui.input(|i| i.pointer.any_released()) || !ui.input(|i| i.pointer.primary_down());
-    if !dragging || !(stopped || released) {
+    if !drag_ends(ui, dragging, stopped) {
         return false;
     }
     let _ = app.run("develop.endInteraction", json!({}));
     true
+}
+
+/// Whether a graph drag ends this frame: egui says so, or the pointer came up without it saying so
+/// (see [`commit_interaction`]).
+fn drag_ends(ui: &egui::Ui, dragging: bool, stopped: bool) -> bool {
+    let released = ui.input(|i| i.pointer.any_released()) || !ui.input(|i| i.pointer.primary_down());
+    dragging && (stopped || released)
+}
+
+/// Keep one frame of a graph drag (the time, the pointer, the value it set) for [`settled_release`].
+fn record_drag_frame<V: Copy + Send + Sync + 'static>(ui: &egui::Ui, id: egui::Id, value: V) {
+    let (t, pos) = ui.input(|i| (i.time, i.pointer.latest_pos()));
+    if let Some(pos) = pos {
+        ui.data_mut(|d| d.get_temp_mut_or_default::<ReleaseSettle<V>>(id).push(t, [pos.x, pos.y], value));
+    }
+}
+
+/// The value a graph drag ending this frame should end on instead of its last one, and forget the
+/// drag's frames. A rocking finger that lifts rolls back, and its contact point slides for a few
+/// frames before the click ends: that motion arrives as drag motion and would land in the undo step.
+/// When the pointer rested and then only jerked like that, this is the value from the rest (#4228).
+fn settled_release<V: Copy + Send + Sync + 'static>(ui: &egui::Ui, id: egui::Id) -> Option<V> {
+    let t = ui.input(|i| i.time);
+    ui.data_mut(|d| d.remove_temp::<ReleaseSettle<V>>(id)).and_then(|s| s.on_release(t))
 }
 
 /// How close (screen points) to the curve a press counts as grabbing it.
@@ -95,6 +119,7 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
     };
     let drag_id = egui::Id::unique("curve-param-drag");
     let cursor_id = egui::Id::unique("curve-param-cursor");
+    let settle_id = egui::Id::unique("curve-param-settle");
     // (region, x, initial_amount, start_y): the region being dragged, the graph x the drag is anchored
     // at, the region's starting amount, and the starting screen Y position.
     let mut dragged: Option<(usize, f64, f64, f32)> = ui.data(|dd| dd.get_temp::<Option<(usize, f64, f64, f32)>>(drag_id)).flatten();
@@ -113,7 +138,10 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
         let initial_amount = model.amounts.get(region).copied().unwrap_or(0.0);
         let start_pos = to_screen(x, model.at(x));
         dragged = Some((region, x, initial_amount, start_pos.y));
-        ui.data_mut(|dd| dd.insert_temp(cursor_id, start_pos));
+        ui.data_mut(|dd| {
+            dd.insert_temp(cursor_id, start_pos);
+            dd.remove::<ReleaseSettle<f64>>(settle_id);
+        });
     }
     if let Some((region, x, initial_amount, start_y)) = dragged
         && resp.dragged()
@@ -133,11 +161,20 @@ fn param_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, resp: &egui::
         if let Some(&id) = PARAM_AMOUNTS.get(region) {
             set = Some((id, new_amount));
         }
+        record_drag_frame(ui, settle_id, new_amount);
+    }
+    let dropped = resp.drag_stopped();
+    // the release's own frame moves nothing (egui no longer reports it dragged), so `set` is empty here
+    if drag_ends(ui, dragged.is_some(), dropped)
+        && let Some((region, ..)) = dragged
+        && let Some(v) = settled_release::<f64>(ui, settle_id)
+        && let Some(&id) = PARAM_AMOUNTS.get(region)
+    {
+        set = Some((id, v));
     }
     if let Some((id, v)) = set {
         let _ = app.run("develop.set", json!({"control": id, "value": v}));
     }
-    let dropped = resp.drag_stopped();
     if commit_interaction(app, ui, dragged.is_some(), dropped) {
         dragged = None;
         ui.data_mut(|d| {
@@ -280,6 +317,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     // interaction: drag a point (both axes, between its neighbours; ⌥ = fine), drag empty space to add and
     // drag a new point, click empty space to add, double-click a point to delete it
     let drag_id = egui::Id::unique(("curve-drag", &ch));
+    let settle_id = egui::Id::unique(("curve-settle", &ch));
     // the point being dragged (stored as `Option<usize>` so a stale value can be cleared)
     let mut dragging: Option<usize> = ui.data(|dd| dd.get_temp::<Option<usize>>(drag_id)).flatten();
     let nearest = |q: Pos2| pts.iter().enumerate().map(|(i, p)| (i, to_screen(p.x, p.y).distance(q))).min_by(|a, b| a.1.total_cmp(&b.1));
@@ -324,6 +362,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     {
         // pick the point under the press, not where the pointer is once the drag threshold passed
         let _ = app.run("develop.beginInteraction", json!({"label": "Tone Curve"}));
+        ui.data_mut(|dd| dd.remove::<ReleaseSettle<Point>>(settle_id));
         match nearest(q) {
             Some((i, dist)) if dist < 10.0 => dragging = Some(i),
             _ => {
@@ -365,6 +404,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
             }
             v[i] = Point::new(x, y);
             new_pts = Some(v);
+            record_drag_frame(ui, settle_id, Point::new(x, y));
         }
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
@@ -374,6 +414,9 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
         let mut v = pts.clone();
         let i = v.iter().position(|p| p.x > x).unwrap_or(v.len());
         v.insert(i, Point::new(x, y));
+        new_pts = Some(v);
+    }
+    if let Some(v) = settled_point_release(ui, settle_id, &pts, dragging, resp.drag_stopped()) {
         new_pts = Some(v);
     }
     if let Some(v) = new_pts {
@@ -390,6 +433,16 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
     curve_footer(app, ui, d);
     control(app, ui, d, "curve.refineSaturation", true);
     let _ = id;
+}
+
+/// [`settled_release`] for a point drag ending this frame: `pts` with the dragged point back where
+/// the rest left it, or `None` to keep them as they are.
+fn settled_point_release(ui: &egui::Ui, id: egui::Id, pts: &[Point], dragging: Option<usize>, stopped: bool) -> Option<Vec<Point>> {
+    let i = dragging.filter(|_| drag_ends(ui, true, stopped))?;
+    let rested = settled_release::<Point>(ui, id)?;
+    let mut v = pts.to_vec();
+    *v.get_mut(i)? = rested;
+    Some(v)
 }
 
 /// The row under the curve graph: point-curve presets and reset every curve.
