@@ -8,9 +8,10 @@ pub fn import_defaults(p: &Photo) -> lightcraft_develop::DevelopSettings {
 }
 
 /// Does the photo still look as the camera rendered it (its embedded camera preview is then a
-/// fair stand-in)? Not when a default preset changed it on import.
+/// fair stand-in)? Not when a default preset changed it on import. As Shot counts as As Shot
+/// whatever numbers it stores ([`Photo::develop_matches`]), as for [`Photo::is_edited`].
 pub fn has_import_look(p: &Photo) -> bool {
-    *p.develop == p.camera_defaults()
+    p.develop_matches(p.camera_defaults())
 }
 
 /// User defaults applied on import (Settings → Import; saved in the library's `prefs.json`).
