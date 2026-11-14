@@ -22,13 +22,13 @@ fn demo(view: &str) -> Headless {
     let first = h.app.session.visible_cloned()[0].0;
     let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [first]}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
+    h.settled(SETTLE, "after library.select");
     h
 }
 
 /// Run `n` frames (plus a settle: thumbnails and renders finishing must not move anything).
 fn idle(h: &mut Headless, n: usize) {
-    h.settle(SETTLE);
+    h.settled(SETTLE, "the UI");
     for _ in 0..n {
         h.step();
     }

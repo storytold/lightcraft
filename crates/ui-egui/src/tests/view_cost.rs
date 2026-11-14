@@ -105,7 +105,7 @@ fn what_one_keyword_costs_in_a_library_of_67_000_photos() {
     h.app.ui.left_panel = true;
     h.request("engine.execute", json!({"command": "view.squareGrid", "params": {}}), Duration::from_secs(60));
     h.request("engine.execute", json!({"command": "panel.keywords", "params": {}}), Duration::from_secs(60));
-    h.settle(Duration::from_secs(120));
+    h.settled(Duration::from_secs(120), "after panel.keywords");
     let frame = |h: &mut Headless| {
         let t = Instant::now();
         h.step();
@@ -132,7 +132,7 @@ fn what_one_keyword_costs_in_a_library_of_67_000_photos() {
         if right && h.app.ui.right != crate::state::RightPanel::Keywords {
             h.request("engine.execute", json!({"command": "panel.keywords", "params": {}}), Duration::from_secs(60));
         }
-        h.settle(Duration::from_secs(120));
+        h.settled(Duration::from_secs(120), "after panel.keywords");
         let id: PhotoId = h.app.session.visible()[500];
         h.app.session.execute("library.select", &json!({"ids": [id.0]})).unwrap();
         h.step();
@@ -144,7 +144,7 @@ fn what_one_keyword_costs_in_a_library_of_67_000_photos() {
     h.app.ui.left_panel = true;
     let view = "view.photoGrid";
     h.request("engine.execute", json!({"command": view, "params": {}}), Duration::from_secs(60));
-    h.settle(Duration::from_secs(120));
+    h.settled(Duration::from_secs(120), "after engine.execute");
     let id: PhotoId = h.app.session.visible()[400];
     h.app.session.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     h.step();

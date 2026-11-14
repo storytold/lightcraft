@@ -3,12 +3,14 @@
 //! the next one once its neighbour prefetch is done and once more at once.
 //! `cargo run --release -p lightcraft-ui-egui --example open_timeline -- a.ARW b.ARW c.ARW`
 //! (`LIGHTCRAFT_PROFILE=1` adds the engine's stage timings; every line carries ms since start on stderr).
+//! When a settle before a timing gives up, the summary is marked INVALID and the run exits with status 1.
 use lightcraft_engine::Session;
 use lightcraft_ui_egui::{LightcraftApp, Services, headless::Headless};
 use serde_json::{Value, json};
+use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-fn main() {
+fn main() -> ExitCode {
     let files: Vec<String> = std::env::args().skip(1).collect();
     let t0 = Instant::now();
     let ms = move || t0.elapsed().as_secs_f64() * 1e3;
@@ -18,15 +20,31 @@ fn main() {
     let mut h = Headless::new(LightcraftApp::new(s, Services::default()), [1600.0, 1000.0], 1.0);
     let req = |h: &mut Headless, m: &str, p: Value| h.request(m, p, Duration::from_secs(60));
     let cmd = |h: &mut Headless, c: &str| req(h, "engine.execute", json!({"command": c}))["result"].clone();
+    // a wait that gives up says what was still busy, and the timeline doesn't claim it settled
+    let settle = |h: &mut Headless| {
+        let limit = Duration::from_secs(60);
+        if h.settle(limit) { Ok(()) } else { Err(format!("did not settle within {limit:?}: {}", h.busy_description())) }
+    };
+    // settles that gave up before a timing: the loupe then competes with unfinished work
+    let mut unsettled = 0;
     cmd(&mut h, "view.photoGrid");
-    h.settle(Duration::from_secs(60));
+    if let Err(e) = settle(&mut h) {
+        unsettled += 1;
+        eprintln!("{:9.1} grid {e}", ms());
+    }
     cmd(&mut h, "library.selectNone");
     let r = cmd(&mut h, "library.next");
     eprintln!("{:9.1} first: {r}", ms());
     let first = r["active"].as_u64().unwrap_or(1);
-    h.settle(Duration::from_secs(60));
+    let grid = settle(&mut h);
     let gpu = req(&mut h, "ui.inspect", json!({}))["result"]["perf"]["gpu"].clone();
-    eprintln!("{:9.1} grid settled, gpu {gpu}", ms());
+    match grid {
+        Ok(()) => eprintln!("{:9.1} grid settled, gpu {gpu}", ms()),
+        Err(e) => {
+            unsettled += 1;
+            eprintln!("{:9.1} grid {e}, gpu {gpu}", ms());
+        }
+    }
     // what the loupe shows, every frame, until `photo` is rendered for good
     let watch = |h: &mut Headless, label: &str, photo: u64| {
         let start = ms();
@@ -55,8 +73,13 @@ fn main() {
     cmd(&mut h, "view.detail");
     let open = watch(&mut h, "open", first);
     let t = ms();
-    h.settle(Duration::from_secs(60));
-    eprintln!("{:9.1} neighbours prefetched after {:.0} ms", ms(), ms() - t);
+    match settle(&mut h) {
+        Ok(()) => eprintln!("{:9.1} neighbours prefetched after {:.0} ms", ms(), ms() - t),
+        Err(e) => {
+            unsettled += 1;
+            eprintln!("{:9.1} neighbours not all prefetched: {e}", ms());
+        }
+    }
     // step towards the side that has photos (the sort may put the first one last)
     let mut dir = "library.next";
     let mut r = cmd(&mut h, dir);
@@ -69,6 +92,15 @@ fn main() {
     let step1 = watch(&mut h, "next (prefetched)", n1);
     let n2 = cmd(&mut h, dir)["active"].as_u64().unwrap_or(0);
     let step2 = watch(&mut h, "next at once", n2);
-    h.settle(Duration::from_secs(60));
-    eprintln!("{:9.1} summary: open {open:.0} ms, next prefetched {step1:.0} ms, next at once {step2:.0} ms", ms());
+    if let Err(e) = settle(&mut h) {
+        eprintln!("{:9.1} {e}", ms());
+    }
+    let summary = format!("open {open:.0} ms, next prefetched {step1:.0} ms, next at once {step2:.0} ms");
+    if unsettled == 0 {
+        eprintln!("{:9.1} summary: {summary}", ms());
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("{:9.1} summary INVALID ({unsettled} settle(s) gave up before a timing): {summary}", ms());
+        ExitCode::FAILURE
+    }
 }
