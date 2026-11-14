@@ -5409,6 +5409,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lcc-sync"
+version = "26.46.3"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lcc-sysmem"
 version = "26.46.3"
 dependencies = [

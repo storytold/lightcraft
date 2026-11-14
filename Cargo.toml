@@ -28,6 +28,7 @@ lcc-winspool = { path = "crates/winspool" }
 lcc-winmsi = { path = "crates/winmsi" }
 lcc-android-host = { path = "crates/android-host" }
 lcc-peer = { path = "crates/peer" }
+lcc-sync = { path = "crates/sync" }
 lcc-audio-out = { path = "crates/audio-out" }
 lcc-color = { path = "crates/color" }
 lcc-raster = { path = "crates/raster" }
