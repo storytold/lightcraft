@@ -509,6 +509,8 @@ impl LightcraftApp {
 
     /// Preparing photos in the background ([`lightcraft_engine::prep`]): the whole view's previews
     /// once the user is culling in the loupe, built from the photo on screen in the direction of travel.
+    /// A build that didn't run to its end is taken up again from any screen, the grid too, after a
+    /// restart as well (`PrepState::unfinished`).
     /// Advanced on every logic pass, the hidden ones too (a minimised window keeps preparing).
     fn background_prep(&mut self, ctx: &egui::Context) {
         #[cfg(test)]
@@ -523,7 +525,8 @@ impl LightcraftApp {
         if self.session.preview_build.as_ref().is_some_and(|b| b.running()) {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
-        // a build that couldn't start tries again at its time, also when nothing else draws a frame
+        // a build that couldn't start tries again at its time, and an unfinished one is taken up
+        // again once the view has been still, also when nothing else draws a frame
         if let Some(wait) = self.session.prep_retry_in() {
             ctx.request_repaint_after(wait);
         }
