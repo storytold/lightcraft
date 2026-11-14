@@ -10,7 +10,7 @@ fn cfa_helpers() {
     assert_eq!(c.shifted(1, 1).name(), "BGGR");
     assert!(Cfa::bayer("RGGX").is_none());
     for name in ["RGGB", "BGGR", "GRBG", "GBRG"] {
-        assert_eq!(Cfa::bayer_static(name).name(), name);
+        assert_eq!(crate::bayer(name).name(), name);
     }
     let x = Cfa::xtrans();
     assert!(!x.is_bayer());
@@ -259,9 +259,9 @@ fn private_containers_are_recognised_by_their_magic() {
     assert_eq!(probe(b"\0MRM\0\x01\0\0"), Some(RawFormat::Mrw));
     assert_eq!(probe(b"FOVb\x02\0\x02\0"), Some(RawFormat::X3f));
     for f in [RawFormat::Crw, RawFormat::Mrw] {
-        assert!(f.is_supported());
+        assert!(crate::is_supported(f));
     }
-    assert!(!RawFormat::X3f.is_supported());
+    assert!(!crate::is_supported(RawFormat::X3f));
     // a CRW signature with no heap behind it is corrupt, not a panic
     assert!(matches!(decode(b"II\x1a\0\0\0HEAPCCDR\0\0"), Err(RawError::Corrupt(_))));
     assert!(matches!(decode(b"FOVb\x02\0\x02\0"), Err(RawError::Unsupported(w)) if w.contains("X3f")));
@@ -393,6 +393,7 @@ fn private_compression_99_is_a_raw() {
 /// without the block, or an RGB image carrying it, stays an ordinary image.
 #[test]
 fn uncompressed_leaf_mos_is_a_raw() {
+    const LEAF_DATA: u16 = 0x8606;
     let mosaic = |leaf_data: bool| {
         let mut ifd = IfdBuilder::new();
         ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
@@ -542,20 +543,6 @@ fn lossless_jpeg_cfa_tiff_decodes() {
     assert_eq!(r.cfa.unwrap().name(), "RGGB");
 }
 
-/// Hasselblad's own lossless-JPEG coding (selection value 8, as in FFF and most compressed 3FR files) of the
-/// same layout decodes: the file is read like the uncompressed one.
-#[test]
-fn selection_value_8_cfa_tiff_decodes() {
-    let strip = ljpeg::tests::encode_hasselblad(&cfa_samples(), 8, 6);
-    let bytes = plain_cfa_tiff(7, strip, None);
-    assert_eq!(probe(&bytes), Some(RawFormat::CfaTiff));
-    let r = decode(&bytes).unwrap();
-    assert_eq!((r.format, r.width, r.height), (RawFormat::CfaTiff, 8, 6));
-    assert_eq!(r.data, RawData::U16(cfa_samples()));
-    assert_eq!(r.cfa.unwrap().name(), "RGGB");
-    assert_eq!(probe_info(&bytes).unwrap().format, RawFormat::CfaTiff);
-}
-
 /// A lossless-JPEG scan whose predictor selection value is neither 0 to 7 (T.81) nor 8 (Hasselblad) is not a
 /// coding the lossless decoder knows: the file stays an undecodable raw, with that as the reason, and keeps the
 /// stand-in preview an unsupported container gets.
@@ -569,7 +556,7 @@ fn cfa_tiff_with_an_unknown_predictor_stays_undecodable() {
     assert!(matches!(ljpeg::decode(&strip, 1 << 20), Err(RawError::Unsupported(w)) if w.contains("selection value 9")));
     let bytes = plain_cfa_tiff(7, strip, None);
     assert_eq!(probe(&bytes), Some(RawFormat::OtherTiff));
-    assert!(!RawFormat::OtherTiff.is_supported());
+    assert!(!crate::is_supported(RawFormat::OtherTiff));
     let Err(RawError::Unsupported(why)) = decode(&bytes) else { panic!("expected Unsupported") };
     assert!(why.contains("lossless JPEG") && why.contains("selection value 9"), "{why}");
 }

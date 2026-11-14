@@ -102,8 +102,10 @@ fn camera_name(b: &[u8]) -> String {
 /// The CFA: X-Trans from the (reversed) layout record, else RGGB.
 fn cfa(h: &Header) -> Cfa {
     match record(h, XTRANS_LAYOUT) {
-        Some(l) if l.len() == 36 && l.iter().all(|&c| c <= 2) => Cfa { width: 6, height: 6, pattern: l.iter().rev().copied().collect() },
-        _ => Cfa::bayer_static("RGGB"),
+        Some(l) if l.len() == 36 && l.iter().all(|&c| c <= 2) => {
+            Cfa { width: 6, height: 6, origin_x: 0, origin_y: 0, pattern: l.iter().rev().copied().collect() }
+        }
+        _ => crate::bayer("RGGB"),
     }
 }
 

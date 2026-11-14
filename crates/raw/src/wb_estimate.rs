@@ -144,7 +144,7 @@ mod tests {
         // RGGB, R at 400, G at 800, B at 200 above a black of 100
         let (w, h) = (8, 8);
         let d: Vec<u16> = (0..w * h).map(|i| [500, 900, 900, 300][(i / w % 2) * 2 + i % 2]).collect();
-        let cfa = Cfa::bayer_static("RGGB");
+        let cfa = crate::bayer("RGGB");
         let black = BlackLevel::uniform(100.0);
         let f = Frame { data: &d, width: w, crop: Rect::new(0, 0, w, h), cfa: &cfa, black: &black, white: 4095.0 };
         assert_eq!(as_shot(b"not a raw", &f), Some([2.0, 1.0, 4.0]));
