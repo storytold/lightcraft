@@ -41,6 +41,17 @@
   get it, photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
   [Whites and the tone curves](curve-stage.md).
 
+### Flatpak updates
+- Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
+  This permissions repair must first arrive through your existing host-side update method. Flatpaks
+  managed by a software repository continue to use its package manager, and launcher-pinned versions
+  keep their selected version.
+
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
@@ -64,6 +75,45 @@
 - A page can also run LightCraft in its own document, with no iframe: `data-host="page"` on the canvas carries the same
   messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
   when a page asks for both.
+
+### A library is written only to the folder it was opened from
+- LightCraft wrote a library's files to wherever the library's path led at that moment, not to the folder it had opened.
+  When a share was mounted over the library's folder, or the folder was moved away and another put in its place while
+  the library was open, it wrote into that other folder: it could replace another library's catalog (`catalog.snap`
+  and `catalog.log`) with its own, and closing the library removed the note another program had left in
+  `catalog.lock.owner` to say that it has the library open (issue #3240).
+- LightCraft now remembers the folder it opened (its device and inode number) and, before every save, checks that the
+  library's path still leads to it. If it doesn't, nothing is written: not the catalog, its log, the library's
+  settings, the lock note or a thumbnail. The not-saved warning says why, names the path and asks you to put the
+  original folder back; your changes are kept in memory, quitting asks first as it does for any unsaved change, and
+  saving goes on by itself once the original folder is at its path again. That holds for photos, albums and presets; a
+  preference that could not be saved is reported where you changed it, and is written with the next preference you
+  save. Opening the library at that path again takes the lock of the folder that is there now, so it is refused while
+  another program has that library open.
+- Saving keeps working after a drive or share is mounted again. A volume that is mounted again gets a new device
+  number, and some file systems number their folders anew at every mount (FAT and exFAT drives on Linux, sshfs). The
+  folder at the path still counts as the one that was opened when it holds exactly the lock note this session wrote
+  into the folder it opened (the note holds a value no other lock's note has), or when it is the same volume mounted
+  again: the same inode number and the same creation time under another device number (a system that doesn't know
+  when a folder was created can't tell that from another folder). On the same device an inode number is given again
+  to a folder made later, so two creation times that are known and differ are two folders. A copy of the library's
+  folder made while the library was open holds that note too and counts as the library, and so does a clone of its
+  volume; a share mounted over the folder, with another library in it or with nothing, never does. A copy lacks the
+  changes made after it was made: they are written to it by the next snapshot, which holds them all, and until then
+  they are kept in memory and reported as not saved. If neither tells, the folder counts as another one and nothing is
+  written.
+- Dropping the lock removes the lock note only if it is the one this session wrote, with the bytes it wrote, in the
+  folder it locked or one that holds that note; another program's note is left alone.
+- Import ▸ Move removes the originals from the card only after the library's catalog is on disk, not just handed over
+  to be written: when the library can't be saved, the originals stay on the card.
+- On Windows a folder's identity isn't available to the program yet (Rust's standard library offers it only on its
+  nightly builds), so there the check notices a path that no longer leads to a folder, not one that leads to another
+  folder; the lock note is protected there too.
+- On every system, files outside the library's catalog and settings are still written by path, some of them over what
+  is there: originals copied into the library (always under a new name), Smart Previews, profiles, the face-scan
+  record (`focus-scanned.bin`), the Lightroom import's `Interop` folder, and what is done to the photos stored in the
+  library's `Originals` folder (their sidecars, Save Metadata to File, rename, delete from disk, duplicate and
+  conversion to DNG).
 
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
@@ -272,7 +322,6 @@
   `folder.rename` and `folder.move` commands now refuse the home folder and its Pictures, Desktop and Downloads too,
   so a script or an agent can't do it either.
 
-
 ## 2026-10-27
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
@@ -370,7 +419,6 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
-
 ## 2026-10-25
 
 ### `>=` and `<=` work in the search box
@@ -399,7 +447,6 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
-
 
 ## 2026-10-24
 
@@ -464,7 +511,6 @@
   names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
   reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
   saved.
-
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
@@ -577,7 +623,6 @@
   noise looks like grain. Edges are as sharp as before. Thumbnails and previews that LightCraft rendered from a raw
   are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
 
-
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
@@ -639,7 +684,6 @@
   import adds some, others are removed, moved to Recently Deleted or relinked), the answer leaves out the photos that
   no longer apply, a photo added meanwhile is not part of that check, and the answer is not kept for a later request.
 
-
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the
   library open now, or create a new library for them, named after the catalog and placed next to the open library
@@ -697,7 +741,6 @@
   English before. So did "The download failed", shown under a denoise or face recognition model's download when the
   download gives no reason.
 
-
 ## 2026-10-22
 
 ### Exports don't create a photo's sidecar
@@ -710,7 +753,6 @@
   the brush stroke you are painting is no longer drawn in the overlay colour while you hold the button, so the photo
   stays visible as you dodge and burn (issue #2549). The stroke's effect still appears when you let go. With the
   overlay shown, the stroke is tinted as before; a colour overlay at opacity 0 leaves it untinted too.
-
 
 ### Reliability
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
@@ -817,7 +859,6 @@
   Slideshow Export no longer say "1 photos" or "1 stacks". The Import review's Move button counts photos that are
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
-
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
