@@ -136,6 +136,13 @@
 
 ## 2026-10-30
 
+### The web version no longer offers a Lightroom catalog import it can't do
+- In LightCraft in the browser, File ▸ Import Lightroom Catalog… did nothing when chosen: the browser build can't read a
+  Lightroom catalog and has no dialog to pick one. The item is now greyed out there, as Import from Folder… already
+  is without a folder dialog (the empty library already left the button out). Run any other way (a key you gave it,
+  the command palette, an agent) without a path, it and the folder and tracklog imports and Find Missing Photos… say
+  there is no file or folder dialog instead of doing nothing (issue #3655). The desktop app is unchanged.
+
 ### Lightroom catalogs with a print inside a collection import their collections
 - Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
   LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an

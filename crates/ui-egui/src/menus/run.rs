@@ -19,6 +19,23 @@ fn panel(app: &mut LightcraftApp, ctx: &egui::Context, p: RightPanel, name: &str
     let _ = app.session.end_interaction();
 }
 
+/// What a command that needs a file (or folder) dialog says on a host that has none, such as the
+/// browser build (#3655), instead of doing nothing; a dialog that was cancelled stays quiet.
+const NO_FILE_DIALOG: &str = "no file dialog on this platform; supply path";
+const NO_FOLDER_DIALOG: &str = "no folder dialog on this platform; supply the folder";
+
+/// Ask for a folder for command `id` (its answer arrives as `key`): the folder chosen now, `None`
+/// when the dialog answers later or was cancelled, and an error on a host with no folder dialog.
+fn ask_folder(app: &mut LightcraftApp, id: &str, p: &Value, key: &'static str, title: &str) -> Result<Option<String>, String> {
+    match crate::pick::ask(app, id, p, key, PickRequest::folder(crate::i18n::tr(title)), |s| {
+        s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
+    }) {
+        Picked::Now(v) => Ok(v.into_iter().next()),
+        Picked::Unavailable if app.services.pick_folder.is_none() => Err(NO_FOLDER_DIALOG.into()),
+        Picked::Later | Picked::Unavailable => Ok(None),
+    }
+}
+
 /// `[` / `]` (size ×`k`) and ⇧`[` / ⇧`]` (feather +`df`) for the brush in use: the Remove tool's
 /// (and its selected spot's) or the Masking brush's.
 fn adjust_brush(app: &mut LightcraftApp, k: f32, df: f32) -> Value {
@@ -1345,6 +1362,10 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             import_into_album(app, p, r)
         }
         "file.importLightroom" => {
+            // the browser build can't import a catalog at all, path or not: say that, not "no dialog"
+            if cfg!(target_arch = "wasm32") {
+                return Some(Err(crate::lightroom_import::UNSUPPORTED_IN_BROWSER.into()));
+            }
             // where the catalog goes (#2672): checked before a file dialog opens
             let req = match crate::lightroom_destination::Request::parse(p) {
                 Ok(req) => req,
@@ -1360,6 +1381,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
                     );
                     match crate::pick::ask(app, id, p, "path", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
                         Picked::Now(v) => v.into_iter().next(),
+                        Picked::Unavailable if app.services.pick_lightroom_catalog.is_none() => return Some(Err(NO_FILE_DIALOG.into())),
                         Picked::Later | Picked::Unavailable => None,
                     }
                 }
@@ -1416,11 +1438,9 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             // a folder (searched recursively) into the import review
             let path = match p.get("path").and_then(Value::as_str) {
                 Some(x) => Some(x.to_string()),
-                None => match crate::pick::ask(app, id, p, "path", PickRequest::folder(crate::i18n::tr("Import from Folder…")), |s| {
-                    s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
-                }) {
-                    Picked::Now(v) => v.into_iter().next(),
-                    Picked::Later | Picked::Unavailable => None,
+                None => match ask_folder(app, id, p, "path", "Import from Folder…") {
+                    Ok(path) => path,
+                    Err(e) => return Some(Err(e)),
                 },
             };
             match path {
@@ -1808,12 +1828,7 @@ fn file_find_missing_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Re
     let title = if within.is_some() { "Locate Missing Files…" } else { "Find Missing Photos…" };
     let folder = match p.get("folder").and_then(Value::as_str) {
         Some(f) => Some(f.to_string()),
-        None => match crate::pick::ask(app, id, p, "folder", PickRequest::folder(crate::i18n::tr(title)), |s| {
-            s.pick_folder.as_mut().and_then(|f| f()).map(|x| vec![x])
-        }) {
-            Picked::Now(v) => v.into_iter().next(),
-            Picked::Later | Picked::Unavailable => None,
-        },
+        None => ask_folder(app, id, p, "folder", title)?,
     };
     let Some(folder) = folder else { return Ok(Value::Null) };
     // the search (checking every photo's file, walking the folder) runs on a worker thread;
@@ -1857,6 +1872,7 @@ fn photo_tag_from_tracklog_command(app: &mut LightcraftApp, _ctx: &egui::Context
             let req = PickRequest::file(crate::i18n::tr("Auto-Tag from Tracklog"), crate::i18n::tr("GPS Track Log"), &["gpx"]);
             match crate::pick::ask(app, id, p, "path", req, |s| s.pick_tracklog.as_mut().map(|f| f())) {
                 Picked::Now(v) => v.into_iter().next(),
+                Picked::Unavailable if app.services.pick_tracklog.is_none() => return Err(NO_FILE_DIALOG.into()),
                 Picked::Later | Picked::Unavailable => None,
             }
         }
