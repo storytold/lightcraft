@@ -152,6 +152,7 @@ pub enum Gesture {
 /// full-screen aware), crop overlays and the render requests for the current view, or, when no
 /// photo is active, the empty-library message if the library is empty and "No photo selected"
 /// otherwise.
+#[allow(clippy::cognitive_complexity)]
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.max_rect();
@@ -307,7 +308,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let single = hover_key.is_none() && !split && !show_before && !split_view && !interacting;
     let camera_full = request_camera_full(app, &photo, single && !windows.is_empty(), native_long.min(texture_side));
     let (crop_lr, crop_pan, crop_angle) = crop_display(app, &d, img_rect, crop_tool, id);
-    let (crop_lr, crop_pan, crop_angle) = crop_display(app, &d, img_rect, crop_tool, id);
     let p = ui.painter_at(canvas);
     let turn = crop_lr.then_some((crop_pan, crop_angle));
     let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, &SlotDraw { slot, r, clip, turn });
@@ -355,10 +355,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // consistent whole-frame render alone beats tiles that stay behind where the photo was.
     let drawn = if !(crop_lr && (crop_angle.abs() > f64::EPSILON || crop_pan != egui::Vec2::ZERO)) {
         // (holding `\` in a wipe shows the Before everywhere: it is the Before view alone then)
-        let mode = if show_before { BeforeAfter::Original } else { app.ui.before_after };
-        draw_windows(app, &p, &window_ctx, &windows, mode, [canvas, img_rect])
+        draw_windows(app, &p, &window_ctx, &windows, [canvas, img_rect], (show_before, split))
     } else {
-        false
+        WindowsDrawn { any: false, shown: false }
     };
     let shown = shown_after_windows(shown, camera_full_drawn, drawn);
     app.loupe_shown = Some((id, shown));
@@ -801,22 +800,8 @@ fn render_coming(app: &LightcraftApp, shown: &str, windows: &[(WindowView, crate
         && whole.iter().chain(windows.iter().map(|(v, _)| &v.slot)).any(|s| app.renderer.is_pending(*s) && !app.renderer.retrying(*s))
 }
 
-/// The window renders over the whole-frame ones, where they belong in the frame (clipped to their
-/// pane, or their side of the line).
-fn draw_windows(
-    app: &LightcraftApp,
-    p: &egui::Painter,
-    ctx: &WindowCtx,
-    windows: &[(WindowView, crate::region::RegionView)],
-    mode: BeforeAfter,
-    [canvas, img_rect]: [Rect; 2],
-) {
-    for (v, view) in windows {
-        let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
-        draw_window(&p.with_clip_rect(clip), app, ctx, v, view);
-    }
-}
-
+/// Draw the window renders over the whole-frame ones, each where it belongs in the frame
+/// (clipped to its pane, or its side of the line). Returns whether any window was drawn.
 /// What the active tool needs to know about the loupe.
 struct ToolView<'a> {
     right: RightPanel,
@@ -1112,7 +1097,6 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, v: &
             painter.image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
     }
-}
     what
 }
 
