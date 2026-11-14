@@ -64,7 +64,7 @@ impl RawImage {
         let black = self.black.mean();
         // a hostile file can state any levels: NaN, negative or inverted ones are left alone
         let levels_ok = black.is_finite() && white.is_finite() && black >= 0.0 && white > black && white <= 65535.0;
-        if self.cpp != 1 || !cfa.valid() || self.width.checked_mul(self.height) != Some(d.len()) || !levels_ok {
+        if self.cpp != 1 || !crate::cfa_valid(cfa) || self.width.checked_mul(self.height) != Some(d.len()) || !levels_ok {
             return none;
         }
         let a = self.active_area;
@@ -143,7 +143,7 @@ impl RawImage {
         let (old, black) = (self.white_at(0), self.black.mean());
         let ceiling = ((1u32 << self.bits) - 1) as f32;
         if self.cpp != 1
-            || !cfa.valid()
+            || !crate::cfa_valid(cfa)
             || self.width.checked_mul(self.height) != Some(data.len())
             || !black.is_finite()
             || !old.is_finite()

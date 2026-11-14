@@ -3,7 +3,7 @@
 //! Clean-room: written from SMPTE RDD 34:2015 §6.3 (Figures 6.5-6.8) and checked against its worked
 //! example (Figure 6.9) and Phase 0 oracle vectors. No other raw decoder's source was consulted.
 
-use crate::vendor::pef::Bits;
+use crate::vendor::huffman::Bits;
 use crate::{RawError, Result};
 
 /// Largest coefficient bit depth (DPT) a stream may select; keeps `Bits::get` in range.
@@ -328,7 +328,7 @@ pub(crate) fn reconstruct3(b: &Bands3, phases: [u8; 3]) -> Result<Plane> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vendor::pef::Bits;
+    use crate::vendor::huffman::Bits;
 
     fn bits_of(s: &str) -> Vec<u8> {
         let mut out = vec![0u8; s.len().div_ceil(8)];

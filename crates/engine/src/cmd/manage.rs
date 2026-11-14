@@ -64,6 +64,9 @@ fn set_names_ops(s: &crate::Session, names: &[String; 5]) -> Vec<Op> {
         .collect()
 }
 
+/// Most bytes of a track log file.
+const MAX_GPX_BYTES: u64 = 256 << 20;
+
 /// Geotag photos from a GPX track log by capture time (Lightroom Classic's Map ▸ Tracklog ▸
 /// Auto-Tag Photos). GPX times are UTC; capture times are the camera's local clock, so a photo's
 /// recorded zone (Exif `OffsetTimeOriginal`) or the `offset` parameter converts them.
@@ -72,7 +75,9 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.autoTagTracklog";
     let text = match (str_param(p, "gpx"), str_param(p, "path")) {
         (Some(t), _) => t.to_string(),
-        (None, Some(path)) => std::fs::read_to_string(path).map_err(|e| bad(C, format!("can't read {path}: {e}")))?,
+        (None, Some(path)) => crate::read_file::read_regular(path, MAX_GPX_BYTES)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .map_err(|e| bad(C, format!("can't read {path}: {e}")))?,
         (None, None) => return Err(bad(C, "missing `path` (a .gpx file) or `gpx` (its text)")),
     };
     let log = parse_gpx(&text).map_err(|e| bad(C, e.to_string()))?;
