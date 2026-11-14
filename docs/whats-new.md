@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Paste Selected Settings pastes the crop and Remove
+- Copy Edit Settings still leaves Crop, Remove, Masking and Red Eye out by default, as Lightroom does, so a plain
+  Paste doesn't change them. Ticking one of them in Paste Selected Settings (⇧⌘V) now pastes it from the copied photo;
+  before, a group the copy had left out was silently skipped.
+- A crop pasted, pasted from the previous photo, synced or carried by Auto Sync onto a photo of another shape keeps its
+  aspect ratio, angle and relative size instead of being stretched, and stays centred where it was as far as the photo
+  allows (a straightened crop off the centre can move in to stay inside the turned photo). A locked ratio such as 3:2
+  is kept even when it crops nothing on the copied photo; an Original lock takes the new photo's own shape. On a photo
+  of the same shape the crop is pasted as it is. Presets apply their crop as stored. Auto Sync carries only what the
+  edit changed: a new crop rectangle keeps each photo's own angle, and a new angle each photo's own rectangle.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

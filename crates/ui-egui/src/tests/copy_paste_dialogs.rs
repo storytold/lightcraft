@@ -89,3 +89,20 @@ fn escape_closes_paste_settings_without_pasting() {
     assert!(h.app.ui.dialog.is_none(), "Esc closes the dialog");
     assert_eq!(exposure(&h, ids[1]), 0.0, "Esc pastes nothing");
 }
+
+/// Issue #3056: ticking Crop in Paste Selected Settings pastes the crop, which the copy (light and
+/// colour) left out; it used to be dropped silently.
+#[test]
+fn ticking_crop_pastes_the_crop_the_copy_left_out() {
+    let (mut h, ids) = edited();
+    exec(&mut h, "crop.set", json!({"rect": [0.1, 0.2, 0.7, 0.8]}));
+    paste_dialog(&mut h, ids);
+    let r = h.request("ui.clickWidget", json!({"id": "pasteGroup:crop"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    key(&mut h, json!({"key": "Enter"}));
+    assert!(h.app.ui.dialog.is_none(), "Return closes the dialog");
+    let crop = h.app.session.develop_of(PhotoId(ids[1])).map(|d| d.crop.geometry).unwrap_or_default();
+    assert!(!crop.is_identity(), "the crop is pasted: {crop:?}");
+    assert_eq!(exposure(&h, ids[1]), 1.0, "with the copied settings");
+}

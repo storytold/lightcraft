@@ -278,7 +278,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-REM-REFLECT | Remove reflections | P2 | ⬜ | | |
 | LR-REM-DUST | Dust detection | P2 | ✅ | `cmd:spot.findDust`, `crates/pipeline/src/dust.rs` | Remove panel ▸ Find Dust Spots: small, soft, round dark spots on smooth areas become heal spots (sensitivity; one undo step); Visualize Spots for checking by eye |
 | LR-REM-BLEMISH | Find blemishes on faces (beyond Lightroom) | P2 | ✅ | `cmd:spot.findBlemishes`, `crates/pipeline/src/blemish.rs`, `crates/engine/src/cmd/face_detect.rs` | Remove panel ▸ Find Blemishes: with the YuNet detector installed, small darker-or-redder round spots on each face's skin (eyes, brows, nostrils and mouth cut out around the landmarks) become heal spots (one undo step); faces under 160 px and faces with more than 12 candidates (stubble, freckles) get none, at most 6 per face; sensitivity 0–100. Classical, no learned model beyond the detector; not a Lightroom feature |
-| LR-REM-SYNC | Sync spots | P1 | ✅ | `cmd:develop.copy` (`groups`), `crates/develop/src/presets.rs` | |
+| LR-REM-SYNC | Sync spots | P1 | ✅ | `cmd:develop.copy` (`groups`), `cmd:develop.paste` (`groups`), `crates/develop/src/presets.rs` | left out of Copy by default, as in Lightroom; ticking Remove in Copy or in Paste Selected Settings pastes the spots (#3056) |
 
 ## J. Red eye (EYE)
 
@@ -314,7 +314,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-MASK-OVERLAYALL | Show all mask overlays | P1 | ✅ | `cmd:view.maskOverlayAll`, `crates/ui-egui/src/panels/masking.rs`, `crates/pipeline/src/visualize.rs` | one diagnostic tint over every visible mask at once (CPU + GPU): the masks still stack their adjustments as before — this only paints each mask's region together, so you can see all masked areas at a glance (⌘⇧O / Ctrl+Shift+O) |
 | LR-MASK-PINS | Pins | P1 | ✅ | `cmd:view.maskPins`, `cmd:view.toolOverlay`, `crates/ui-egui/src/panels/detail.rs`, `crates/ui-egui/src/tests/tool_overlay.rs`, `crates/ui-egui/src/tests/masking.rs` | a pin per radial/linear/brush component: click selects its mask, drag moves it; Object (at its first click) and Describe (on what it found) components have pins too: click selects, drag changes nothing (issue #3049); Show Pins on follows the Tool Overlay mode (Auto: while the pointer is over the photo, hidden while brushing; Always; Selected: the selected mask's; Never; ⇧H cycles, #224); no pins for range components or Subject, Sky, Background, People and Landscape |
 | LR-MASK-UPDATE | Recompute AI masks | P2 | ⬜ | | |
-| LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`) | |
+| LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`), `cmd:develop.paste` (`groups`) | left out of Copy by default, as in Lightroom; ticking Masking in Copy or in Paste Selected Settings pastes them |
 | LR-MASK-ADAPTIVE | Adaptive presets | P2 | ⬜ | | |
 
 ## L. Presets (PRE)
@@ -346,7 +346,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 |---|---|---|---|---|---|
 | LR-SYNC-COPY | Copy edit settings | P0 | ✅ | `cmd:develop.copy` | |
 | LR-SYNC-CHOOSE | Choose settings to copy | P0 | ✅ | `cmd:dialog.copySettings` | groups are coarser than per-slider |
-| LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste` | no separate "paste selected" (choose at copy time instead) |
+| LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste`, `crates/geom/src/crop.rs` (`CropGeometry::refit`) | pastes the groups chosen at copy time onto every selected photo, one undo step; Paste Selected Settings (MENU-EDIT-PASTESELECTED) chooses at paste time. A crop pasted, synced or Auto Synced onto a photo of another shape keeps its aspect ratio, angle and relative size, as in Lightroom, centred where it was unless that would leave the turned photo; a locked ratio is kept even on an uncropped photo, an Original lock or an unlocked uncropped photo takes the new photo's shape (`Crop::refit`); Auto Sync carries only the crop fields the edit changed (a new rect keeps each photo's angle, a new angle each photo's rect); presets apply their crop as stored |
 | LR-SYNC-SYNCBTN | Sync active → selected | P1 | ✅ | `cmd:develop.sync` | |
 | LR-SYNC-PREVIOUS | Paste from previous / auto sync [Classic] | P2 | ✅ | `cmd:develop.pastePrevious`, `cmd:develop.autoSync` | ⌥⌘V pastes the previously active photo's settings (copy groups); Auto Sync (⌥⇧⌘A) |
 
@@ -524,7 +524,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-EDIT-REDO | Redo | P0 | ✅ | `cmd:edit.redo` | |
 | MENU-EDIT-COPYPASTE | Copy / paste (edit settings) | P0 | ✅ | `cmd:develop.copy`, `cmd:develop.paste` | |
 | MENU-EDIT-CHOOSECOPY | Choose Edit Settings to Copy… | P0 | ✅ | `cmd:dialog.copySettings` | Return copies, Esc cancels |
-| MENU-EDIT-PASTESELECTED | Paste Selected Settings | P0 | ✅ | `cmd:dialog.pasteSettings`, `cmd:develop.paste` (`groups`) | checklist prefilled with the copied groups; only copied groups can be pasted; Return pastes, Esc cancels; Paste Settings from Previous (⌥⌘V) follows it |
+| MENU-EDIT-PASTESELECTED | Paste Selected Settings | P0 | ✅ | `cmd:dialog.pasteSettings`, `cmd:develop.paste` (`groups`) | checklist prefilled with the copied groups; any group of the copied photo can be pasted, including one the copy left out (Crop, Remove, Masking, Red Eye: the clipboard keeps the photo's whole settings, #3056); Return pastes, Esc cancels; Paste Settings from Previous (⌥⌘V) follows it |
 | MENU-EDIT-SELECTALL | Select All | P0 | ✅ | `cmd:library.selectAll` | |
 | MENU-EDIT-SELECTNONE | Select None | P0 | ✅ | `cmd:library.selectNone` | Select Only Active Photo (⇧⌘D) follows it |
 | MENU-EDIT-SELECTBY | Select by flag / rating | P1 | ✅ | `cmd:library.selectBy` | Edit → Select by: picks, rejects, unflagged, ★…★★★★★ and higher, unrated, colour labels; `add` extends the selection |
@@ -802,6 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | MENU-EDIT-PASTESELECTED, LR-SYNC-PASTE, LR-REM-SYNC, LR-MASK-SYNC: the settings clipboard keeps the copied photo's whole settings, so Paste Selected Settings pastes any ticked group, also Crop and Remove left out of the copy (issue #3056); a crop pasted, pasted from previous, synced or Auto Synced onto a photo of another shape keeps its aspect ratio and aspect lock (`CropGeometry::refit`, `Crop::refit`), Auto Sync refitting only the crop fields the edit changed; LR-SYNC-PASTE no longer says there is no Paste Selected; status counts unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | patch | LRC-LIB-CATALOG-LOCK: a library is written only to the folder it was opened from (on Unix, where the system gives a folder an identity, it is checked before every write of the catalog, settings, lock note and thumbnails; a share mounted over it, or a replaced folder, is refused and nothing is written; a folder that holds this session's lock note counts as the opened one, so a drive mounted again keeps saving; on Windows only that the path is still a folder is checked, so a replaced folder or a share mounted at the same path is not caught), a Move import removes its originals only once the catalog log is on disk, and dropping the lock removes only the owner note it wrote itself (#3240); status unchanged |
 | 2026-11-05 | minor | LR-EDIT-LENSBLUR: ⬜ → 🟡 (Lens Blur section: Apply, Blur Amount, Boost, focus on the subject or a mask; no depth map yet); LR-MASK-SLIDERS: a Lens Blur block in every mask (selection or outside, Amount, Boost, Transition); KEY-SECTIONS: ⌘6 opens Lens Blur |
