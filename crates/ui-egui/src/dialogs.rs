@@ -1235,7 +1235,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                                 crate::theme::font_credits(app.chinese_font.is_some())
                             ));
                             ui.add_space(10.0);
-                            let r = crate::button::Button::new("Join the ArtCraft Discord")
+                            let r = crate::button::Button::new("Prisijungti prie „ArtCraft“ bendruomenės „Discord“ serveryje")
                                 .primary()
                                 .large()
                                 .min_width(260.0)
