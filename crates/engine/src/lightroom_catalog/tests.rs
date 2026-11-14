@@ -620,6 +620,50 @@ fn a_collection_listed_twice_imports_once_and_a_conflicting_one_is_skipped_with_
     );
     assert_eq!(s.undo.len(), 1);
 }
+/// A collection member whose `collection` is missing, NULL, text or a fraction names no collection. It used to read as
+/// collection 0 (and 11.5 as 11), so the collection with that id took in photos that aren't its own; now such members
+/// join no album, with one warning. A whole number stored as a REAL (11.0) still names its collection.
+#[test]
+fn a_member_whose_collection_is_not_a_whole_number_joins_no_album() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":0,"name":"Zero","creationId":"collection"})));
+    data.collections.push(row(json!({"id_local":11,"name":"Eleven","creationId":"collection"})));
+    data.members.extend([
+        row(json!({"collection":0,"image":1,"positionInCollection":"a"})),
+        row(json!({"collection":11,"image":2,"positionInCollection":"a"})),
+        row(json!({"collection":11.0,"image":1,"positionInCollection":"b"})),
+        row(json!({"collection":null,"image":2,"positionInCollection":"c"})),
+        row(json!({"collection":"x","image":2,"positionInCollection":"d"})),
+        row(json!({"image":2,"positionInCollection":"e"})),
+        row(json!({"collection":11.5,"image":1,"positionInCollection":"f"})),
+    ]);
+    let r = apply(&mut s, data, false).unwrap();
+    let id = |source: &str| PhotoId(r["mapping"][source].as_u64().unwrap());
+    assert_eq!(album_named(&s, "Zero").photos, [id("1")], "{r}");
+    assert_eq!(album_named(&s, "Eleven").photos, [id("2"), id("1")], "{r}");
+    assert_eq!(album_named(&s, "Keepers").photos, [id("2"), id("1")], "{r}");
+    assert_eq!(r["warnings"], json!(["AgLibraryCollectionImage: 4 records added to no album; their collection is not a collection id"]));
+}
+/// A collection left out for sharing collection 0's id says the photos under that id go to the first only when a
+/// member names it: a member whose `collection` is NULL is not one of them.
+#[test]
+fn a_member_naming_no_collection_is_not_listed_under_id_0() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    data.collections.push(row(json!({"id_local":0,"name":"Zero","creationId":"collection"})));
+    data.collections.push(row(json!({"id_local":0,"name":"Also zero","creationId":"collection"})));
+    data.members.push(row(json!({"collection":null,"image":1,"positionInCollection":"a"})));
+    let r = apply(&mut s, data, false).unwrap();
+    assert!(album_named(&s, "Zero").photos.is_empty(), "{r}");
+    assert_eq!(
+        r["warnings"],
+        json!([
+            "collection “Also zero”: not imported, it has the id of collection “Zero”",
+            "AgLibraryCollectionImage: 1 record added to no album; its collection is not a collection id"
+        ])
+    );
+}
 /// The search for the nearest set ends on a parent loop that got past `validate` (A in B in A, a collection in
 /// itself) and on a chain of plain collections deeper than 64: the album goes to the top level, flagged as moved.
 #[test]
@@ -1320,6 +1364,56 @@ fn record(values: &[SqlValue]) -> Vec<u8> {
     out.extend(header);
     out.extend(body);
     out
+}
+#[test]
+fn a_reference_names_a_record_only_by_a_whole_number() {
+    let r = row(json!({
+        "int": 7, "zero": 0, "negative": -3, "real": 7.0, "fraction": 7.5, "text": "7", "null": null, "nan_like": "NaN",
+        "past_f64": 9_007_199_254_740_993_i64, "max": i64::MAX, "edge": 9_223_372_036_854_775_808.0,
+        "low_edge": -9_223_372_036_854_775_808.0, "too_big": 1e19, "too_small": -1e19
+    }));
+    let got: Vec<_> = [
+        "int",
+        "zero",
+        "negative",
+        "real",
+        "fraction",
+        "text",
+        "null",
+        "nan_like",
+        "missing",
+        "past_f64",
+        "max",
+        "edge",
+        "low_edge",
+        "too_big",
+        "too_small",
+    ]
+    .iter()
+    .map(|k| (*k, id_of(&r, k)))
+    .collect();
+    assert_eq!(
+        got,
+        [
+            ("int", Some(7)),
+            ("zero", Some(0)),
+            ("negative", Some(-3)),
+            ("real", Some(7)),
+            ("fraction", None),
+            ("text", None),
+            ("null", None),
+            ("nan_like", None),
+            ("missing", None),
+            // an integer rounds through f64 as `number` reads the `id_local` it names
+            ("past_f64", Some(number(&r, "past_f64"))),
+            ("max", Some(number(&r, "max"))),
+            // 2^63, the first value past i64::MAX: a cast would saturate onto record i64::MAX
+            ("edge", None),
+            ("low_edge", Some(i64::MIN)),
+            ("too_big", None),
+            ("too_small", None),
+        ]
+    );
 }
 fn leaf(page: &mut [u8], offset: usize, rows: &[Vec<SqlValue>]) {
     page[offset] = 13;
