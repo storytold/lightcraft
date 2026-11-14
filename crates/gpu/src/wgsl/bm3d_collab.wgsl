@@ -35,7 +35,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (p.wiener == 0u) {
         var kept = 0u;
         for (var k = 0u; k < m * NN; k = k + 1u) {
-            if (abs(buf[k]) < p.lambda) {
+            if (abs(buf[k]) < p.lam[ch]) {
                 buf[k] = 0.0;
             } else {
                 kept = kept + 1u;
@@ -58,7 +58,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         var energy = 0.0;
         for (var k = 0u; k < m * NN; k = k + 1u) {
             let q = pb[k];
-            let w = q * q / (q * q + p.sigma * p.sigma);
+            let w = q * q / (q * q + p.sig[ch] * p.sig[ch]);
             buf[k] = buf[k] * w;
             energy = energy + w * w;
         }
