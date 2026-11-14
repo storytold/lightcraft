@@ -325,5 +325,12 @@
   "View › Detail View ({keys}).": "Widok › Widok szczegółów ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Plik › Eksportuj… · Plik › Drukuj… ({keys}).",
   "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}",
+  "Signed in as {name}": "Zalogowano jako {name}",
+  "Signed in to Flickr as {name}": "Zalogowano do Flickr jako {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Prześlij do Flickr jako {name} – zdjęcia: {n}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Przesłane do Flickr zdjęcia: {ok} z {total}{:.0}",
+  " · {} not added to the album": " · nie dodano do albumu: {}",
+  " · the album couldn't be made: {}": " · nie udało się utworzyć albumu: {}",
+  " · new album “{}”": " · nowy album „{}”"
 }

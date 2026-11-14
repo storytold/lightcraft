@@ -326,5 +326,12 @@
   "{name} is installed and in use: face recognition is on": "{name} está instalado e em uso: o reconhecimento facial está ativado",
   "Bring photos in with File › Import Photos… ({keys}).": "Traga fotos com Arquivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys}).",
+  "Signed in as {name}": "Conectado como {name}",
+  "Signed in to Flickr as {name}": "Conectado ao Flickr como {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Enviar {n} foto{} ao Flickr como {name}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "{ok} de {total} foto{} enviadas ao Flickr",
+  " · {} not added to the album": " · {} não adicionada(s) ao álbum",
+  " · the album couldn't be made: {}": " · não foi possível criar o álbum: {}",
+  " · new album “{}”": " · novo álbum “{}”"
 }
