@@ -147,6 +147,7 @@ fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<
     }
 }
 
+/// Process requests for one editor, releasing its cached model on disconnect or failure.
 fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device) -> Result<(), String> {
     stream.set_read_timeout(Some(Duration::from_secs(10 * 60))).map_err(|e| e.to_string())?;
     stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
@@ -179,7 +180,8 @@ fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device)
             predict(m, enc, request.operation)
         })();
         eprintln!(
-            "SAM3 Metal request elapsed={:.3}s image={}x{} detail={} success={}",
+            "SAM3 {} request elapsed={:.3}s image={}x{} detail={} success={}",
+            gpu_name(&device).unwrap_or("CPU"),
             started.elapsed().as_secs_f64(),
             request.width,
             request.height,
@@ -194,15 +196,31 @@ fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device)
     }
 }
 
-pub fn serve(address: SocketAddr, dir: &Path, device: candle_core::Device) -> Result<(), String> {
-    if !address.ip().is_loopback() || !device.is_metal() {
-        return Err("SAM worker requires a loopback address and a Metal device".into());
+/// The GPU backend of `device`, `None` on the CPU.
+fn gpu_name(device: &candle_core::Device) -> Option<&'static str> {
+    match device {
+        d if d.is_metal() => Some("Metal"),
+        d if d.is_cuda() => Some("CUDA"),
+        _ => None,
     }
+}
+
+/// Validate the private endpoint before checking model files or binding a listener.
+fn worker_backend(address: SocketAddr, gpu: Option<&'static str>) -> Result<&'static str, String> {
+    if !address.ip().is_loopback() {
+        return Err("SAM worker requires a loopback address; use an SSH tunnel for remote access".into());
+    }
+    gpu.ok_or_else(|| "SAM worker requires a GPU device (Metal or CUDA)".into())
+}
+
+/// Serve one editor at a time on a loopback GPU endpoint; CPU devices are rejected.
+pub fn serve(address: SocketAddr, dir: &Path, device: candle_core::Device) -> Result<(), String> {
+    let gpu = worker_backend(address, gpu_name(&device))?;
     if !crate::is_model_dir(dir) {
         return Err("SAM model files are missing".into());
     }
     let listener = TcpListener::bind(address).map_err(|e| e.to_string())?;
-    eprintln!("SAM3 worker listening on {address}; device=Metal; idle unload=600s");
+    eprintln!("SAM3 worker listening on {address}; device={gpu}; idle unload=600s");
     for stream in listener.incoming() {
         let mut stream = stream.map_err(|e| e.to_string())?;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| serve_client(&mut stream, dir, device.clone())));
@@ -213,4 +231,46 @@ pub fn serve(address: SocketAddr, dir: &Path, device: candle_core::Device) -> Re
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Both GPU backends require loopback, including IPv6.
+    #[test]
+    fn worker_requires_loopback_for_each_gpu_backend() {
+        for gpu in ["Metal", "CUDA"] {
+            for ip in ["127.0.0.1:0", "[::1]:0"] {
+                assert_eq!(worker_backend(ip.parse().unwrap(), Some(gpu)).unwrap(), gpu);
+            }
+            for ip in ["0.0.0.0:0", "192.0.2.1:0", "[::]:0"] {
+                let error = worker_backend(ip.parse().unwrap(), Some(gpu)).unwrap_err();
+                assert!(error.contains("loopback address"), "{error}");
+            }
+        }
+    }
+
+    /// A real CUDA device passes endpoint validation before model files are checked.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn worker_accepts_cuda_before_checking_model_files() {
+        let device = match candle_core::Device::new_cuda(0) {
+            Ok(device) => device,
+            Err(error) => {
+                lightcraft_testkit::skip!(Gpu, "CUDA device unavailable: {error}");
+                return;
+            }
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let result = serve("127.0.0.1:0".parse().unwrap(), dir.path(), device);
+        assert_eq!(result.unwrap_err(), "SAM model files are missing");
+    }
+
+    #[test]
+    fn worker_refuses_the_cpu() {
+        let address = "127.0.0.1:0".parse().unwrap();
+        let error = serve(address, Path::new("."), candle_core::Device::Cpu).unwrap_err();
+        assert!(error.contains("GPU device"), "{error}");
+    }
 }

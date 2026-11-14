@@ -61,21 +61,83 @@ The result is stored with the mask: the model's 288 × 288 mask logits over the 
 need the model, so masks survive moving the library to a machine without it, and the web build
 renders them. Editing the photo's look later does not recompute a mask (click again to update).
 
-## Remote Metal inference
+## Remote GPU inference
 
 Native builds with `sam` can keep the editor, RAW files, library, and exports local while
-a Mac runs SAM 3. Build both ends from the same revision. On the Mac, install the model
-as described below, then run:
+a Mac or an NVIDIA machine runs SAM 3. Build both ends from the same revision. On the Mac, install
+the model as described below, then run:
 
 ```sh
 cargo build --release --locked -p lightcraft-segment --bin lightcraft-sam3-worker
 target/release/lightcraft-sam3-worker "$HOME/Library/Application Support/LightCraft/models/sam3" 127.0.0.1:8793
 ```
 
-On the editing computer, start an SSH tunnel in one terminal and LightCraft in another:
+The worker backend is selected at build time: the default worker is Metal-only (macOS).
+On Linux/NVIDIA, `--features cuda` is mandatory; there is no CPU worker fallback.
+The tested configuration is arm64 Ubuntu 24.04, GB10 (sm_121), CUDA 13.2. Other
+CUDA versions, architectures and Windows CUDA workers have not been verified.
+
+Install the CUDA toolkit (including `nvcc`, headers and development libraries) and a
+compatible NVIDIA driver. CUDA 13.x requires driver branch 580 or newer for minor-version
+compatibility; use a driver supporting your specific toolkit and GPU, following
+[NVIDIA's compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/minor-version-compatibility.html).
+Candle loads PTX kernels, so the minor-version floor alone may be insufficient for JIT
+compilation. Use a GPU-compatible driver from the toolkit release or newer, or a
+[supported NVIDIA forward-compatibility package](https://docs.nvidia.com/deploy/cuda-compatibility/forward-compatibility.html).
+The worker also needs the matching CUDA libraries at run time: keep the toolkit runtime
+libraries (including cuBLAS, cuBLASLt, cuRAND and NVRTC) available to the dynamic loader,
+and the driver's `libcuda.so.1`. Copying only the binary to a machine without these is insufficient.
+Before building, verify the compiler and driver:
 
 ```sh
-ssh -N -T -o ExitOnForwardFailure=yes -L 127.0.0.1:8793:127.0.0.1:8793 user@your-mac
+nvcc --version
+nvidia-smi
+nvidia-smi --query-gpu=index,name,compute_cap --format=csv
+```
+
+`CUDA_COMPUTE_CAP` is the compute capability with the decimal point removed:
+
+| GPU example | Capability | `CUDA_COMPUTE_CAP` |
+|---|---|---|
+| RTX 3090 | 8.6 | `86` |
+| RTX 4090 | 8.9 | `89` |
+| GB10 | 12.1 | `121` |
+
+Look up other models in [NVIDIA's GPU table](https://developer.nvidia.com/cuda/gpus),
+or use the query above. These are target examples, not additional tested configurations.
+If unset, the pinned CUDA build helper queries `nvidia-smi` and uses the first reported
+GPU's capability; without a visible GPU, set it explicitly. An unsupported target fails
+at build time; a target incompatible with the worker GPU can fail when kernels load or run.
+Rebuild for the intended GPU, with a toolkit whose `nvcc` supports that target.
+
+On the NVIDIA machine, first accept the model licence and obtain access at
+[facebook/sam3](https://huggingface.co/facebook/sam3), as described under
+[Getting the model](#getting-the-model). After authenticating with `hf auth login`, install
+and verify the Linux model directory, then build (this example targets GB10):
+
+```sh
+tools/install-sam3.sh --dir "$HOME/.config/lightcraft/models/sam3"
+tools/install-sam3.sh --dir "$HOME/.config/lightcraft/models/sam3" --check
+CUDA_COMPUTE_CAP=121 cargo build --release --locked -p lightcraft-segment --features cuda --bin lightcraft-sam3-worker
+target/release/lightcraft-sam3-worker ~/.config/lightcraft/models/sam3 127.0.0.1:8793
+```
+
+The worker opens CUDA ordinal 0. On a multi-GPU machine, select an existing system GPU
+index with `CUDA_VISIBLE_DEVICES`; for example, if GPU 2 exists, this maps it to ordinal 0:
+
+```sh
+CUDA_VISIBLE_DEVICES=2 target/release/lightcraft-sam3-worker ~/.config/lightcraft/models/sam3 127.0.0.1:8793
+```
+
+The build must support that GPU's compute capability. Initialization failures stop startup;
+model-memory failures can occur on the first request when weights are loaded.
+
+On the editing computer, start an SSH tunnel in one terminal and LightCraft in another.
+Replace `user@worker-host` with the SSH destination of the machine actually running the
+worker: the NVIDIA machine for CUDA, or the Mac for Metal.
+
+```sh
+ssh -N -T -o ExitOnForwardFailure=yes -L 127.0.0.1:8793:127.0.0.1:8793 user@worker-host
 LIGHTCRAFT_SAM3_REMOTE=127.0.0.1:8793 lightcraft
 ```
 
@@ -86,11 +148,11 @@ rendered model input (long edge at most 1008 pixels) and prompts cross the tunne
 worker caches the current photo; detail crops do not replace that cache. Returned masks
 stay in the local library, so later adjustments and exports work without the connection.
 
-The worker requires Metal and accepts one editing connection at a time. It loads weights
+The worker requires a GPU (Metal, or CUDA in a `cuda` build) and accepts one editing connection at a time. It loads weights
 on demand and releases them when the client disconnects or remains idle for ten minutes.
 Both endpoints require loopback addresses: SSH provides authentication and encryption.
 The listener has no independent authentication; do not expose it through a public proxy. Any
-process of any user on the worker Mac can connect to it, and on the editing computer a local
+process of any user on the worker machine can connect to it, and on the editing computer a local
 process listening on the port while the tunnel is down receives the rendered model input, so use
 this only on machines whose local users you trust.
 
