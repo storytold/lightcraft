@@ -368,6 +368,18 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.view = ViewMode::People;
             Ok(json!({"people": app.session.catalog.people().len()}))
         }
+        "view.map" => {
+            app.ui.view = ViewMode::Map;
+            Ok(json!({"view": "map"}))
+        }
+        "view.toggleMapFilter" => {
+            app.ui.map.show_filter_bar = !app.ui.map.show_filter_bar;
+            Ok(json!({"show": app.ui.map.show_filter_bar}))
+        }
+        "map.toggleLock" => {
+            app.ui.map.locked = !app.ui.map.locked;
+            Ok(json!({"locked": app.ui.map.locked}))
+        }
         "view.person" => {
             // {name}: one person's page in the People view: their faces, and the faces that look like them
             let Some(name) = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) else {

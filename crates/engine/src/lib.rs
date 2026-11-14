@@ -57,6 +57,7 @@ pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
 pub mod logging;
+pub mod map;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -358,6 +359,8 @@ pub struct Session {
     pub print: print::template::PrintSettings,
     /// Saved print templates (`print.template.*`), persisted in prefs.json.
     pub print_templates: Vec<print::template::PrintTemplate>,
+    /// Saved geographical bookmarks for the Map module (`map.savedLocations.*`).
+    pub saved_locations: Vec<map::SavedLocation>,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
     pub metadata_presets: Vec<cmd::metadata::MetadataPreset>,
     /// Saved filter-bar settings (`filter.*`), persisted in prefs.json.
@@ -531,6 +534,7 @@ impl Session {
             export_presets: Vec::new(),
             print: Default::default(),
             print_templates: Vec::new(),
+            saved_locations: Vec::new(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),

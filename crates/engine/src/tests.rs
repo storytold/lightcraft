@@ -36,6 +36,7 @@ mod lens_refresh;
 mod libops;
 mod library;
 mod lightroom_folder;
+mod map;
 mod mask_effects;
 mod mask_geometry;
 mod merge;
