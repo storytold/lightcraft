@@ -79,51 +79,67 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     painter.rect_filled(canvas_rect, 0.0, bg_color);
 
+    let screen_center = canvas_rect.center();
+
+    let lat_lon_to_screen = |coord: LatLon, cur_zoom: f64, cur_center: LatLon| -> Pos2 {
+        let (c_tx, c_ty) = cur_center.to_tile_coords(cur_zoom);
+        let (tx, ty) = coord.to_tile_coords(cur_zoom);
+        pos2(screen_center.x + ((tx - c_tx) * TILE_SIZE as f64) as f32, screen_center.y + ((ty - c_ty) * TILE_SIZE as f64) as f32)
+    };
+
+    let screen_to_lat_lon = |screen_pos: Pos2, cur_zoom: f64, cur_center: LatLon| -> LatLon {
+        let (c_tx, c_ty) = cur_center.to_tile_coords(cur_zoom);
+        let tx = c_tx + (screen_pos.x - screen_center.x) as f64 / TILE_SIZE as f64;
+        let ty = c_ty + (screen_pos.y - screen_center.y) as f64 / TILE_SIZE as f64;
+        LatLon::from_tile_coords(tx, ty, cur_zoom)
+    };
+
     // Pan with mouse drag
     if canvas_response.dragged() && !canvas_response.drag_started() {
         let delta = canvas_response.drag_delta();
-        let n = 2.0_f64.powf(zoom);
+        let n = 2.0_f64.powf(zoom.clamp(0.0, 24.0));
         let delta_tile_x = -delta.x as f64 / TILE_SIZE as f64;
         let delta_tile_y = -delta.y as f64 / TILE_SIZE as f64;
 
         let (mut cur_tx, mut cur_ty) = center.to_tile_coords(zoom);
         cur_tx = (cur_tx + delta_tile_x).rem_euclid(n);
         cur_ty = (cur_ty + delta_tile_y).clamp(0.0, n);
-        center = LatLon::from_tile_coords(cur_tx, cur_ty, zoom as u32);
+        center = LatLon::from_tile_coords(cur_tx, cur_ty, zoom);
     }
 
-    // Scroll wheel zoom
+    // Scroll wheel zoom anchored to cursor
     if canvas_response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() > 0.5 {
-            zoom = (zoom + (scroll as f64 * 0.005)).clamp(1.0, map_ui.provider.max_zoom() as f64);
-        }
-        if canvas_response.double_clicked() {
-            zoom = (zoom + 1.0).min(map_ui.provider.max_zoom() as f64);
+        let double_click = canvas_response.double_clicked();
+        let delta_zoom = if double_click {
+            1.0
+        } else if scroll.abs() > 0.5 {
+            scroll as f64 * 0.005
+        } else {
+            0.0
+        };
+
+        if delta_zoom != 0.0 {
+            let max_z = map_ui.provider.max_zoom() as f64;
+            let new_zoom = (zoom + delta_zoom).clamp(1.0, max_z);
+            if let Some(pointer_pos) = ui.input(|i| i.pointer.hover_pos()).filter(|&pos| canvas_rect.contains(pos)) {
+                let mouse_geo = screen_to_lat_lon(pointer_pos, zoom, center);
+                let (m_tx, m_ty) = mouse_geo.to_tile_coords(new_zoom);
+                let n = 2.0_f64.powf(new_zoom.clamp(0.0, 24.0));
+                let new_center_tx = (m_tx - (pointer_pos.x - screen_center.x) as f64 / TILE_SIZE as f64).rem_euclid(n);
+                let new_center_ty = (m_ty - (pointer_pos.y - screen_center.y) as f64 / TILE_SIZE as f64).clamp(0.0, n);
+                center = LatLon::from_tile_coords(new_center_tx, new_center_ty, new_zoom);
+            }
+            zoom = new_zoom;
         }
     }
 
-    // Coordinate projection helpers
-    let screen_center = canvas_rect.center();
-    let (center_tx, center_ty) = center.to_tile_coords(zoom);
-
-    let lat_lon_to_screen = |coord: LatLon, cur_zoom: f64| -> Pos2 {
-        let (tx, ty) = coord.to_tile_coords(cur_zoom);
-        pos2(screen_center.x + ((tx - center_tx) * TILE_SIZE as f64) as f32, screen_center.y + ((ty - center_ty) * TILE_SIZE as f64) as f32)
-    };
-
-    let screen_to_lat_lon = |screen_pos: Pos2, cur_zoom: f64| -> LatLon {
-        let tx = center_tx + (screen_pos.x - screen_center.x) as f64 / TILE_SIZE as f64;
-        let ty = center_ty + (screen_pos.y - screen_center.y) as f64 / TILE_SIZE as f64;
-        LatLon::from_tile_coords(tx, ty, cur_zoom as u32)
-    };
-
     // Draw Map Grid / Tile outlines
-    render_tile_grid(&painter, canvas_rect, screen_center, center_tx, center_ty, zoom, map_ui.provider);
+    render_tile_grid(&painter, canvas_rect, screen_center, center, zoom, map_ui.provider);
 
     // 2. Fetch and Cluster Candidate Photos
-    let candidate_photos = collect_photos(app, map_ui.filter, |p| screen_to_lat_lon(p, zoom), canvas_rect);
-    let clusters = cluster_photos(&candidate_photos, |coord| lat_lon_to_screen(coord, zoom), canvas_rect);
+    let candidate_photos = collect_photos(app, map_ui.filter, |p| screen_to_lat_lon(p, zoom, center), canvas_rect);
+    let clusters = cluster_photos(&candidate_photos, |coord| lat_lon_to_screen(coord, zoom, center), canvas_rect);
 
     // 3. Render Clusters and Markers
     let mut clicked_photo = None;
@@ -176,7 +192,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(active_id) = map_ui.active_pin_photo {
         let pin_coord = app.session.catalog.photo(active_id).and_then(|ph| ph.meta.gps).and_then(|(lat, lon)| LatLon::new(lat, lon));
         if let Some(coord) = pin_coord {
-            let pin_pos = lat_lon_to_screen(coord, zoom);
+            let pin_pos = lat_lon_to_screen(coord, zoom, center);
             if canvas_rect.contains(pin_pos) {
                 render_loupe_popover(app, ui, pin_pos, active_id, &mut map_ui);
             }
@@ -237,16 +253,17 @@ fn fetch_and_cache_tile(key: TileKey, url: String, disk_path: std::path::PathBuf
     });
 }
 
-fn render_tile_grid(p: &Painter, canvas: Rect, center_pos: Pos2, center_tx: f64, center_ty: f64, zoom: f64, provider: MapProvider) {
-    let int_zoom = zoom.floor() as u8;
+fn render_tile_grid(p: &Painter, canvas: Rect, center_pos: Pos2, center: LatLon, zoom: f64, provider: MapProvider) {
+    let int_zoom = (zoom.floor() as u8).min(provider.max_zoom());
+    let scale = 2.0_f64.powf(zoom - int_zoom as f64);
+    let tile_screen_size = (TILE_SIZE as f64 * scale) as f32;
+    let (center_int_tx, center_int_ty) = center.to_tile_coords(int_zoom as f64);
     let n = 2.0_f64.powi(int_zoom as i32);
-    let scale_diff = 2.0_f64.powf(zoom - int_zoom as f64);
-    let tile_screen_size = (TILE_SIZE as f64 * scale_diff) as f32;
 
-    let min_x = ((center_tx - (center_pos.x - canvas.left()) as f64 / tile_screen_size as f64).floor() as i64).max(0);
-    let max_x = ((center_tx + (canvas.right() - center_pos.x) as f64 / tile_screen_size as f64).ceil() as i64).min(n as i64 - 1);
-    let min_y = ((center_ty - (center_pos.y - canvas.top()) as f64 / tile_screen_size as f64).floor() as i64).max(0);
-    let max_y = ((center_ty + (canvas.bottom() - center_pos.y) as f64 / tile_screen_size as f64).ceil() as i64).min(n as i64 - 1);
+    let min_x = ((center_int_tx - (center_pos.x - canvas.left()) as f64 / tile_screen_size as f64).floor() as i64).max(0);
+    let max_x = ((center_int_tx + (canvas.right() - center_pos.x) as f64 / tile_screen_size as f64).ceil() as i64).min(n as i64 - 1);
+    let min_y = ((center_int_ty - (center_pos.y - canvas.top()) as f64 / tile_screen_size as f64).floor() as i64).max(0);
+    let max_y = ((center_int_ty + (canvas.bottom() - center_pos.y) as f64 / tile_screen_size as f64).ceil() as i64).min(n as i64 - 1);
 
     let grid_stroke = match provider {
         MapProvider::EsriImagery | MapProvider::EsriHybrid => Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 30)),
@@ -276,8 +293,8 @@ fn render_tile_grid(p: &Painter, canvas: Rect, center_pos: Pos2, center_tx: f64,
 
     for x in min_x..=max_x {
         for y in min_y..=max_y {
-            let left = center_pos.x + ((x as f64 - center_tx) * tile_screen_size as f64) as f32;
-            let top = center_pos.y + ((y as f64 - center_ty) * tile_screen_size as f64) as f32;
+            let left = center_pos.x + ((x as f64 - center_int_tx) * tile_screen_size as f64) as f32;
+            let top = center_pos.y + ((y as f64 - center_int_ty) * tile_screen_size as f64) as f32;
             let tile_rect = Rect::from_min_size(pos2(left, top), vec2(tile_screen_size, tile_screen_size));
 
             let coord = TileCoord::new(int_zoom, x as u32, y as u32);
@@ -671,5 +688,34 @@ mod tests {
 
         assert_eq!(app.ui.view, ViewMode::Map);
         assert_eq!(app.ui.map.provider, MapProvider::OpenStreetMap);
+    }
+
+    #[test]
+    fn continuous_zoom_and_pan_preserves_coordinates() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+        app.ui.view = ViewMode::Map;
+        app.ui.map.center_lat = 45.57;
+        app.ui.map.center_lon = -73.2;
+        app.ui.map.zoom = 10.35;
+
+        let mut view = HeadlessView::new();
+        let mut raw = HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
+        raw.events.push(egui::Event::PointerMoved(pos2(500.0, 350.0)));
+        raw.events.push(egui::Event::PointerButton {
+            pos: pos2(500.0, 350.0),
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::default(),
+        });
+        raw.events.push(egui::Event::PointerMoved(pos2(550.0, 370.0)));
+
+        view.run(raw, |ui| {
+            show(&mut app, ui);
+        });
+
+        assert!(app.ui.map.center_lat.is_finite());
+        assert!(app.ui.map.center_lon.is_finite());
+        assert!((app.ui.map.center_lat - 45.57).abs() < 1.0);
+        assert!((app.ui.map.center_lon - (-73.2)).abs() < 1.0);
     }
 }

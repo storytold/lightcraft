@@ -55,10 +55,9 @@ impl LatLon {
         (x, y)
     }
 
-    /// Convert continuous tile coordinates back to `LatLon` at integer zoom `zoom`.
-    pub fn from_tile_coords(x: f64, y: f64, zoom: u32) -> Self {
-        let z = zoom.min(24);
-        let n = 2.0_f64.powi(z as i32);
+    /// Convert continuous tile coordinates back to `LatLon` at zoom `zoom`.
+    pub fn from_tile_coords(x: f64, y: f64, zoom: f64) -> Self {
+        let n = 2.0_f64.powf(zoom.clamp(0.0, 24.0));
         let lon = if n > 0.0 { (x / n * 360.0 - 180.0).clamp(-180.0, 180.0) } else { 0.0 };
         let lat_rad = (PI * (1.0 - 2.0 * y / n)).sinh().atan();
         let lat = lat_rad.to_degrees().clamp(-90.0, 90.0);
@@ -184,8 +183,9 @@ mod tests {
         ];
 
         for p in points {
-            for zoom in 0..=18 {
-                let (x, y) = p.to_tile_coords(zoom as f64);
+            for zoom_step in 0..=36 {
+                let zoom = zoom_step as f64 * 0.5;
+                let (x, y) = p.to_tile_coords(zoom);
                 let roundtrip = LatLon::from_tile_coords(x, y, zoom);
                 assert!((p.lat - roundtrip.lat).abs() < 1e-4, "lat mismatch at z={zoom}: {} vs {}", p.lat, roundtrip.lat);
                 assert!((p.lon - roundtrip.lon).abs() < 1e-4, "lon mismatch at z={zoom}: {} vs {}", p.lon, roundtrip.lon);
