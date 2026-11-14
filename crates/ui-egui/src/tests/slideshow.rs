@@ -241,7 +241,7 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
     assert_eq!(r["settings"]["manual"], true, "{r}");
     // once the first two slides are rendered, and far longer than the slide duration: the first
     // photo stays up
-    assert!(h.step_until(SETTLE, |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
     for _ in 0..120 {
         h.step();
     }
