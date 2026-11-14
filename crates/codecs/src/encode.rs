@@ -239,7 +239,9 @@ pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &Encod
     let comp = match compression {
         TiffCompression::None => Compression::Uncompressed,
         TiffCompression::Lzw => Compression::Lzw,
-        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Fast),
+        // Balanced, not Fast: with flate2's zlib-rs backend (in the build since craft-psd turned it on), the
+        // fast level writes a noisy 16-bit photo larger than uncompressed (#2882's test caught it)
+        TiffCompression::Deflate => Compression::Deflate(DeflateLevel::Balanced),
         TiffCompression::PackBits => Compression::Packbits,
     };
     let float = matches!(img.samples, Samples::F32(_));
