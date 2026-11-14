@@ -408,6 +408,110 @@ fn delete_means_the_backspace_key() {
     assert_eq!(parse("Delete"), Some((Modifiers::NONE, Key::Backspace)));
     assert_eq!(parse("Cmd+Delete"), Some((Modifiers::COMMAND, Key::Backspace)));
 }
+
+/// A library of four photos with the first selected, shown in `view` with `right` as the saved right panel.
+fn library_in(view: crate::state::ViewMode, right: crate::state::RightPanel) -> crate::headless::Headless {
+    let mut h = library();
+    h.app.ui.view = view;
+    h.app.ui.right = right;
+    h.step();
+    h
+}
+
+fn press(h: &mut crate::headless::Headless, key: egui::Key) {
+    h.app.synthetic.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.step();
+}
+
+/// `ui.right` is saved and stays after the view that showed it is left: with no tool on screen, Delete (and ⌫)
+/// is still the photo's, in the grids, in a comparison and in the full-screen preview.
+#[test]
+fn delete_asks_to_delete_the_photo_when_no_tool_is_on_screen() {
+    use crate::state::{Dialog, RightPanel as R, ViewMode as V};
+    for view in [V::PhotoGrid, V::SquareGrid, V::Compare, V::Survey] {
+        for right in [R::Edit, R::Masking, R::Remove, R::RedEye, R::Crop] {
+            for key in [egui::Key::Delete, egui::Key::Backspace] {
+                let mut h = library_in(view, right);
+                press(&mut h, key);
+                assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "{view:?} with {right:?}, {key:?}");
+            }
+        }
+    }
+    let mut h = library_in(V::Detail, R::Masking);
+    h.app.ui.fullscreen = true;
+    press(&mut h, egui::Key::Delete);
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDelete { count: 1 }), "the full-screen preview shows no tool");
+}
+
+/// With the tool on screen Delete still belongs to it: no mask, spot or guide is selected, so nothing happens.
+#[test]
+fn delete_stays_with_the_tool_in_the_single_photo_view() {
+    use crate::state::{RightPanel as R, ViewMode as V};
+    for right in [R::Masking, R::Remove, R::RedEye] {
+        let mut h = library_in(V::Detail, right);
+        press(&mut h, egui::Key::Delete);
+        assert_eq!(h.app.ui.dialog, None, "{right:?}");
+        assert!(!h.app.session.catalog.photo(lightcraft_catalog::PhotoId(1)).unwrap().deleted, "{right:?}");
+    }
+}
+
+#[test]
+fn delete_deletes_at_once_when_the_question_is_off() {
+    let mut h = library_in(crate::state::ViewMode::PhotoGrid, crate::state::RightPanel::Masking);
+    h.app.ui.settings.confirm_delete = false;
+    press(&mut h, egui::Key::Delete);
+    assert_eq!(h.app.ui.dialog, None);
+    assert!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(1)).unwrap().deleted);
+}
+
+/// X rejects in the grid even though the saved panel is Crop (where it swaps the crop's aspect).
+#[test]
+fn x_rejects_in_the_grid_whatever_the_saved_right_panel() {
+    let mut h = library_in(crate::state::ViewMode::PhotoGrid, crate::state::RightPanel::Crop);
+    press(&mut h, egui::Key::X);
+    assert_eq!(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(1)).unwrap().flag, lightcraft_catalog::Flag::Reject);
+}
+
+/// Minimizing the Tools panel or hiding its tab does not let Delete delete the photo while a canvas
+/// tool is active: the tool on the canvas still owns the key.
+#[test]
+fn delete_stays_with_the_canvas_tool_even_when_tools_panel_is_not_exposed() {
+    use crate::docking::Panel;
+    use crate::state::{RightPanel as R, ViewMode as V};
+    for right in [R::Masking, R::Remove, R::RedEye] {
+        let mut h = library_in(V::Detail, right);
+        h.app.run("ui.dock", json!({"operation": "float", "panel": "tools", "rect": [400, 100, 320, 500]})).unwrap();
+        h.app.run("ui.dock", json!({"action": {"SetMinimized": {"panel": "tools", "minimized": true}}})).unwrap();
+        h.step();
+        assert!(!crate::docking::exposed(&h.app, Panel::Tools));
+        press(&mut h, egui::Key::Delete);
+        assert_eq!(h.app.ui.dialog, None, "{right:?}");
+        assert!(!h.app.session.catalog.photo(lightcraft_catalog::PhotoId(1)).unwrap().deleted, "{right:?}");
+    }
+}
+
+/// A does not trigger Visualize Spots or Crop Aspect Lock in grids or the full-screen preview:
+/// the hidden tool state is left unchanged.
+#[test]
+fn a_leaves_hidden_tool_state_unchanged_outside_single_photo_view() {
+    use crate::state::{RightPanel as R, ViewMode as V};
+    for view in [V::PhotoGrid, V::SquareGrid, V::Compare, V::Survey] {
+        for right in [R::Crop, R::Edit, R::None, R::Masking] {
+            let mut h = library_in(view, right);
+            let spots_before = h.app.ui.visualize_spots;
+            press(&mut h, egui::Key::A);
+            assert_eq!(h.app.ui.right, right, "view {view:?}, right {right:?}");
+            assert_eq!(h.app.ui.visualize_spots, spots_before, "view {view:?}");
+        }
+    }
+    let mut h = library_in(V::Detail, R::Crop);
+    h.app.ui.fullscreen = true;
+    let spots_before = h.app.ui.visualize_spots;
+    press(&mut h, egui::Key::A);
+    assert_eq!(h.app.ui.right, R::Crop, "full screen preview keeps saved right");
+    assert_eq!(h.app.ui.visualize_spots, spots_before);
+}
+
 use super::*;
 
 #[test]
