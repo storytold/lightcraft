@@ -51,6 +51,35 @@ fn errors() {
     assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("unknown command"));
 }
 
+/// Generated/alias tools and batches retain validation details, but later errors inherit none.
+#[test]
+fn face_review_errors_keep_details_for_tools_and_batches_without_leaking() {
+    let mut b = Headless::new(lightcraft_engine::Session::with_demo());
+    for (tool, args) in [
+        ("cmd_faces_ignore", json!({"faces": []})),
+        ("command_run", json!({"id": "faces.ignore", "params": {"faces": []}})),
+        ("run_command", json!({"command": "faces.ignore", "params": {"faces": []}})),
+    ] {
+        let result = call_tool(&mut b, tool, &args);
+        assert!(result.is_error);
+        assert_eq!(result.structured.as_ref().unwrap()["errorDetails"], json!({"code": "invalidInput", "field": "faces"}));
+        assert!(result.content[0]["text"].as_str().unwrap().contains("select between"));
+    }
+    let result = call_tool(
+        &mut b,
+        "command_batch",
+        &json!({"stop_on_error": false, "steps": [
+            {"id": "faces.ignored", "params": {"limit": 0}}, {"id": "no.such"}
+        ]}),
+    );
+    assert!(result.is_error);
+    let structured = result.structured.unwrap();
+    assert_eq!(structured["results"][0]["errorDetails"], json!({"code": "invalidInput", "field": "limit"}));
+    assert!(structured["results"][1].get("errorDetails").is_none());
+    assert!(call_tool(&mut b, "no.such", &json!({})).structured.is_none());
+    assert!(!call_tool(&mut b, "cmd_faces_ignored", &json!({})).is_error);
+}
+
 #[test]
 fn tools_list_has_helpers_and_every_command() {
     let mut s = server();
