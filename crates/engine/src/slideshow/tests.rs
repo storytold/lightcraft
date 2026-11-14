@@ -213,6 +213,205 @@ fn a_manual_slideshow_moves_only_with_the_arrows() {
 }
 
 #[test]
+fn pan_and_zoom_moves_each_photo_over_its_slide_on_its_own_path() {
+    // off: every slide shows its whole picture
+    let p = Playback::new(ids(3), None, settings(4.0, 1.0), 1, 0.0).unwrap();
+    assert_eq!(p.pan_zoom(2.0), PanZoom { current: None, from: None });
+
+    let s = PlaybackSettings { pan_and_zoom: true, repeat: true, ..settings(4.0, 1.0) };
+    let mut p = Playback::new(ids(3), None, s.clone(), 9, 0.0).unwrap().with_titles(Some(2.0), None);
+    assert_eq!(p.pan_zoom(1.0).current, None, "a title screen doesn't move");
+    assert_eq!(p.tick(2.0, all_ready), Tick::Advanced(ph(1)));
+    let m1 = Motion::new(p.motion_key(ph(1)).unwrap(), 0.5);
+    assert_eq!(p.pan_zoom(2.0).current, Some(m1.start), "a photo comes up at its start view");
+    assert_eq!(p.pan_zoom(2.5).from, None, "the intro fading out doesn't move either");
+    assert_eq!(p.pan_zoom(4.0).current, Some(m1.at(0.5)), "half way through its 4 s, fade in included");
+    // paused: frozen
+    p.toggle_pause(4.0);
+    assert_eq!(p.pan_zoom(100.0).current, Some(m1.at(0.5)));
+    p.toggle_pause(100.0);
+    assert_eq!(p.pan_zoom(101.0).current, Some(m1.at(0.75)), "and carries on from there");
+    // the next photo: its own path from its start; the one fading out stays at its end view
+    assert_eq!(p.tick(102.0, all_ready), Tick::Advanced(ph(2)));
+    let z = p.pan_zoom(102.5);
+    let m2 = Motion::new(p.motion_key(ph(2)).unwrap(), 0.5);
+    assert_ne!(m1, m2, "every photo has its own path");
+    assert_eq!(z.current, Some(m2.at(0.125)));
+    assert_eq!(z.from, Some(m1.end));
+    assert_eq!(p.pan_zoom(103.5).from, None, "after the fade");
+    // a slide that is due but not ready holds its end view
+    assert_eq!(p.tick(106.0, |i| i != ph(3)), Tick::Waiting(ph(3)));
+    assert_eq!(p.pan_zoom(110.0).current, Some(m2.end));
+    // the same seed plays the same paths; another seed other ones
+    let q = Playback::new(ids(3), None, s.clone(), 9, 0.0).unwrap();
+    assert_eq!(q.motion_key(ph(1)).map(|k| Motion::new(k, 0.5)), Some(m1));
+    let r = Playback::new(ids(3), None, s, 10, 0.0).unwrap();
+    assert_ne!(r.motion_key(ph(1)), q.motion_key(ph(1)));
+}
+
+#[test]
+fn pan_and_zoom_paths_change_each_pass_and_hold_in_a_manual_slideshow() {
+    let s = PlaybackSettings { pan_and_zoom: true, repeat: true, ..settings(4.0, 1.0) };
+    // a new pass: a new path for the same photo
+    let mut p = Playback::new(ids(2), None, PlaybackSettings { fade_duration: 0.0, ..s.clone() }, 9, 0.0).unwrap();
+    let first = p.pan_zoom(0.0).current;
+    p.tick(4.0, all_ready);
+    assert_eq!(p.tick(8.0, all_ready), Tick::Advanced(ph(1)));
+    assert_ne!(p.pan_zoom(8.0).current, first, "a fresh path in the next pass");
+    // a single photo repeating starts again on a new path
+    let mut p = Playback::new(ids(1), None, s.clone(), 9, 0.0).unwrap();
+    let first = p.pan_zoom(0.0).current;
+    let ended = p.pan_zoom(4.0).current;
+    assert_eq!(p.tick(4.0, all_ready), Tick::Idle);
+    assert_ne!(p.pan_zoom(4.0).current, first);
+    assert_eq!(p.pan_zoom(4.0).current, ended, "the new path starts where the last one ended: no jump");
+    let second_end = p.pan_zoom(8.0).current;
+    assert_ne!(second_end, ended, "and goes somewhere new");
+    assert_eq!(p.tick(8.0, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(8.0).current, second_end, "again");
+    assert_ne!(p.pan_zoom(12.0).current, second_end);
+    // the amount sets the zoom
+    let close = |amount: f64| {
+        let p = Playback::new(ids(1), None, PlaybackSettings { pan_and_zoom_amount: amount, ..s.clone() }, 9, 0.0).unwrap();
+        let m = Motion::new(p.motion_key(ph(1)).unwrap(), amount);
+        m.start.zoom.max(m.end.zoom)
+    };
+    assert!(close(1.0) > close(0.0));
+    // the playback view follows the path for its amount
+    let view = |amount: f64| {
+        let p = Playback::new(ids(1), None, PlaybackSettings { pan_and_zoom_amount: amount, ..s.clone() }, 9, 0.0).unwrap();
+        let m = Motion::new(p.motion_key(ph(1)).unwrap(), amount);
+        let (a, b) = (p.pan_zoom(0.0).current.unwrap(), p.pan_zoom(100.0).current.unwrap());
+        assert_eq!((a, b), (m.at(0.0), m.at(1.0)), "the view at amount {amount} starts and ends on its path");
+        a.zoom.max(b.zoom)
+    };
+    assert!(view(1.0) > view(0.5) && view(0.5) > view(0.0), "the amount sets the zoom of the playback view");
+    // a manual slideshow holds each photo at its start view; ← / → start the next one there
+    let mut p = Playback::new(ids(3), None, PlaybackSettings { manual: true, ..s }, 9, 0.0).unwrap();
+    let start = Motion::new(p.motion_key(ph(1)).unwrap(), 0.5).start;
+    assert_eq!(p.pan_zoom(500.0).current, Some(start));
+    p.step(1, 500.0);
+    assert_eq!(p.pan_zoom(900.0).current, Some(Motion::new(p.motion_key(ph(2)).unwrap(), 0.5).start));
+}
+
+#[test]
+fn pan_and_zoom_settings_round_trip_and_are_checked() {
+    let d = PlaybackSettings::default();
+    assert!(!d.pan_and_zoom, "off by default");
+    assert_eq!(d.pan_and_zoom_amount, 0.5);
+    let m = d.merged(&json!({"panAndZoom": true, "panAndZoomAmount": 0.8})).unwrap();
+    assert!(m.pan_and_zoom);
+    assert_eq!((m.to_json()["panAndZoom"].clone(), m.to_json()["panAndZoomAmount"].clone()), (json!(true), json!(0.8)));
+    for out in [json!(3), json!(-1), json!(1.0001), json!(-0.0001)] {
+        assert!(d.merged(&json!({"panAndZoomAmount": out})).is_err(), "{out} is outside 0 to 1");
+    }
+    assert_eq!(d.merged(&json!({"panAndZoomAmount": 0})).unwrap().pan_and_zoom_amount, 0.0);
+    assert_eq!(d.merged(&json!({"panAndZoomAmount": 1})).unwrap().pan_and_zoom_amount, 1.0);
+    let saved = PlaybackSettings { pan_and_zoom_amount: 3.0, ..d.clone() }.sanitized();
+    assert_eq!(saved.pan_and_zoom_amount, 1.0, "a saved value outside the range is clamped when read");
+    assert!(d.merged(&json!({"panAndZoom": "on"})).is_err());
+    assert!(d.merged(&json!({"panAndZoomAmount": "high"})).is_err());
+    let s = PlaybackSettings { pan_and_zoom_amount: f64::NAN, ..d.clone() }.sanitized();
+    assert_eq!(s.pan_and_zoom_amount, 0.5, "not finite: the default");
+    let off = d.merged(&json!({"panAndZoomAmount": 0.2, "panAndZoom": false})).unwrap();
+    assert_eq!(off.pan_and_zoom_amount, 0.2, "the amount is kept with the effect off");
+}
+
+#[test]
+fn pan_and_zoom_shows_the_start_the_middle_and_the_end_of_a_slide() {
+    let s = PlaybackSettings { pan_and_zoom: true, ..settings(4.0, 1.0) };
+    let mut p = Playback::new(ids(2), None, s, 5, 10.0).unwrap();
+    let first = p.current();
+    let m = Motion::new(p.motion_key(first).unwrap(), 0.5);
+    assert_ne!(m.start, m.end, "the photo moves");
+    assert_eq!(p.tick(10.0, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(10.0).current, Some(m.start), "at 0");
+    let half = p.pan_zoom(12.0).current.unwrap();
+    assert_eq!(half, m.at(0.5), "half way");
+    for (a, b, mid) in [(m.start.zoom, m.end.zoom, half.zoom), (m.start.x, m.end.x, half.x), (m.start.y, m.end.y, half.y)] {
+        assert!((mid - (a + b) / 2.0).abs() < 1e-12, "half way along the path: {half:?}");
+    }
+    assert_eq!(p.tick(13.99, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(14.0).current, Some(m.end), "at the end");
+    assert_eq!(p.pan_zoom(30.0).current, Some(m.end), "a slide that runs over stays at its end");
+    let Tick::Advanced(next) = p.tick(14.0, all_ready) else { panic!("the next slide comes up at 14") };
+    let m2 = Motion::new(p.motion_key(next).unwrap(), 0.5);
+    assert_eq!(p.pan_zoom(14.0), PanZoom { current: Some(m2.start), from: Some(m.end) }, "the next one starts at its start");
+}
+
+#[test]
+fn pan_and_zoom_moves_only_while_a_photo_plays_out_its_time() {
+    let s = PlaybackSettings { pan_and_zoom: true, ..settings(4.0, 1.0) };
+    let mut p = Playback::new(ids(2), None, s.clone(), 5, 0.0).unwrap();
+    for now in [0.0, 2.0, 3.99] {
+        assert!(p.pan_zoom_moving(now), "moving at {now}");
+    }
+    // its time is over and the next slide is not ready: it holds its end view, so nothing moves
+    let next = p.upcoming(1)[0];
+    assert_eq!(p.tick(4.0, |i| i != next), Tick::Waiting(next));
+    assert!(!p.pan_zoom_moving(4.0) && !p.pan_zoom_moving(9.0));
+    assert_eq!(p.tick(9.0, all_ready), Tick::Advanced(next));
+    assert!(p.pan_zoom_moving(9.0), "the next photo moves");
+    p.toggle_pause(10.0);
+    assert!(!p.pan_zoom_moving(11.0), "paused");
+    let off = Playback::new(ids(2), None, settings(4.0, 1.0), 5, 0.0).unwrap();
+    assert!(!off.pan_zoom_moving(1.0), "off");
+    let manual = Playback::new(ids(2), None, PlaybackSettings { manual: true, ..s.clone() }, 5, 0.0).unwrap();
+    assert!(!manual.pan_zoom_moving(1.0), "a manual slideshow holds its start view");
+    let titled = Playback::new(ids(2), None, s, 5, 0.0).unwrap().with_titles(Some(2.0), None);
+    assert!(!titled.pan_zoom_moving(1.0), "a title screen does not move");
+}
+
+#[test]
+fn pan_and_zoom_stops_while_paused_and_carries_on_after() {
+    let s = PlaybackSettings { pan_and_zoom: true, ..settings(4.0, 1.0) };
+    let mut p = Playback::new(ids(2), None, s, 5, 0.0).unwrap();
+    let m1 = Motion::new(p.motion_key(p.current()).unwrap(), 0.5);
+    assert!(p.toggle_pause(1.0));
+    for now in [1.0, 2.0, 50.0] {
+        assert_eq!(p.pan_zoom(now).current, Some(m1.at(0.25)), "paused at {now}");
+    }
+    assert_eq!(p.tick(50.0, all_ready), Tick::Idle, "no slide change while paused");
+    assert!(!p.toggle_pause(50.0));
+    assert_eq!(p.pan_zoom(50.0).current, Some(m1.at(0.25)), "it resumes where it stopped");
+    assert_eq!(p.pan_zoom(52.0).current, Some(m1.at(0.75)));
+    assert_eq!(p.tick(52.99, all_ready), Tick::Idle);
+    let Tick::Advanced(next) = p.tick(53.0, all_ready) else { panic!("the slide had 3 s left after the pause") };
+    let m2 = Motion::new(p.motion_key(next).unwrap(), 0.5);
+    // paused during the fade: both photos hold their views, and the fade waits too
+    assert!(p.toggle_pause(53.5));
+    assert_eq!(p.pan_zoom(80.0), PanZoom { current: Some(m2.at(0.125)), from: Some(m1.end) });
+    assert_eq!(p.tick(80.0, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(80.0).from, Some(m1.end));
+    assert!(!p.toggle_pause(80.0));
+    assert_eq!(p.pan_zoom(80.25), PanZoom { current: Some(m2.at(0.1875)), from: Some(m1.end) });
+    assert_eq!(p.tick(80.5, all_ready), Tick::Idle);
+    assert_eq!(p.pan_zoom(80.5), PanZoom { current: Some(m2.at(0.25)), from: None }, "the fade is over after its second");
+}
+
+#[test]
+fn pan_and_zoom_moves_through_a_fade_that_overlaps_it() {
+    // a 2 s fade in a 4 s slide, straight and through a color: the new photo moves from its start
+    // view as it fades in, and the old one shows at its end view until the fade is over
+    for color in [None, Some([0, 0, 0])] {
+        let s = PlaybackSettings { pan_and_zoom: true, fade_color: color, ..settings(4.0, 2.0) };
+        let mut p = Playback::new(ids(2), None, s, 5, 0.0).unwrap();
+        let old = p.current();
+        let m1 = Motion::new(p.motion_key(old).unwrap(), 0.5);
+        let Tick::Advanced(new) = p.tick(4.0, all_ready) else { panic!("the next slide comes up at 4") };
+        let m2 = Motion::new(p.motion_key(new).unwrap(), 0.5);
+        for (now, t, progress) in [(4.0, 0.0, 0.0), (5.0, 0.25, 0.5), (5.5, 0.375, 0.75)] {
+            let f = p.frame(now);
+            assert_eq!((f.current, f.from), (new, Some(old)), "{color:?} at {now}");
+            assert!((f.progress - progress).abs() < 1e-6, "{color:?} at {now}: {f:?}");
+            assert_eq!(p.pan_zoom(now), PanZoom { current: Some(m2.at(t)), from: Some(m1.end) }, "{color:?} at {now}");
+        }
+        assert_eq!(p.tick(6.0, all_ready), Tick::Idle);
+        assert_eq!(p.pan_zoom(6.0), PanZoom { current: Some(m2.at(0.5)), from: None }, "{color:?}: the fade is over, the move goes on");
+    }
+}
+
+#[test]
 fn a_single_photo_repeats_without_changing() {
     let mut p = Playback::new(ids(1), None, settings(1.0, 0.5), 1, 0.0).unwrap();
     assert_eq!(p.upcoming(2), vec![]);

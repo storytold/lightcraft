@@ -93,6 +93,33 @@ fn playback_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             }
         }
     });
+    let mut v = s.pan_and_zoom;
+    if check(ui, "settings.slideshowPanAndZoom", &mut v, "Pan and zoom") {
+        let _ = app.run("slideshow.playback", json!({"panAndZoom": v}));
+    }
+    row(ui, t, crate::i18n::tr("Amount"), |ui| {
+        ui.add_enabled_ui(s.pan_and_zoom, |ui| {
+            ui.label(crate::i18n::tr("Low"));
+            let mut a = s.pan_and_zoom_amount;
+            let r = ui.add(egui::Slider::new(&mut a, 0.0..=1.0).show_value(false));
+            register(ui, "slider:slideshowPanAndZoom", r.rect);
+            ui.label(crate::i18n::tr("High"));
+            if r.changed()
+                && let Ok(next) = app.session.slideshow.merged(&json!({"panAndZoomAmount": a}))
+            {
+                app.session.slideshow = next;
+            }
+            if r.drag_stopped() || (r.changed() && !r.dragged()) {
+                let _ = app.run("slideshow.playback", json!({"panAndZoomAmount": a}));
+                // the live value above already holds the amount, so the command finds no change
+                // to save: save it here
+                if let Err(e) = app.session.save_prefs() {
+                    log::warn!("slideshow: {e}");
+                }
+            }
+        });
+    });
+    hint(ui, t, crate::i18n::tr("Each photo moves and zooms slowly while it is up, on a path of its own. Exports show the photos still."));
     let mut v = s.random_order;
     if check(ui, "settings.slideshowRandom", &mut v, "Random order") {
         let _ = app.run("slideshow.playback", json!({"randomOrder": v}));
