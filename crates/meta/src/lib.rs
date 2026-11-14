@@ -16,29 +16,44 @@
 
 mod container;
 pub mod cr3;
-mod datetime;
 mod exif;
 pub mod focus;
 mod focus_read;
-mod gpx;
 pub mod heif;
 mod iptc;
 pub mod mrw;
 mod psd;
 pub mod tags;
 mod xmp;
-mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
-pub use datetime::DateTime;
+pub use craft_metadata::DateTime;
+pub use craft_metadata::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
-pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
 pub use tags::{TagRow, file_tag_rows, tag_rows};
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
-pub use xmp_merge::{MergeRules, merge_xmp};
+
+/// Which properties [`merge_xmp`] takes from the fresh packet.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MergeRules<'a> {
+    /// Always replaced: removed from the existing packet, written from the fresh one if stated.
+    pub owned: &'a [&'a str],
+    /// Replaced only when the fresh packet states them; otherwise the existing value stays.
+    pub owned_if_present: &'a [&'a str],
+}
+
+/// Merge `fresh` into `existing` following `rules`.
+pub fn merge_xmp(existing: &str, fresh: &str, rules: MergeRules) -> Result<String, XmpError> {
+    let namespaces = [craft_metadata::XmpNamespace { prefix: "lc", uri: LC_NS }];
+    craft_metadata::merge_xmp(
+        existing,
+        fresh,
+        craft_metadata::MergeRules { owned: rules.owned, owned_if_present: rules.owned_if_present, namespaces: &namespaces },
+    )
+}
 
 use serde::{Deserialize, Serialize};
 

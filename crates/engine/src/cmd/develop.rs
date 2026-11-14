@@ -1065,7 +1065,7 @@ pub fn specs() -> Vec<CommandSpec> {
         // ---- geometry: Upright
         cmd!(
             "geometry.upright",
-            "Upright",
+            "Perspective Correction",
             [],
             None,
             "{mode: off|auto|guided|level|vertical|full} — analyses the photo (line segments → vanishing points) and stores the correction; run again to update after lens changes",
@@ -1083,7 +1083,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         Some(lightcraft_pipeline::upright::auto_transform(&src, &info, &d, m))
                     }
                 };
-                edit(s, "geometry.upright", "Upright", |d| {
+                edit(s, "geometry.upright", "Perspective Correction", |d| {
                     d.geometry.upright = mode;
                     d.geometry.upright_transform = transform;
                     Ok(())
@@ -1093,10 +1093,10 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(
             "geometry.guides",
-            "Guided Upright Guides",
+            "Perspective Guides",
             [],
             None,
-            "{guides: [[x0,y0,x1,y1], …] (≤ 4, normalized coords of the lens-corrected image), add?: bool (append one guide, dropping the oldest beyond 4)} — switches Upright to Guided",
+            "{guides: [[x0,y0,x1,y1], …] (≤ 4, normalized coords of the lens-corrected image), add?: bool (append one guide, dropping the oldest beyond 4)} — switches Perspective Correction to Guided",
             has_active,
             |s, p| {
                 let parse = |v: &Value| -> Option<(Point, Point)> {
@@ -1106,7 +1106,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let guides: Vec<(Point, Point)> =
                     p.get("guides").and_then(Value::as_array).map(|a| a.iter().filter_map(parse).collect()).unwrap_or_default();
                 let add = bool_or(p, "add", false);
-                edit(s, "geometry.guides", "Guided Upright", |d| {
+                edit(s, "geometry.guides", "Guided Perspective", |d| {
                     if add {
                         d.geometry.guides.extend(guides);
                     } else {
