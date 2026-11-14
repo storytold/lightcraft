@@ -273,7 +273,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         .unwrap_or_default();
     heading(ui, t, "Models");
     let installing = downloads.iter().any(|d| d["id"] == "local-install" && d["state"].as_str() == Some("installing"));
-    let r = crate::button::Button::new("Install from file…")
+    let r = crate::button::Button::new(tr("Install from file…"))
         .enabled(runtime && app.services.pick_denoise_model.is_some())
         .busy(installing)
         .widget("denoise:installFile")
