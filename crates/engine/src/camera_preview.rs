@@ -24,6 +24,8 @@ mod pairs;
 mod proxy;
 mod tone;
 
+pub(crate) use pairs::clip_colour;
+
 #[cfg(test)]
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
@@ -43,8 +45,9 @@ use look_fit::{
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
 #[cfg(test)]
 use pairs::{
-    Attempt, Pairs, TONE_FITS, collect_pairs, colour_pair, displayed, fit_attempt, fit_pairs, fit_pairs_ordered, fit_pairs_with, fit_partial,
-    fit_tone_with_shadows, luma, rank_correlation_ties, search_ordered,
+    Attempt, MATRIX_SPREAD, MATRIX_SPREAD_FROM, Pairs, TONE_FITS, collect_pairs, colour_pair, dark_colour_signal, displayed, fit_attempt, fit_pairs,
+    fit_pairs_ordered, fit_pairs_with, fit_partial, fit_partial_on, fit_tone_with_shadows, jpeg_clipped, luma, matrix_spread, rank_correlation_ties,
+    search_ordered,
 };
 #[cfg(test)]
 pub(crate) use proxy::LensGeometry;
@@ -84,7 +87,13 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
 /// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
-pub const LOOK_VERSION: u32 = 13;
+/// 20: effective JPEG primaries for clipping in the partial look's second attempt with the bright pairs (#631's bird).
+/// 21: dark-scene colour fits use thresholds scaled by luminance (#865) and keep luminance when clipping negative colour noise.
+/// 22: filtered bright retry holdouts stay out of chroma training.
+/// 23: dark-scene fitting with the separated bright chroma holdouts.
+/// 24: bright-pair clipping follows every known decoded JPEG space, including Display P3.
+/// 25: dark-scene fitting with the known-space clipping correction.
+pub const LOOK_VERSION: u32 = 25;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -92,6 +101,8 @@ pub(crate) struct CameraLook {
     pub tone: CameraTone,
     /// Hue/saturation correction after `matrix`, in linear ProPhoto RGB (DNG `ProfileHueSatMap`).
     pub hue_sat: Option<HsvTable>,
+    /// Clipping negative channels keeps luminance for a matrix learnt through the scaled spread.
+    pub preserve_luminance: bool,
 }
 
 #[cfg(test)]
