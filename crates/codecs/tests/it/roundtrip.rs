@@ -909,20 +909,21 @@ fn jxl_alpha_and_gray() {
 #[test]
 #[cfg(feature = "jxl")]
 fn jxl_hdr_pq() {
-    // linear Rec. 2020, SDR white = 1.0: the left half at SDR white, the right half four times brighter
+    // linear Rec. 2020 input, with SDR white = 203 cd/m²; samples are encoded as BT.2020 PQ.
     let (w, h) = (64usize, 32usize);
     let px: Vec<f32> = (0..w * h).flat_map(|i| [if i % w < w / 2 { 1.0 } else { 4.0 }; 3]).collect();
     for lossless in [false, true] {
         let o = JxlOptions { lossless, quality: 95, colour: JxlColour::Rec2020Pq, ..Default::default() };
         let b = encode_jxl(&EncodeImage::new(w as u32, h as u32, 3, Samples::F32(&px)), &o, &EncodeMeta::default()).unwrap();
-        // the file's own samples: linear Rec. 2020 (1.0 = 203 cd/m², 4.0 = 812 cd/m²) and PQ CICP
+        // DecoderDefault keeps the file's PQ transfer encoding, so compare against the PQ codes
+        // for 203 and 812 cd/m² rather than linear-light input values.
         let dec = craft_jxl::decode(&b, craft_jxl::DecodeLimits::default()).unwrap();
         assert_eq!(dec.rendered_cicp, Some([9, 16, 0, 1]));
         let ch = dec.layout.channels();
         let at = |x: usize| dec.pixels[((h / 2) * w + x) * ch + 1];
-        for (x, want) in [(w / 4, 1.0f32), (w * 3 / 4, 4.0f32)] {
+        for (x, want) in [(w / 4, 0.5807f32), (w * 3 / 4, 0.7292f32)] {
             let got = at(x);
-            assert!((got - want).abs() < 0.05, "lossless={lossless}: linear value {got}, want {want}");
+            assert!((got - want).abs() < 0.01, "lossless={lossless}: PQ code {got}, want {want}");
         }
     }
     // float samples are HDR only
