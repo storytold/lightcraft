@@ -87,6 +87,7 @@ pub mod smart;
 pub mod sync;
 mod sync_same;
 pub mod text;
+pub mod upright_transfer;
 mod view;
 pub mod walk;
 
@@ -308,6 +309,9 @@ pub struct Session {
     pub(crate) focus_scan: focus_scan::FocusScan,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
+    /// The photo the clipboard was copied from (an Upright correction moves only between entries of
+    /// the same file: [`crate::upright_transfer`]).
+    pub clipboard_source: Option<crate::upright_transfer::UprightSource>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
     pub browse: Option<Browse>,
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
@@ -396,6 +400,7 @@ pub struct Session {
     /// The last Synchronize Folder scan, which `folder.synchronize` acts on while it is current
     /// (see [`Session::take_folder_changes`]).
     pub folder_changes: Option<sync::FolderChanges>,
+    pub(crate) sync_frames: sync::FrameProbes,
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
@@ -507,6 +512,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
             clipboard: None,
+            clipboard_source: None,
             meta_clipboard: None,
             browse: None,
             library_folder: None,
@@ -548,6 +554,7 @@ impl Session {
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
+            sync_frames: Default::default(),
             activity: Default::default(),
             preview_build: None,
             prep: Default::default(),
@@ -1038,6 +1045,8 @@ impl Session {
                 return Vec::new();
             }
         }
+        // an Upright correction moves only between entries of the same file
+        let source = self.catalog.photo(id).map(|p| crate::upright_transfer::source_of(p, new, &self.library_identity));
         let ainfo = self.source_info(id);
         let wb_changed = old.wb != new.wb;
         self.selection
@@ -1046,7 +1055,10 @@ impl Session {
             .filter(|x| **x != id)
             .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
             .filter_map(|(x, d)| {
-                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+                let mut synced = match self.catalog.photo(x) {
+                    Some(p) => crate::upright_transfer::transferred(p, &d, &delta, source.as_ref()),
+                    None => lightcraft_develop::apply_partial(&d, &delta, 1.0),
+                };
                 if wb_changed {
                     sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
                 }
@@ -1054,6 +1066,26 @@ impl Session {
                 (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
             })
             .collect()
+    }
+
+    /// What `preset` at `amount` makes of photo `id`'s settings, as Apply Preset stores it (its
+    /// Upright correction settled: [`crate::upright_transfer::apply_preset`]); for previews too.
+    pub fn preset_look(&self, id: PhotoId, preset: &lightcraft_develop::Preset, amount: f64) -> Option<DevelopSettings> {
+        let p = self.catalog.photo(id)?;
+        let info = self.source_info(id);
+        let prepared = crate::cmd::prepare_photo_for_wb_partial(&p.develop, &preset.settings, &info);
+        let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
+        let base = prepared.as_ref().unwrap_or(&p.develop);
+        // Amount is measured from the import look only when the photo has one (below 100 %);
+        // otherwise the current settings (on the partial's white balance scale) are its baseline
+        let imported = (p.import_look.is_some() && (amount - 1.0).abs() >= 1e-9).then(|| p.import_defaults());
+        let prepared_import = imported.map(|d| crate::cmd::prepare_photo_for_wb_partial(&d, &preset.settings, &info).unwrap_or(d));
+        let original = prepared_import.as_ref().unwrap_or(base);
+        let mut after = crate::upright_transfer::apply_preset_on(p, base, original, preset, amount);
+        if on_kelvin_scale {
+            lightcraft_pipeline::local::normalize_wb(&mut after, &info);
+        }
+        Some(after)
     }
 
     /// Auto Sync carries an edit of photo `id` labelled `label` to the other selected photos: it is
@@ -1497,3 +1529,6 @@ pub(crate) fn orientation_change(from: lightcraft_geom::Orientation, to: lightcr
         })
     })
 }
+
+#[cfg(test)]
+mod tests_upright;

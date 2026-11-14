@@ -87,7 +87,7 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
     let preset = s.import_defaults.preset_for(raw, &p.meta.camera).and_then(|id| s.presets.iter().find(|x| x.id == id));
     match preset {
         Some(pr) => {
-            let look = std::sync::Arc::new(pr.apply(&base, 1.0));
+            let look = std::sync::Arc::new(crate::upright_transfer::apply_preset(p, &base, pr, 1.0));
             p.develop = look.clone();
             p.import_look = (*look != base).then_some(look);
         }
