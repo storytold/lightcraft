@@ -8,6 +8,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use crate::import::Origin;
 use crate::lightroom_sqlite::{Database, FileSource, LiveTable, Value as SqlValue};
 use lightcraft_catalog::{Album, Flag, Op, Photo, PhotoId, Source};
 use lightcraft_geom::{Affine, Orientation, Point, Rect};
@@ -171,7 +172,8 @@ pub enum Original {
     #[default]
     NotHere,
     /// `path` is refused (why): it is on another computer or a device, or its folder or file name
-    /// is an absolute path. The photo is reported missing and not added to the library.
+    /// is an absolute path. The photo gets no library record, so it isn't reported missing either:
+    /// the import counts it in `pathRefused`.
     Refused(String),
 }
 
@@ -179,6 +181,12 @@ impl CatalogPhoto {
     /// Whether the original is a file here; only a [`Original::Local`] path is looked at.
     pub fn original_is_file(&self) -> bool {
         self.original == Original::Local && Path::new(&self.path).is_file()
+    }
+
+    /// Whether an inspection lists the original as missing, as the import does: it isn't a file
+    /// here and isn't on a refused path (which gets no record, see [`Original::Refused`]).
+    pub fn original_is_missing(&self) -> bool {
+        !matches!(self.original, Original::Refused(_)) && !self.original_is_file()
     }
 }
 
@@ -204,6 +212,15 @@ pub struct CatalogImport {
     /// so each front end can say so in its own language.
     #[serde(default)]
     pub skipped: Vec<SkippedImage>,
+    /// How many images the catalog has: its `Adobe_images` rows, masters and virtual copies (as
+    /// Lightroom's All Photographs counts them). The import report accounts for each one.
+    #[serde(default)]
+    pub images: usize,
+    /// Catalog images left out because their original isn't a file type LightCraft reads (a
+    /// document or a program; a video the catalog lists as one becomes a video record), counted by
+    /// the original's extension in lower case ("" for none); a virtual copy counts under its master's. Their ids are in [`CatalogImport::warnings`].
+    #[serde(default)]
+    pub not_supported: BTreeMap<String, usize>,
 }
 
 /// A catalog image that was not imported, and why.
@@ -604,8 +621,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
             None => absolute.to_string(),
         };
         if let Err(crate::doc_path::NotFollowed::Refused(why)) = crate::doc_path::resolve(&resolved, Some(document)) {
-            warnings
-                .push(format!("root folder {}: {resolved} is not opened: {why}; its photos are listed as missing and not added", text(root, "name")));
+            warnings.push(format!("root folder {}: {resolved} is not opened: {why}; its photos are not imported", text(root, "name")));
             refused_roots.insert(id);
         }
         root_paths.insert(id, resolved);
@@ -622,12 +638,16 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         collection_content: optional_table("AgLibraryCollectionContent", &mut warnings)?,
         warnings,
         skipped: Vec::new(),
+        images: 0,
+        not_supported: BTreeMap::new(),
     };
     // images whose file, folder or root record is gone, or whose path is empty (Lightroom leaves
     // these behind and ignores them); they and their virtual copies are skipped and reported
     // instead of failing the import
     let mut orphans = HashSet::new();
-    for image in table("Adobe_images", true)? {
+    let images = table("Adobe_images", true)?;
+    out.images = images.len();
+    for image in images {
         ensure_read_active(cancel)?;
         let id = number(&image, "id_local");
         let record = files.get(&number(&image, "rootFile")).ok_or(SkipReason::MissingFile).and_then(|file| {
@@ -656,7 +676,7 @@ fn read_file(path: &Path, document: &Path, source: &Path, cancel: &AtomicBool, d
         if let Original::Refused(why) = &original
             && !refused_roots.contains(&root_id)
         {
-            out.warnings.push(format!("image {id}: {photo_path} is not opened: {why}; listed as missing and not added"));
+            out.warnings.push(format!("image {id}: {photo_path} is not opened: {why}; it and its virtual copies are not imported"));
         }
         let packet = match xmp(metadata.get(&id).and_then(|r| r.get("xmp"))) {
             Ok(s) => s,
@@ -717,7 +737,7 @@ fn is_catalog_video(p: &CatalogPhoto) -> bool {
 }
 
 /// Drop the catalog's images whose original is not a file type LightCraft reads, saying so in the
-/// import's warnings.
+/// import's warnings and counting them in [`CatalogImport::not_supported`].
 ///
 /// The catalog decides these paths, and a record it leaves behind is one click from the system
 /// opener (Photo ▸ Edit In ▸ Open Original in Other Editor). A record for `payload.exe`,
@@ -729,40 +749,61 @@ fn is_catalog_video(p: &CatalogPhoto) -> bool {
 /// can keep one; the second pass finds nothing left to say.
 pub(crate) fn refuse_non_media(data: &mut CatalogImport) {
     // masters first: a virtual copy may come before its master in the table
-    let refused: HashSet<i64> = data
+    // each refused master's extension, which its virtual copies count under
+    let refused: HashMap<i64, String> = data
         .photos
         .iter()
         .filter(|p| number(&p.image, "masterImage") == 0 && !crate::open_path::is_media(Path::new(&p.path)) && !is_catalog_video(p))
-        .map(|p| p.source_id)
+        .map(|p| (p.source_id, Path::new(&p.path).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()))
         .collect();
     if refused.is_empty() {
         return;
     }
     let mut warnings = Vec::new();
+    let mut counted = Vec::new();
     data.photos.retain(|p| {
         let master = number(&p.image, "masterImage");
         // `masterImage` is 0 for a master, so a refused id of 0 (a malformed catalog) must not
         // take every master of the catalog with it
         if master != 0 {
-            if !refused.contains(&master) {
-                return true;
-            }
+            let Some(extension) = refused.get(&master) else { return true };
             warnings.push(format!("image {}: not imported; its original was not imported", p.source_id));
+            counted.push(extension.clone());
             return false;
         }
-        if !refused.contains(&p.source_id) {
-            return true;
-        }
+        let Some(extension) = refused.get(&p.source_id) else { return true };
         warnings.push(format!("image {}: not imported; {} isn't one of the file types LightCraft reads", p.source_id, p.path));
+        counted.push(extension.clone());
         false
     });
     data.warnings.extend(warnings);
+    for extension in counted {
+        let count = data.not_supported.entry(extension).or_default();
+        *count = count.saturating_add(1);
+    }
 }
 
 fn ensure_read_active(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) { Err("Lightroom import cancelled".into()) } else { Ok(()) }
 }
 
+/// A catalog row's develop text, read: its settings as XMP properties, their values, and how many
+/// deferred adjustments (`-999999`) it held. Fails on text that isn't a Lua settings table.
+type CatalogSettings = (crate::crs::Props, crate::crs_masks::Values, usize);
+
+fn read_settings(text: &str) -> Result<CatalogSettings, String> {
+    let mut root = crate::preset_import::parse_lua(text)?;
+    let deferred = strip_lua_sentinels(&mut root);
+    let (props, mut values) = crate::preset_import::lua_settings_props(&root)?;
+    // Catalog Lua names the component inversion `Inverted` while XMP's is `MaskInverted`;
+    // rename it so an inverted mask keeps its inversion instead of importing as normal.
+    for v in values.values_mut() {
+        alias_catalog_inverted(v);
+    }
+    Ok((props, values, deferred))
+}
+
+#[cfg(test)]
 fn mapped_settings(
     text: &str,
     target: crate::crs::Target,
@@ -771,14 +812,19 @@ fn mapped_settings(
     stored_aspect: f64,
     user: Orientation,
 ) -> Result<(Value, Vec<String>), String> {
-    let mut root = crate::preset_import::parse_lua(text)?;
-    let deferred = strip_lua_sentinels(&mut root);
-    let (mut props, mut values) = crate::preset_import::lua_settings_props(&root)?;
-    // Catalog Lua names the component inversion `Inverted` while XMP's is `MaskInverted`;
-    // rename it so an inverted mask keeps its inversion instead of importing as normal.
-    for v in values.values_mut() {
-        alias_catalog_inverted(v);
-    }
+    Ok(mapped(read_settings(text)?, target, aspect, orientation, stored_aspect, user))
+}
+
+/// [`read_settings`]' settings as a develop patch for the photo.
+fn mapped(
+    settings: CatalogSettings,
+    target: crate::crs::Target,
+    aspect: f64,
+    orientation: Orientation,
+    stored_aspect: f64,
+    user: Orientation,
+) -> (Value, Vec<String>) {
+    let (mut props, values, deferred) = settings;
     // A catalog's develop settings carry the crop edges and angle but no `HasCrop` (XMP has it):
     // any crop field means the photo is cropped.
     const CROP: [&str; 5] = ["crs:CropLeft", "crs:CropTop", "crs:CropRight", "crs:CropBottom", "crs:CropAngle"];
@@ -795,7 +841,38 @@ fn mapped_settings(
     if deferred > 0 {
         unknown.push("Deferred Lightroom adjustments (-999999)".into());
     }
-    Ok((partial, unknown))
+    (partial, unknown)
+}
+
+/// Every develop setting a catalog's develop text can carry (dotted paths: `effects.clarity`): what
+/// the `crs:` mapping writes ([`crate::crs::mapped_paths`]) and the masks of the local corrections
+/// [`crate::preset_import::lua_settings_props`] reads (it reads no spots).
+fn text_paths() -> impl Iterator<Item = &'static str> {
+    crate::crs::mapped_paths().iter().map(String::as_str).chain(["masks"])
+}
+
+/// `p`'s develop settings with every setting a catalog's develop text can carry ([`text_paths`]) at
+/// the camera's default (`Photo::camera_defaults`), the others as they are.
+fn at_text_defaults(p: &Photo) -> Result<lightcraft_develop::DevelopSettings, String> {
+    let defaults = p.camera_defaults().to_json();
+    let mut out = p.develop.to_json();
+    for path in text_paths() {
+        let mut parts: Vec<&str> = path.split('.').collect();
+        let Some(leaf) = parts.pop() else { continue };
+        let value = defaults.pointer(&format!("/{}", path.replace('.', "/"))).cloned();
+        let mut at = &mut out;
+        for part in parts {
+            let Value::Object(fields) = at else { break };
+            at = fields.entry(part.to_string()).or_insert_with(|| json!({}));
+        }
+        let Value::Object(fields) = at else { continue };
+        match value {
+            Some(value) => fields.insert(leaf.to_string(), value),
+            // (a setting at its default isn't always written: left out, it reads as its default)
+            None => fields.remove(leaf),
+        };
+    }
+    lightcraft_develop::DevelopSettings::from_json(&out).map_err(|e| e.to_string())
 }
 
 /// Lightroom's `Adobe_images.orientation`: where the stored image's top-left and top-right corners
@@ -921,7 +998,8 @@ fn catalog_masks(partial: &mut Value, orientation: Orientation) {
 }
 
 /// The catalog's XMP masks in LightCraft's frame, as [`catalog_masks`] puts the develop row's: they
-/// are on the same stored image, and they stay when the row has no masks of its own. The packet's
+/// are on the same stored image (they stay only on a photo without develop text the import can
+/// read: the text decides its masks otherwise). The packet's
 /// radials come fitted to the sidecar default aspect and `sidecar::merge_into` re-fits them to the
 /// photo's size, so they are fitted to the stored image to be turned (a quarter turn swaps the
 /// radii) and handed back in the default aspect, for that re-fit to undo.
@@ -1231,8 +1309,16 @@ fn stage_collections(
 
 /// Turn the read catalog into library records in one undo step and return the import report
 /// (added, missing, failed, warnings and skipped images).
+///
+/// The report accounts for every image of the catalog (`inCatalog`, masters and virtual copies):
+/// each one is `added` (a new record, or a record this import's file import made or a browsed
+/// Local photo that joins the library), `alreadyInLibrary` (an existing record, updated in place),
+/// `inRecentlyDeleted` (an existing record in Recently Deleted, left there), `notSupported` (not a
+/// file type LightCraft reads, by type in `notSupportedTypes`), `pathRefused` (an original the
+/// import doesn't look at, see [`Original::Refused`]: no record) or `incomplete` (`skipped`).
+/// Should they not add up, a warning says by how much.
 pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, context: ApplyPrepared<'_>) -> crate::Result<AppliedImport> {
-    let ApplyPrepared { update_existing, files, index, archive_path, missing_sources, undo0 } = context;
+    let ApplyPrepared { update_existing, mut files, index, archive_path, missing_sources, undo0 } = context;
     // nothing but a file type LightCraft reads becomes a record, whichever route got here (#2135)
     refuse_non_media(&mut data);
     validate(&data).map_err(error)?;
@@ -1248,27 +1334,45 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     // Normal import counts probed originals; catalog import also adds offline records,
     // distinct originals with identical bytes, and virtual copies.
     let mut imported = files.imported.len();
-    let mut promoted = HashSet::new();
+    // Where each record this job lands on came from, from the file import on: what the import
+    // does to the record follows from it (its develop settings, the report's breakdown).
+    let mut origins = std::mem::take(&mut files.origins);
+    // What the XMP sidecars of the files this job's file import read named and LightCraft doesn't
+    // apply (a camera profile, Upright geometry, unmapped fields), by path: the report says it for
+    // the record made from the file (see `sidecar_warning`).
+    let mut sidecar_warnings = warnings_by_path(std::mem::take(&mut files.warnings));
+    // The records a catalog photo has landed on so far: the first one counts it as added (or
+    // promotes it), any other catalog photo with the same path finds it already there.
+    let mut claimed = HashSet::new();
     let mut unmapped = BTreeMap::new();
     let mut preserved = 0;
-    // Library photos in Recently Deleted that a catalog photo matched: they stay there (only an
-    // import of the files themselves brings a photo back, see `OnDeleted`), and the report says so.
-    let mut in_trash = HashSet::new();
+    // Where each catalog photo went (the report's breakdown, see above). A library photo in Recently
+    // Deleted that a catalog photo matched stays there (only an import of the files themselves
+    // brings a photo back, see `OnDeleted`), and the report says so.
+    let (mut added, mut already, mut in_trash, mut path_refused) = (0usize, 0usize, 0usize, 0usize);
     // Masters precede their virtual copies.
     let mut photos: Vec<_> = data.photos.iter().collect();
     photos.sort_by_key(|p| number(&p.image, "masterImage") != 0);
     let copy_masters: HashSet<_> = data.photos.iter().map(|p| number(&p.image, "masterImage")).filter(|id| *id != 0).collect();
     let refused: HashSet<_> = data.photos.iter().filter(|p| matches!(p.original, Original::Refused(_))).map(|p| p.source_id).collect();
     let mut planned: HashMap<PhotoId, Photo> = HashMap::new();
+    // Masters that share a path land on one record: a later one goes on from what an earlier one
+    // staged for it, not from the record as it was before the batch (whose develop settings would
+    // then replace the earlier one's) or, for a record the batch adds, from no record at all
+    // (which made a second one).
+    let mut shared = SharedPaths::of(&data);
     for src in photos {
         let master = number(&src.image, "masterImage");
+        // A refused path must not become a library record the app would look at later; its
+        // virtual copies go with it. Having no record, it isn't missing (Find Missing Photos has
+        // nothing to relink): it is counted on its own. (`masterImage` is 0 for a master, so a
+        // refused id of 0, from a malformed catalog, must not refuse every master.)
+        if refused.contains(&src.source_id) || (master != 0 && refused.contains(&master)) {
+            path_refused += 1;
+            continue;
+        }
         if master == 0 && missing_sources.contains(&key(&src.path)) {
             missing.push(src.path.clone());
-        }
-        // A refused path must not become a library record the app would look at later; its
-        // virtual copies go with it.
-        if refused.contains(&src.source_id) || refused.contains(&master) {
-            continue;
         }
         let indexed = index
             .photos
@@ -1277,11 +1381,20 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             .map(PhotoId)
             .filter(|id| s.catalog.photo(*id).is_some_and(|p| source_path(p).is_some_and(|path| key(path) == key(&src.path))));
         let existing_id = indexed.or_else(|| if master == 0 { by_path.get(&key(&src.path)).copied() } else { None });
-        let mut p = if let Some(id) = existing_id.and_then(|id| s.catalog.photo(id)) {
-            if id.deleted {
-                in_trash.insert(id.id);
-            }
-            (**id).clone()
+        let mut trashed = false;
+        // the warnings of the XMP sidecar that gave this record its develop settings, if one did
+        let mut from_sidecar = Vec::new();
+        // (what an earlier master at its path staged for the record, else the record)
+        let found = existing_id.and_then(|id| shared.staged(id).or_else(|| s.catalog.photo(id).map(|p| &**p)));
+        let (mut p, origin) = if let Some(found) = found {
+            trashed = found.deleted;
+            // what the job already says of it (a record its file import made or promoted, or one
+            // an earlier master at its path landed on), else what it was before the job: browsed
+            // in Local (untouched since or changed, as for an offline original, which never
+            // reaches the file import) or in the library
+            let origin = origins.record(found.id, Origin::of(found));
+            from_sidecar = made_from_file(&mut sidecar_warnings, origin, master, &src.path);
+            (found.clone(), origin)
         } else if master != 0 {
             let master_id = ids.get(&master).copied().ok_or_else(|| error(format!("virtual copy {}: missing master", src.source_id)))?;
             let mut p = planned
@@ -1294,7 +1407,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.copy_name = Some(text(&src.image, "copyName").to_string());
             // a new copy of a master in Recently Deleted is imported, not trashed with it
             p.deleted = false;
-            p
+            (p, Origin::Created)
         } else if let Some((duplicate, file)) =
             duplicates.get(&key(&src.path)).and_then(|(id, meta)| s.catalog.photo(*id).cloned().map(|p| (p, *meta)))
         {
@@ -1302,8 +1415,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             // The new record takes only what the bytes determine from the photo with the same
             // bytes, never that photo's own state: not its Recently Deleted (#2589), virtual copy,
             // edits, history, versions, ratings, capture time or the metadata a person writes. Its
-            // metadata and capture time are what its own file gives it, as a file import reads them
-            // (copyright, creator…); the catalog's capture time, when it has one, applies on top.
+            // metadata and capture time are what its own file and XMP sidecar give it, as a file
+            // import reads them (copyright, caption, creator…); the catalog's apply on top.
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
             let mut p = Photo::new(
                 s.catalog.alloc_photo_id(),
@@ -1322,26 +1435,28 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             p.embedded_lens = duplicate.embedded_lens;
             p.preview_only = duplicate.preview_only.clone();
             p.preview_checked = duplicate.preview_checked.clone();
-            if let Some(file) = file {
-                p.meta = file.meta.clone();
-                p.captured = file.captured.clone();
-            } else {
+            let file = file.cloned().unwrap_or_else(|| {
                 // (the file wasn't read: only the exposure description, which no command edits;
                 // not GPS, which placing a photo on the map does, nor the capture time, which
                 // Edit Capture Time does)
                 let m = &duplicate.meta;
-                p.meta.camera = m.camera.clone();
-                p.meta.lens = m.lens.clone();
-                p.meta.focal_mm = m.focal_mm;
-                p.meta.aperture = m.aperture;
-                p.meta.shutter = m.shutter.clone();
-                p.meta.iso = m.iso;
-                p.meta.focus = m.focus.clone();
-            }
-            // the settings a file import gives it (as-shot white balance, embedded lens
-            // corrections, the default preset); the catalog's settings apply on top
-            crate::import::apply_import_defaults(s, &mut p);
-            p
+                let meta = lightcraft_catalog::Meta {
+                    camera: m.camera.clone(),
+                    lens: m.lens.clone(),
+                    focal_mm: m.focal_mm,
+                    aperture: m.aperture,
+                    shutter: m.shutter.clone(),
+                    iso: m.iso,
+                    focus: m.focus.clone(),
+                    ..Default::default()
+                };
+                crate::import::FileFacts { meta, ..Default::default() }
+            });
+            // as a file import of it: its file's metadata and capture time, the import defaults
+            // (as-shot white balance, embedded lens corrections, the default preset), its XMP
+            // sidecar; the catalog's settings and metadata apply on top
+            from_sidecar = crate::import::start_from_file(s, &mut p, file, &now).map(|sc| sc.warnings).unwrap_or_default();
+            (p, Origin::Created)
         } else {
             let id = s.catalog.alloc_photo_id();
             let name = Path::new(&src.path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| src.path.clone());
@@ -1357,18 +1472,36 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             if ["RAW", "DNG", "ARW", "CR2", "CR3", "CRW", "NEF", "NRW", "RAF", "ORF", "RW2", "PEF"].contains(&p.format.to_uppercase().as_str()) {
                 p.kind = lightcraft_catalog::MediaKind::Raw;
             }
-            p
+            (p, Origin::Created)
         };
+        let origin = origins.record(p.id, origin);
         // Offline videos bypass file probing; Lightroom's format still identifies their kind.
         if text(&src.image, "fileFormat").eq_ignore_ascii_case("VIDEO") {
             p.kind = lightcraft_catalog::MediaKind::Video;
         }
         ids.insert(src.source_id, p.id);
         index.photos.insert(identity(&data, src), p.id.0);
-        let keep_develop = existing_id.is_some() && p.edited.is_some() && !update_existing;
+        // Only a record that was there before the job can hold an edit made in the library. One the
+        // job made has what its file and XMP sidecar gave it: the catalog's settings apply (#3707).
+        // (whether it has an edit is what it had before the job: an earlier master at its path may
+        // have given it the catalog's settings)
+        let keep_develop = origin.was_there() && s.catalog.photo(p.id).is_some_and(|old| old.edited.is_some()) && !update_existing;
         let previous_develop = (p.develop.clone(), p.edited.clone());
         if keep_develop {
             preserved += 1;
+        }
+        // the catalog's develop settings this photo takes, read once (none to take: no text, or
+        // the record's own edit is kept)
+        let settings = (!src.settings.is_empty() && !keep_develop).then(|| read_settings(&src.settings));
+        // Lightroom leaves settings at zero (Clarity, Texture, …) out of its develop text, so the
+        // catalog's settings for a record the job made start from the camera's defaults, not from
+        // what its file's XMP, a default import preset or a virtual copy's master gave it (#3434).
+        // With no develop text, or text that can't be read, there is nothing to replace them with.
+        if !origin.was_there() && matches!(settings, Some(Ok(_))) {
+            p.develop = Arc::new(p.camera_defaults());
+        } else {
+            // the sidecar's develop settings stand, so what it named and isn't applied is said
+            warnings.extend(from_sidecar.iter().map(|warning| sidecar_warning(src, warning)));
         }
         let orientation = lightroom_orientation(text(&src.image, "orientation")).unwrap_or_default();
         let stored_aspect = number(&src.image, "fileWidth") as f64 / number(&src.image, "fileHeight") as f64;
@@ -1397,24 +1530,33 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         if !src.keywords.is_empty() {
             p.meta.keywords = src.keywords.clone();
         }
-        if !src.settings.is_empty() && !keep_develop {
-            match mapped_settings(
-                &src.settings,
-                crate::crs::Target::for_photo(&p),
-                p.width.max(1) as f64 / p.height.max(1) as f64,
-                orientation,
-                stored_aspect,
-                p.develop.orientation,
-            ) {
-                Ok((partial, unknown)) => {
-                    p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
-                    p.edited = Some(now.clone());
-                    if !unknown.is_empty() {
-                        unmapped.insert(src.source_id, unknown);
-                    }
+        match settings {
+            Some(Ok(settings)) => {
+                // The develop text is the photo's settings, and Lightroom leaves a setting at its
+                // default out of it: so every setting the text can carry starts at the camera's
+                // default, not at what the record had or the catalog's XMP (older than the text, and
+                // merged above) said. The XMP still gives what the text can't (spots, LightCraft's
+                // own settings), and the record keeps the rest (its rotation, process version).
+                match at_text_defaults(&p) {
+                    Ok(develop) => p.develop = Arc::new(develop),
+                    Err(e) => warnings.push(format!("image {} settings: {e}", src.source_id)),
                 }
-                Err(e) => warnings.push(format!("image {} settings: {e}", src.source_id)),
+                let (partial, unknown) = mapped(
+                    settings,
+                    crate::crs::Target::for_photo(&p),
+                    p.width.max(1) as f64 / p.height.max(1) as f64,
+                    orientation,
+                    stored_aspect,
+                    p.develop.orientation,
+                );
+                p.develop = Arc::new(lightcraft_develop::apply_partial(&p.develop, &partial, 1.0));
+                p.edited = Some(now.clone());
+                if !unknown.is_empty() {
+                    unmapped.insert(src.source_id, unknown);
+                }
             }
+            Some(Err(e)) => warnings.push(format!("image {} settings: {e}", src.source_id)),
+            None => {}
         }
         if keep_develop {
             (p.develop, p.edited) = previous_develop;
@@ -1430,6 +1572,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             planned.insert(photo_id, p.clone());
         }
         if let Some(old) = s.catalog.photo(p.id) {
+            shared.stage(master, &src.path, &p, None);
             if old.kind != p.kind {
                 // Repair older imports with existing reversible operations. Removing just the
                 // record leaves album/stack membership intact; the enclosing batch is atomic.
@@ -1437,9 +1580,17 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 repaired.kind = p.kind;
                 ops.extend([Op::RemovePhoto { id: p.id }, Op::AddPhoto { photo: Box::new(repaired) }]);
             }
-            if was_local && promoted.insert(p.id) {
+            let first = claimed.insert(p.id);
+            if was_local && first {
                 imported += 1;
                 ops.push(Op::SetLocal { id: p.id, local: false });
+            }
+            if trashed {
+                in_trash += 1;
+            } else if first && origin != Origin::Existing {
+                added += 1;
+            } else {
+                already += 1;
             }
             ops.extend([
                 Op::SetRating { id: p.id, rating: p.rating },
@@ -1450,8 +1601,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             ]);
             ops.push(Op::SetDevelop { id: p.id, settings: p.develop.clone(), label: "Lightroom catalog".into(), edited: p.edited.clone() });
         } else {
-            imported += 1;
-            ops.push(Op::AddPhoto { photo: Box::new(p) });
+            // a record the batch adds, unless an earlier master at this path added it: then it is
+            // already there
+            let new = usize::from(shared.add(master, &src.path, p, &mut ops));
+            imported += new;
+            added += new;
+            already += 1 - new;
         }
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
@@ -1460,10 +1615,124 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
     }
     s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
+    let not_supported = data.not_supported.values().fold(0usize, |sum, n| sum.saturating_add(*n));
+    let accounted = [added, already, in_trash, not_supported, path_refused, data.skipped.len()].into_iter().fold(0usize, usize::saturating_add);
+    if accounted != data.images {
+        warnings.push(format!(
+            "the catalog has {} images, but this report accounts for {accounted} (a difference of {})",
+            data.images,
+            data.images.abs_diff(accounted)
+        ));
+    }
     Ok(AppliedImport {
-        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
+        report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,
+            "inCatalog":data.images,"added":added,"alreadyInLibrary":already,"inRecentlyDeleted":in_trash,"notSupported":not_supported,"notSupportedTypes":data.not_supported,"pathRefused":path_refused,"incomplete":data.skipped.len(),
+            "missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
     })
+}
+
+/// The catalog masters that share a path, and what each staged for its record in a Lightroom
+/// import's batch, so that a later one goes on from it (see [`apply_prepared`]). Only masters at a
+/// shared path keep their photo here, with the place in the batch of the record's `AddPhoto` when
+/// the batch adds it.
+struct SharedPaths {
+    /// the paths ([`key`]) more than one master has
+    paths: HashSet<String>,
+    staged: HashMap<PhotoId, (Photo, Option<usize>)>,
+}
+
+impl SharedPaths {
+    fn of(data: &CatalogImport) -> Self {
+        let mut seen = HashSet::new();
+        let paths = data
+            .photos
+            .iter()
+            .filter(|p| number(&p.image, "masterImage") == 0)
+            .map(|p| key(&p.path))
+            .filter(|path| !seen.insert(path.clone()))
+            .collect();
+        SharedPaths { paths, staged: HashMap::new() }
+    }
+
+    /// What an earlier master at its path staged for record `id`.
+    fn staged(&self, id: PhotoId) -> Option<&Photo> {
+        self.staged.get(&id).map(|(p, _)| p)
+    }
+
+    /// Keeps `p` as staged by a `master` at `path` (the `AddPhoto` at `added_at` in the batch, when
+    /// the batch adds it), if that path is shared.
+    fn stage(&mut self, master: i64, path: &str, p: &Photo, added_at: Option<usize>) {
+        if master == 0 && self.paths.contains(&key(path)) {
+            self.staged.insert(p.id, (p.clone(), added_at));
+        }
+    }
+
+    /// Adds `p`, a record a `master` at `path` lands on that isn't in the library, to the batch
+    /// `ops`, and says whether it is new: when an earlier master at its path added it, `p`
+    /// replaces that `AddPhoto` instead.
+    fn add(&mut self, master: i64, path: &str, p: Photo, ops: &mut Vec<Op>) -> bool {
+        if let Some((staged, Some(at))) = self.staged.get_mut(&p.id) {
+            *staged = p.clone();
+            if let Some(op) = ops.get_mut(*at) {
+                *op = Op::AddPhoto { photo: Box::new(p) };
+            }
+            return false;
+        }
+        self.stage(master, path, &p, Some(ops.len()));
+        ops.push(Op::AddPhoto { photo: Box::new(p) });
+        true
+    }
+}
+
+/// The file import's XMP sidecar warnings, by path ([`key`]).
+fn warnings_by_path(warnings: Vec<crate::import::ImportWarning>) -> HashMap<String, Vec<crate::import::ImportWarning>> {
+    let mut out: HashMap<String, Vec<crate::import::ImportWarning>> = HashMap::new();
+    for warning in warnings {
+        out.entry(key(&warning.path)).or_default().push(warning);
+    }
+    out
+}
+
+/// The sidecar warnings of a record the job's file import made from the file at `path` (a master
+/// whose origin is `Created`), taken once: none for any other record.
+fn made_from_file(
+    warnings: &mut HashMap<String, Vec<crate::import::ImportWarning>>,
+    origin: Origin,
+    master: i64,
+    path: &str,
+) -> Vec<crate::import::ImportWarning> {
+    if origin == Origin::Created && master == 0 { warnings.remove(&key(path)).unwrap_or_default() } else { Vec::new() }
+}
+
+/// A report line for what a catalog photo's XMP sidecar named that LightCraft doesn't apply (the
+/// file import's [`crate::import::ImportWarning`], which the import window words in the UI
+/// language), for a record whose develop settings came from that sidecar. A sidecar can name any
+/// number of unmapped fields: past twelve the rest are an ellipsis.
+fn sidecar_warning(src: &CatalogPhoto, warning: &crate::import::ImportWarning) -> String {
+    use crate::import::{ImportUprightMode as Mode, ImportWarningCode as Code};
+    let what = match warning.code {
+        Code::CameraProfile => {
+            format!("the XMP profile \"{}\" was not applied; colors may differ from Lightroom", warning.profile.as_deref().unwrap_or_default())
+        }
+        Code::UprightGeometry => match warning.mode.unwrap_or(Mode::Unknown) {
+            Mode::Off => "Lightroom geometry was not preserved; the saved transform is ignored because Upright is Off".into(),
+            Mode::Guided => "Lightroom geometry was not preserved; Guided Upright's saved transform is unsupported".into(),
+            Mode::Auto => "Lightroom geometry was not preserved; Auto Upright will be recalculated".into(),
+            Mode::Level => "Lightroom geometry was not preserved; Level Upright will be recalculated".into(),
+            Mode::Vertical => "Lightroom geometry was not preserved; Vertical Upright will be recalculated".into(),
+            Mode::Full => "Lightroom geometry was not preserved; Full Upright will be recalculated".into(),
+            Mode::Unknown => "Lightroom geometry was not preserved; the saved Upright transform is unsupported".into(),
+        },
+        Code::UnmappedXmp => {
+            let mut fields: Vec<&str> = warning.fields.iter().take(12).map(String::as_str).collect();
+            if warning.fields.len() > 12 {
+                fields.push("…");
+            }
+            format!("XMP adjustments were not imported: {}", fields.join(", "))
+        }
+    };
+    format!("image {} XMP sidecar of {}: {what}", src.source_id, src.path)
 }
 
 /// The collection set a Lightroom collection's album goes into (`None`: the top level), and whether that isn't its

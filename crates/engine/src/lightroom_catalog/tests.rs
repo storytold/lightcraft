@@ -38,6 +38,8 @@ fn sample() -> CatalogImport {
         collection_content: Vec::new(),
         warnings: Vec::new(),
         skipped: Vec::new(),
+        images: 2,
+        not_supported: BTreeMap::new(),
     }
 }
 /// A crafted `.lrcat` that names a program as a photo's original gets no record for it, so
@@ -214,6 +216,8 @@ fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() 
                 file: Some(Box::new(crate::import::FileFacts {
                     meta: lightcraft_catalog::Meta { camera: "Same Camera".into(), ..Default::default() },
                     captured: None,
+                    orientation: None,
+                    sidecar: None,
                 })),
             }],
             ..Default::default()
@@ -356,6 +360,181 @@ fn a_content_duplicate_keeps_the_rights_metadata_and_capture_time_in_its_file() 
     assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "{r}");
     std::fs::remove_dir_all(dir).unwrap();
 }
+/// A content duplicate's XMP sidecar goes into its new record as it does for a file import of it
+/// (caption, copyright…) when the catalog doesn't restate them, also when its file has a capture
+/// time of its own (#2589).
+#[test]
+fn a_content_duplicate_keeps_what_its_sidecar_says() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-sidecar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">© Sidecar Author</rdf:li></rdf:Alt></dc:rights>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!((new.meta.caption.as_str(), new.meta.copyright.as_str()), ("Harbour at dawn", "© Sidecar Author"), "{r}");
+    assert_eq!(new.captured.as_deref(), Some("2024-05-06T07:08:09"), "the file's own capture time: {r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A file that becomes a content duplicate only after it was prepared (another import added a photo
+/// with its bytes while the catalog was read) is turned into one just before the commit
+/// (`revalidate_add`); its new record keeps what its sidecar says all the same (#2589).
+#[test]
+fn a_file_that_turns_out_to_be_a_content_duplicate_at_commit_keeps_what_its_sidecar_says() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-late-duplicate-sidecar-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+<dc:rights><rdf:Alt><rdf:li xml:lang="x-default">© Sidecar Author</rdf:li></rdf:Alt></dc:rights>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 20,
+            height: 10,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            ..Default::default()
+        })
+    }));
+    // prepared while the library has no photo with the file's bytes: the file is ready to add
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    // then a photo with the same bytes arrives before the commit (the library is still the one
+    // the job was prepared for: the commit checks its identity, not its photos)
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    assert_eq!(s.catalog.photos().count(), 2, "{r}");
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!((new.meta.caption.as_str(), new.meta.copyright.as_str()), ("Harbour at dawn", "© Sidecar Author"), "{r}");
+    assert_eq!(s.catalog.photo(other).unwrap().meta.caption, "Other photo's caption", "{r}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// A content duplicate's sidecar regions drawn on its photo as stored (its stored size as
+/// `AppliedToDimensions`, no `mwg-rs:Rotation`) land on the upright photo, turned by its file's own
+/// orientation as a file import of it turns them (#2674): the record's size is its file's upright one,
+/// and the catalog's orientation is a develop rotation on top of it (#2589).
+#[test]
+fn a_content_duplicates_sidecar_regions_are_turned_by_its_files_orientation() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-regions-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    let source = dir.join("source.lrcat");
+    std::fs::write(dir.join("Photos/test.ARW"), b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("Photos/test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+  xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+<mwg-rs:Regions rdf:parseType="Resource">
+<mwg-rs:AppliedToDimensions rdf:parseType="Resource" stDim:w="32" stDim:h="24" stDim:unit="pixel"/>
+<mwg-rs:RegionList><rdf:Bag><rdf:li rdf:parseType="Resource" mwg-rs:Name="Hannah" mwg-rs:Type="Face">
+<mwg-rs:Area rdf:parseType="Resource" stArea:x="0.25" stArea:y="0.4" stArea:w="0.1" stArea:h="0.15" stArea:unit="normalized"/>
+</rdf:li></rdf:Bag></mwg-rs:RegionList>
+</mwg-rs:Regions>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
+    let mut s = crate::Session::new();
+    // stored 32 × 24, a quarter turn clockwise upright: 24 × 32 (the size the new record takes)
+    let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| (p.width, p.height) = (24, 32));
+    s.media.file_probe = Some(Arc::new(|_| {
+        Ok(crate::media::ProbeInfo {
+            format: "ARW".into(),
+            width: 24,
+            height: 32,
+            content_hash: Some("same-bytes".into()),
+            captured: Some("2024-05-06T07:08:09".into()),
+            orientation: Some(lightcraft_geom::Orientation::Rotate90),
+            ..Default::default()
+        })
+    }));
+    let mut job = crate::lightroom_job::LightroomJob::new(&mut s, source, false).unwrap();
+    let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
+    let r = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap().report;
+    let new = s.catalog.photos().find(|p| p.id != other).unwrap_or_else(|| panic!("no new record: {r}"));
+    assert_eq!(new.meta.regions.len(), 1, "{r}");
+    let b = new.meta.regions[0].rect;
+    let got = [b.x0, b.y0, b.x1, b.y1];
+    assert!(
+        got.iter().zip([0.525, 0.2, 0.675, 0.3]).all(|(g, w)| (g - w).abs() < 1e-9),
+        "the box is where the photo as stored had the face: {got:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+/// Only the Lightroom import reads a content duplicate's XMP sidecar: any other import skips the
+/// duplicate without looking its sidecar up (#2954), so the same file beside the same sidecar
+/// reaches the report with no sidecar unless the import makes a record of it (#2589).
+#[test]
+fn only_an_import_that_makes_a_record_of_a_content_duplicate_reads_its_sidecar() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-duplicate-skip-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("test.ARW");
+    std::fs::write(&file, b"same bytes").unwrap();
+    std::fs::write(
+        dir.join("test.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:description><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:description>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let paths = [file.to_string_lossy().into_owned()];
+    for same_content in [crate::import::SameContent::Skip, crate::import::SameContent::Create] {
+        let mut s = crate::Session::new();
+        let other = library_photo(&mut s, "/elsewhere/a.ARW", |p| p.meta.caption = "Other photo's caption".into());
+        s.media.file_probe =
+            Some(Arc::new(|_| Ok(crate::media::ProbeInfo { format: "ARW".into(), content_hash: Some("same-bytes".into()), ..Default::default() })));
+        let opts = crate::import::ImportOptions { same_content, ..Default::default() };
+        let r = crate::import::import_with(&mut s, &paths, &opts).unwrap();
+        assert!(r.imported.is_empty() && s.catalog.photos().count() == 1, "{same_content:?}: {r:?}");
+        let [d] = r.duplicates.as_slice() else { panic!("{same_content:?}: {r:?}") };
+        assert_eq!((d.reason, d.existing), ("content", Some(other.0)), "{same_content:?}");
+        let caption = d.file.as_ref().and_then(|f| f.sidecar.as_ref()).and_then(|sc| sc.caption.clone());
+        if same_content == crate::import::SameContent::Create {
+            assert_eq!(caption.as_deref(), Some("Harbour at dawn"), "the Lightroom import reads it: {r:?}");
+        } else {
+            assert_eq!(caption, None, "a skipped duplicate's sidecar isn't looked up: {r:?}");
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
 /// A catalog photo matched (by path) to a library photo in Recently Deleted leaves it there, as
 /// the import was set up to do (a Lightroom import doesn't restore, see `OnDeleted`), and the report
 /// counts it so the photos don't go missing unexplained (#2589). A new virtual copy of it is
@@ -407,6 +586,97 @@ fn a_reimport_counts_each_trashed_match_once() {
     assert_eq!(r["imported"], 0, "{r}");
     assert!(ids.iter().all(|id| s.catalog.photo(*id).unwrap().deleted));
 }
+
+/// The report says where each of the catalog's images went, one count per outcome, and the counts
+/// add up to the catalog's images (virtual copies included), so a large import that adds fewer
+/// photos than the catalog has explains the rest (#2589, #1584).
+#[test]
+fn the_report_accounts_for_every_catalog_image_once() {
+    let mut s = crate::Session::new();
+    library_photo(&mut s, "/library/kept.ARW", |_| {});
+    library_photo(&mut s, "/library/trashed.ARW", |p| p.deleted = true);
+    let mut data = sample();
+    let master = data.photos[1].clone();
+    let photo = |id: i64, path: &str, master_image: i64| {
+        let mut p = master.clone();
+        p.source_id = id;
+        p.uuid = format!("image-{id}");
+        p.path = path.into();
+        p.image = row(json!({"id_local": id, "masterImage": master_image, "fileFormat": "ARW"}));
+        p
+    };
+    let mut far = photo(7, "//server/share/far.ARW", 0);
+    far.original = Original::Refused("it is on another computer".into());
+    data.photos.extend([
+        photo(3, "/library/kept.ARW", 0),
+        photo(4, "/library/trashed.ARW", 0),
+        // a file type LightCraft doesn't read (an MP4 the catalog doesn't list as a video) and its
+        // virtual copy
+        photo(5, "/Videos/clip.MP4", 0),
+        photo(6, "/Videos/clip.MP4", 5),
+        far,
+    ]);
+    data.skipped.push(SkippedImage { image: 8, reason: SkipReason::MissingFile });
+    data.images = 8;
+    // one index across both imports, as a library on disk keeps it
+    let mut index = ImportIndex::default();
+    let missing_sources: HashSet<_> = data.photos.iter().filter(|p| !p.original_is_file()).map(|p| key(&p.path)).collect();
+    let mut import = |s: &mut crate::Session| {
+        let undo0 = s.undo.len();
+        let context = ApplyPrepared {
+            update_existing: false,
+            files: Default::default(),
+            index: &mut index,
+            archive_path: None,
+            missing_sources: &missing_sources,
+            undo0,
+        };
+        apply_prepared(s, data.clone(), context).unwrap().report
+    };
+    let r = import(&mut s);
+    let counts = ["added", "alreadyInLibrary", "inRecentlyDeleted", "notSupported", "pathRefused", "incomplete"].map(|k| r[k].as_u64().unwrap());
+    assert_eq!(counts, [2, 1, 1, 2, 1, 1], "the offline master and its copy are added: {r}");
+    assert_eq!(r["inCatalog"], 8, "{r}");
+    assert_eq!(counts.iter().sum::<u64>(), 8, "{r}");
+    assert_eq!(r["notSupportedTypes"], json!({"mp4": 2}), "{r}");
+    assert_eq!(r["imported"], r["added"], "{r}");
+    let missing = r["missing"].to_string();
+    assert!(!missing.contains("far.ARW"), "a refused path has no record to relink, so it isn't missing: {missing}");
+    assert!(!r["warnings"].to_string().contains("accounts for"), "{r}");
+    // Imported again, the photos it added are already in the library.
+    let again = import(&mut s);
+    let counts = ["added", "alreadyInLibrary", "inRecentlyDeleted"].map(|k| again[k].as_u64().unwrap());
+    assert_eq!(counts, [0, 3, 1], "{again}");
+}
+/// A refused photo whose id reads as 0 (a malformed catalog) refuses only itself and its own
+/// copies: `masterImage` is 0 for every master, so every master was counted as refused (#2589).
+#[test]
+fn a_refused_photo_with_id_zero_refuses_only_itself() {
+    let mut s = crate::Session::new();
+    let mut data = sample();
+    let mut far = data.photos[1].clone();
+    far.source_id = 0;
+    far.uuid = "image-0".into();
+    far.path = "//server/share/far.ARW".into();
+    far.image = row(json!({"id_local": 0, "fileFormat": "ARW"}));
+    far.original = Original::Refused("it is on another computer".into());
+    data.photos.push(far);
+    data.images = 3;
+    let r = apply(&mut s, data, false).unwrap();
+    assert_eq!((r["added"].as_u64(), r["pathRefused"].as_u64()), (Some(2), Some(1)), "the master and its copy are added: {r}");
+    assert_eq!(s.catalog.len(), 2, "{r}");
+}
+
+/// Counts that don't add up to the catalog's images say so instead of passing silently.
+#[test]
+fn a_report_that_does_not_add_up_says_by_how_much() {
+    let mut data = sample();
+    data.images = 5;
+    let r = apply(&mut crate::Session::new(), data, false).unwrap();
+    let warnings = r["warnings"].to_string();
+    assert!(warnings.contains("the catalog has 5 images, but this report accounts for 2 (a difference of 3)"), "{warnings}");
+}
+
 /// The import report's warnings about `album`.
 fn warnings_naming(r: &Value, album: &str) -> Vec<String> {
     r["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).filter(|w| w.starts_with(&format!("{album}:"))).map(String::from).collect()
@@ -944,9 +1214,10 @@ fn imported_crops_use_the_catalog_orientation() {
     assert_eq!(r, [0.1, 0.1, 0.8, 0.6]);
 }
 
-/// Masks only the catalog's XMP has (the develop row has none to replace them) are on the stored
-/// image too: on a vertical shot (`DA`) they turn like the row's, and a radial keeps its shape on
-/// the 2:1 stored image, also for a photo already in the library at its shown 10 × 20.
+/// Masks from the catalog's XMP (for a photo without develop text, whose XMP is all there is)
+/// are on the stored image too: on a vertical shot (`DA`) they turn like the develop text's, and a
+/// radial keeps its shape on the 2:1 stored image, also for a photo already in the library at its
+/// shown 10 × 20.
 #[test]
 fn catalog_xmp_masks_follow_the_photo_orientation() {
     let mut data = sample();
@@ -955,7 +1226,7 @@ fn catalog_xmp_masks_follow_the_photo_orientation() {
     data.photos[0].image.insert("orientation".into(), json!("DA"));
     data.photos[0].image.insert("fileWidth".into(), json!(20));
     data.photos[0].image.insert("fileHeight".into(), json!(10));
-    data.photos[0].settings = "s = { Exposure2012 = 0.5 }".into();
+    data.photos[0].settings = String::new();
     data.photos[0].xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
 <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
  <crs:MaskGroupBasedCorrections><rdf:Seq>
@@ -975,7 +1246,6 @@ fn catalog_xmp_masks_follow_the_photo_orientation() {
     apply(&mut s, data, true).unwrap();
     assert_eq!(s.catalog.len(), 1, "the catalog's photo is the one already in the library");
     let p = s.catalog.photo(id).unwrap();
-    assert_eq!(p.develop.light.exposure, 0.5, "the develop row is applied too");
     let c = &serde_json::to_value(&p.develop.masks).unwrap()[0]["components"];
     let (linear, radial) = (&c[0]["shape"], &c[1]["shape"]);
     let r = [&linear["start"]["x"], &linear["start"]["y"], &linear["end"]["x"], &linear["end"]["y"], &radial["center"]["x"], &radial["center"]["y"]]
@@ -1033,13 +1303,19 @@ fn deferred_auto_tone_sentinels_never_become_real_slider_values() {
     data.photos[0].settings = "s = { AutoTone = true, Exposure2012 = -999999, Contrast2012 = -999999, Shadows2012 = 65, Temperature = 6150 }".into();
     data.photos[0].xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="-999999" crs:Contrast2012="-999999" crs:Blacks2012="-22"/></rdf:RDF></x:xmpmeta>"#.into();
     let mut s = crate::Session::new();
-    let report = apply(&mut s, data, false).unwrap();
+    let report = apply(&mut s, data.clone(), false).unwrap();
     let p = s.catalog.photos().next().unwrap();
     assert_eq!(p.develop.light.exposure, 0.0);
     assert_eq!(p.develop.light.contrast, 0.0);
     assert_eq!(p.develop.light.shadows, 65.0);
-    assert_eq!(p.develop.light.blacks, -22.0);
+    assert_eq!(p.develop.light.blacks, 0.0, "the develop text, which leaves Blacks out, wins over the XMP");
     assert!(report["unmapped"]["2"].as_array().unwrap().iter().any(|v| v.as_str().is_some_and(|v| v.contains("Deferred"))));
+    // without develop text, the XMP's settings apply, its sentinels left out
+    data.photos[0].settings = String::new();
+    let mut s = crate::Session::new();
+    apply(&mut s, data, false).unwrap();
+    let p = s.catalog.photos().next().unwrap();
+    assert_eq!((p.develop.light.exposure, p.develop.light.contrast, p.develop.light.blacks), (0.0, 0.0, -22.0));
     let (partial, _) = mapped_settings(
         "s = { Exposure2012 = -5, Contrast2012 = -100 }",
         crate::crs::Target::RawAbsolute,
@@ -1629,6 +1905,9 @@ fn probed_original_is_counted_once_and_reimport_adds_nothing() {
         let prepared = job.prepare(&AtomicBool::new(false)).unwrap();
         let completion = crate::lightroom_job::commit_prepared(&mut s, prepared).unwrap();
         assert_eq!(completion.report["imported"], expected);
+        // the record the file import made is added; the second time it is already in the library
+        let outcome = (completion.report["added"].as_u64(), completion.report["alreadyInLibrary"].as_u64());
+        assert_eq!(outcome, (Some(expected), Some(1 - expected)), "{}", completion.report);
         assert_eq!(completion.report["missing"], json!([]));
         assert_eq!(completion.report["failed"], json!([]));
         assert_eq!(s.catalog.len(), 1);
@@ -1672,8 +1951,17 @@ fn originals_on_other_computers_are_never_looked_at_or_added() {
         std::fs::write(&source, native_catalog(&photo_tables((root, "")))).unwrap();
         let catalog = read(&source).unwrap();
         assert!(matches!(catalog.photos[0].original, Original::Refused(_)), "{root}: {:?}", catalog.photos[0]);
-        assert!(catalog.warnings.iter().any(|w| w.contains("not opened")), "{root}: {:?}", catalog.warnings);
+        // counted as `pathRefused`, not as missing (#2589)
+        assert!(
+            catalog.warnings.iter().any(|w| w.contains("not opened") && w.ends_with("its photos are not imported")),
+            "{root}: {:?}",
+            catalog.warnings
+        );
+        assert!(!catalog.warnings.iter().any(|w| w.contains("missing")), "{root}: {:?}", catalog.warnings);
         let mut s = crate::Session::new();
+        // inspecting the catalog doesn't list it as missing either
+        let inspected = s.execute("library.inspectLightroom", &json!({"path": source})).unwrap();
+        assert_eq!(inspected["missing"], json!([]), "{root}: {inspected}");
         let probes = Arc::new(AtomicUsize::new(0));
         let calls = probes.clone();
         s.media.file_probe = Some(Arc::new(move |_| {
@@ -1682,14 +1970,19 @@ fn originals_on_other_computers_are_never_looked_at_or_added() {
         }));
         let report = import(&mut s, &source, false).unwrap();
         assert_eq!(probes.load(Ordering::Relaxed), 0, "{root}");
-        assert_eq!(report["missing"].as_array().map(Vec::len), Some(1), "{root}: {report}");
+        // no record, so nothing for Find Missing Photos: counted on its own
+        assert_eq!(report["missing"], json!([]), "{root}: {report}");
+        assert_eq!((report["pathRefused"].as_u64(), report["inCatalog"].as_u64()), (Some(1), Some(1)), "{root}: {report}");
         assert!(s.catalog.is_empty(), "{root}");
     }
     // An absolute folder path would replace the root.
     let mut tables = photo_tables((dir.to_str().unwrap(), ""));
     tables[1].2[2] = SqlValue::Text(format!("{}/Photos/", dir.display()));
     std::fs::write(&source, native_catalog(&tables)).unwrap();
-    assert!(matches!(read(&source).unwrap().photos[0].original, Original::Refused(_)));
+    let catalog = read(&source).unwrap();
+    assert!(matches!(catalog.photos[0].original, Original::Refused(_)));
+    assert!(catalog.warnings.iter().any(|w| w.ends_with("it and its virtual copies are not imported")), "{:?}", catalog.warnings);
+    assert!(!catalog.warnings.iter().any(|w| w.contains("missing")), "{:?}", catalog.warnings);
     // A root beside the catalog is followed.
     std::fs::write(&source, native_catalog(&photo_tables((dir.to_str().unwrap(), "")))).unwrap();
     let catalog = read(&source).unwrap();
@@ -1731,4 +2024,204 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// A catalog XMP packet older than the develop text: settings Lightroom has since set back to zero
+/// (and so leaves out of the text) still at their old values, a mask, a spot (which only the XMP
+/// gives the import: the text's `RetouchAreas` isn't read), and metadata.
+const STALE_XMP: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"
+ xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4" crs:Exposure2012="+2" crs:Clarity2012="+30" crs:Texture="+12" crs:LuminanceSmoothing="25">
+ <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Harbour at dawn</rdf:li></rdf:Alt></dc:title>
+ <dc:creator><rdf:Seq><rdf:li>Example Photographer</rdf:li></rdf:Seq></dc:creator>
+ <crs:MaskGroupBasedCorrections><rdf:Seq>
+  <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="-0.25">
+   <crs:CorrectionMasks><rdf:Seq><rdf:li crs:What="Mask/Gradient" crs:FullX="0.1" crs:FullY="0.2" crs:ZeroX="0.3" crs:ZeroY="0.6"/></rdf:Seq></crs:CorrectionMasks>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:MaskGroupBasedCorrections>
+ <crs:RetouchAreas><rdf:Seq>
+  <rdf:li><rdf:Description crs:SpotType="heal" crs:SourceState="sourceSetExplicitly" crs:SourceX="0.45" crs:OffsetY="0.3" crs:Opacity="1" crs:Feather="0">
+   <crs:Masks><rdf:Seq><rdf:li crs:What="Mask/Ellipse" crs:X="0.4" crs:Y="0.3" crs:SizeX="0.01" crs:SizeY="0.015"/></rdf:Seq></crs:Masks>
+  </rdf:Description></rdf:li>
+ </rdf:Seq></crs:RetouchAreas>
+</rdf:Description></rdf:RDF></x:xmpmeta>"#;
+
+/// One catalog photo (offline original) with `settings` as its develop text and [`STALE_XMP`].
+fn stale_xmp_catalog(settings: &str) -> CatalogImport {
+    let mut data = sample();
+    data.photos.truncate(1);
+    data.photos[0].image.remove("masterImage");
+    data.photos[0].settings = settings.into();
+    data.photos[0].xmp = STALE_XMP.into();
+    data
+}
+
+/// (exposure, clarity, texture, luminance noise reduction, masks, spots) of `p`'s develop settings.
+fn stale_xmp_develop(p: &Photo) -> (f64, f64, f64, f64, usize, usize) {
+    let d = &p.develop;
+    (d.light.exposure, d.effects.clarity, d.effects.texture, d.detail.nr_luminance, d.masks.len(), d.spots.len())
+}
+
+/// Lightroom leaves settings at their defaults out of a photo's develop text, and the catalog's
+/// XMP can be older than the text: the text decides every setting it can carry, so one it leaves
+/// out is at its default, not the XMP's value nor what the record had. The XMP still gives the
+/// photo its metadata and what the import can't read from the text (spots). For a record the
+/// import makes (here an offline original) and for every record found before it whose develop
+/// settings take the catalog's.
+#[test]
+fn the_catalog_develop_text_wins_over_its_xmp() {
+    let text = "s = { Exposure2012 = 0.5 }";
+    let mut got = Vec::new();
+    // a record the import makes
+    let mut s = crate::Session::new();
+    apply(&mut s, stale_xmp_catalog(text), false).unwrap();
+    let p = s.catalog.photos().next().unwrap();
+    got.push(("new record", stale_xmp_develop(p), p.meta.title.clone()));
+    assert_eq!(p.meta.creator, "Example Photographer");
+    assert_eq!(p.rating, 2, "the catalog's rating, over the XMP's");
+    // records there before, each with settings of its own the text leaves out (Clarity 15,
+    // Texture 5, a mask): in the library unedited (Existing), browsed in Local and changed since
+    // (Promoted), and either with an edit made in LightCraft, which "update existing" replaces
+    // with the catalog's settings
+    let cases: [(&str, bool, bool, bool); 4] = [
+        ("library, unedited", false, false, false),
+        ("Local, changed", true, false, false),
+        ("library, edited", false, true, true),
+        ("Local, edited", true, true, true),
+    ];
+    for (case, local, edited, update_existing) in cases {
+        let mut s = crate::Session::new();
+        let id = library_photo(&mut s, "/missing/test.ARW", |p| {
+            p.local = local;
+            p.rating = 3;
+            let mask = json!({"masks": [{"name": "Sky", "components": [{"shape": {"kind": "linear", "start": {"x": 0.5, "y": 0.0}, "end": {"x": 0.5, "y": 0.5}}}]}]});
+            let mut d = p.develop.merged(&mask).unwrap();
+            d.effects.clarity = 15.0;
+            d.effects.texture = 5.0;
+            if edited {
+                d.light.exposure = -1.0;
+                p.edited = Some("before".into());
+            }
+            p.develop = Arc::new(d);
+        });
+        assert_eq!(s.catalog.photo(id).unwrap().develop.masks.len(), 1, "{case}: the record's own mask");
+        let r = apply(&mut s, stale_xmp_catalog(text), update_existing).unwrap();
+        assert_eq!(r["preservedExistingEdits"], 0, "{case}");
+        let p = s.catalog.photo(id).unwrap();
+        got.push((case, stale_xmp_develop(p), p.meta.title.clone()));
+    }
+    let want = ["new record", "library, unedited", "Local, changed", "library, edited", "Local, edited"]
+        .map(|case| (case, (0.5, 0.0, 0.0, 0.0, 0, 1), "Harbour at dawn".to_string()));
+    assert_eq!(got, want);
+}
+
+/// A LightCraft edit an import keeps stays whole: neither the catalog's text nor its XMP changes
+/// it; the XMP's metadata still arrives.
+#[test]
+fn a_kept_edit_takes_neither_the_catalog_text_nor_its_xmp() {
+    let mut s = crate::Session::new();
+    let id = library_photo(&mut s, "/missing/test.ARW", |p| {
+        let mut d = (*p.develop).clone();
+        d.light.exposure = -1.0;
+        d.effects.clarity = 15.0;
+        p.develop = Arc::new(d);
+        p.edited = Some("before".into());
+    });
+    let r = apply(&mut s, stale_xmp_catalog("s = { Exposure2012 = 0.5 }"), false).unwrap();
+    assert_eq!(r["preservedExistingEdits"], 1);
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(stale_xmp_develop(p), (-1.0, 15.0, 0.0, 0.0, 0, 0));
+    assert_eq!(p.meta.title, "Harbour at dawn");
+}
+
+/// Without develop text the catalog can read, its XMP is all there is: its settings apply, masks
+/// included, as before.
+#[test]
+fn without_readable_develop_text_the_catalog_xmp_develops_the_photo() {
+    for text in ["", "s = {"] {
+        let mut s = crate::Session::new();
+        apply(&mut s, stale_xmp_catalog(text), false).unwrap();
+        let p = s.catalog.photos().next().unwrap();
+        assert_eq!(stale_xmp_develop(p), (2.0, 30.0, 12.0, 25.0, 1, 1), "text {text:?}");
+        assert_eq!(p.meta.title, "Harbour at dawn", "text {text:?}");
+    }
+}
+
+/// LightCraft's own settings in the catalog's XMP (`lc:settings`, kept there from a sidecar
+/// LightCraft wrote) are older than the text too: the text decides what it carries (Clarity, at
+/// its default), and the rest of them (a spot) stays.
+#[test]
+fn the_catalog_develop_text_wins_over_lightcraft_settings_in_its_xmp() {
+    let spot = json!({"effects": {"clarity": 30.0}, "spots": [{"mode": "heal", "points": [{"x": 0.4, "y": 0.3}], "size": 0.01, "feather": 0.0, "opacity": 100.0, "source_offset": null}]});
+    let old = lightcraft_develop::DevelopSettings::default().merged(&spot).unwrap();
+    assert_eq!((old.effects.clarity, old.spots.len()), (30.0, 1));
+    let meta = lightcraft_meta::Metadata { title: Some("Harbour at dawn".into()), ..Default::default() };
+    let packet = lightcraft_meta::write_xmp(&meta, Some(&serde_json::to_string(&old).unwrap()));
+    for (text, want) in [("s = { Exposure2012 = 0.5 }", (0.5, 0.0, 1)), ("", (0.0, 30.0, 1))] {
+        let mut data = stale_xmp_catalog(text);
+        data.photos[0].xmp = packet.clone();
+        let mut s = crate::Session::new();
+        apply(&mut s, data, false).unwrap();
+        let p = s.catalog.photos().next().unwrap();
+        assert_eq!((p.develop.light.exposure, p.develop.effects.clarity, p.develop.spots.len()), want, "text {text:?}");
+        assert_eq!(p.meta.title, "Harbour at dawn", "text {text:?}");
+    }
+}
+
+/// A catalog XMP packet marked `crs:AlreadyApplied` (its settings are in the pixels) develops
+/// nothing, with or without develop text.
+#[test]
+fn an_already_applied_catalog_xmp_develops_nothing() {
+    for text in ["s = { Exposure2012 = 0.5 }", ""] {
+        let mut data = stale_xmp_catalog(text);
+        data.photos[0].xmp = STALE_XMP.replace(r#"xmp:Rating="4""#, r#"xmp:Rating="4" crs:AlreadyApplied="True""#);
+        let mut s = crate::Session::new();
+        apply(&mut s, data, false).unwrap();
+        let p = s.catalog.photos().next().unwrap();
+        let exposure = if text.is_empty() { 0.0 } else { 0.5 };
+        assert_eq!(stale_xmp_develop(p), (exposure, 0.0, 0.0, 0.0, 0, 0), "text {text:?}");
+        assert_eq!(p.meta.title, "Harbour at dawn", "text {text:?}");
+    }
+}
+
+/// What the develop text can write is what the import starts at the camera's defaults: every
+/// setting a text with each kind of field maps to (masks included) is among them, and a spot,
+/// which the text reader doesn't read, isn't written. If it ever is, `text_defaults` must name it.
+#[test]
+fn the_text_defaults_cover_everything_the_text_writes() {
+    let text = r#"s = { Exposure2012 = 0.5, Clarity2012 = 10, WhiteBalance = "Custom", Temperature = 5000, Tint = 3,
+        ConvertToGrayscale = true, HueAdjustmentRed = 4, GrayMixerBlue = 5, ParametricShadows = 6, ToneCurvePV2012 = {0,0,128,150,255,255},
+        ToneCurvePV2012Red = {0,0,255,255}, ToneCurvePV2012Green = {0,0,255,255}, ToneCurvePV2012Blue = {0,0,255,255},
+        ColorGradeMidtoneHue = 30, Sharpness = 40, PostCropVignetteAmount = -10, PostCropVignetteStyle = 2, GrainAmount = 5,
+        LensProfileEnable = 1, AutoLateralCA = 1, DefringePurpleAmount = 2, RedHue = 3, PerspectiveVertical = 4, PerspectiveUpright = 2,
+        HDREditMode = true, CropLeft = 0.1, CropTop = 0.1, CropRight = 0.9, CropBottom = 0.9, CropAngle = 2,
+        MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+            { What = "Mask/Gradient", FullX = 0.1, FullY = 0.2, ZeroX = 0.3, ZeroY = 0.6 } } } },
+        RetouchAreas = { { SpotType = "heal", Masks = { { What = "Mask/Ellipse", X = 0.4, Y = 0.3, SizeX = 0.01, SizeY = 0.01 } } } } }"#;
+    let (partial, _) = mapped_settings(text, crate::crs::Target::RawAbsolute, 1.5, Orientation::Normal, 1.5, Orientation::Normal).unwrap();
+    assert!(partial.get("masks").is_some() && partial.get("spots").is_none(), "{partial}");
+    assert!(partial.pointer("/light/exposure").is_some() && partial.pointer("/crop/geometry").is_some() && partial.pointer("/curve/red").is_some());
+    let paths: Vec<&str> = text_paths().collect();
+    fn uncovered(v: &Value, at: &str, paths: &[&str], out: &mut Vec<String>) {
+        match v {
+            _ if paths.contains(&at) => {}
+            Value::Object(m) => m.iter().for_each(|(k, v)| uncovered(v, &if at.is_empty() { k.clone() } else { format!("{at}.{k}") }, paths, out)),
+            _ => out.push(at.to_string()),
+        }
+    }
+    let mut out = Vec::new();
+    uncovered(&partial, "", &paths, &mut out);
+    assert!(out.is_empty(), "the text writes {out:?}, which the import doesn't start at its default");
+    // and a photo with all of it (and a spot, a red eye, a rotation, which the text doesn't carry)
+    // starts at the camera's defaults for all of it, the rest kept
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "/a.dng".into() }, "a.dng", "DNG", 30, 20, "now");
+    p.kind = lightcraft_catalog::MediaKind::Raw;
+    p.as_shot_wb = Some((5200.0, 4.0));
+    p.develop = Arc::new(p.camera_defaults());
+    let others = json!({"orientation": Orientation::Rotate90, "spots": [{"mode": "heal", "points": [{"x": 0.4, "y": 0.3}], "size": 0.01, "feather": 0.0, "opacity": 100.0, "source_offset": null}]});
+    let start = p.develop.merged(&others).unwrap();
+    assert_eq!((start.spots.len(), start.orientation), (1, Orientation::Rotate90));
+    p.develop = Arc::new(start.merged(&partial).unwrap());
+    assert_ne!(*p.develop, start);
+    assert_eq!(at_text_defaults(&p).unwrap(), start);
 }

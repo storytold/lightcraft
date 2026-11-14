@@ -627,6 +627,25 @@ fn regions_drawn_on_the_photo_as_stored_land_on_the_upright_photo() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// A sidecar that says nothing beside a photo whose file states an orientation isn't one the import counts: the
+/// file's orientation goes to a sidecar that said something, not into an empty one (#2674, #2589).
+#[test]
+fn an_empty_sidecar_beside_a_turned_photo_is_not_counted() {
+    let src = temp_dir("regions-empty-sidecar");
+    let file = src.join("p.jpg");
+    write_turned_jpeg(&file, None);
+    std::fs::write(
+        src.join("p.xmp"),
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about=""/></rdf:RDF></x:xmpmeta>"#,
+    )
+    .unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["sidecars"], 0, "{r}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Review of #2857: a photo whose Exif states no orientation, but whose XMP says `tiff:Orientation=6`, is shown as
 /// stored (LightCraft turns by the Exif alone), so boxes drawn on its stored frame are right as written: at import
 /// and when the file's metadata is read again, which must agree.
