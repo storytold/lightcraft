@@ -224,7 +224,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
 }
 
 /// Ops that fill a photo's empty camera fields (camera, lens, exposure, GPS, capture time) from a fresh probe.
-fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
+pub(crate) fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
     let (mut m, src) = (ph.meta.clone(), &info.meta);
     let before = m.clone();
     if m.camera.is_empty() {
@@ -312,8 +312,9 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
+    // A selected copy refreshes its same-file family too, but only the explicit target
+    // gets missing descriptive metadata above. Relinked copies keep their own file facts.
+    for c in cat.photos().filter(|c| c.id != id && shares_reload_source(c, ph)) {
         let theirs: Vec<Op> =
             content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
         if !theirs.is_empty() {
@@ -321,6 +322,12 @@ pub(crate) fn reload_ops(
             changed.push(c.id);
         }
     }
+}
+
+/// Copies share probe results only while both the family and the actual file agree.
+pub(crate) fn shares_reload_source(a: &lightcraft_catalog::Photo, b: &lightcraft_catalog::Photo) -> bool {
+    a.copy_of.unwrap_or(a.id) == b.copy_of.unwrap_or(b.id)
+        && matches!((&a.source, &b.source), (Source::File { path: a }, Source::File { path: b }) if a == b)
 }
 
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
