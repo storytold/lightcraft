@@ -612,8 +612,8 @@ struct SmartCounts {
 
 /// `source` if it reads the photo's original, else `None`. A source decoded from a smart preview
 /// (it now carries the proxy's stored facts), a proxy standing in for an offline original, and the
-/// proxy fallback of a file source are not the original: refreshing a stale proxy from one of them
-/// would stamp its older look as current.
+/// proxy fallback of a file source are not the original: building or repairing a proxy from one
+/// of them would stamp its older look as current.
 #[cfg(not(target_arch = "wasm32"))]
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
@@ -623,8 +623,20 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
             Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, outliers, reduced: None })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
+        source @ SourceRef::Demo { .. } => Some(source),
         _ => None,
     }
+}
+
+/// A fresh original for a smart preview, keeping the photo's mosaic decode options.
+/// Imported colour profiles and display/source caches must not become proxy pixels.
+#[cfg(not(target_arch = "wasm32"))]
+fn original_source(media: &mut crate::media::MediaCache, photo: &lightcraft_catalog::Photo, max_edge: usize) -> crate::media::SourceRef {
+    let mut source = media.origin_ref(&photo.source, max_edge);
+    if let crate::media::SourceRef::File { outliers, .. } = &mut source {
+        *outliers = photo.develop.removes_hot_pixels();
+    }
+    source
 }
 
 /// The file-system half of Build / Discard Smart Previews (runs on a worker thread in the app).
@@ -669,9 +681,12 @@ fn smart_run(
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
             } else {
-                // a stale proxy is rebuilt from the original only: never from itself (the file
-                // fallback or a source decoded from a proxy would stamp the old look as current)
-                let source = if stale { source.and_then(original_only) } else { source };
+                // Capture provenance before decoding. A reload during that decode makes its
+                // pixels ambiguous; a later reload must leave the captured identity on the bytes.
+                let generation = crate::lens_profiles::generation();
+                let lens_key = crate::lens_profiles::cache_key();
+                // Never relabel pixels from a proxy, even when the destination has no readable header.
+                let source = source.and_then(original_only);
                 // atomic: a failed write leaves no partial proxy that would pass for a built one;
                 // and synced (issue #134): built so the photo can be edited while its original
                 // is offline, when it is the only copy — the sync is small next to the decode
@@ -679,8 +694,14 @@ fn smart_run(
                     .ok_or_else(|| "nothing to build from".to_string())
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
+                        if src.from_proxy || src.reduced {
+                            return Err("smart previews need the original source".to_string());
+                        }
+                        if crate::lens_profiles::generation() != generation {
+                            return Err("lens database changed while decoding the smart preview; retry the build".to_string());
+                        }
                         let info = src.info_or(Default::default());
-                        crate::smart::encode(&src.image, Some(&info))
+                        crate::smart::encode_with_lens_key(&src.image, Some(&info), lens_key)
                     })
                     .and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
@@ -753,9 +774,10 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
-        // (a smart preview keeps the file's own colour: never built with the photo's imported camera profile, nor
-        // from a cached source developed with it)
-        let source = (!discard).then(|| s.media.source_ref_without_profile(&ph, crate::media::SourceLevel::Preview));
+        // Read the original afresh: cached pixels can predate a lens database replacement
+        // or carry an imported camera profile. Smart previews keep the file's own colour
+        // and smart_run's captured lens provenance must describe the encoded pixels.
+        let source = (!discard).then(|| original_source(&mut s.media, &ph, crate::media::SourceLevel::Preview.max_edge()));
         jobs.push((id, path, source, preview_fitted_look(&ph)));
     }
     let custom = s.smart_previews_dir.is_some();
@@ -817,7 +839,7 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
     let jobs: Vec<SmartJob> = photos
         .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(original_source(&mut s.media, p, max_edge)), preview_fitted_look(p)))
         .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
@@ -829,6 +851,8 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 /// The body of [`refresh_stale_smart_previews`]: rebuild the stale proxies among `jobs`.
 #[cfg(not(target_arch = "wasm32"))]
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
+    let generation = crate::lens_profiles::generation();
+    let lens_key = crate::lens_profiles::cache_key();
     let stale: Vec<SmartJob> = jobs
         .into_iter()
         .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
@@ -845,7 +869,10 @@ fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
             }
         }
     }
-    if let Err(e) = crate::smart::mark_look_checked(dir) {
+    if crate::lens_profiles::generation() != generation {
+        return;
+    }
+    if let Err(e) = crate::smart::mark_look_checked_with_lens_key(dir, lens_key) {
         log::warn!("smart previews: {e}");
     }
 }
@@ -1058,5 +1085,311 @@ mod tests {
         assert_eq!(r["done"], json!(ids.len()), "{r}");
         assert_eq!(r["total"], json!(ids.len()));
         assert_eq!(r["failed"], json!(0));
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod smart_provenance_tests {
+    use super::smart_run;
+    use crate::media::{SourceLevel, SourceRef};
+    use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+    use std::sync::Arc;
+
+    fn temp(tag: &str) -> std::io::Result<std::path::PathBuf> {
+        let dir = std::env::temp_dir().join(format!("lc-smart-provenance-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+
+    #[test]
+    fn damaged_shard_never_relabels_cached_legacy_fallback_and_repairs_from_online_original() {
+        let dir = temp("legacy-fallback").unwrap();
+        let mut photo = Photo::new(
+            PhotoId(1),
+            Source::File { path: dir.join("offline.arw").to_string_lossy().into_owned() },
+            "offline.arw",
+            "ARW",
+            48,
+            32,
+            "2026-11-02T00:00:00",
+        );
+        photo.kind = MediaKind::Raw;
+        let shard = crate::smart::sharded_file_path(&dir, &photo);
+        let legacy = dir.join(crate::smart::file_name(&photo));
+        std::fs::create_dir_all(shard.parent().unwrap()).unwrap();
+        let mut image = lightcraft_raster::Rgb32f::new(48, 32);
+        image.data.fill([0.25, 0.3, 0.2]);
+        let bytes = crate::smart::encode(&image, None).unwrap();
+        let start = b"LCSP1\n".len();
+        let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+        let mut head: serde_json::Value = serde_json::from_slice(&bytes[start..nl]).unwrap();
+        head["lens_db"] = serde_json::json!(crate::lens_profiles::cache_key().wrapping_add(1));
+        let mut old = bytes[..start].to_vec();
+        old.extend_from_slice(head.to_string().as_bytes());
+        old.extend_from_slice(&bytes[nl..]);
+        std::fs::write(&legacy, &old).unwrap();
+        std::fs::write(&shard, b"broken").unwrap();
+        assert!(crate::smart::is_stale_for(&legacy, true));
+        assert!(!crate::smart::is_stale_for(&shard, true), "a damaged header is not stale");
+
+        let mut session = crate::Session::new();
+        session.media.smart_dir = Some(dir.clone());
+        session.media.file_loader = Some(Arc::new(|_, _, _| Err("original is offline".into())));
+        // Reproduce the UI cache selecting legacy while the worker sees the damaged shard.
+        let cached_missing = shard.to_string_lossy().into_owned();
+        session.media.availability.set_probe(Arc::new(move |path| path != cached_missing));
+        let source = session.media.source_ref(&photo, SourceLevel::Preview);
+        assert!(matches!(&source, SourceRef::File { fallback: Some(p), .. } if p == &legacy));
+        assert!(source.load_source().unwrap().from_proxy, "the renderer can still use the offline fallback");
+        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), true)], None).unwrap();
+        assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.stale_kept, counts.failed.len()), (0, 0, 0, 0, 1));
+        assert_eq!(std::fs::read(&shard).unwrap(), b"broken", "a failed repair leaves its destination untouched");
+        assert_eq!(std::fs::read(&legacy).unwrap(), old);
+        assert!(crate::smart::load(&legacy).unwrap().from_proxy);
+
+        session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((image.clone(), Default::default()))));
+        let source = session.media.source_ref(&photo, SourceLevel::Preview);
+        let counts = smart_run(&dir, false, false, vec![(photo.id, shard.clone(), Some(source), true)], None).unwrap();
+        assert_eq!((counts.built, counts.repaired, counts.refreshed, counts.failed.len()), (1, 1, 0, 0));
+        assert!(crate::smart::is_valid(&shard));
+        assert!(!crate::smart::is_stale_for(&shard, true));
+        assert_eq!(std::fs::read(&legacy).unwrap(), old, "repair does not overwrite the valid legacy copy");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_target_never_encodes_proxy_sources_but_keeps_valid_offline_proxies() {
+        let dir = temp("missing-target").unwrap();
+        let legacy = dir.join("legacy.lcsp");
+        let image = lightcraft_raster::Rgb32f::new(48, 32);
+        let bytes = crate::smart::encode(&image, Some(&Default::default())).unwrap();
+        std::fs::write(&legacy, &bytes).unwrap();
+        let loaded = crate::smart::load(&legacy).unwrap();
+        assert!(loaded.info.is_some(), "stored facts do not confer original provenance");
+        let mut reduced = crate::media::DecodedSource::new(Arc::new(image.clone()), Some(Default::default()));
+        reduced.reduced = true;
+        let sources = [
+            SourceRef::Loaded(Box::new(reduced)),
+            SourceRef::Loaded(Box::new(loaded.clone())),
+            SourceRef::Fit { from: Box::new(loaded), max_edge: 24 },
+            SourceRef::Smart { path: legacy.clone() },
+        ];
+        for (i, source) in sources.into_iter().enumerate() {
+            let target = dir.join(format!("missing-{i}.lcsp"));
+            let counts = smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), true)], None).unwrap();
+            assert_eq!((counts.built, counts.repaired, counts.failed.len()), (0, 0, 1));
+            assert!(!target.exists());
+        }
+        let source = SourceRef::Smart { path: legacy.clone() };
+        let counts = smart_run(&dir, false, false, vec![(PhotoId(1), legacy.clone(), Some(source), true)], None).unwrap();
+        assert_eq!((counts.built, counts.repaired, counts.failed.len()), (1, 0, 0));
+        assert_eq!(std::fs::read(&legacy).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn smart_command_reads_original_instead_of_cached_pixels() {
+        let dir = temp("fresh-original").unwrap();
+        let photo = Photo::new(
+            PhotoId(1),
+            Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() },
+            "original.arw",
+            "ARW",
+            32,
+            24,
+            "2026-11-04T00:00:00",
+        );
+        let path = crate::smart::sharded_file_path(&dir, &photo);
+        let mut session = crate::Session::new();
+        session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        session.media.smart_dir = Some(dir.clone());
+        session.media.insert(PhotoId(1), SourceLevel::Preview, Arc::new(lightcraft_raster::Rgb32f::new(32, 24)));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = calls.clone();
+        // The new culling path can serve a prepared view without decoding. It must
+        // never become the source of a smart preview's linear original pixels.
+        let view = session.loupe_job(PhotoId(1), 32, 24, true).unwrap();
+        let (cache, key) = view.view_cache.as_ref().unwrap();
+        cache.put_memory(*key, Arc::new(lightcraft_raster::Rgba8::from_fn(32, 24, |_, _| [255, 0, 255, 255])));
+        let cached = view.run();
+        assert_eq!(cached.quick, Some(crate::media::QuickSource::Cached));
+        assert_eq!(cached.rendered.unwrap().image.data[0], [255, 0, 255, 255]);
+        session.media.file_loader = Some(Arc::new(move |_, _, with| {
+            assert!(with.dcp.is_none(), "smart previews keep the original camera colour");
+            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let mut pixels = lightcraft_raster::Rgb32f::new(32, 24);
+            pixels.data.fill([0.4; 3]);
+            Ok((pixels, Default::default()))
+        }));
+        let result = session.execute("library.smartPreviews", &serde_json::json!({"ids": [1]})).unwrap();
+        assert_eq!(result["built"], 1, "{result}");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1, "the original must be decoded afresh");
+        let loaded = crate::smart::load(&path).unwrap();
+        assert!(loaded.image.data[0].iter().all(|v| *v > 0.3), "neither cached black sources nor prepared magenta views are original pixels");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fresh_smart_build_and_refresh_keep_the_photos_hot_pixel_decode() {
+        for outliers in [false, true] {
+            let dir = temp(if outliers { "fresh-hot-on" } else { "fresh-hot-off" }).unwrap();
+            let mut photo = Photo::new(
+                PhotoId(1),
+                Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() },
+                "original.arw",
+                "ARW",
+                32,
+                24,
+                "2026-11-05T00:00:00",
+            );
+            photo.kind = lightcraft_catalog::MediaKind::Raw;
+            let mut settings = lightcraft_develop::DevelopSettings::for_raw(5200.0, 0.0);
+            settings.detail.nr_outliers = outliers;
+            photo.develop = Arc::new(settings);
+            let path = crate::smart::sharded_file_path(&dir, &photo);
+            let mut session = crate::Session::new();
+            session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+            session.media.smart_dir = Some(dir.clone());
+            // A valid, matching raw decode in memory is still not a fresh original.
+            let cached = crate::media::DecodedSource {
+                outliers,
+                ..crate::media::DecodedSource::new(
+                    Arc::new(lightcraft_raster::Rgb32f::new(32, 24)),
+                    Some(lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() }),
+                )
+            };
+            session.media.insert_source(PhotoId(1), SourceLevel::Preview, cached);
+            let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let log = seen.clone();
+            session.media.file_loader = Some(Arc::new(move |_, _, with| {
+                assert!(with.dcp.is_none(), "smart pixels keep the original camera colour");
+                log.lock().unwrap().push(with.outliers);
+                let value = if with.outliers { 0.4 } else { 0.2 };
+                Ok((
+                    lightcraft_raster::Rgb32f::from_fn(32, 24, |_, _| [value; 3]),
+                    lightcraft_pipeline::SourceInfo { raw: true, ..Default::default() },
+                ))
+            }));
+            let result = session.execute("library.smartPreviews", &serde_json::json!({"ids": [1]})).unwrap();
+            assert_eq!(result["built"], 1, "{result}");
+            assert_eq!(*seen.lock().unwrap(), [outliers], "manual build decodes the original with the photo's option");
+            let check_pixels = || {
+                let proxy = crate::smart::load(&path).unwrap();
+                let expected = if outliers { 0.4 } else { 0.2 };
+                assert!(
+                    proxy.image.data.iter().flatten().all(|v| (v - expected).abs() < 0.02),
+                    "the loaded proxy carries the requested decode, not cached black pixels"
+                );
+                assert!(proxy.from_proxy && !proxy.outliers, "a proxy has no raw mosaic decode flag");
+                assert!(proxy.fits_outliers(false) && proxy.fits_outliers(true), "offline proxies retain the upstream no-mosaic contract");
+            };
+            check_pixels();
+            // Force a stale look without changing its pixels, then exercise the actual refresh worker.
+            let bytes = std::fs::read(&path).unwrap();
+            let start = b"LCSP1\n".len();
+            let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
+            let mut header: serde_json::Value = serde_json::from_slice(&bytes[start..nl]).unwrap();
+            header["look_version"] = serde_json::json!(0);
+            let mut stale = bytes[..start].to_vec();
+            stale.extend_from_slice(header.to_string().as_bytes());
+            stale.extend_from_slice(&bytes[nl..]);
+            std::fs::write(&path, stale).unwrap();
+            assert!(crate::smart::is_stale_for(&path, true));
+            super::refresh_stale_smart_previews(&mut session).unwrap().join().unwrap();
+            assert_eq!(*seen.lock().unwrap(), [outliers, outliers], "refresh also decodes a fresh original with the photo's option");
+            assert!(!crate::smart::is_stale_for(&path, true));
+            check_pixels();
+            std::fs::remove_dir_all(dir).unwrap();
+        }
+    }
+
+    #[test]
+    fn runtime_lens_reload_during_smart_decode_preserves_destinations_and_scan_marker() {
+        const CHILD: &str = "LIGHTCRAFT_TEST_SMART_RELOAD_CHILD";
+        const DB: &str = r#"<lensdatabase><lens><maker>Test</maker><model>18mm</model><mount>T</mount>
+            <cropfactor>1.5</cropfactor><calibration><distortion model="poly3" focal="18" k1="-0.03" />
+            </calibration></lens></lensdatabase>"#;
+        if std::env::var_os(CHILD).is_none() {
+            let dir = temp("runtime-reload-child").unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "cmd::previews::smart_provenance_tests::runtime_lens_reload_during_smart_decode_preserves_destinations_and_scan_marker",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env(crate::lens_profiles::ENV, &dir)
+                .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(dir).unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        let dir = std::path::PathBuf::from(std::env::var_os(crate::lens_profiles::ENV).unwrap());
+        let database = dir.join("lens.xml");
+        let image = lightcraft_raster::Rgb32f::new(32, 24);
+        let old = crate::smart::encode_with_lens_key(&image, None, 0).unwrap();
+        for replace in [false, true] {
+            for existing in [None, Some(b"broken".to_vec()), Some(old.clone())] {
+                std::fs::write(&database, DB).unwrap();
+                crate::lens_profiles::reload();
+                let before = crate::lens_profiles::cache_key();
+                assert_ne!(before, 0);
+                let target = dir.join("target.lcsp");
+                if let Some(bytes) = &existing {
+                    std::fs::write(&target, bytes).unwrap();
+                } else {
+                    let _ = std::fs::remove_file(&target);
+                }
+                let db_path = database.clone();
+                let pixels = image.clone();
+                let mut session = crate::Session::new();
+                session.media.file_loader = Some(Arc::new(move |_, _, _| {
+                    std::fs::write(&db_path, DB.replace("-0.03", "-0.05")).map_err(|e| e.to_string())?;
+                    if replace {
+                        crate::lens_profiles::replaced();
+                    } else {
+                        crate::lens_profiles::reload();
+                    }
+                    Ok((pixels.clone(), Default::default()))
+                }));
+                let origin = Source::File { path: dir.join("original.arw").to_string_lossy().into_owned() };
+                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
+                let counts = smart_run(&dir, false, false, vec![(PhotoId(1), target.clone(), Some(source), true)], None).unwrap();
+                assert_ne!(crate::lens_profiles::cache_key(), before);
+                if let Some(bytes) = &existing {
+                    assert_eq!(std::fs::read(&target).unwrap(), *bytes, "a reload never replaces the previous destination");
+                } else {
+                    assert!(!target.exists(), "a reload never creates a mislabeled proxy");
+                }
+                if existing.as_ref() == Some(&old) {
+                    assert_eq!(counts.stale_kept, 1);
+                } else {
+                    assert_eq!(counts.failed.len(), 1);
+                    assert!(counts.failed[0][1].as_str().unwrap().contains("lens database changed"));
+                }
+
+                // The same change inside the actual background refresh cannot stamp the new DB checked.
+                std::fs::write(&database, DB).unwrap();
+                crate::lens_profiles::reload();
+                std::fs::write(&target, &old).unwrap();
+                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
+                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), true)]);
+                assert_eq!(std::fs::read(&target).unwrap(), old);
+                assert!(!crate::smart::look_checked(&dir));
+
+                // A subsequent stable decode writes B's identity and can complete the scan.
+                let pixels = image.clone();
+                session.media.file_loader = Some(Arc::new(move |_, _, _| Ok((pixels.clone(), Default::default()))));
+                let source = session.media.origin_ref(&origin, SourceLevel::Preview.max_edge());
+                super::refresh_stale(&dir, vec![(PhotoId(1), target.clone(), Some(source), true)]);
+                assert!(!crate::smart::is_stale_for(&target, true));
+                assert!(crate::smart::look_checked(&dir));
+                // Reset the marker before the next race attempt.
+                crate::smart::mark_look_checked_with_lens_key(&dir, 0).unwrap();
+            }
+        }
     }
 }
