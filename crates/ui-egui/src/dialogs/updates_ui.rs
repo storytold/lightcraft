@@ -27,6 +27,14 @@ pub(crate) struct Runtime {
     pub(crate) status_message: Option<String>,
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl Runtime {
+    /// Tests: show the startup prompt for `release`, as a startup check that found it would.
+    pub(crate) fn offer(&mut self, release: craft_update::Release) {
+        self.updater.offer(release);
+    }
+}
+
 impl Default for Runtime {
     fn default() -> Self {
         Self {
