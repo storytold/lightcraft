@@ -105,9 +105,20 @@ fn parse(json: &[u8], origin: &str) -> Result<CameraProfile, String> {
     Ok(profile)
 }
 
+/// Model spelling with case and spacing folded away, for matching EXIF variants.
+fn normalized_model(model: &str) -> String {
+    model.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
+}
+
+/// EXIF spellings that differ by more than case and spacing, as `(spelling, bundled model)`.
+const ALIASES: &[(&str, &str)] = &[("NIKON Z8", "NIKON Z 8")];
+
 /// The built-in profile for `model`, if any.
 fn bundled(model: &str) -> Option<CameraProfile> {
-    let (_, json) = BUNDLED.iter().find(|(m, _)| *m == model)?;
+    let needle = normalized_model(model);
+    let needle =
+        ALIASES.iter().find(|(spelling, _)| normalized_model(spelling) == needle).map_or(needle, |(_, canonical)| normalized_model(canonical));
+    let (_, json) = BUNDLED.iter().find(|(m, _)| normalized_model(m) == needle)?;
     parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("lightcraft: ignoring camera profile {e}")).ok()
 }
 
@@ -299,6 +310,24 @@ mod tests {
         // a model name with spaces is stored under its safe file name
         assert!(bundled("Canon EOS D60").is_some_and(|p| p.files > 1000));
         assert_eq!(file_name("Canon EOS D60"), "Canon_EOS_D60.json");
+    }
+
+    #[test]
+    fn bundled_profile_matches_nikon_model_spelling_variants() {
+        for (variant, canonical) in [
+            ("Nikon D5300", "NIKON D5300"),
+            ("Nikon  D5300", "NIKON D5300"),
+            (" Nikon D5300 ", "NIKON D5300"),
+            ("Nikon Z 6_2", "NIKON Z 6_2"),
+            ("Nikon  Z  6_2", "NIKON Z 6_2"),
+            ("Nikon Z 8", "NIKON Z 8"),
+            ("Nikon  Z  8", "NIKON Z 8"),
+            ("Nikon Z8", "NIKON Z 8"),
+            ("NIKON Z8", "NIKON Z 8"),
+        ] {
+            assert!(bundled(canonical).is_some(), "the bundled {canonical:?} profile must load");
+            assert_eq!(bundled(variant), bundled(canonical), "NEF spelling {variant:?} must find the bundled {canonical:?} profile");
+        }
     }
 
     #[test]
