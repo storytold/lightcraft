@@ -55,6 +55,10 @@ pub struct ModernUi {
     /// The menu bar is open on this menu ([`crate::modern_menu`]).
     #[serde(skip)]
     pub menu: Option<String>,
+    /// The menu the bar last scrolled its open title into view for: it scrolls again only when the
+    /// open menu changes, so a finger can scroll the bar away from the open menu's title.
+    #[serde(skip)]
+    pub(crate) menu_scrolled: Option<String>,
     /// The open group's card shows one of its sections in full (`modern_dock::Group::sections`).
     #[serde(skip)]
     pub more: Option<String>,
@@ -169,6 +173,7 @@ impl Default for ModernUi {
             histogram: HistogramPlace::Small,
             histogram_at: [1.0, 0.0],
             menu: None,
+            menu_scrolled: None,
             more: None,
             histogram_menu: None,
             histogram_held: false,
@@ -291,6 +296,11 @@ pub(crate) fn after_input(app: &mut LccApp, raw: &mut egui::RawInput) {
         app.ui.modern.scroller = Default::default();
         return;
     }
+    // the bar scrolls its open menu's title into view only when the open menu changes: forget
+    // the last one when the bar closes, so opening the same menu again still scrolls to it
+    if app.ui.modern.menu.is_none() {
+        app.ui.modern.menu_scrolled = None;
+    }
     // Esc closes the Modern layout's own floating things first (before any shortcut sees it)
     let esc = |e: &egui::Event| matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, modifiers, .. } if modifiers.is_none());
     if raw.events.iter().any(esc) && escape(app) {
@@ -303,8 +313,15 @@ pub(crate) fn after_input(app: &mut LccApp, raw: &mut egui::RawInput) {
     let canvas = if develop { rect_of("modern:canvas").or(app.canvas_rect) } else { None };
     let photos = [rect_of("grid:scroll"), rect_of("filmstrip")];
     let strips = [rect_of("modern:strip"), rect_of("modern:menubar")];
+    // the strips scroll whichever way a finger swipes, even while the menu bar is open — the
+    // modal rule below would otherwise hand a sideways swipe to the title button under it, and
+    // the bar (and the dock) could not be scrolled at all until the menu was closed
+    let strip_over_modal = app.ui.modern.menu.is_some() && app.ui.dialog.is_none();
     let region = |p: Pos2| {
         use crate::modern_input::Region;
+        if strip_over_modal && strips.iter().flatten().any(|r| r.contains(p)) {
+            return Some(Region::Strip);
+        }
         if modal {
             return Some(Region::Free);
         }

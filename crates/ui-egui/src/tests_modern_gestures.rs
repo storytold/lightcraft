@@ -83,6 +83,48 @@ fn a_swipe_scrolls_the_grid_without_picking_or_dragging_a_photo() {
     assert_eq!(h.app.session.active().map(|p| p.0), Some(id));
 }
 
+/// The menu bar, open on a phone-sized window, scrolls sideways under a finger: the open menu
+/// doesn't lock it in place (its title scrolls out of view and stays out), and a tap still picks
+/// the menu that has scrolled into view.
+#[test]
+fn the_open_menu_bar_scrolls_sideways_under_a_finger() {
+    let mut h = library([412.0, 960.0]);
+    exec(&mut h, "modern.menu", json!({"on": true}));
+    let bar = rect(&h, "modern:menubar").expect("the menu bar");
+    let help = rect(&h, "modern:menu:Help").expect("Help's title");
+    assert!(help.left() >= bar.right(), "Help starts off screen to the right ({help:?} in {bar:?})");
+    ask(&mut h, "ui.dragWidget", json!({"id": "modern:menubar", "fx": 0.1, "dx": -400.0, "steps": 10}));
+    let help = rect(&h, "modern:menu:Help").expect("Help's title");
+    assert!(help.left() < 412.0, "the swipe brought Help into view ({help:?})");
+    assert!(h.app.ui.modern.menu.is_some(), "the swipe closed nothing");
+    // and it stays: the open menu doesn't pull the bar back to its own title
+    for _ in 0..3 {
+        h.step();
+    }
+    let stayed = rect(&h, "modern:menu:Help").unwrap();
+    assert!((stayed.left() - help.left()).abs() < 2.0, "no snap-back ({help:?} → {stayed:?})");
+    // a tap still picks the menu now in view
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu:Help"}));
+    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Help"), "the tap picked Help");
+    ask(&mut h, "ui.key", json!({"key": "BrowserBack"}));
+    assert!(h.app.ui.modern.menu.is_none(), "Back closes the bar");
+}
+
+/// The loupe's shot-info strip never sits under the Modern layout's floating dock: it keeps clear
+/// of it, and hides while a group's card is open above the dock.
+#[test]
+fn the_shot_info_strip_keeps_clear_of_the_modern_dock() {
+    // wide: the photo fills the canvas to its bottom edge, where the dock floats
+    let mut h = develop([1280.0, 800.0]);
+    let strip = rect(&h, "loupe:shotInfo").expect("the shot-info strip");
+    let dock = rect(&h, "modern:dock").expect("the dock");
+    assert!(strip.bottom() <= dock.top() + 1.0, "the strip is above the dock ({strip:?} vs {dock:?})");
+    exec(&mut h, "modern.group", json!({"group": "light"}));
+    assert!(rect(&h, "loupe:shotInfo").is_none(), "a card is open over it: the strip hides");
+    exec(&mut h, "modern.group", json!({"group": null}));
+    assert!(rect(&h, "loupe:shotInfo").is_some(), "back with the card away");
+}
+
 /// A mouse is not a finger: its drag goes to the widget under it (a scroll bar, a photo), not to
 /// the swipe scroller, so the grid's scroll bar can be dragged on the desktop.
 #[test]
