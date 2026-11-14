@@ -179,8 +179,23 @@ fn photo(s: &Session) -> lightcraft_catalog::PhotoId {
 }
 
 /// Pump until `n` photos are ready (the job runs on its own thread).
+fn denoise_ready_timeout_for_instrumentation(instrumented: bool) -> Duration {
+    Duration::from_secs(if instrumented { 600 } else { 30 })
+}
+
+fn denoise_ready_timeout() -> Duration {
+    denoise_ready_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn denoise_pump_budget_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(denoise_ready_timeout_for_instrumentation(false), Duration::from_secs(30));
+    assert_eq!(denoise_ready_timeout_for_instrumentation(true), Duration::from_secs(600));
+}
+
 fn pump_until_ready(s: &mut Session, n: u64) -> Value {
-    for _ in 0..600 {
+    let deadline = std::time::Instant::now() + denoise_ready_timeout();
+    while std::time::Instant::now() < deadline {
         let r = s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
         if r["ready"].as_u64() >= Some(n) {
             return r;

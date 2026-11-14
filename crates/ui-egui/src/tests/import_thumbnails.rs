@@ -65,7 +65,7 @@ impl Review {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services::default());
         app.ui.dialog = Some(Dialog::Import { opts: Box::new(ImportDialog::new(candidates)) });
         let mut h = Headless::new(app, [1366.0, 1000.0], scale);
-        assert!(h.settle(T));
+        assert!(h.settle(super::ui_settle_timeout()));
         Self { h, dir }
     }
 
@@ -89,7 +89,7 @@ impl Review {
     /// Set thumbnail size through its command and wait for the resulting previews to settle.
     fn size(&mut self, size: f32) {
         self.request("engine.execute", json!({"command": "view.importThumbSize", "params": {"size": size}}));
-        assert!(self.h.settle(T));
+        assert!(self.h.settle(super::ui_settle_timeout()));
     }
 }
 
@@ -98,7 +98,7 @@ impl Drop for Review {
     fn drop(&mut self) {
         self.h.app.ui.dialog = None;
         self.h.app.renderer.forget_imports();
-        self.h.settle(T);
+        self.h.settle(super::ui_settle_timeout());
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
@@ -113,11 +113,11 @@ fn import_thumbnail_slider_reflows_without_changing_selection_or_badges() {
     assert!(!checked[0] && !checked[1] && !checked[2]);
     // Real pointer input on the slider, including its end stops.
     review.request("ui.clickWidget", json!({"id": "slider:importThumbSize", "fx": 0.0}));
-    assert!(review.h.settle(T));
+    assert!(review.h.settle(super::ui_settle_timeout()));
     assert_eq!(review.rect("import:0").width(), 80.0);
     let slider = review.rect("slider:importThumbSize");
     review.request("ui.dragWidget", json!({"id": "slider:importThumbSize", "toX": slider.right(), "toY": slider.center().y}));
-    assert!(review.h.settle(T));
+    assert!(review.h.settle(super::ui_settle_timeout()));
     assert_eq!(review.rect("import:0").width(), 320.0);
     assert_eq!(review.checks(), checked);
     let text = review.h.painted_text().join("\n");
@@ -147,7 +147,7 @@ fn import_thumbnail_previews_upgrade_for_density_and_stay_bounded_when_scrolling
     // Scrolling a large card retains only the nearby tiles and drops obsolete requests.
     review.request("ui.hoverWidget", json!({"id": "import:0"}));
     review.request("ui.scroll", json!({"dy": -20000.0}));
-    assert!(review.h.settle(T));
+    assert!(review.h.settle(super::ui_settle_timeout()));
     assert!(!review.h.app.renderer.textures.contains_key(&Slot::Import(0)));
     let imports: Vec<_> = review.h.app.renderer.textures.keys().filter_map(|s| if let Slot::Import(i) = s { Some(*i) } else { None }).collect();
     assert!(!imports.is_empty() && imports.len() < 20, "bounded visible previews: {imports:?}");
@@ -182,7 +182,7 @@ fn import_thumbnail_close_releases_previews_for_all_cancel_paths() {
             "control" => review.request("ui.dialog.cancel", json!({})),
             _ => review.request("ui.clickWidget", json!({"id": "button:dialogCancel"})),
         }
-        assert!(review.h.settle(T));
+        assert!(review.h.settle(super::ui_settle_timeout()));
         assert!(review.h.app.ui.dialog.is_none());
         assert!(review.h.app.renderer.textures.keys().all(|slot| !matches!(slot, Slot::Import(_))));
         assert!(!review.h.app.renderer.is_pending(Slot::Import(0)));
@@ -214,13 +214,13 @@ fn import_thumbnail_slider_keeps_the_shared_keyboard_contract() {
     let mut review = Review::new(1.0);
     let checked = review.checks();
     review.request("ui.clickWidget", json!({"id": "slider:importThumbSize", "fx": 0.4}));
-    assert!(review.h.settle(T));
+    assert!(review.h.settle(super::ui_settle_timeout()));
     for _ in 0..6 {
         review.h.step();
     }
     let before = review.h.app.ui.import_thumb_size;
     review.request("ui.key", json!({"key": "ArrowUp"}));
-    assert!(review.h.settle(T));
+    assert!(review.h.settle(super::ui_settle_timeout()));
     assert_eq!(review.h.app.ui.import_thumb_size, before + 1.0);
     assert_eq!(review.checks(), checked);
 }
@@ -235,7 +235,7 @@ fn import_thumbnail_exact_entry_escape_keeps_the_review_open() {
         review.request("ui.key", json!({"key": "a", "cmd": true}));
         review.request("ui.text", json!({"text": "240"}));
         review.request("ui.key", json!({"key": key}));
-        assert!(review.h.settle(T));
+        assert!(review.h.settle(super::ui_settle_timeout()));
         assert_eq!(review.h.app.ui.import_thumb_size, expected);
         assert_eq!(review.checks(), checked, "the review remains open after exact-value editing");
     }
@@ -265,7 +265,7 @@ fn import_thumbnail_labels_are_localized_in_every_shipped_language() {
                 }
                 let result = h.request("ui.set", json!({"language": locale.code()}), T);
                 assert_eq!(result["ok"], true, "{result}");
-                assert!(h.settle(T));
+                assert!(h.settle(super::ui_settle_timeout()));
                 assert!(h.painted_text().iter().any(|text| text == locale.tr("Thumbnail size")), "{locale:?}: translated slider label");
                 let track = h.app.widgets.iter().find(|(id, _)| id == "slider:importThumbSize").expect("the import slider is visible").1;
                 let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
