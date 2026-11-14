@@ -46,6 +46,23 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
     // looking at a folder never brings its deleted photos back (importing the files does)
     let opts = ImportOptions { mode: ImportMode::Add, local: true, on_deleted: crate::import::OnDeleted::Skip, ..Default::default() };
     let report = import_with(s, &files, &opts)?;
+    // Reload local photos in this folder that have changed on disk:
+    let changed_ids: Vec<PhotoId> = s
+        .catalog
+        .photos()
+        .filter(|p| p.local && !p.deleted && p.copy_of.is_none())
+        .filter_map(|p| match &p.source {
+            Source::File { path } if in_folder(path, &dir_s, subfolders) => {
+                let meta = std::fs::metadata(path).ok()?;
+                if meta.len() != p.file_size { Some(p.id) } else { None }
+            }
+            _ => None,
+        })
+        .collect();
+    if !changed_ids.is_empty() {
+        let ids: Vec<Value> = changed_ids.iter().map(|id| json!(id.0)).collect();
+        let _ = s.execute("photo.reload", &json!({"ids": ids}));
+    }
     let forgotten = forget_gone(s, &dir_s, subfolders, &files);
     stamp_browsed(s, &dir_s, &files);
     s.browse = Some(Browse { path: dir_s.clone(), subfolders });

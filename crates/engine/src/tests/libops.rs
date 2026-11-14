@@ -421,7 +421,7 @@ fn tracklog_auto_tag() {
     s.open_library(dir.join("lib"), true).unwrap();
     let ids: Vec<u64> = s.visible_cloned().iter().take(4).map(|p| p.0).collect();
     let set = |s: &mut Session, id: u64, t: &str| {
-        s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some(t.into()) }).unwrap();
+        s.commit("t", Op::SetCaptured { id: PhotoId(id), captured: Some(t.into()), manual: false }).unwrap();
     };
     set(&mut s, ids[0], "2026-05-01T12:00:30"); // camera clock on +02:00, no zone recorded
     set(&mut s, ids[1], "2026-05-01T12:01:00+02:00"); // zone recorded: exactly on the 2nd point
@@ -484,7 +484,7 @@ fn tracklog_auto_tag_decodes_character_references_and_undoes_once() {
     let Some(id) = s.visible_cloned().first().copied() else {
         panic!("the demo library has a photo");
     };
-    s.commit("test capture time", Op::SetCaptured { id, captured: Some("2026-01-01T00:01:00".into()) }).unwrap();
+    s.commit("test capture time", Op::SetCaptured { id, captured: Some("2026-01-01T00:01:00".into()), manual: false }).unwrap();
     let original_gps = s.catalog.photo(id).unwrap().meta.gps;
     let params = |gpx: &str, dry_run| json!({"gpx": gpx, "ids": [id.0], "dryRun": dry_run});
 

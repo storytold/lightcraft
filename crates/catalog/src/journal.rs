@@ -65,6 +65,7 @@
 //! | 11 | lens database profiles named in the Optics panel | `EmbeddedLens.source` |
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
 //! | 13 | Lens Blur | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
+//! | 14 | capture-time manual edit | `Photo.captured_manual`, `Op::SetCaptured.manual` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -89,7 +90,7 @@ pub const LOG: &str = "catalog.log";
 const FORMAT: &str = "lightcraft-catalog";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 13;
+pub const VERSION: u32 = 14;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -454,6 +455,11 @@ impl Journal {
                 for r in &report.repaired {
                     log::warn!("{SNAPSHOT}: {r}");
                 }
+                // Catalogs created before format v10 didn't track whether capture times were file-derived
+                // or manual user edits. Mark snapshot capture times as manual so reloads preserve them.
+                if h.version < 10 {
+                    catalog.mark_captured_manual_for_upgrade();
+                }
                 (catalog, s.seq, Some(h.version))
             }
             None => (Catalog::new(), 0, None),
@@ -571,12 +577,11 @@ impl Journal {
                 log::warn!("catalog: can't write the new library's snapshot: {e}");
             }
         } else if report.damaged.is_none() && snapshot_version != Some(VERSION) {
-            report.upgraded_from = Some(snapshot_version.unwrap_or(0));
+            let from = snapshot_version.unwrap_or(0);
+            report.upgraded_from = Some(from);
             match j.snapshot(&catalog) {
                 Ok(()) => {
-                    if let Some(v) = report.upgraded_from {
-                        log::info!("catalog: upgraded from format v{v} to v{VERSION}");
-                    }
+                    log::info!("catalog: upgraded from format v{from} to v{VERSION}");
                 }
                 // nothing lost: the old files are intact and still load; retried on next open
                 Err(e) => log::warn!("catalog: can't write the format v{VERSION} snapshot: {e}"),

@@ -322,7 +322,7 @@ fn a_batch_of_new_photos_or_an_edit_to_one_is_read_photo_by_photo() {
     assert_as_made_afresh(&mut h, "after the batch");
     // a photo taken on another day: it moves there, and only it is read
     let read = h.app.caches.grid_stats.photos_read;
-    h.app.session.commit("Capture time", Op::SetCaptured { id: PhotoId(500), captured: Some("2027-02-01T08:00:00".into()) }).unwrap();
+    h.app.session.commit("Capture time", Op::SetCaptured { id: PhotoId(500), captured: Some("2027-02-01T08:00:00".into()), manual: false }).unwrap();
     h.step();
     assert_eq!(h.app.caches.grid_stats.photos_read - read, 1, "only the photo edited is read");
     assert!(widget(&h, "group:2027-02-01").is_some(), "its new day heads the grid");
@@ -360,10 +360,10 @@ fn a_grid_followed_through_edits_shows_what_a_grid_made_afresh_shows() {
                     let _ = h.app.session.commit("Delete", Op::SetDeleted { id: PhotoId(id), deleted: true });
                 }
                 2 => {
-                    let _ = h
-                        .app
-                        .session
-                        .commit("Capture time", Op::SetCaptured { id: PhotoId(id), captured: Some(format!("2026-{:02}-03T10:00:00", 1 + n % 12)) });
+                    let _ = h.app.session.commit(
+                        "Capture time",
+                        Op::SetCaptured { id: PhotoId(id), captured: Some(format!("2026-{:02}-03T10:00:00", 1 + n % 12)), manual: false },
+                    );
                 }
                 3 => {
                     h.app.session.execute("library.select", &json!({"ids": [id]})).unwrap();
