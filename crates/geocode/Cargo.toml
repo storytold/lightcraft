@@ -2,6 +2,7 @@
 name = "lightcraft-geocode"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft offline reverse geocoding: GPS position to sublocation / city / state / country from a GeoNames dump (L1)"
 

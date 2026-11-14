@@ -2,6 +2,7 @@
 name = "lightcraft-fetch"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license = "Apache-2.0"
 description = "LightCraft model downloads: mirrors, resume, pinned SHA-256, over HTTPS in pure Rust (L0)"
 

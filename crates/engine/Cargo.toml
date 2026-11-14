@@ -2,6 +2,7 @@
 name = "lightcraft-engine"
 version.workspace = true
 edition.workspace = true
+repository.workspace = true
 license.workspace = true
 description = "LightCraft engine: session, command registry, history, render jobs, view-models (L4)"
 
