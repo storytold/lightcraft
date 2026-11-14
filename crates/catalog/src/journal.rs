@@ -23,7 +23,9 @@
 //! - records already covered by the snapshot (crash between writing the snapshot and resetting
 //!   the log) are skipped;
 //! - a bad record **followed by good ones** is real damage: replay stops there, the log is kept
-//!   as `catalog.log.damaged-<seq>`, and a fresh snapshot is written so the library stays usable.
+//!   as `catalog.log.damaged-<seq>` (`catalog.log.damaged-<seq>-2`, `-3`, … when another log's
+//!   copy is already there: one is never replaced), and a fresh snapshot is written so the library
+//!   stays usable.
 //!
 //! Segmentation grids are shared within a snapshot (issue #2154): each distinct grid is written
 //! once into `Catalog.grids` and the masks of the photo's develop settings, versions, history
@@ -412,6 +414,35 @@ fn write_snapshot_owned(store: &mut dyn Store, seq: u64, mut snapshot: Catalog) 
 /// The highest `seq` a snapshot may hold; beyond it the counter is treated as corrupt, far from overflow.
 const MAX_SEQ: u64 = u64::MAX / 2;
 
+/// How many damaged logs for one change number can stand side by side before a further one is
+/// refused (a copy is never replaced to make room).
+const MAX_DAMAGED_COPIES: u32 = 100;
+
+/// Keep the damaged `log` of a library that replayed up to change `seq` as
+/// `catalog.log.damaged-<seq>`, and return that name. A library restored from an older backup can
+/// reach the same change number again with another damaged log: a file already there is never
+/// replaced, the copy goes to `catalog.log.damaged-<seq>-2` (then `-3`, …, up to
+/// [`MAX_DAMAGED_COPIES`] names, then an error). A file with these very bytes is the copy
+/// already (an open whose snapshot then failed is retried at the next open): its name is
+/// returned and nothing is written.
+fn keep_damaged_log(store: &mut dyn Store, seq: u64, log: &[u8]) -> std::io::Result<String> {
+    for copy in 1..=MAX_DAMAGED_COPIES {
+        let name = if copy == 1 { format!("{LOG}.damaged-{seq}") } else { format!("{LOG}.damaged-{seq}-{copy}") };
+        let there = store.read(&name).map_err(|e| std::io::Error::new(e.kind(), format!("can't read {name}: {e}")))?;
+        match there {
+            None => {
+                store.write_atomic(&name, log)?;
+                return Ok(name);
+            }
+            Some(there) if there == log => return Ok(name),
+            Some(_) => {}
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "{MAX_DAMAGED_COPIES} damaged logs kept as {LOG}.damaged-{seq} are already there; nothing was changed: remove some of them and open the library again"
+    )))
+}
+
 /// Just the identification of `catalog.snap` (read before the catalog itself).
 #[derive(serde::Deserialize)]
 struct SnapHeader {
@@ -428,7 +459,9 @@ struct SnapFile {
 
 impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
-    /// tail. Fails only if the snapshot itself is unreadable (then nothing is modified).
+    /// tail. Fails if the snapshot itself is unreadable (then nothing is modified), or if a
+    /// damaged log can't be kept (every name for its copy is taken, or the copy can't be written:
+    /// the log stays as it is).
     pub fn open(mut store: Box<dyn Store>) -> Result<(Journal, Catalog, LoadReport)> {
         let mut report = LoadReport::default();
         let snap = store.read(SNAPSHOT).map_err(io)?;
@@ -543,8 +576,7 @@ impl Journal {
         }
 
         if let Some(at) = damaged_at {
-            let name = format!("{LOG}.damaged-{}", j.seq);
-            j.store.write_atomic(&name, &log).map_err(io)?;
+            let name = keep_damaged_log(&mut *j.store, j.seq, &log).map_err(io)?;
             log::warn!("catalog log damaged at byte {at}; kept as {name}; state recovered up to op {}", j.seq);
             report.damaged = Some(name);
             j.snapshot(&catalog)?;

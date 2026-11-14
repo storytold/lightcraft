@@ -198,6 +198,17 @@ impl Store for FilesStore {
 /// Names of the library files read at start-up.
 pub const LIBRARY_FILES: [&str; 6] = ["catalog.snap", "catalog.log", "presets.json", "view.json", "prefs.json", "ui.json"];
 
+/// The kept copies of damaged logs (`catalog.log.damaged-<seq>`, `-<n>`; see the catalog's
+/// journal) among the `listed` names of a library folder. They are read at start-up too: the
+/// catalog [`Store`] reads only what is preloaded, so a copy left by an earlier page load would
+/// look like a free name and be replaced by the next one.
+pub fn damaged_logs(listed: Vec<String>) -> Vec<String> {
+    // the two shapes the catalog gives a copy: `-<seq>` and `-<seq>-<n>`
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let kept = |n: &String| n.strip_prefix("catalog.log.damaged-").is_some_and(|rest| rest.split('-').count() <= 2 && rest.split('-').all(digits));
+    listed.into_iter().filter(kept).collect()
+}
+
 /// Is a browser storage error, by its `DOMException` name, "the entry doesn't exist"? Only
 /// `NotFoundError` is; anything else (security, type mismatch, an unreadable store) is a failure.
 pub fn is_not_found(dom_exception_name: Option<&str>) -> bool {
@@ -353,6 +364,68 @@ mod tests {
         let reads = vec![("catalog.snap", Ok(Some(b"snap".to_vec()))), ("catalog.log", Ok(None))];
         preload_library(&files, reads).unwrap();
         assert_eq!(files.get("catalog.snap").as_deref(), Some(&b"snap"[..]));
+    }
+
+    #[test]
+    fn only_the_names_of_kept_damaged_logs_are_read() {
+        let listed = [
+            "catalog.log.damaged-7",
+            "catalog.log.damaged-7-2",
+            "catalog.log.damaged-",
+            "catalog.log.damaged-7-2-3",
+            "catalog.log.damaged-x",
+            "catalog.log",
+            "catalog.log.damaged-7.tmp",
+        ];
+        assert_eq!(damaged_logs(listed.iter().map(|n| n.to_string()).collect()), ["catalog.log.damaged-7", "catalog.log.damaged-7-2"]);
+    }
+
+    /// A damaged log kept in an earlier page load is read at start-up, so the next one kept at the
+    /// same change goes under another name instead of replacing it.
+    #[test]
+    fn a_damaged_log_kept_in_an_earlier_page_load_is_not_replaced() {
+        use lightcraft_engine::catalog::{Journal, Op};
+
+        // one page load: preload what the folder holds (as start-up does), open, flush back
+        let page_load = |disk: &mut BTreeMap<String, Vec<u8>>| {
+            let files = Files::default();
+            let listed = damaged_logs(disk.keys().cloned().collect());
+            let mut reads: Vec<(&str, Result<Option<Vec<u8>>, String>)> = LIBRARY_FILES.iter().map(|n| (*n, Ok(disk.get(*n).cloned()))).collect();
+            reads.extend(listed.iter().map(|n| (n.as_str(), Ok(disk.get(n).cloned()))));
+            preload_library(&files, reads).unwrap();
+            let (_, _, report) = Journal::open(Box::new(files.store())).unwrap();
+            flush(&files, disk);
+            report.damaged
+        };
+        let damage = |clean: &[u8], mark: &str| {
+            let text = String::from_utf8(clean.to_vec()).unwrap();
+            let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+            lines[2] = lines[2].replacen("\"op\":{\"op\":\"", &format!("\"op\":{{\"op\":\"{mark}"), 1);
+            format!("{}\n", lines.join("\n")).into_bytes()
+        };
+
+        let files = Files::default();
+        let (mut j, _, _) = Journal::open(Box::new(files.store())).unwrap();
+        for _ in 0..6 {
+            j.append(&[Op::Batch { ops: vec![] }]).unwrap();
+        }
+        drop(j);
+        let clean = files.get("catalog.log").unwrap();
+        let mut disk = BTreeMap::new();
+        flush(&files, &mut disk);
+
+        let first = damage(&clean, "x");
+        disk.insert("catalog.log".to_string(), first.clone());
+        let name1 = page_load(&mut disk).expect("damage reported");
+        assert_eq!(disk.get(&name1), Some(&first));
+
+        // another page load, the log damaged again at the same change
+        let second = damage(&clean, "y");
+        disk.insert("catalog.log".to_string(), second.clone());
+        let name2 = page_load(&mut disk).expect("damage reported again");
+        assert_ne!(name1, name2);
+        assert_eq!(disk.get(&name1), Some(&first), "the first copy is untouched");
+        assert_eq!(disk.get(&name2), Some(&second));
     }
 
     #[test]
