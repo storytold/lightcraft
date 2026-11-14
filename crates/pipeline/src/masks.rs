@@ -172,12 +172,17 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
             first = false;
             continue;
         }
+        // an inverted mask is inverted at the end, so combine on its visible (inverted) side:
+        // [+] adds to what the mask shows and [-] removes from it
+        let inv = m.invert;
         for (a, c) in alpha.data.iter_mut().zip(&c.data) {
-            *a = match comp.op {
-                MaskOp::Add => a.max(*c),
-                MaskOp::Subtract => *a * (1.0 - c),
-                MaskOp::Intersect => *a * c,
+            let v = if inv { 1.0 - *a } else { *a };
+            let v = match comp.op {
+                MaskOp::Add => v.max(*c),
+                MaskOp::Subtract => v * (1.0 - c),
+                MaskOp::Intersect => v * c,
             };
+            *a = if inv { 1.0 - v } else { v };
         }
         first = false;
     }
