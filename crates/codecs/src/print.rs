@@ -17,14 +17,14 @@
 //!   on screen (the print is what it corrects).
 //!
 //! Everything before the profile conversion is per channel, so it folds into one 65,536-entry table
-//! indexed by the 16-bit sample; the conversion itself is moxcms's.
+//! indexed by the 16-bit sample; the conversion itself is `craft-cms`'s.
 //!
 //! Sources: ICC.1:2022 (rendering intents, profile classes); Adobe Systems, "Adobe Black Point
 //! Compensation" (2006, public white paper) for the black point mapping. Own design otherwise.
 
 use std::sync::Arc;
 
-use moxcms::{ColorProfile, DataColorSpace, Layout, RenderingIntent, TransformExecutor, TransformOptions};
+use craft_cms::{ColorSpace, Intent, Profile, Transform, TransformOptions};
 
 use crate::display::MAX_PROFILE_BYTES;
 use crate::proof::ProofIntent;
@@ -64,12 +64,10 @@ const BATCH: usize = 1 << 16;
 /// says more is broken or not a print profile; leave the page alone rather than wash it out.
 const MAX_BLACK: f32 = 0.5;
 
-type Executor = Arc<dyn TransformExecutor<f32> + Send + Sync>;
-
 /// A page conversion, built once per print job and applied to every page.
 pub struct PrintTransform {
-    forward: Executor,
-    layout: Layout,
+    forward: Transform,
+    is_cmyk: bool,
     channels: usize,
     icc: Arc<Vec<u8>>,
     /// 16-bit sample → linear Rec.2020 after the print adjustment and black point compensation.
@@ -88,14 +86,10 @@ impl std::fmt::Debug for PrintTransform {
     }
 }
 
-fn guarded<T>(f: impl FnOnce() -> Option<T>) -> Option<T> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok().flatten()
-}
-
-fn rendering_intent(intent: ProofIntent) -> RenderingIntent {
+fn rendering_intent(intent: ProofIntent) -> Intent {
     match intent {
-        ProofIntent::Perceptual => RenderingIntent::Perceptual,
-        ProofIntent::Relative => RenderingIntent::RelativeColorimetric,
+        ProofIntent::Perceptual => Intent::Perceptual,
+        ProofIntent::Relative => Intent::RelativeColorimetric,
     }
 }
 
@@ -127,21 +121,19 @@ impl PrintTransform {
         if icc.len() > MAX_PROFILE_BYTES {
             return Err("the profile is too large".into());
         }
-        let dev = guarded(|| ColorProfile::new_from_slice(&icc).ok()).ok_or("not a valid ICC profile")?;
-        let (layout, channels) = match dev.color_space {
-            DataColorSpace::Rgb => (Layout::Rgb, 3),
-            DataColorSpace::Cmyk => (Layout::Rgba, 4),
-            DataColorSpace::Gray => (Layout::Gray, 1),
+        let dev = Profile::parse(&icc).map_err(|_| "not a valid ICC profile")?;
+        let (is_cmyk, channels) = match dev.color_space {
+            ColorSpace::Rgb => (false, 3),
+            ColorSpace::Cmyk => (true, 4),
+            ColorSpace::Gray => (false, 1),
             _ => return Err("only RGB, CMYK and grey printer profiles can be printed to".into()),
         };
         let lin = crate::icc::linear_rec2020_profile();
-        let opts = |i| TransformOptions { rendering_intent: i, ..TransformOptions::default() };
-        let forward: Executor = guarded(|| lin.create_transform_f32(Layout::Rgb, &dev, layout, opts(rendering_intent(color.intent))).ok())
-            .ok_or("can't convert to this profile")?;
+        let opts = |intent| TransformOptions { intent, bpc: false, precise_float: true };
+        let forward = Transform::with_options(&lin, &dev, opts(rendering_intent(color.intent))).map_err(|_| "can't convert to this profile")?;
 
         let black = if color.black_point_compensation && color.intent == ProofIntent::Relative {
-            let back: Executor = guarded(|| dev.create_transform_f32(layout, &lin, Layout::Rgb, opts(RenderingIntent::RelativeColorimetric)).ok())
-                .ok_or("can't convert from this profile")?;
+            let back = Transform::with_options(&dev, &lin, opts(Intent::RelativeColorimetric)).map_err(|_| "can't convert from this profile")?;
             device_black(&forward, &back, channels)
         } else {
             0.0
@@ -163,7 +155,7 @@ impl PrintTransform {
             })
             .collect();
         let description = crate::icc::parse(&icc).and_then(|i| i.description);
-        Ok(PrintTransform { forward, layout, channels, icc, pre, black, description })
+        Ok(PrintTransform { forward, is_cmyk, channels, icc, pre, black, description })
     }
 
     /// Samples per pixel of the converted page: 3 (RGB), 4 (CMYK) or 1 (grey).
@@ -179,7 +171,7 @@ impl PrintTransform {
     /// Whether the samples are CMYK (PDF readers show CMYK images inverted unless told otherwise,
     /// so writers need to know).
     pub fn is_cmyk(&self) -> bool {
-        self.layout == Layout::Rgba
+        self.is_cmyk
     }
 
     /// The linear black black point compensation lifts the page's black to (0 when off).
@@ -205,7 +197,7 @@ impl PrintTransform {
         let run = |src: &[u16], dst: &mut [u16]| -> Option<()> {
             let lin: Vec<f32> = src.iter().map(|&v| self.pre.get(usize::from(v)).copied().unwrap_or(0.0)).collect();
             let mut dev = vec![0f32; dst.len()];
-            self.forward.transform(&lin, &mut dev).ok()?;
+            self.forward.convert_f32(&lin, 3, &mut dev, ch, false).ok()?;
             for (d, v) in dst.iter_mut().zip(dev) {
                 let v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
                 *d = (v * 65535.0 + 0.5) as u16;
@@ -218,24 +210,20 @@ impl PrintTransform {
         let ok = {
             use rayon::prelude::*;
             let pairs: Vec<_> = src.zip(dst).collect();
-            pairs.into_par_iter().all(|(s, d)| guarded(|| run(s, d)).is_some())
+            pairs.into_par_iter().all(|(s, d)| run(s, d).is_some())
         };
         #[cfg(not(feature = "parallel"))]
-        let ok = src.zip(dst).all(|(s, d)| guarded(|| run(s, d)).is_some());
+        let ok = src.zip(dst).all(|(s, d)| run(s, d).is_some());
         if ok { Ok(out) } else { Err("the profile's tables can't be applied".into()) }
     }
 }
 
 /// The darkest the device holds, as linear Rec.2020 luminance: black there and back, relative
 /// colorimetric both ways (for a device that reaches true black, 0).
-fn device_black(forward: &Executor, back: &Executor, channels: usize) -> f32 {
+fn device_black(forward: &Transform, back: &Transform, channels: usize) -> f32 {
     let mut device = vec![0f32; channels];
     let mut lin = [0f32; 3];
-    let ok = guarded(|| {
-        forward.transform(&[0.0; 3], &mut device).ok()?;
-        back.transform(&device, &mut lin).ok()
-    });
-    if ok.is_none() {
+    if forward.convert_f32(&[0.0; 3], 3, &mut device, channels, false).is_err() || back.convert_f32(&device, channels, &mut lin, 3, false).is_err() {
         return 0.0;
     }
     // BT.2020 luminance weights
@@ -246,7 +234,6 @@ fn device_black(forward: &Executor, back: &Executor, channels: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moxcms::ToneReprCurve;
 
     /// A page of one 16-bit pixel per linear grey level.
     fn greys(levels: &[f32]) -> Vec<u16> {
@@ -259,15 +246,14 @@ mod tests {
 
     /// An RGB print profile whose ink can't get darker than linear 0.03: device 0 is 3 % grey.
     fn raised_black_profile() -> Arc<Vec<u8>> {
-        let mut p = ColorProfile::new_from_slice(&crate::icc::write_named(NamedSpace::Srgb)).unwrap();
-        let (g, e) = (2.2f32, 0.03f32);
+        use craft_cms::Curve;
+        let mut p = Profile::parse(&crate::icc::write_named(NamedSpace::Srgb)).unwrap();
+        let (g, e) = (2.2f64, 0.03f64);
         let a = (1.0 - e).powf(1.0 / g);
         // ICC parametric type 4: Y = (aX + b)^g + e for X >= d, Y = cX + f below
-        let trc = ToneReprCurve::Parametric(vec![g, a, 0.0, 0.0, 0.0, e, e]);
-        p.red_trc = Some(trc.clone());
-        p.green_trc = Some(trc.clone());
-        p.blue_trc = Some(trc);
-        Arc::new(p.encode().unwrap())
+        let trc = Curve::Parametric { kind: 4, p: [g, a, 0.0, 0.0, 0.0, e, e] };
+        p.trc = Some([trc.clone(), trc.clone(), trc]);
+        Arc::new(p.with_encoded_bytes().to_bytes().to_vec())
     }
 
     #[test]
