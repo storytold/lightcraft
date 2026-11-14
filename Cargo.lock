@@ -4087,7 +4087,7 @@ dependencies = [
  "craft-tiff",
  "lightcraft-geom",
  "proptest",
- "quick-xml 0.41.0",
+ "quick-xml 0.42.0",
  "serde",
  "serde_json",
 ]

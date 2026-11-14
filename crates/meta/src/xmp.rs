@@ -277,8 +277,8 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                 let mut scope = Vec::new();
                 let mut raw_attrs = Vec::new();
                 for a in e.attributes().with_checks(false).flatten() {
-                    let k = String::from_utf8_lossy(a.key.as_ref()).into_owned();
-                    let v = unescape_attr(&String::from_utf8_lossy(&a.value));
+                    let k = a.key.as_ref().to_owned();
+                    let v = unescape_attr(&a.value);
                     if k == "xmlns" {
                         scope.push((String::new(), v));
                     } else if let Some(p) = k.strip_prefix("xmlns:") {
@@ -289,7 +289,7 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                 }
                 scopes.push(scope);
                 check_scopes(&scopes)?;
-                let name = canonical(&String::from_utf8_lossy(e.name().as_ref()), &scopes, &mut opaque_budget)?;
+                let name = canonical(e.name().as_ref(), &scopes, &mut opaque_budget)?;
                 let attrs =
                     raw_attrs.into_iter().map(|(k, v)| Ok((canonical(&k, &scopes, &mut opaque_budget)?, v))).collect::<Result<_, XmpError>>()?;
                 let node = Node { name, attrs, ..Default::default() };
@@ -311,16 +311,16 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
             }
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&t.decode().map_err(|e| XmpError::Xml(e.to_string()))?);
+                    top.text.push_str(&t);
                 }
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    top.text.push_str(&String::from_utf8_lossy(&t));
+                    top.text.push_str(&t);
                 }
             }
             Event::GeneralRef(r) => {
-                let name = String::from_utf8_lossy(&r).into_owned();
+                let name = (*r).to_owned();
                 if let Some(top) = stack.last_mut() {
                     match entity(&name) {
                         Some(c) => top.text.push(c),
