@@ -111,6 +111,8 @@ impl LightcraftApp {
             survey_motion: Default::default(),
             merge: merge::MergeState::default(),
             import: None,
+            pending_document_opens: 0,
+            pending_document_library: None,
             scan: None,
             scans_stopping: Default::default(),
             waiting_import: Default::default(),

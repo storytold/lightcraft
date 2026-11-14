@@ -326,6 +326,11 @@ pub struct LightcraftApp {
     pub merge: merge::MergeState,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
+    /// Native document batches waiting for the importer. Library switching waits for these,
+    /// except while startup recovery still needs the user to choose a destination.
+    pub pending_document_opens: usize,
+    /// A destination already chosen for queued native requests, including a temporary session.
+    pub pending_document_library: Option<u64>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
     /// Scans stopped without waiting for their workers: each channel is kept until its worker ends, so

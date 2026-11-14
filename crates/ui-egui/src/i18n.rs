@@ -272,6 +272,18 @@ pub(crate) fn plural_s(n: usize) -> &'static str {
 // `locales/*-formats.json`.
 include!(concat!(env!("OUT_DIR"), "/tr-formats.rs"));
 
+/// Translate a native document-open error, including the failed file's position.
+pub fn document_open_error(error: &str) -> String {
+    if let Some(index) = error
+        .strip_prefix("File ")
+        .and_then(|text| text.strip_suffix(" in the open request is not a file URL."))
+        .and_then(|text| text.parse::<usize>().ok())
+    {
+        return tr_format!("File {n} in the open request is not a file URL.", n = index);
+    }
+    tr(error).to_string()
+}
+
 /// The web build's notice for a dropped file the browser could not read.
 pub fn dropped_file_unreadable(name: &str, error: &str) -> String {
     tr_format!("Could not read {name}: {e}", name = name, e = error)

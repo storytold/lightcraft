@@ -89,10 +89,12 @@ of it.
   "unsupported" error or is disabled. Sole exception: a provably infallible literal, as `#[allow(clippy::expect_used)]`
   + `.expect("why it can't fail")`.
 - **`unsafe` lives only in `crates/sysmem`** (one FFI call, `malloc_zone_pressure_relief`, that returns freed
-  allocator pages to macOS after raw decodes) **and `crates/wincolor`** (Win32 calls that read the colour profile
-  Windows assigns to the monitor showing the window, and whether Windows colour-manages that monitor itself). Every
-  other production crate root has `#![forbid(unsafe_code)]`. A new unsafe need goes in an isolated, well-tested helper
-  crate like them: `// SAFETY:` on every block, a safe API, a safe fallback where possible, and a line here naming it.
+  allocator pages to macOS after raw decodes), **`crates/wincolor`** (Win32 calls that read the colour profile
+  Windows assigns to the monitor showing the window, and whether Windows colour-manages that monitor itself) **and
+  `crates/macos-open`** (registers the macOS Open Documents Apple event through objc2 behind a safe, main-thread-only
+  queue). Every other production crate root has `#![forbid(unsafe_code)]`. A new unsafe need goes in an isolated,
+  well-tested helper crate like them: `// SAFETY:` on every block, a safe API, a safe fallback where possible, and a
+  line here naming it.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or
   arithmetic on them; checked/saturating math for lengths, offsets and counts; no division by zero, NaN/inf or negative
   casts to `usize`; cap allocations sized by input; slice strings only at char boundaries.
@@ -109,7 +111,7 @@ of it.
   `workspace = true` under a `[lints]` table in `Cargo.toml` to inherit `[workspace.lints]`, and new production crate roots include
   the attribute before modules or other crate items; crate-level `//!` documentation may precede it. `cargo xtask roots`
   (part of `ci` and `ci --quick`) machine-checks that every root, including binary-only crates and the `cdylib`/`rlib`
-  web build, carries both this and the `#![forbid(unsafe_code)]` above (`crates/sysmem` is the one forbid exception).
+  web build, carries both this and the `#![forbid(unsafe_code)]` above (`crates/sysmem`, `crates/wincolor` and `crates/macos-open` are the forbid exceptions).
 
 ## Non-negotiables
 - **Clean-room.** Never read/disassemble anything inside Adobe app bundles (names/listings only). Never copy Adobe icons, presets, profiles (DCP), lens profiles (LCP), camera matrices, fonts. Observation of the installed Lightroom is read-only (it syncs the user's personal library: never import/edit/rate/delete there). Never copy GPL/LGPL/AGPL code (darktable, RawTherapee, ART, LibRaw, rawspeed, rawloader, rawler, lensfun, dcraw-derived GPL code…).
