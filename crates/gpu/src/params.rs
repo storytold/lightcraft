@@ -23,6 +23,13 @@ const FIELDS: &[(&str, usize)] = &[
     ("SRGB_OFF", 1),
     ("CURVE_OFF", 1),
     ("CURVES", 1),
+    ("STAGE", 1),
+    ("STAGE_OFF", 1),
+    ("STAGE_REFINE", 1),
+    ("MSTAGE", 1),
+    ("MSTAGE_OFF", 1),
+    ("MGRADE", 1),
+    ("MGRADE_OFF", 1),
     ("GAIN", 1),
     ("EV", 1),
     ("AIR", 1),
@@ -197,20 +204,39 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let srgb_off = aux.len();
     aux.extend_from_slice(&srgb_lut()[..]);
     let curve_off = aux.len();
-    if let Some(c) = &fp.curves {
-        for l in c {
-            if l.v.len() != CURVE_N as usize {
-                // a wrong-length curve would shift every later aux offset (CURVE_OFF, MASK_OFF and
-                // the mask terms that follow) and make the kernel read the wrong data. `fail()`
-                // records the failure on this thread so the render falls back to the CPU; the
-                // partial `(p, aux)` returned here is never bound to a pipeline.
-                fail(FailKind::Fatal, format!("curve table has {} entries, expected {}", l.v.len(), CURVE_N));
-                // `p` is only assembled below the curve loop, so an empty block is as good as any:
-                // the caller (render.rs) gates on `failed()` right after this returns and bails to
-                // the CPU fallback before indexing `p` or uploading `aux`.
-                return (Vec::new(), aux);
-            }
-            aux.extend_from_slice(&l.v);
+    let stage_off = curve_off + fp.curves.as_ref().map_or(0, |c| c.len() * CURVE_N as usize);
+    // process V9's stage (red, green, blue, then the base table) or the earlier processes' curves
+    let tables = fp.curves.iter().flatten().chain(fp.curve_stage.iter().flat_map(|c| c.chan.iter().chain([&c.base])));
+    for l in tables {
+        if l.v.len() != CURVE_N as usize {
+            // a wrong-length curve would shift every later aux offset (CURVE_OFF, MASK_OFF and
+            // the mask terms that follow) and make the kernel read the wrong data. `fail()`
+            // records the failure on this thread so the render falls back to the CPU; the
+            // partial `(p, aux)` returned here is never bound to a pipeline.
+            fail(FailKind::Fatal, format!("curve table has {} entries, expected {}", l.v.len(), CURVE_N));
+            // `p` is only assembled below the curve loop, so an empty block is as good as any:
+            // the caller (render.rs) gates on `failed()` right after this returns and bails to
+            // the CPU fallback before indexing `p` or uploading `aux`.
+            return (Vec::new(), aux);
+        }
+        aux.extend_from_slice(&l.v);
+    }
+    // process V9's mixer stage: its 9 chroma and 3 lightness keys, then its table
+    let mstage_off = aux.len();
+    if let Some(cs) = &fp.mixer_stage {
+        aux.extend(cs.chroma.iter().flatten());
+        aux.extend_from_slice(&cs.light);
+        aux.extend_from_slice(&cs.table[..]);
+    }
+    // process V9's Colour Grading: the Luminance curve, then per wheel its tint, damping and profile
+    let mgrade_off = aux.len();
+    let mgrade = fp.ops.measured_grading.as_ref();
+    if let Some(g) = mgrade {
+        aux.extend_from_slice(&g.lum);
+        for w in &g.wheels {
+            aux.extend_from_slice(&w.tint);
+            aux.extend(w.damping.iter().flatten());
+            aux.extend_from_slice(&w.profile);
         }
     }
     let mask_off = aux.len();
@@ -258,6 +284,14 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);
     p.b("CURVES", fp.curves.is_some());
+    p.b("STAGE", fp.curve_stage.is_some());
+    p.u("STAGE_OFF", stage_off as u32);
+    p.f("STAGE_REFINE", fp.curve_stage.as_ref().map_or(1.0, |c| c.refine));
+    p.b("MSTAGE", fp.mixer_stage.is_some());
+    p.u("MSTAGE_OFF", mstage_off as u32);
+    // 0: off, else 1 + the number of wheels with a tint
+    p.u("MGRADE", mgrade.map_or(0, |g| 1 + g.wheels.len() as u32));
+    p.u("MGRADE_OFF", mgrade_off as u32);
     p.f("REFINE_SAT", fp.refine_sat);
     p.f("GAIN", fp.gain);
     p.f("EV", fp.ev);

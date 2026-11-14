@@ -12,6 +12,8 @@
 //! 3. tone map — contrast / whites / blacks filmic curve on luminance, highlight desaturation
 //! 4. colour — vibrance, saturation, colour mixer, colour grading, B&W (OkLCh)
 //! 5. display — gamut map to the output space (sRGB unless [`RenderRequest::space`] says otherwise), encode, tone curves (parametric + point), vignette, grain
+//!    (from process V9 the colour mixer, then the tone curves and Whites, run between 3 and 4 instead:
+//!    [`mixer_stage`], [`curve_stage`])
 //!
 //! Spatial parameters are specified relative to the image's long edge, so a 400 px preview and a
 //! 60 MP export look alike.
@@ -29,9 +31,15 @@ pub mod colorops;
 pub mod crystal;
 pub mod cull;
 pub mod curve;
+pub mod curve_stage;
+#[rustfmt::skip]
+mod curve_stage_tables;
 pub mod dust;
 pub mod finish;
 pub mod geometry;
+pub mod grading_stage;
+#[rustfmt::skip]
+mod grading_stage_tables;
 pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
@@ -42,6 +50,7 @@ pub mod local_tone;
 pub mod lut;
 pub mod mask_space;
 pub mod masks;
+pub mod mixer_stage;
 pub mod nrc_joint;
 #[cfg(test)]
 mod nrc_joint_reference;
