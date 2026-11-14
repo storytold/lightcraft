@@ -327,6 +327,12 @@
   drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
   VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
 
+### The Window menu lists the open windows
+- On macOS the Window menu now shows a row for each open window (the main window, and the second one from
+  Window ▸ Second Window while it is open), below Bring All to Front. Before, the menu ended at Bring All to Front
+  and listed no window. macOS also adds its own window items there: Fill, Center, Move & Resize and Full Screen Tile
+  on macOS 15 and later, and Minimize All, Zoom All and Arrange in Front while Option is held.
+
 ## 2026-10-29
 
 ### A dialog no longer dims the macOS title bar
