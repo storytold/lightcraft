@@ -42,6 +42,7 @@ mod job;
 mod scan;
 mod types;
 
+pub(crate) use commit::start_from_file;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use commit::workers;
 pub use commit::{batch_size, civil, commit_prepared, system_clock};
@@ -63,7 +64,7 @@ pub use scan::{
 use scan::{library_files, library_hashes};
 pub use types::{
     Duplicate, FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved,
-    OnDeleted, Organize,
+    OnDeleted, Organize, Origin, Origins, SameContent,
 };
 
 #[cfg(test)]

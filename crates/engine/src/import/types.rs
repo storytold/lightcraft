@@ -1,4 +1,4 @@
-use super::{Deserialize, MediaKind, Photo, Serialize};
+use super::{Deserialize, HashMap, MediaKind, Photo, PhotoId, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ImportMode {
@@ -67,6 +67,8 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// What the import makes of a file whose bytes a library photo already has.
+    pub same_content: SameContent,
     /// A batch-edit recipe: develop control id / value pairs (e.g. `light.exposure` → 0.5),
     /// applied to every imported photo *after* its XMP sidecar, camera default and import preset,
     /// as one more History step (`Import adjustments`). Only the named controls change; the recipe
@@ -77,6 +79,77 @@ pub struct ImportOptions {
     /// one skipped as a duplicate, restored from Recently Deleted, or joined from a browsed
     /// folder (Local) is never touched, as the preset and keywords never are.
     pub recipe: Vec<(String, f64)>,
+}
+
+/// What an import makes of a file whose bytes a library photo already has (a duplicate by
+/// content). What is read of the file follows from it: a file the job makes a record of is read in
+/// full, its XMP sidecar included; one it only matches to a library photo needs no more than its
+/// capture time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SameContent {
+    /// No record: the report lists it in [`ImportReport::duplicates`]. Its sidecar is read only for
+    /// the capture time its file lacks, and not looked up otherwise (a round trip per name on a
+    /// network share, #2954).
+    #[default]
+    Skip,
+    /// A record of its own ([`Origin::Created`]), which the Lightroom catalog import makes from
+    /// [`Duplicate::file`] (catalogs hold distinct originals with identical bytes): read as any
+    /// file the job makes a record of, its XMP sidecar included (#2589).
+    Create,
+}
+
+/// Where a library record an import job made or landed on came from. The job keeps one origin per
+/// record ([`Origins`]), set where the record is made or first matched, and what the import does
+/// to a record follows from it: whether its develop settings are an edit to keep, and how the
+/// report counts it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    /// This job made it, from a file (its metadata, the import defaults, its XMP sidecar) or from a
+    /// Lightroom catalog, or it is a photo browsed in Local and not changed since, which holds only
+    /// what browsing read from its file, as a record made from that file would (#3434): nothing in
+    /// it is an edit made in the library.
+    Created,
+    /// A photo browsed in Local and changed since browsing that this job brought into the library:
+    /// there before the job, with the user's changes.
+    Promoted,
+    /// In the library before the job.
+    Existing,
+}
+
+impl Origin {
+    /// The origin of `p`, a record that was in the library or browsed in Local when the job found
+    /// it: [`Origin::Created`] if browsed and untouched since ([`Photo::untouched_local`]: any
+    /// change counts, a rating or keyword too), [`Origin::Promoted`] if browsed and changed,
+    /// [`Origin::Existing`] otherwise. Read before the job promotes it (a promoted record is no
+    /// longer Local).
+    pub fn of(p: &Photo) -> Origin {
+        if p.untouched_local() {
+            Origin::Created
+        } else if p.local {
+            Origin::Promoted
+        } else {
+            Origin::Existing
+        }
+    }
+
+    /// There before the job: what it has may be the user's own work.
+    pub fn was_there(self) -> bool {
+        self != Origin::Created
+    }
+}
+
+/// The origin of each record an import job made or landed on ([`Origin`]): the file import
+/// records the ones it makes and promotes ([`ImportReport::origins`]), and a Lightroom catalog
+/// import goes on with the same record for the ones it matches and makes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Origins(HashMap<PhotoId, Origin>);
+
+impl Origins {
+    /// `id`'s origin in this job: the one recorded first. A record the job made stays
+    /// [`Origin::Created`] when a later step of the job finds it in the library.
+    pub fn record(&mut self, id: PhotoId, origin: Origin) -> Origin {
+        *self.0.entry(id).or_insert(origin)
+    }
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the
@@ -171,11 +244,20 @@ pub struct FileFacts {
     /// The capture time a file import gives it: the file's, else its XMP sidecar's, else the
     /// file's modification time.
     pub captured: Option<String>,
+    /// The file's own orientation, when it states one ([`crate::media::ProbeInfo::orientation`]): it turns what its
+    /// sidecar's regions were drawn on, the photo as stored, upright (#2674).
+    pub orientation: Option<lightcraft_geom::Orientation>,
+    /// Its XMP sidecar (or a raw's embedded XMP), which a file import merges into the record.
+    pub sidecar: Option<crate::sidecar::SidecarData>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ImportReport {
     pub imported: Vec<u64>,
+    /// The origin of each record in `imported`: made from its file, or a photo browsed in Local
+    /// that joined the library. (Not in the report.)
+    #[serde(skip)]
+    pub origins: Origins,
     pub duplicates: Vec<Duplicate>,
     /// [`OnDeleted::Restore`]: photos brought back from Recently Deleted instead of imported.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -252,4 +334,45 @@ pub struct Moved {
 pub struct Kept {
     pub path: String,
     pub reason: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Origin, Origins, Photo, PhotoId};
+
+    fn photo(local: bool) -> Photo {
+        let source = lightcraft_catalog::Source::File { path: "/photos/a.jpg".into() };
+        let mut p = Photo::new(PhotoId(1), source, "a.jpg", "JPEG", 20, 10, "before");
+        p.local = local;
+        p.set_local_baseline();
+        p
+    }
+
+    /// A photo browsed in Local and untouched since holds only what browsing read from its file,
+    /// so the job counts it as one it made (#3434); any change since browsing, a rating too, makes
+    /// it Promoted; a library record is Existing. Only a record the job made wasn't there before.
+    #[test]
+    fn a_record_s_origin_follows_from_what_it_was_when_the_job_found_it() {
+        let mut browsed = photo(true);
+        assert!(browsed.untouched_local());
+        assert_eq!(Origin::of(&browsed), Origin::Created);
+        browsed.rating = 3;
+        assert_eq!(Origin::of(&browsed), Origin::Promoted);
+        assert_eq!(Origin::of(&photo(false)), Origin::Existing);
+        let there: Vec<bool> = [Origin::Created, Origin::Promoted, Origin::Existing].map(Origin::was_there).into();
+        assert_eq!(there, [false, true, true]);
+    }
+
+    /// The first origin recorded for a record stands for the whole job: a record the job made stays
+    /// Created when a later step finds it in the library, and every later `record` returns it.
+    #[test]
+    fn the_first_origin_recorded_for_a_record_stands() {
+        let mut origins = Origins::default();
+        assert_eq!(origins.record(PhotoId(1), Origin::Created), Origin::Created);
+        assert_eq!(origins.record(PhotoId(1), Origin::Existing), Origin::Created);
+        assert_eq!(origins.record(PhotoId(1), Origin::Promoted), Origin::Created);
+        assert_eq!(origins.record(PhotoId(2), Origin::Promoted), Origin::Promoted);
+        assert_eq!(origins.record(PhotoId(2), Origin::Created), Origin::Promoted);
+        assert_eq!(origins.record(PhotoId(3), Origin::Existing), Origin::Existing);
+    }
 }

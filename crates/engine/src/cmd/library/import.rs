@@ -82,6 +82,8 @@ pub fn import_params(s: &Session, p: &Value) -> Result<ImportRequest> {
         metadata_preset,
         convert_dng: bool_or(p, "dng", false),
         local: bool_or(p, "local", false),
+        // (only the Lightroom import makes records of duplicates)
+        same_content: crate::import::SameContent::Skip,
         recipe: crate::cmd::recipe_param(p, "library.import")?,
     };
     let album_name = str_param(p, "albumName").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
