@@ -863,7 +863,7 @@ pub fn render(
     }
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
-        let list = s.masks.iter().filter(|m| m.visible && !m.components.is_empty());
+        let list = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(lightcraft_pipeline::masks::max_masks(&plan.frame, w, h));
         match (list.map(|m| m.id).position(|id| id == m.id), masks.as_ref()) {
             (Some(mi), Some(all)) => Ok(cx.slice(all, mi * n, n)),
             _ => Err(m),
@@ -875,7 +875,12 @@ pub fn render(
     // on the CPU, instead of one synchronous readback per mask (which stalls the pipeline N times).
     let all_overlay_alphas: Option<Vec<Plane>> = if matches!(req.overlay, lightcraft_pipeline::Overlay::AllMasks { .. }) {
         masks.as_ref().map(|all| {
-            let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+            let list: Vec<_> = s
+                .masks
+                .iter()
+                .filter(|m| m.visible && !m.components.is_empty())
+                .take(lightcraft_pipeline::masks::max_masks(&plan.frame, w, h))
+                .collect();
             if list.is_empty() {
                 return Vec::new();
             }
@@ -1541,11 +1546,13 @@ fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma
 fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Host) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
-    let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+    let (w, h) = (plan.w, plan.h);
+    // as the CPU path keeps them: the first `max_masks`, so over-cap documents render the same
+    let list: Vec<_> =
+        s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).take(lightcraft_pipeline::masks::max_masks(&plan.frame, w, h)).collect();
     if list.is_empty() {
         return (None, Vec::new());
     }
-    let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let frame = &plan.frame;
     let ev = s.light.exposure as f32;
