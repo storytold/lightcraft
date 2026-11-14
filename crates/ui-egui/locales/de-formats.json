@@ -154,6 +154,8 @@
   "{month}": "{month:02}",
   "{month} {year}": "{month:02}/{year}",
   "{msg} ({failed} failed)": "{msg} ({failed} fehlgeschlagen)",
+  "Smart previews folder changed; moved {n}": "Ordner für Smart-Vorschauen geändert; {n} verschoben",
+  "Smart previews folder changed; deleted {n}": "Ordner für Smart-Vorschauen geändert; {n} gelöscht",
   "{name} Label": "Farbmarkierung {name}",
   "{name} Off": "{name} aus",
   "{name} On": "{name} ein",
