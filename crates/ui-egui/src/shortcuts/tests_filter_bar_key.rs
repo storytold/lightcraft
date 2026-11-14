@@ -110,6 +110,35 @@ fn saved_keymap_wins_over_the_grid_backslash() {
 }
 
 #[test]
+fn backslash_toggles_the_map_filter_bar_in_the_map_view() {
+    let mut app = app().unwrap();
+    app.ui.view = ViewMode::Map;
+    let ctx = egui::Context::default();
+    let shown = app.ui.map.show_filter_bar;
+    frame(&mut app, &ctx, Some(Key::Backslash), None);
+    assert_eq!(app.ui.map.show_filter_bar, !shown, "\\ toggles the map's filter bar");
+    assert!(!app.ui.filter_bar, "the library Filter Bar stays as it was");
+    assert_ne!(app.ui.before_after, BeforeAfter::Original, "the map has no original to show");
+    frame(&mut app, &ctx, Some(Key::Backslash), None);
+    assert_eq!(app.ui.map.show_filter_bar, shown);
+}
+
+#[test]
+fn cmd_k_locks_the_map_markers_in_the_map_view() {
+    let mut app = app().unwrap();
+    app.ui.view = ViewMode::Map;
+    let ctx = egui::Context::default();
+    let locked = app.ui.map.locked;
+    let events = vec![egui::Event::Key { key: Key::K, physical_key: Some(Key::K), pressed: true, repeat: false, modifiers: Modifiers::COMMAND }];
+    let mut out = ctx.run_ui(
+        egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() },
+        |ui| super::handle(&mut app, ui.ctx()),
+    );
+    out.textures_delta.clear();
+    assert_eq!(app.ui.map.locked, !locked, "Cmd+K locks the markers in the Map view");
+}
+
+#[test]
 fn backslash_yields_to_a_focused_text_field() {
     let mut app = app().unwrap();
     app.ui.view = ViewMode::PhotoGrid;

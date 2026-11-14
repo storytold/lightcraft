@@ -368,6 +368,46 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.view = ViewMode::People;
             Ok(json!({"people": app.session.catalog.people().len()}))
         }
+        "view.map" | "panel.map" => {
+            app.ui.view = ViewMode::Map;
+            Ok(json!({"view": "map"}))
+        }
+        "view.toggleMapFilter" | "map.filterBar" => {
+            app.ui.map.show_filter_bar = !app.ui.map.show_filter_bar;
+            Ok(json!({"show": app.ui.map.show_filter_bar}))
+        }
+        "map.toggleLock" | "map.lock" => {
+            app.ui.map.locked = !app.ui.map.locked;
+            Ok(json!({"locked": app.ui.map.locked}))
+        }
+        "map.navigator" => {
+            app.ui.map.navigator_open = !app.ui.map.navigator_open;
+            Ok(json!({"open": app.ui.map.navigator_open}))
+        }
+        "map.legend" => {
+            app.ui.map.legend_open = !app.ui.map.legend_open;
+            Ok(json!({"open": app.ui.map.legend_open}))
+        }
+        "photo.showInMap" => {
+            let target_id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.selection.active);
+            if let Some(id) = target_id {
+                let _ = app.run("library.select", json!({"ids": [id.0]}));
+                app.ui.view = ViewMode::Map;
+                if let Some(ph) = app.session.catalog.photo(id) {
+                    if let Some((lat, lon)) = ph.meta.gps {
+                        app.ui.map.center_lat = lat;
+                        app.ui.map.center_lon = lon;
+                        app.ui.map.zoom = 15.0;
+                        app.ui.map.active_pin_photo = Some(id);
+                    } else {
+                        app.toast(ctx, crate::i18n::tr("Photo has no GPS coordinates (drag onto map to place)"));
+                    }
+                }
+            } else {
+                app.ui.view = ViewMode::Map;
+            }
+            Ok(json!({"view": "map"}))
+        }
         "view.person" => {
             // {name}: one person's page in the People view: their faces, and the faces that look like them
             let Some(name) = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) else {

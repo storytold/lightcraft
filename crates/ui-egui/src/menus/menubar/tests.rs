@@ -852,3 +852,47 @@ fn edit_menu_places_the_select_and_paste_rows_with_their_kin() {
     let after = &nodes[pos("app.settings") + 1..];
     assert!(!after.iter().any(|n| matches!(n, MenuNode::Item { .. })), "no row follows Settings… but a submenu: {after:?}");
 }
+
+/// Show in Map is present in Photo menu and Window contains a Map submenu with map controls.
+#[test]
+fn show_in_map_and_window_map_menu() {
+    let mut a = app();
+    let bar = menu_bar(&a);
+
+    // Verify photo.showInMap is in Photo menu
+    let photo_nodes = &bar.iter().find(|(title, _)| title == "Photo").unwrap().1;
+    assert!(find(photo_nodes, "photo.showInMap").is_some(), "photo.showInMap must be in Photo menu");
+
+    // Verify @Map is in Window menu and has items
+    let window_nodes = &bar.iter().find(|(title, _)| title == "Window").unwrap().1;
+    assert!(find(window_nodes, "panel.map").is_some(), "panel.map must be in Window>Map");
+    assert!(find(window_nodes, "map.navigator").is_some(), "map.navigator must be in Window>Map");
+    assert!(find(window_nodes, "map.filterBar").is_some(), "map.filterBar must be in Window>Map");
+    assert!(find(window_nodes, "map.legend").is_some(), "map.legend must be in Window>Map");
+    assert!(find(window_nodes, "map.lock").is_some(), "map.lock must be in Window>Map");
+
+    // Test running map.navigator toggles navigator_open
+    let nav_before = a.ui.map.navigator_open;
+    run_item(&mut a, "map.navigator", Value::Null).unwrap();
+    assert_eq!(a.ui.map.navigator_open, !nav_before);
+
+    // Test running map.filterBar toggles show_filter_bar
+    let bar_before = a.ui.map.show_filter_bar;
+    run_item(&mut a, "map.filterBar", Value::Null).unwrap();
+    assert_eq!(a.ui.map.show_filter_bar, !bar_before);
+
+    // Test running map.legend toggles legend_open
+    let legend_before = a.ui.map.legend_open;
+    run_item(&mut a, "map.legend", Value::Null).unwrap();
+    assert_eq!(a.ui.map.legend_open, !legend_before);
+
+    // Test running map.lock toggles locked
+    let lock_before = a.ui.map.locked;
+    run_item(&mut a, "map.lock", Value::Null).unwrap();
+    assert_eq!(a.ui.map.locked, !lock_before);
+
+    // Test running panel.map switches to ViewMode::Map
+    a.ui.view = ViewMode::PhotoGrid;
+    run_item(&mut a, "panel.map", Value::Null).unwrap();
+    assert_eq!(a.ui.view, ViewMode::Map);
+}

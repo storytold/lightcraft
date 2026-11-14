@@ -335,6 +335,9 @@ struct PrefsFile {
     slide_titles: crate::slide_title::TitleSettings,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`).
     hold_view: bool,
+    /// User-saved map locations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    saved_locations: Vec<crate::map::SavedLocation>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -652,6 +655,7 @@ impl Session {
         self.slide_titles = prefs.slide_titles.sanitized();
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
+        self.saved_locations = prefs.saved_locations;
         self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
@@ -973,6 +977,7 @@ impl Session {
             slide_overlays: self.slide_overlays.clone(),
             slide_titles: self.slide_titles.clone(),
             hold_view: self.hold_view,
+            saved_locations: self.saved_locations.clone(),
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };

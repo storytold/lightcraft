@@ -17,6 +17,7 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("compare", Icon::Compare, ViewMode::Compare, "Compare (Shift+C)"),
     ("survey", Icon::Survey, ViewMode::Survey, "Survey (N)"),
     ("people", Icon::Subject, ViewMode::People, "People"),
+    ("map", Icon::MapPin, ViewMode::Map, "Map (Ctrl+Alt+3)"),
 ];
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {

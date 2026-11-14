@@ -319,10 +319,14 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
 /// Default brackets rate in grids, and the default backslash shows / hides the Filter Bar there
 /// (Lightroom Classic's Library keys; Detail keeps brush size and Show Original). The full-screen
 /// preview keeps the grid's view but shows the photo alone, so backslash stays Show Original there.
+/// The Map view has no original to show, so its backslash shows / hides the map's filter bar, and
+/// its Cmd+K locks the markers instead of adding keywords (Lightroom Classic's Map module keys).
 /// Remapped brush and Show Original keys retain their action, and a saved assignment of the key to
 /// another command takes precedence over this default.
-fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
+fn grid_key_command(keymap: &Keymap, grid: bool, map: bool, fullscreen: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
     let command = match (grid, id, shortcut) {
+        (_, "view.showOriginal", (m, Key::Backslash)) if map && m == Modifiers::NONE && !fullscreen => "view.toggleMapFilter",
+        (_, "panel.addKeywords", (m, Key::K)) if map && m == Modifiers::COMMAND && !fullscreen => "map.toggleLock",
         (true, "brush.smaller", (m, Key::OpenBracket)) if m == Modifiers::NONE => "photo.decreaseRating",
         (true, "brush.larger", (m, Key::CloseBracket)) if m == Modifiers::NONE => "photo.increaseRating",
         (true, "view.showOriginal", (m, Key::Backslash)) if m == Modifiers::NONE && !fullscreen => "view.filterBar",
@@ -450,7 +454,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
-                && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
+                && let Some(id) = grid_key_command(keymap, grid, app.ui.view == crate::state::ViewMode::Map, app.ui.fullscreen, b.id, (m, k))
             {
                 if id == "view.zoomToggle" && k == Key::Space {
                     // Toggle Zoom given Space in the keymap is the Space alias: the same hand and

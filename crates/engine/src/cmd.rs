@@ -27,6 +27,7 @@ pub mod lens_refresh;
 pub mod library;
 pub mod lut_profiles;
 pub mod manage;
+pub mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod masks;
@@ -174,6 +175,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(recheck::specs());
         v.extend(lens_refresh::specs());
         v.extend(sync::specs());
+        v.extend(map::specs());
         v.extend(metadata::specs());
         v.extend(geocode::specs());
         v.extend(filters::specs());
