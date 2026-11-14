@@ -191,7 +191,7 @@ Neither names ORF or specifies its file layout. These references do not establis
 | Stage | Target | LightCraft | Status |
 |---|---|---|---|
 | Bayer demosaic | Adobe's own, plus AI "Raw Details" | AHD (default; blends its horizontal and vertical candidates where neither is clearly more homogeneous, so flat noise doesn't become a maze), PPG, bilinear (`crates/raw/src/demosaic`) | 🟡 quality unmeasured against Lightroom; demosaics before white balance (#1328, PR #1463); no Raw Details |
-| X-Trans demosaic | ✅ | in-house edge-weighted directional | 🟡 unmeasured |
+| X-Trans demosaic | ✅ | classified LMMSE green + residual-interpolated red/blue on the white-balanced mosaic, trained on CC0 X-Trans raws (`crates/raw/src/demosaic/xtrans_ri.rs`, [xtrans-demosaic.md](xtrans-demosaic.md)) | 🟡 +4.8 dB CPSNR and 40 % less false colour than the previous directional method on held-out real X-Trans scenes; not measured against Lightroom |
 | Foveon | ✅ (older bodies) | — | ⬜ |
 | Monochrome / LinearRaw | ✅ | handled, no demosaic | ✅ |
 | Pixel shift (Sony ARQ, Pentax, OM high-res, Nikon) | ✅ (Sony, Pentax, Nikon) | — | ⬜ |
@@ -297,6 +297,7 @@ Beyond decoding:
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-26 | patch | Bundled camera profile count 5 → 9 (Nikon Z 6II, Z 8 and D5300, ILCE-7RM5); counts only |
+| 2026-10-24 | minor | X-Trans demosaic replaced: on the white-balanced mosaic, a 7 × 7 linear green filter per pattern position and structure-tensor class (72), least-squares fitted on 25 CC0 X-Trans scenes, then red and blue by residual interpolation. On 13 held-out real scenes 38.9 dB CPSNR / 4.0 chroma RMSE against 34.2 / 6.6 before; about 3× the time (0.55 s for 40 MP on 20 threads). Method and numbers: [xtrans-demosaic.md](xtrans-demosaic.md) |
 | 2026-10-23 | minor | Lens profiles: Sony ILCE-6700 (APS-C) in-file distortion through the ILCE-7RM6 conversion, knots spanning its own crop; lens score unchanged (~10%: one more body) |
 | 2026-10-25 | patch | CRW variant rows split by verification status (EOS and G1/G6 verified; G2/G3/G4/Pro1/S-series unverified; G5 preview); the CIFF heap walk is bounded by a per-file record budget, so a block of sub-heap records pointing back at their parent no longer hangs decode |
 | 2026-10-13 | minor | Canon CRW decoded (clean-room derivation, craft-libs `crates/crw/clean-room/`): EOS D30/D60/10D/300D, PowerShot G1/G6 verified pixel-exact (28 of 29 corpus files); G5 preview (entropy anomaly); as-shot WB from ColorBalance 0x10a9; 243 verified, 950 unverified, 217 preview; Canon bucket 76% (21% verified) |

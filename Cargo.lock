@@ -4059,6 +4059,7 @@ dependencies = [
  "dhat",
  "jpeg-encoder",
  "jxl-oxide",
+ "lightcraft-codecs",
  "lightcraft-color",
  "lightcraft-geom",
  "lightcraft-meta",

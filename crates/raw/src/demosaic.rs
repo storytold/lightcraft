@@ -5,8 +5,13 @@
 //! - [`Method::Ppg`] — Patterned Pixel Grouping (Chuan-kai Lin): gradient-selected green, colour-difference R/B.
 //! - [`Method::Ahd`] — Adaptive Homogeneity-Directed (Hirakawa & Parks, IEEE TIP 2005): horizontal/vertical
 //!   candidates chosen per pixel by CIELab homogeneity. The quality default for Bayer sensors.
-//! - Non-Bayer patterns (X-Trans, …) always use `xtrans::directional`, our own edge-weighted colour-difference
-//!   interpolation.
+//!
+//! X-Trans (and other non-Bayer patterns):
+//! - [`Method::Ahd`] → [`xtrans_ri`]: on the white-balanced mosaic ([`Options::balance`]), a classified linear
+//!   (LMMSE) green trained on real X-Trans raws, then red and blue by residual interpolation. X-Trans in any phase,
+//!   at least 24 × 24; otherwise `xtrans::directional`.
+//! - [`Method::Ppg`] → `xtrans::directional`: our own edge-weighted colour-difference interpolation (faster).
+//! - [`Method::Bilinear`] → bilinear.
 //!
 //! Every method reproduces a constant-colour mosaic exactly.
 
@@ -14,6 +19,8 @@ mod ahd;
 mod bilinear;
 mod ppg;
 mod xtrans;
+mod xtrans_ri;
+mod xtrans_taps;
 
 use crate::{Cfa, Normalized, Rect, Rgb32f};
 use serde::{Deserialize, Serialize};
@@ -73,6 +80,21 @@ impl Mosaic<'_> {
 
 /// Demosaic normalised raw data. `cpp == 3` data is returned as is; monochrome data is replicated to grey.
 pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
+    demosaic_with(n, method, Options::default())
+}
+
+/// Options for [`demosaic_with`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Options {
+    /// White-balance gains (camera RGB → balanced; the as-shot multipliers) for the X-Trans demosaic, which
+    /// interpolates the balanced mosaic: in camera RGB, R − G and B − G change with brightness across every edge,
+    /// and interpolation turns that into colour fringes. Bayer methods ignore it, as they do gains that are not
+    /// finite and positive.
+    pub balance: Option<[f32; 3]>,
+}
+
+/// [`demosaic`] with [`Options`].
+pub fn demosaic_with(n: &Normalized, method: Method, opts: Options) -> Rgb32f {
     let (w, h) = (n.width, n.height);
     if w == 0 || h == 0 {
         return Rgb32f::new(w, h);
@@ -95,11 +117,17 @@ pub fn demosaic(n: &Normalized, method: Method) -> Rgb32f {
         },
         (None, _) => Rgb32f { width: w, height: h, data: n.data.iter().map(|&v| [v; 3]).collect() },
         (Some(cfa), _) => {
+            // every interpolator below indexes `w × h` samples: a shorter buffer (or dimensions that
+            // overflow) gets a 0 × 0 image, as allocating `w × h` for it could fail just the same
+            if w.checked_mul(h).is_none_or(|len| n.data.len() < len) {
+                return Rgb32f::new(0, 0);
+            }
             let m = Mosaic { w, h, data: &n.data, cfa };
             if !cfa.is_bayer() {
                 return match method {
                     Method::Bilinear => bilinear::bilinear(&m),
-                    _ => xtrans::directional(&m),
+                    Method::Ppg => xtrans::directional(&m),
+                    Method::Ahd => xtrans_ri::demosaic(&m, opts.balance).unwrap_or_else(|| xtrans::directional(&m)),
                 };
             }
             if w < 4 || h < 4 {
@@ -224,6 +252,29 @@ mod tests {
             }
             assert!(ahd_window(&n, Rect::new(1, 0, 300, 270)).is_none(), "a window past the mosaic is refused");
         }
+    }
+
+    #[test]
+    fn balance_reaches_x_trans_only_and_is_illuminant_invariant() {
+        let img = edgy_scene(48, 36);
+        // Bayer methods ignore it
+        let bayer = mosaic_from_rgb(&img, &Cfa::bayer("RGGB").unwrap());
+        for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+            let with = demosaic_with(&bayer, m, Options { balance: Some([1.9, 1.0, 1.6]) });
+            assert_eq!(with.data, demosaic(&bayer, m).data, "{m:?}");
+        }
+        // a balanced scene seen under a coloured illuminant, demosaiced with that illuminant's gains and balanced
+        // back, matches the neutral-illuminant result
+        let cfa = Cfa::xtrans();
+        let neutral = demosaic(&mosaic_from_rgb(&img, &cfa), Method::Ahd);
+        let g = [1.15f32, 1.0, 2.8];
+        let cam = Rgb32f { width: img.width, height: img.height, data: img.data.iter().map(|p| [p[0] / g[0], p[1], p[2] / g[2]]).collect() };
+        let out = demosaic_with(&mosaic_from_rgb(&cam, &cfa), Method::Ahd, Options { balance: Some(g) });
+        let back = Rgb32f { width: out.width, height: out.height, data: out.data.iter().map(|p| [p[0] * g[0], p[1], p[2] * g[2]]).collect() };
+        assert!(psnr(&back, &neutral, 0) > 80.0);
+        // invalid gains are ignored rather than poisoning the image
+        let bad = Options { balance: Some([f32::NAN, 1.0, 0.0]) };
+        assert!(demosaic_with(&mosaic_from_rgb(&img, &cfa), Method::Ahd, bad).data.iter().all(|p| p.iter().all(|v| v.is_finite())));
     }
 
     #[test]
@@ -396,5 +447,23 @@ mod tests {
         let t = std::time::Instant::now();
         let _ = demosaic(&n, Method::Ahd);
         println!("X-Trans directional: {:.1} MP/s", (w * h) as f64 / 1e6 / t.elapsed().as_secs_f64());
+    }
+
+    #[test]
+    fn a_short_mosaic_gives_the_empty_image_instead_of_panicking() {
+        // `Normalized` fields are public: a buffer shorter than `width × height` reached the
+        // interpolators, which index every sample (the X-Trans fallback panicked past the end);
+        // dimensions that overflow, or are huge over a few samples, must not be allocated either
+        for cfa in [Cfa::xtrans(), Cfa::bayer("RGGB").unwrap()] {
+            let mut short = mosaic_from_rgb(&edgy_scene(48, 36), &cfa);
+            short.data.truncate(48 * 36 - 100);
+            let huge = |width, height| Normalized { width, height, cpp: 1, data: vec![0.5; 64], cfa: Some(cfa.clone()) };
+            for n in [short, huge(usize::MAX, 2), huge(1 << 20, 1 << 20)] {
+                for m in [Method::Bilinear, Method::Ppg, Method::Ahd] {
+                    let out = demosaic(&n, m);
+                    assert_eq!((out.width, out.height, out.data.len()), (0, 0, 0), "{m:?} {}×{}", n.width, n.height);
+                }
+            }
+        }
     }
 }
