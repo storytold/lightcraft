@@ -291,7 +291,7 @@
   "…and {more} more": "…und {more} weitere",
   "Template preview: {name}": "Vorlagenvorschau: {name}",
   "{n} selected photo{} · {pages} page{}": "Ausgewählte Fotos: {n} · Seiten: {pages}{:.0}{:.0}",
-  "{n} photo{} in view · {slides} slide{} · {time}": "Fotos in der Ansicht: {n} · Folien: {slides} · {time}{:.0}{:.0}",
+  "{n} photo{} in view · {slides} slide{} · {time}": "Fotos in der Ansicht: {n} · Dias: {slides} · {time}{:.0}{:.0}",
   "{n} pages": "{n} Seiten",
   "{n} JPEG files": "{n} JPEG-Dateien",
   "{s} s of AV1 video": "{s} s AV1-Video",
@@ -320,11 +320,11 @@
   "No lens profile found for {}.": "Kein Objektivprofil für {} gefunden.",
   "{n} photos got their lens profile": "{n} Fotos haben ihr Objektivprofil erhalten",
   "Photo: {name}": "Foto: {name}",
-  "Panel layout could not be restored: {error}": "Die Bereichsanordnung konnte nicht wiederhergestellt werden: {error}",
-  "Panel move was not applied: {error}": "Das Verschieben des Bereichs wurde nicht ausgeführt: {error}",
+  "Panel layout could not be restored: {error}": "Die Anordnung der Bedienfelder konnte nicht wiederhergestellt werden: {error}",
+  "Panel move was not applied: {error}": "Das Bedienfeld wurde nicht verschoben: {error}",
   "{name} is installed": "{name} ist installiert",
   "{name} is installed and in use: face recognition is on": "{name} ist installiert und in Gebrauch: Gesichtserkennung ist eingeschaltet",
-  "Bring photos in with File › Import Photos… ({keys}).": "Fotos holen Sie mit Datei › Fotos importieren… ({keys}) in die Bibliothek.",
+  "Bring photos in with File › Import Photos… ({keys}).": "Fotos holst du mit Datei › Fotos importieren… ({keys}) in die Bibliothek.",
   "View › Detail View ({keys}).": "Ansicht › Detailansicht ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys})."
 }
