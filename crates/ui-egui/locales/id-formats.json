@@ -286,6 +286,7 @@
   "Exported to {path}": "Diekspor ke {path}",
   "Saved template {name}": "Templat {name} disimpan",
   "Imported {name}": "{name} diimpor",
+  "Moved {name} to {folder}": "{name} dipindahkan ke {folder}",
   "Skipped {problem}": "Dilewati: {problem}",
   "…and {more} more": "…dan {more} lainnya",
   "Template preview: {name}": "Pratinjau templat: {name}",

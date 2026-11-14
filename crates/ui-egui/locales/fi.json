@@ -2411,5 +2411,9 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
+  "User Templates": "Käyttäjän mallipohjat",
+  "Delete Folder": "Poista kansio",
+  "Folder name": "Kansion nimi",
+  "Its templates move to User Templates.": "Sen mallipohjat siirretään kansioon Käyttäjän mallipohjat.",
   "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
 }

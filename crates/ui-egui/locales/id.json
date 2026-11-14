@@ -2425,5 +2425,9 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
+  "User Templates": "Templat pengguna",
+  "Delete Folder": "Hapus folder",
+  "Folder name": "Nama folder",
+  "Its templates move to User Templates.": "Templatnya dipindahkan ke Templat pengguna.",
   "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
 }
