@@ -11,4 +11,4 @@ workspace = true
 [dependencies]
 lightcraft-develop = { workspace = true }
 lightcraft-geom = { workspace = true }
-quick-xml = { workspace = true }
+craft-xml = { workspace = true }
