@@ -1,5 +1,5 @@
 use crate::convert::{from_craft, to_craft};
-use crate::{DateTime, Gps, Metadata, Orientation};
+use crate::{Metadata, Orientation};
 use craft_tiff::{ParseOptions, Tiff, TiffError, tags as t};
 
 pub fn strip_exif_header(b: &[u8]) -> &[u8] {
@@ -34,6 +34,7 @@ pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
 #[cfg(test)]
 mod write_tests {
     use super::*;
+    use crate::{DateTime, Gps};
 
     #[test]
     fn capture_time_offset_and_subsec_round_trip() {
