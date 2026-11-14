@@ -158,7 +158,7 @@ fn welcome_body(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, page: &mut u
     // a hard-coded key. A command whose binding was removed shows the menu path alone.
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
     let keys = welcome_page_command(*page)
-        .and_then(|id| crate::shortcuts::shortcut_of(&app.ui.settings.keymap, id))
+        .and_then(|id| crate::shortcuts::shortcut_of(app.ui.settings.profile(), &app.ui.settings.keymap, id))
         .map(|sc| crate::menus::menubar::shortcut_text(sc, mac));
     let opening = welcome_opening(*page, opening, keys.as_deref(), cfg!(target_arch = "wasm32"));
     ui.label(egui::RichText::new(opening).color(t.text_dim));
