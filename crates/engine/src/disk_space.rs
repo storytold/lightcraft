@@ -181,7 +181,7 @@ impl crate::Session {
                             Ok(()) => match answered.recv_timeout(SHOW_ROW_AFTER) {
                                 Ok(answer) => Ok(answer),
                                 Err(_) => {
-                                    let _row = activity.start("cache", "Checking free disk space", crate::activity::Cancel::No);
+                                    let _row = activity.start("cache", "Checking free disk space", crate::activity::Cancel::Quick);
                                     Ok(answered.recv().ok().flatten())
                                 }
                             },
@@ -408,6 +408,8 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(s.disk_space_reading());
+        // a read-only check: the quit prompt (which asks about `running()`) doesn't mention it
+        assert!(s.activity.running().iter().all(|t| t.label != "Checking free disk space"), "{:?}", s.activity.running());
         s.check_disk_space(true);
         assert!(s.take_disk_space_alert().is_none(), "nor does a check while the read runs");
         release.send(()).unwrap();

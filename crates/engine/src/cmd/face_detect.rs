@@ -138,7 +138,7 @@ pub(crate) fn offer_gpu(
         set_gpu_state(what, GpuState { why: Some("the CPU is chosen in Settings".into()), ..GpuState::default() });
         return;
     }
-    let task = s.activity.start("facesGpu", "Checking the GPU for faces", crate::activity::Cancel::No);
+    let task = s.activity.start("facesGpu", "Checking the GPU for faces", crate::activity::Cancel::Quick);
     task.detail(what);
     set_gpu_state(what, GpuState { checking: true, ..GpuState::default() });
     let spawned = std::thread::Builder::new().name(format!("faces-gpu-{what}")).spawn(move || {
