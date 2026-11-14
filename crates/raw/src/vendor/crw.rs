@@ -94,6 +94,7 @@ fn datetime_from_unix(t: i64) -> Option<DateTime> {
         second: u8::try_from(c.second()).ok()?,
         millis: 0,
         offset_minutes: None,
+        ..Default::default()
     };
     ((1970..=2200).contains(&dt.year)).then_some(dt)
 }
