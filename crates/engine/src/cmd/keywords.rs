@@ -39,9 +39,11 @@ fn commit_keywords(s: &mut Session, label: &str, op: lightcraft_catalog::Op, fol
         && let Some(k) = f.keyword.clone()
     {
         f.keyword = follow(&k);
-        // the keyword was deleted: if that emptied the filter, nothing is left to bring back. The rating
-        // operator filters nothing without stars, so it alone does not count as something to bring back.
-        gone_from_put_aside = f.keyword.is_none() && (Filter { rating_op: Default::default(), ..f.clone() }) == Filter::default();
+        // the keyword was deleted: if that emptied the filter, nothing is left to bring back. "At least
+        // no stars" filters nothing, so that operator alone does not count; "exactly" or "at most" no
+        // stars shows the unrated photos (#3417), so it is still something to bring back.
+        gone_from_put_aside =
+            f.keyword.is_none() && !f.rating_filters() && (Filter { rating_op: Default::default(), ..f.clone() }) == Filter::default();
     }
     if gone_from_put_aside {
         s.shelved_filter = None;
