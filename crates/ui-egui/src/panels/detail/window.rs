@@ -140,6 +140,16 @@ mod bounded_window_tests {
     use crate::{Services, headless::Headless};
     use std::time::Duration;
 
+    fn exact_job(h: &mut Headless, view: crate::region::RegionView, slot: Slot) -> lightcraft_engine::RenderJob {
+        let job = if view.before {
+            h.app.session.region_job_before(view.photo, view.full.0, view.full.1, view.window, true)
+        } else {
+            h.app.session.region_job(view.photo, view.full.0, view.full.1, view.window, true)
+        }
+        .unwrap();
+        h.app.renderer.job_for(slot, job)
+    }
+
     /// A window not on screen yet is rendered main's way first (bounded margin, Dehaze proxy),
     /// then the exact window replaces it.
     #[test]
