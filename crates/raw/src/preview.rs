@@ -328,9 +328,9 @@ fn preview_covering(bytes: &[u8], min_edge: Option<u32>) -> Option<Vec<u8>> {
         .or(largest)
         .map(|s| if is_jxl(s) { s.to_vec() } else { trim_eoi(s).to_vec() });
     // a TIFF raw whose preview no tag points to: one we can't decode (Leaf MOS), or Epson ERF (in its maker note)
-    best.or_else(|| format.filter(|f| !f.is_supported() || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)))
+    best.or_else(|| format.filter(|f| !crate::is_supported(*f) || *f == crate::RawFormat::Erf).and_then(|_| scan_for_jpeg(bytes)))
         // Hasselblad 3FR / FFF carry no JPEG, only uncompressed RGB images: one wrapped as a baseline TIFF
-        .or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| crate::vendor::hasselblad::rgb_preview(&tiff, bytes)).flatten())
+        .or_else(|| (format == Some(crate::RawFormat::CfaTiff)).then(|| craft_raw::embedded_preview(bytes)).flatten())
 }
 
 /// Drops candidate ranges that repeat an earlier one, that are not a displayable JPEG or JPEG XL, and valid ones

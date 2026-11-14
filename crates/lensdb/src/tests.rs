@@ -94,7 +94,8 @@ fn rejects_mismatched_xml_closing_tags() {
 #[test]
 fn malformed_documents_are_errors_not_panics() {
     assert!(LensDb::parse("").is_err());
-    assert!(LensDb::parse("<lensdatabase><lens><maker>").is_ok_and(|d| d.lenses.is_empty()));
+    // a truncated document is an error, not an empty database
+    assert!(matches!(LensDb::parse("<lensdatabase><lens><maker>"), Err(Error::Xml(_))));
     assert!(LensDb::parse("<other/>").is_err());
     let deep = "<a>".repeat(100);
     assert_eq!(LensDb::parse(&deep), Err(Error::TooLarge));

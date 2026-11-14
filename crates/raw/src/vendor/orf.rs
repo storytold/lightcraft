@@ -152,7 +152,7 @@ pub(crate) fn cfa_from_data(d: &[u16], w: usize, a: Rect) -> Cfa {
             anti += (s1 - s2).unsigned_abs();
         }
     }
-    Cfa::bayer_static(if main < anti { "GRBG" } else { "RGGB" })
+    crate::bayer(if main < anti { "GRBG" } else { "RGGB" })
 }
 
 /// Byte offsets of the stored rows of the two-field 12-bit layout, or `None` unless every condition holds
