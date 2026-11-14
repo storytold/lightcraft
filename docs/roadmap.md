@@ -21,7 +21,7 @@ Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md
 4. **Full-resolution zoom** (gap 4, 8–15 h): visible-region rendering so 100% shows original pixels.
 5. **AI masks** (gap 5, 40–70 h): Subject / Sky / People on licensable weights; configure the SAM 3
    mirror. Needs the maintainer's model decision.
-6. **Compressed ORF and HE NEF** (gaps 6–7, 28–55 h).
+6. **Compressed ORF** (gap 6 reopened; estimate pending provenance review) and **HE NEF** (gap 7, 20–40 h).
 7. **Lens profiles of our own** (gap 8, 40–80 h).
 8. **Tests in CI on macOS and Windows, and the GPU tests in CI** (gap 9, 6–12 h).
 9. **Per-model verification** (gap 10, 20–35 h).

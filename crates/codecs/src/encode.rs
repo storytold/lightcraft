@@ -39,12 +39,16 @@ impl<'a> EncodeImage<'a> {
         if self.width == 0 || self.height == 0 {
             return Err(Error::Encode("zero dimension".into()));
         }
-        let need = self.width as u64 * self.height as u64 * self.channels as u64;
+        // u128: 2^32 x 2^32 x 4 does not fit u64, and every later `width * height * channels` is bounded by this
+        let need = self.width as u128 * self.height as u128 * self.channels as u128;
+        if need > usize::MAX as u128 {
+            return Err(Error::Encode("image too large".into()));
+        }
         let have = match self.samples {
             Samples::U8(s) => s.len(),
             Samples::U16(s) => s.len(),
             Samples::F32(s) => s.len(),
-        } as u64;
+        } as u128;
         if have < need {
             return Err(Error::Encode(format!("sample buffer too short: {have} < {need}")));
         }
@@ -225,7 +229,7 @@ pub enum TiffCompression {
 }
 
 /// Encode TIFF: 8/16-bit integer or 32-bit float, gray/RGB with optional (unassociated) alpha.
-/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `lightcraft-tiff`).
+/// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `craft-tiff`).
 pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &EncodeMeta) -> Result<Vec<u8>> {
     use tiff::encoder::{Compression, DeflateLevel, TiffEncoder};
     use tiff::tags::Predictor;
@@ -670,6 +674,13 @@ fn avif_10bit(enc: &ravif::Encoder, img: &EncodeImage, s: &[u16]) -> Result<Vec<
 #[cfg(test)]
 mod hlg_tests {
     use super::*;
+
+    #[test]
+    fn dimensions_whose_sample_count_wraps_are_refused() {
+        // 2^31 x 2^31 x 4 is 2^64 samples: zero when wrapped, which an empty buffer would satisfy
+        let img = EncodeImage::new(1 << 31, 1 << 31, 4, Samples::U8(&[]));
+        assert!(img.validate().is_err());
+    }
 
     #[test]
     fn hlg_reference_white_and_peak() {

@@ -510,6 +510,8 @@ fn library_with_jpeg(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::p
 
 fn preset_export_preserves_originals(command: &str, selection: serde_json::Value, tag: &str) {
     let (mut s, _, dir, src, original) = library_with_jpeg(tag);
+    // something for mask.exportEffects to write (the other commands ignore it)
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
     let sidecar = src.with_extension("xmp");
     let appended_sidecar = dir.join("IMG_1.jpg.xmp");
     std::fs::write(&sidecar, b"existing sidecar").unwrap();
@@ -535,6 +537,14 @@ fn preset_export_preserves_originals(command: &str, selection: serde_json::Value
         assert_eq!(std::fs::read(&sidecar).unwrap(), b"existing sidecar");
         assert_eq!(std::fs::read(&appended_sidecar).unwrap(), b"appended sidecar");
     }
+    // `..` through a folder that does not exist yet could reach the original once it is created
+    let mut params = selection.clone();
+    params["path"] = json!(dir.join("missing/../IMG_1.jpg").to_string_lossy());
+    let error = s.execute(command, &params).unwrap_err().to_string();
+    // Windows resolves `..` lexically and finds the original; Unix cannot resolve it and refuses
+    assert!(error.contains("cannot be resolved") || error.contains("never writes over an original"), "{error}");
+    assert!(!dir.join("missing").exists());
+    assert_eq!(std::fs::read(&src).unwrap(), original);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -596,9 +606,12 @@ fn keyword_export_preserves_the_previous_file_on_write_failure() {
 fn preset_exports_preserve_previous_files_on_write_failure() {
     let dir = temp_dir("preset-export-failure");
     let mut s = Session::new();
-    for (command, selection, file) in
-        [("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"), ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve")]
-    {
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
+    for (command, selection, file) in [
+        ("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"),
+        ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve"),
+        ("mask.exportEffects", json!({"names": ["Glow"]}), "effects.lceffect"),
+    ] {
         let path = dir.join(file);
         let mut params = selection;
         params["path"] = json!(path.to_string_lossy());
@@ -611,8 +624,13 @@ fn preset_exports_preserve_previous_files_on_write_failure() {
         assert_eq!(std::fs::read(&path).unwrap(), previous, "{command} preserves the prior export");
         assert_eq!(s.execute(command, &params).unwrap()["count"], 1, "replacement still succeeds");
     }
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no temporary files remain");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "no temporary files remain");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn mask_effect_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("mask.exportEffects", json!({"names": ["Glow"]}), "effect-export-guard");
 }
 
 fn disk_batch(
@@ -1079,6 +1097,30 @@ fn metadata_none_in_any_case_exports_no_metadata() {
     }
     let m = export(&mut s, json!({"metadata": "ALL", "removeLocation": true}));
     assert!(m.gps.is_none() && m.city.is_none(), "{m:?}");
+}
+
+/// A raw's Exif Make, Model and LensMake reach an exported JPEG apart, as stitching tools read them.
+#[test]
+fn export_writes_camera_make_and_lens_make_to_exif() {
+    let dir = temp_dir("export-raw-exif");
+    let src = dir.join("Canon.dng");
+    let meta = lightcraft_meta::Metadata {
+        make: Some("Canon".into()),
+        model: Some("EOS R5".into()),
+        lens_make: Some("Sigma".into()),
+        lens_model: Some("RF 24-105mm f/4L IS USM".into()),
+        ..Default::default()
+    };
+    std::fs::write(&src, synthetic_dng_with(None, meta)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "jpeg", "longEdge": 64, "metadata": "all"})), 1).unwrap();
+    let back = lightcraft_meta::extract(&e.bytes);
+    assert_eq!(back.make.as_deref(), Some("Canon"), "EXIF Make is missing: {back:?}");
+    assert_eq!(back.model.as_deref(), Some("EOS R5"), "EXIF Model holds the model alone: {back:?}");
+    assert_eq!(back.lens_make.as_deref(), Some("Sigma"), "EXIF LensMake is missing: {back:?}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// An original raw whose own metadata holds GPS is refused under "Remove location info".

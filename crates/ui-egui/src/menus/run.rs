@@ -154,6 +154,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
+    if id == "develop.auto" {
+        return Some(crate::auto_settings::command(app, p));
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
@@ -1358,8 +1361,11 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             let path = match p.get("path").and_then(Value::as_str).map(str::to_string) {
                 Some(path) => Some(path),
                 None => {
-                    let req =
-                        PickRequest::file(crate::i18n::tr("Import Lightroom Catalog"), crate::i18n::tr("Lightroom Classic Catalog"), &["lrcat"]);
+                    let req = PickRequest::file(
+                        crate::i18n::tr("Import Lightroom Catalog"),
+                        crate::i18n::tr("Lightroom Classic Catalog"),
+                        &["lrcat", "zip"],
+                    );
                     match crate::pick::ask(app, id, p, "path", req, |s| s.pick_lightroom_catalog.as_mut().and_then(|f| f()).map(|x| vec![x])) {
                         Picked::Now(v) => v.into_iter().next(),
                         Picked::Later | Picked::Unavailable => None,

@@ -1,6 +1,7 @@
 use super::settings_hash::SettingsHashes;
 use super::source::{DecodedSource, DenoiseSpec, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
 use super::{Arc, DcpProfile, DevelopSettings, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
+use lightcraft_preview::WriteGate;
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
 /// file system, so it can be asked on the UI thread.
@@ -85,19 +86,24 @@ pub(crate) fn rendered_budget(share: usize) -> usize {
 impl MediaCache {
     /// Keep rendered thumbnails on disk in `dir` as well. The cache this replaces is retired
     /// (its files stay): render jobs still holding it can't write through it any more, even
-    /// into a directory a later clear emptied (`dir` may be the same one).
-    pub fn attach_disk_cache(&mut self, dir: &std::path::Path, disk_bytes: u64) {
+    /// into a directory a later clear emptied (`dir` may be the same one). `gate` is asked before
+    /// the cache changes its folder (`lightcraft_preview::DiskCache::set_gate`).
+    pub fn attach_disk_cache(&mut self, dir: &std::path::Path, disk_bytes: u64, gate: Option<WriteGate>) {
         self.rendered.retire();
-        self.rendered = Arc::new(PreviewCache::with_disk(rendered_budget(self.budget), dir, disk_bytes));
+        let cache = PreviewCache::with_disk(rendered_budget(self.budget), dir, disk_bytes);
+        if let (Some(disk), Some(gate)) = (cache.disk(), gate) {
+            disk.set_gate(gate);
+        }
+        self.rendered = Arc::new(cache);
     }
 
     /// Change the disk budget of the cache in `dir`: in place when that cache is attached (its
     /// thumbnails are keyed by content, so they and the textures shown from them stay valid,
-    /// and the same cache object keeps its generation), else attach it.
-    pub fn set_disk_cache_bytes(&mut self, dir: &std::path::Path, disk_bytes: u64) {
+    /// and the same cache object keeps its generation), else attach it (with `gate`).
+    pub fn set_disk_cache_bytes(&mut self, dir: &std::path::Path, disk_bytes: u64, gate: Option<WriteGate>) {
         match self.rendered.disk().filter(|d| d.dir() == dir) {
             Some(d) => d.set_budget(disk_bytes),
-            None => self.attach_disk_cache(dir, disk_bytes),
+            None => self.attach_disk_cache(dir, disk_bytes, gate),
         }
     }
 
@@ -344,13 +350,17 @@ impl MediaCache {
         {
             return SourceRef::Loaded(Box::new(a));
         }
-        // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
+        // a thumbnail of a photo whose preview or full source is decoded (the one in the loupe) is cut from it; not
         // with a denoised picture, which the thumbnail would lose, nor from one decoded with another camera profile
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
-            && let Some(big) = self.get_source(p.id, SourceLevel::Preview).filter(|b| b.fits_outliers(outliers))
-            && (big.camera_profile == wanted.as_ref().map(|(tag, _)| tag.clone()) || (big.from_proxy && self.original_offline(p)))
+            && let Some(big) = [SourceLevel::Preview, SourceLevel::Full].into_iter().find_map(|level| {
+                self.get_source(p.id, level).filter(|b| {
+                    b.fits_outliers(outliers)
+                        && (b.camera_profile.as_deref() == wanted.as_ref().map(|(tag, _)| tag.as_str()) || (b.from_proxy && self.original_offline(p)))
+                })
+            })
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }

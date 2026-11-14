@@ -1,7 +1,7 @@
 //! Malformed vendor raw files (NEF, ARW, PEF, ORF, RW2 of every raw format, CR2, RAF, CRW) must decode to an error, never panic.
 
-use lightcraft_tiff::tags as t;
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+use craft_tiff::tags as t;
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use proptest::prelude::*;
 
 const W: u32 = 32;
