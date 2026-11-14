@@ -144,6 +144,8 @@ pub struct ColorOps {
     pub grading: Option<([WheelK; 4], f32, f32)>,
     /// OkLCh hue of skin tones (protected by vibrance).
     pub skin: f32,
+    /// Process V9's Colour Grading, measured against Lightroom (`grading` is `None` from V9 on).
+    pub measured_grading: Option<crate::grading_stage::GradingStage>,
 }
 
 fn wheel(w: &lightcraft_develop::Wheel) -> WheelK {
@@ -162,14 +164,15 @@ impl ColorOps {
             hue: bands.map(|b| (b.hue / 100.0) as f32 * 0.5),
             sat: bands.map(|b| (b.sat / 100.0) as f32),
             lum: bands.map(|b| (b.lum / 100.0) as f32 * 0.18),
-            mixer: !s.mixer.is_neutral(),
+            // from process V9 the colour stage applies the mixer (`crate::mixer_stage`)
+            mixer: !s.mixer.is_neutral() && s.process.process() < lightcraft_develop::Process::V9,
             points: if crate::is_bw(s) {
                 Vec::new()
             } else {
                 s.point_colors.iter().take(lightcraft_develop::MAX_POINT_COLORS).filter(|p| !p.is_neutral()).map(PointK::new).collect()
             },
             bw: crate::is_bw(s).then(|| s.bw_mix.bands().map(|v| (v / 100.0) as f32)),
-            grading: (!g.is_neutral()).then(|| {
+            grading: (!g.is_neutral() && s.process.process() < lightcraft_develop::Process::V9).then(|| {
                 (
                     [wheel(&g.shadows), wheel(&g.midtones), wheel(&g.highlights), wheel(&g.global)],
                     (g.blending / 100.0) as f32,
@@ -177,11 +180,18 @@ impl ColorOps {
                 )
             }),
             skin: oklch_hue_of_srgb_hue(25.0),
+            measured_grading: crate::grading_stage::GradingStage::new(s),
         }
     }
 
     pub fn is_identity(&self) -> bool {
-        self.vibrance == 0.0 && self.saturation == 0.0 && !self.mixer && self.points.is_empty() && self.bw.is_none() && self.grading.is_none()
+        self.vibrance == 0.0
+            && self.saturation == 0.0
+            && !self.mixer
+            && self.points.is_empty()
+            && self.bw.is_none()
+            && self.grading.is_none()
+            && self.measured_grading.is_none()
     }
 
     /// `local_sat` (−1..1) and `local_hue` (radians) come from masks.
@@ -250,6 +260,9 @@ impl ColorOps {
     /// Colour grading on OkLab, then back to linear Rec.2020.
     #[inline]
     fn grade(&self, mut lab: [f32; 3]) -> [f32; 3] {
+        if let Some(g) = &self.measured_grading {
+            return oklab_to_2020(g.apply(lab));
+        }
         if let Some((wheels, blending, balance)) = &self.grading {
             let m = 0.5 - balance * 0.25;
             let width = 0.15 + blending * 0.5;
@@ -366,7 +379,8 @@ mod tests {
 
     #[test]
     fn mixer_targets_its_band() {
-        let mut s = DevelopSettings::default();
+        // V7's mixer (from V9 the colour stage applies it: `crate::mixer_stage`)
+        let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
         s.mixer.blue.sat = -100.0;
         let ops = ColorOps::new(&s);
         let blue = [0.02, 0.05, 0.4];
@@ -376,6 +390,20 @@ mod tests {
         let cr = lab_to_lch(oklab_from_2020(ops.apply(red, 0.0, 0.0)))[1];
         assert!(cb < 0.02, "{cb}");
         assert!((cr - cr0).abs() < 0.01);
+    }
+
+    #[test]
+    fn v8_leaves_the_mixer_to_the_mixer_stage() {
+        // from V9 `crate::mixer_stage` applies the mixer, so `ColorOps` must not apply it again
+        let mut s = DevelopSettings { process: lightcraft_develop::Process::V7.version(), ..DevelopSettings::default() };
+        s.mixer.blue.sat = -100.0;
+        assert!(ColorOps::new(&s).mixer);
+        // V8 (the Highlights/Shadows base change) still applies the earlier mixer, and has no mixer stage
+        s.process = lightcraft_develop::Process::V8.version();
+        assert!(ColorOps::new(&s).mixer);
+        assert!(crate::mixer_stage::MixerStage::new(&s).is_none());
+        s.process = lightcraft_develop::Process::V9.version();
+        assert!(!ColorOps::new(&s).mixer);
     }
 
     #[test]

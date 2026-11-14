@@ -806,6 +806,136 @@ fn light_v3_operators_match() {
     }
 }
 
+/// Process V9's curve stage: Whites, the parametric curve, the point curves and Refine Saturation, on a camera curve
+/// and without one, in SDR and HDR.
+#[test]
+fn curve_stage_matches() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_geom::Point;
+    let src = scene(0, 960, 640);
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.0 * x).exp()]
+    }))
+    .unwrap();
+    let raw = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let v9 = || DevelopSettings { process: Process::V9.version(), ..Default::default() };
+    for v in [-100.0, -30.0, 40.0, 100.0] {
+        let mut s = v9();
+        s.light.whites = v;
+        check(&format!("V9 Whites {v}"), &src, &raw, &s, &req);
+    }
+    let mut s = v9();
+    s.curve.highlights = -40.0;
+    s.curve.lights = 25.0;
+    s.curve.darks = -15.0;
+    s.curve.shadows = 30.0;
+    check("V9 parametric", &src, &raw, &s, &req);
+    s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.55 }, Point { x: 1.0, y: 0.95 }];
+    s.curve.red = vec![Point { x: 0.0, y: 0.0 }, Point { x: 0.4, y: 0.5 }, Point { x: 1.0, y: 1.0 }];
+    s.curve.blue = vec![Point { x: 0.0, y: 0.1 }, Point { x: 1.0, y: 0.9 }];
+    s.light.whites = -25.0;
+    check("V9 curves", &src, &raw, &s, &req);
+    s.curve.refine_saturation = 30.0;
+    check("V9 Refine Saturation", &src, &raw, &s, &req);
+    check("V9 curves, no camera curve", &src, &SourceInfo::default(), &s, &req);
+    s.curve.split_mid = 40.0;
+    check("V9 other splits", &src, &raw, &s, &req);
+    s.curve.split_mid = 50.0;
+    s.hdr.enabled = true;
+    s.hdr.max_ev = 2.0;
+    check("V9 HDR preview", &src, &raw, &s, &req);
+}
+
+/// Process V9's mixer stage matches the CPU's, alone, with Calibration (still V7's operator), with the curve
+/// stage after it, and with V7's colour tools (Saturation, B&W) that still follow.
+#[test]
+fn mixer_stage_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let v9 = || DevelopSettings { process: Process::V9.version(), ..Default::default() };
+    let mut s = v9();
+    s.mixer.orange.sat = -60.0;
+    s.mixer.blue.hue = -40.0;
+    s.mixer.green.lum = 70.0;
+    s.mixer.magenta.hue = 15.0;
+    check("V9 mixer", &src, &raw, &s, &req);
+    s.calibration.red_hue = 45.0;
+    s.calibration.blue_sat = 60.0;
+    s.calibration.shadows_tint = 30.0;
+    check("V9 mixer and calibration", &src, &raw, &s, &req);
+    s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.6 }, Point { x: 1.0, y: 0.95 }];
+    s.color.saturation = 20.0;
+    check("V9 colour stage, curves, Saturation", &src, &raw, &s, &req);
+    check("V9 colour stage, not raw", &src, &SourceInfo::default(), &s, &req);
+    s.treatment = lightcraft_develop::Treatment::Bw;
+    check("V9 colour stage, B&W", &src, &raw, &s, &req);
+}
+
+/// Process V9's measured Colour Grading matches the CPU's: single wheels, all four with Blending and Balance,
+/// Luminance only, and together with the mixer stage, the curves and B&W.
+#[test]
+fn grading_stage_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let v9 = || DevelopSettings { process: Process::V9.version(), ..Default::default() };
+    let mut s = v9();
+    s.grading.shadows = lightcraft_develop::Wheel { hue: 210.0, sat: 40.0, lum: 0.0 };
+    check("V9 shadows wheel", &src, &raw, &s, &req);
+    s.grading.midtones = lightcraft_develop::Wheel { hue: 45.0, sat: 22.0, lum: -20.0 };
+    s.grading.highlights = lightcraft_develop::Wheel { hue: 46.0, sat: 80.0, lum: 30.0 };
+    s.grading.global = lightcraft_develop::Wheel { hue: 300.0, sat: 15.0, lum: 10.0 };
+    s.grading.blending = 70.0;
+    s.grading.balance = -35.0;
+    check("V9 four wheels", &src, &raw, &s, &req);
+    let mut l = v9();
+    l.grading.highlights.lum = -60.0;
+    check("V9 grading Luminance only", &src, &raw, &l, &req);
+    s.mixer.orange.sat = 40.0;
+    s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.6 }, Point { x: 1.0, y: 0.95 }];
+    check("V9 grading, mixer, curves", &src, &raw, &s, &req);
+    s.treatment = lightcraft_develop::Treatment::Bw;
+    check("V9 grading, B&W", &src, &raw, &s, &req);
+}
+
+/// Process V9's default curve for a raw whose profile has no tone curve (`default_tone`): the GPU applies it hue
+/// preserving on linear ProPhoto channels as the CPU does, alone, with an exposure offset, with Exposure and
+/// Contrast, with the curves and colour stages, and in HDR.
+#[test]
+fn default_tone_matches() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let req = RenderRequest::fit(720, 720);
+    let v9 = || DevelopSettings { process: Process::V9.version(), ..Default::default() };
+    let plain = SourceInfo { raw: true, default_tone: Some(0.0), ..Default::default() };
+    check("V9 default curve", &src, &plain, &v9(), &req);
+    let shifted = SourceInfo { default_tone: Some(-0.1), ..plain.clone() };
+    let mut s = v9();
+    s.light.exposure = 0.7;
+    s.light.contrast = 30.0;
+    check("V9 default curve, offset, Exposure, Contrast", &src, &shifted, &s, &req);
+    s.mixer.orange.sat = 40.0;
+    s.grading.shadows = lightcraft_develop::Wheel { hue: 210.0, sat: 40.0, lum: 0.0 };
+    s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.6 }, Point { x: 1.0, y: 0.95 }];
+    check("V9 default curve, mixer, grading, curves", &src, &shifted, &s, &req);
+    let mut h = v9();
+    h.hdr.enabled = true;
+    check("V9 default curve, HDR", &src, &plain, &h, &req);
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2 to V7: of its fine median, V8 on: of its detail-free plane, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.

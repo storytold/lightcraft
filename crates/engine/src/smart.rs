@@ -97,6 +97,9 @@ struct SmartFacts {
     lens: Option<lightcraft_develop::EmbeddedLens>,
     camera_color: Option<lightcraft_pipeline::CameraColor>,
     local_tone: Option<lightcraft_pipeline::local_tone::LocalTone>,
+    /// `SourceInfo::default_tone` (absent in smart previews written before process V9's default curve).
+    #[serde(default)]
+    default_tone: Option<f32>,
     /// The semantic mattes whose bytes follow the facts, in this order.
     #[serde(default)]
     mattes: Vec<StoredMatte>,
@@ -197,6 +200,7 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
             lens: i.lens,
             camera_color: i.camera_color.as_deref().cloned(),
             local_tone: i.local_tone.as_deref().cloned(),
+            default_tone: i.default_tone,
             mattes: matte_list,
         };
         let facts = serde_json::to_vec(&facts).map_err(|e| e.to_string())?;
@@ -244,6 +248,7 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
         lens: f.lens,
         camera_color: f.camera_color.map(Arc::new),
         camera_tone: tone,
+        default_tone: f.default_tone,
         mattes: (!mattes.is_empty()).then(|| Arc::new(mattes)),
         local_tone: f.local_tone.map(Arc::new),
         native_long: None,

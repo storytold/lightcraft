@@ -285,6 +285,8 @@ pub fn applies(s: &DevelopSettings, info: &SourceInfo) -> bool {
     match s.process.process() {
         Process::V1 | Process::V2 | Process::V3 => false,
         Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => camera_look,
+        // a raw on Lightroom's default curve has a camera curve too, even when no tone was fitted to its JPEG
+        Process::V9 => camera_look || crate::default_tone::for_source(s, info).is_some(),
     }
 }
 
