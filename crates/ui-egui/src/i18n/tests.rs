@@ -1295,3 +1295,134 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     assert_polish_glyphs(&ctx);
     set_language(Locale::En);
 }
+
+/// `settings.use24HourClock` (issue #3479): English capture times on a 24-hour clock, with the
+/// same date wording and wall-clock digits; fractions and zones are dropped as on the 12-hour
+/// clock, missing seconds read as :00, and what doesn't parse is shown as it is.
+#[test]
+fn english_capture_times_on_a_24_hour_clock() {
+    set_language(Locale::En);
+    let cases = [
+        ("2022-03-30T22:11:11", "March 30, 2022 at 22:11:11"),
+        ("2022-01-02T00:00:00", "January 2, 2022 at 00:00:00"),
+        ("2022-01-02T00:30:05", "January 2, 2022 at 00:30:05"),
+        ("2022-01-02T12:00:00", "January 2, 2022 at 12:00:00"),
+        ("2022-01-02T09:05:07", "January 2, 2022 at 09:05:07"),
+        ("2022-03-30 22:11", "March 30, 2022 at 22:11:00"),
+        ("2022-03-30T22:05:01.5-04:00", "March 30, 2022 at 22:05:01"),
+        ("2022-03-30T22:05:01.123456", "March 30, 2022 at 22:05:01"),
+        ("2022-03-30T22:05:01Z", "March 30, 2022 at 22:05:01"),
+        // without seconds an offset is never read as them
+        ("2022-03-30T22:11Z", "March 30, 2022 at 22:11:00"),
+        ("2022-03-30T22:11+02:00", "March 30, 2022 at 22:11:00"),
+        ("2022-03-30T22:11-05:00", "March 30, 2022 at 22:11:00"),
+        ("2022-07-04", "July 4, 2022"),
+        // a time it can't read is shown as written, not as a date alone or another time
+        ("2022-07-04T22", "2022-07-04T22"),
+        ("2022-07-04+01:00", "2022-07-04+01:00"),
+        ("2022-03-30T22:11:x5", "2022-03-30T22:11:x5"),
+        ("2022-03-30T22:11:05 local", "2022-03-30T22:11:05 local"),
+        ("", ""),
+        ("someday", "someday"),
+        ("2026-02-30T22:00:00", "2026-02-30T22:00:00"),
+        ("2022-03-30T25:00:00", "2022-03-30T25:00:00"),
+        ("２０２２-03-30T22:00", "２０２２-03-30T22:00"),
+        ("2022-03-30T22:1é", "2022-03-30T22:1é"),
+    ];
+    for (iso, want) in cases {
+        assert_eq!(display_time_with(iso, true), want, "{iso:?}");
+        assert!(!want.ends_with(" AM") && !want.ends_with(" PM"), "{iso:?}");
+    }
+    // the default keeps the catalog's 12-hour English
+    for iso in ["2022-03-30T22:11:11", "2022-01-02T00:00:00", "2022-01-02T12:00:00", "2022-07-04", "someday"] {
+        assert_eq!(display_time_with(iso, false), lightcraft_catalog::dates::display_time(iso), "{iso:?}");
+    }
+    assert_eq!(display_time_with("2022-01-02T00:00:00", false), "January 2, 2022 at 12:00:00 AM");
+    assert_eq!(display_time_with("2022-01-02T12:00:00", false), "January 2, 2022 at 12:00:00 PM");
+}
+
+/// Other languages already show the time as written (24-hour); the preference changes nothing
+/// there, and switching language keeps it.
+#[test]
+fn the_24_hour_clock_is_independent_of_the_language() {
+    for language in Locale::ALL.iter().copied().filter(|l| *l != Locale::En) {
+        set_language(language);
+        for iso in ["2026-09-20T16:04:05", "2026-09-20T00:00:00", "2026-09-20T16:04+02:00", "2026-09-20", "x"] {
+            assert_eq!(display_time_with(iso, true), display_time_with(iso, false), "{language:?} {iso:?}");
+        }
+    }
+    set_language(Locale::En);
+}
+
+/// The preference is kept in `ui.json` under `settings.use24HourClock`: off when absent, and a
+/// value that isn't true/false reads as off without costing the other settings.
+#[test]
+fn the_24_hour_clock_setting_round_trips_and_reads_leniently() {
+    let old: crate::state::UiState = serde_json::from_str(r#"{"settings": {"startupView": "detail"}}"#).unwrap();
+    assert!(!old.settings.use_24_hour_clock);
+    let off: crate::state::UiState = serde_json::from_str(r#"{"settings": {"use24HourClock": false}}"#).unwrap();
+    assert!(!off.settings.use_24_hour_clock);
+    for odd in [r#""yes""#, "1", "null", "{}", r#""真""#] {
+        let json = format!(r#"{{"settings": {{"use24HourClock": {odd}, "startupView": "detail"}}}}"#);
+        let ui: crate::state::UiState = serde_json::from_str(&json).unwrap();
+        assert!(!ui.settings.use_24_hour_clock, "{odd}");
+        assert_eq!(ui.settings.startup_view, crate::state::StartupView::Detail, "{odd}: the rest of the file still loads");
+    }
+    let mut ui = crate::state::UiState::default();
+    ui.settings.use_24_hour_clock = true;
+    let saved = serde_json::to_value(&ui).unwrap();
+    assert_eq!(saved["settings"]["use24HourClock"], true);
+    let back: crate::state::UiState = serde_json::from_value(saved).unwrap();
+    assert!(back.settings.use_24_hour_clock);
+    assert_eq!(back.settings, ui.settings);
+}
+
+/// `ui.set` turns the 24-hour clock on and off at once (in its reply too), every frame applies
+/// what the state says, and the photo's capture time itself is never rewritten.
+#[test]
+fn the_24_hour_clock_applies_through_ui_set_and_each_frame() {
+    use crate::control::{ControlRequest, Outcome};
+    set_language(Locale::En);
+    set_24_hour_clock(false);
+    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    app.ui.language = Locale::En;
+    let (id, captured) = app.session.catalog.photos().find_map(|p| Some((p.id, p.captured.clone()?))).unwrap();
+    let iso = lightcraft_catalog::dates::normalize_iso(&captured).unwrap();
+    let clock = iso.get(11..19).unwrap().to_string();
+    let ctx = egui::Context::default();
+    let (req, _) = ControlRequest::new("ui.set", serde_json::json!({"settings": {"use24HourClock": true}}));
+    let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected a reply") };
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["result"]["settings"]["use24HourClock"], true, "{reply}");
+    assert!(app.ui.settings.use_24_hour_clock);
+    assert!(uses_24_hour_clock(), "applies at once, not on the next frame");
+    assert!(display_time(&captured).ends_with(&format!(" at {clock}")), "{captured} → {}", display_time(&captured));
+    // a later language switch keeps the clock
+    let (req, _) = ControlRequest::new("ui.set", serde_json::json!({"language": "de"}));
+    let Outcome::Done(_) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected a reply") };
+    let (req, _) = ControlRequest::new("ui.set", serde_json::json!({"language": "en"}));
+    let Outcome::Done(_) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected a reply") };
+    assert!(app.ui.settings.use_24_hour_clock && uses_24_hour_clock());
+    let (req, _) = ControlRequest::new("ui.set", serde_json::json!({"settings": {"use24HourClock": false}}));
+    let Outcome::Done(reply) = crate::control::handle(&mut app, &ctx, &req) else { panic!("expected a reply") };
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(!uses_24_hour_clock());
+    assert_eq!(display_time(&captured), lightcraft_catalog::dates::display_time(&captured));
+    assert_eq!(app.session.catalog.photo(id).and_then(|p| p.captured.clone()), Some(captured), "the metadata is unchanged");
+    // the logic pass's own sync: the state wins over whatever the thread had
+    app.ui.settings.use_24_hour_clock = true;
+    app.logic(&ctx);
+    assert!(uses_24_hour_clock());
+    app.ui.settings.use_24_hour_clock = false;
+    app.logic(&ctx);
+    assert!(!uses_24_hour_clock());
+    // …and the UI pass's, in a frame without a logic pass
+    for on in [true, false] {
+        app.ui.settings.use_24_hour_clock = on;
+        set_24_hour_clock(!on);
+        let input = crate::headless::HeadlessView::raw_input(egui::vec2(800.0, 600.0), 1.0, 0.0, vec![]);
+        ctx.run_ui(input, |ui| app.ui(ui)).textures_delta.clear();
+        assert_eq!(uses_24_hour_clock(), on, "the UI pass applies {on}");
+    }
+    set_24_hour_clock(false);
+}

@@ -96,17 +96,29 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
 
 /// "Sep 30, 2026, 12:00 PM" from an ISO time.
 pub(super) fn short_time(iso: &str) -> String {
+    short_time_with(iso, crate::i18n::uses_24_hour_clock())
+}
+
+/// [`short_time`] on the clock given: `clock_24` gives "Sep 30, 2026, 12:00" in English.
+pub(super) fn short_time_with(iso: &str, clock_24: bool) -> String {
     // Other languages use their own date patterns (`i18n::display_time`).
     if crate::i18n::language() != crate::i18n::Locale::En {
-        return crate::i18n::display_time(iso);
+        return crate::i18n::display_time_with(iso, clock_24);
     }
-    let long = lightcraft_catalog::dates::display_time(iso);
+    // what doesn't parse is shown as it is, not cut up as if it were a date
+    if clock_24 && lightcraft_catalog::dates::shift_iso(iso, 0).is_none() {
+        return iso.to_string();
+    }
+    let long = crate::i18n::display_time_with(iso, clock_24);
     // "September 30, 2026 at 12:00:00 PM" → month abbreviated, seconds dropped
     let (date, time) = long.split_once(" at ").map_or((long.as_str(), None), |(d, t)| (d, Some(t)));
     let date = match date.split_once(' ') {
         Some((m, rest)) => format!("{} {rest}", m.chars().take(3).collect::<String>()),
         None => date.to_string(),
     };
+    if clock_24 && let Some(hms) = time {
+        return format!("{date}, {}", hms.rsplit_once(':').map_or(hms, |x| x.0));
+    }
     match time.and_then(|t| t.rsplit_once(' ')) {
         Some((hms, ampm)) => format!("{date}, {} {ampm}", hms.rsplit_once(':').map_or(hms, |x| x.0)),
         None => date,

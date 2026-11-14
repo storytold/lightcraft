@@ -117,6 +117,16 @@ in code without invalidating anyone's saved preference. `LIGHTCRAFT_LANGUAGE` ac
 locale looks like (`zh_Hans`, `zh-CN`, `en_US`, `ja_JP.UTF-8`) and falls back to the base language
 when a region has no dedicated entry.
 
+English shows times on a 12-hour clock (`March 30, 2022 at 10:11:11 PM`); `settings.use24HourClock: true`
+in `ui.json` (or through `ui.set`) shows them on a 24-hour clock instead (`March 30, 2022 at 22:11:11`,
+Versions `Mar 30, 2022, 22:11`), in the Info panel's Captured field, the grid's capture-date caption
+and the Versions list; a time it can't read (an hour alone, a zone right after the date) is shown as
+written. Absent, `false` or any other value keeps the 12-hour clock. The other languages
+already show the time as written (24-hour) and are unchanged by it. Only the display changes: capture
+times, their zones, sorting, export file names and the names saved for automatic versions stay as they
+are. There is no Settings control for it yet, and nothing follows the system's regional settings
+(date order, number separators); issue #3479 tracks the rest.
+
 ## Release notes
 
 Help ▸ What's New shows `docs/whats-new.md`, and each of its lines (a heading, or one wrapped line of a

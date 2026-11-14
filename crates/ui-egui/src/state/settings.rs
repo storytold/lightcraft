@@ -207,6 +207,11 @@ pub struct AppSettings {
     /// profiles changes it). A value this version doesn't read asks again.
     #[serde(deserialize_with = "lenient")]
     pub lens_database: lightcraft_engine::lensfun_download::Offer,
+    /// English times on a 24-hour clock ("at 22:11:11", not "at 10:11:11 PM"): Captured, the grid's
+    /// date caption, Versions. The other languages already show one (issue #3479). Off when
+    /// absent; a value that isn't true/false reads as off.
+    #[serde(rename = "use24HourClock", deserialize_with = "lenient")]
+    pub use_24_hour_clock: bool,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -260,6 +265,7 @@ impl Default for AppSettings {
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
             lens_database: Default::default(),
+            use_24_hour_clock: false,
         }
     }
 }

@@ -224,7 +224,7 @@ fn block_coverage_agrees_with_every_pixel() {
 }
 
 /// A grid of dark lines on white with lateral CA: red magnified by `ar`, blue by `ab` (about the centre).
-fn ca_grid(w: usize, h: usize, ar: f64, ab: f64) -> Rgb32f {
+pub(crate) fn ca_grid(w: usize, h: usize, ar: f64, ab: f64) -> Rgb32f {
     let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
     let val = |x: f64, y: f64| -> f32 {
         // smooth-edged discs on a grid (edges in every direction)

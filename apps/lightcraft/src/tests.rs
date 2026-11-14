@@ -282,6 +282,29 @@ fn docking_survives_native_settings_file_reload() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// Issue #3479: `settings.use24HourClock` is written to ui.json and read back on the next launch, and the
+/// relaunched app draws English times on the 24-hour clock from its first frame.
+#[test]
+fn the_24_hour_clock_survives_native_settings_file_reload() {
+    let d = dir("clock-reload");
+    let path = d.join("ui.json");
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    app.ui.language = lightcraft_ui_egui::i18n::Locale::En;
+    app.ui.settings.use_24_hour_clock = true;
+    let mut writer = PrefsWriter { path: Some(path.clone()), ..Default::default() };
+    writer.save_ui(&app.ui, false).unwrap();
+    let (restored, warning, keep) = load_prefs_at(&path, false);
+    assert!(warning.is_none() && !keep);
+    let mut restored_app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
+    restored_app.ui = restored.unwrap();
+    assert!(restored_app.ui.settings.use_24_hour_clock);
+    restored_app.logic(&egui::Context::default());
+    assert!(lightcraft_ui_egui::i18n::uses_24_hour_clock());
+    assert_eq!(lightcraft_ui_egui::i18n::display_time("2022-03-30T22:11:11"), "March 30, 2022 at 22:11:11");
+    lightcraft_ui_egui::i18n::set_24_hour_clock(false);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn future_docking_preserves_library_settings_and_the_original_preferences_file() {
     let d = dir("future-docking");

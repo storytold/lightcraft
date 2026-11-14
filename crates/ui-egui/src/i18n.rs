@@ -191,6 +191,8 @@ thread_local! {
     static LOCALE: std::cell::Cell<Locale> = const { std::cell::Cell::new(Locale::En) };
     /// The host's answer for the "Auto" language ([`set_default_language`]).
     static DEFAULT_LANGUAGE: std::cell::Cell<Option<Locale>> = const { std::cell::Cell::new(None) };
+    /// `settings.use24HourClock` ([`set_24_hour_clock`]).
+    static CLOCK_24: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Install the language the "Auto" setting resolves to when nothing is stored. The browser host
@@ -224,6 +226,16 @@ pub fn set_language(language: Locale) {
 
 pub fn language() -> Locale {
     LOCALE.with(std::cell::Cell::get)
+}
+
+/// English times on a 24-hour clock (`settings.use24HourClock`, issue #3479); synced from the UI
+/// state like the language.
+pub fn set_24_hour_clock(on: bool) {
+    CLOCK_24.with(|value| value.set(on));
+}
+
+pub fn uses_24_hour_clock() -> bool {
+    CLOCK_24.with(std::cell::Cell::get)
 }
 
 /// Translate a built-in display label, preserving unknown labels verbatim.
@@ -443,6 +455,26 @@ pub fn date_group_label(key: &str, short: bool) -> String {
 /// A capture time for display in the UI language (English: "March 30, 2022 at 10:11:11 PM");
 /// the metadata itself is never rewritten, and a value that doesn't parse is shown as it is.
 pub fn display_time(iso: &str) -> String {
+    display_time_with(iso, uses_24_hour_clock())
+}
+
+/// [`display_time`] on the clock given: `clock_24` puts English on a 24-hour clock ("March 30, 2022
+/// at 22:11:11": the wall-clock digits, fraction and zone left out, missing seconds :00; a time it
+/// can't read, such as an hour alone or a zone right after the date, as written); the other
+/// languages already show the time as written.
+pub fn display_time_with(iso: &str, clock_24: bool) -> String {
+    if language() == Locale::En && clock_24 {
+        // `shift_iso` reads only whole times; `normalize_iso` alone would also take `2022-07-04T22`
+        // as midnight and `2022-07-04+01:00` as 01:00
+        let normal = lightcraft_catalog::dates::shift_iso(iso, 0).and_then(|_| lightcraft_catalog::dates::normalize_iso(iso));
+        let Some(normal) = normal else { return iso.to_string() };
+        let date = lightcraft_catalog::dates::display_time(normal.get(..10).unwrap_or(&normal));
+        // `normalize_iso` gives a date alone midnight: only a written time is shown
+        return match normal.get(11..19).filter(|_| iso.trim().len() >= 16) {
+            Some(time) => format!("{date} at {time}"),
+            None => date,
+        };
+    }
     if language() == Locale::En || lightcraft_catalog::dates::normalize_iso(iso).is_none() {
         return lightcraft_catalog::dates::display_time(iso);
     }

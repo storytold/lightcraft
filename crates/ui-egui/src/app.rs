@@ -627,6 +627,7 @@ impl LightcraftApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.sync_prep_settings();
         i18n::set_language(self.ui.language);
+        i18n::set_24_hour_clock(self.ui.settings.use_24_hour_clock);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and
         // this runs on every UI pass and every hidden logic tick.
@@ -672,6 +673,7 @@ impl LightcraftApp {
     /// frame bookkeeping. A hidden `run_logic` never reaches this.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         i18n::set_language(self.ui.language);
+        i18n::set_24_hour_clock(self.ui.settings.use_24_hour_clock);
         let ctx = ui.ctx().clone();
         if !self.fonts_ready {
             ctx.request_repaint();
