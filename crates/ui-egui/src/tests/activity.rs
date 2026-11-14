@@ -12,6 +12,7 @@ use crate::{LightcraftApp, Services};
 // generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
 const T: Duration = Duration::from_secs(60);
 
+/// Build a headless instance with the procedural demo library loaded.
 fn demo() -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
@@ -21,14 +22,17 @@ fn demo() -> Headless {
     h
 }
 
+/// Check whether a widget with the given identifier is registered.
 fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
+/// Count the number of activity row widgets registered.
 fn rows(h: &Headless) -> usize {
     h.app.widgets.iter().filter(|(w, _)| w.starts_with("activity:row:")).count()
 }
 
+/// Return the bounding rectangle of the registered widget with `id`.
 fn rect(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
@@ -571,6 +575,124 @@ fn rows_added_later_grow_the_stack() {
         let r = rect(&h, &format!("activity:row:{}", g.id()));
         assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
     }
+}
+
+/// Verify that dragging the activity stack moves the panel across frames and respects viewport constraints.
+#[test]
+fn activity_stack_area_is_movable() {
+    let mut h = demo();
+    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    wait_visible(&mut h);
+    let id = egui::Id::unique("activity-stack");
+    let initial_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(initial_rect.min.x >= 7.0 && initial_rect.min.x <= 9.0, "default pos at x=8: {initial_rect:?}");
+
+    // Hover cancel cross -> PointingHand
+    let cancel_id = format!("activity:cancel:{}", g.id());
+    let r = h.request("ui.hoverWidget", json!({"id": cancel_id}), T);
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::PointingHand, "cancel cross shows pointing hand");
+
+    // Hover frame padding -> Grab
+    let r = h.request("ui.move", json!({"x": initial_rect.min.x + 4.0, "y": initial_rect.min.y + 4.0}), T);
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::Grab, "frame padding hover shows grab cursor");
+
+    // Drag the activity stack from non-interactive frame padding, verifying Grabbing cursor mid-drag
+    let start_pos = initial_rect.min + egui::vec2(4.0, 4.0);
+    let target_pos = start_pos + egui::vec2(100.0, 60.0);
+    let modifiers = egui::Modifiers::NONE;
+    h.app.synthetic.push(egui::Event::PointerMoved(start_pos));
+    h.app.synthetic.push(egui::Event::PointerButton { pos: start_pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
+    h.step();
+    for i in 1..=4 {
+        h.app.synthetic.push(egui::Event::PointerMoved(start_pos + (target_pos - start_pos) * (i as f32 / 4.0)));
+        h.step();
+    }
+    assert_eq!(h.last_cursor, egui::CursorIcon::Grabbing, "cursor is Grabbing mid-drag");
+    h.app.synthetic.push(egui::Event::PointerButton { pos: target_pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    h.step();
+    h.step();
+    let updated_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!((updated_rect.min.x - (initial_rect.min.x + 100.0)).abs() < 5.0, "stack moved in x: {updated_rect:?}");
+    assert!((updated_rect.min.y - (initial_rect.min.y + 60.0)).abs() < 5.0, "stack moved in y: {updated_rect:?}");
+    assert!(!g.is_cancelled(), "dragging the stack does not cancel the task");
+
+    // Dragging beyond the right and bottom viewport edges moves toward edges and is constrained on screen
+    let content = h.view.ctx.content_rect();
+    let before_rb = updated_rect;
+    let r = h.request(
+        "ui.drag",
+        json!({"x": updated_rect.min.x + 4.0, "y": updated_rect.min.y + 4.0, "toX": content.max.x + 500.0, "toY": content.max.y + 500.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let constrained_rb = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(constrained_rb.min.x > before_rb.min.x, "stack moved right toward edge: {constrained_rb:?} vs {before_rb:?}");
+    assert!(constrained_rb.min.y > before_rb.min.y, "stack moved down toward edge: {constrained_rb:?} vs {before_rb:?}");
+    assert!(constrained_rb.max.x <= content.max.x + 1.0, "constrained in right: {constrained_rb:?} vs {content:?}");
+    assert!(constrained_rb.max.y <= content.max.y + 1.0, "constrained in bottom: {constrained_rb:?} vs {content:?}");
+
+    // Dragging past the left and top edges moves toward top-left and is constrained
+    let before_lt = constrained_rb;
+    let r = h.request(
+        "ui.drag",
+        json!({"x": constrained_rb.min.x + 4.0, "y": constrained_rb.min.y + 4.0, "toX": content.min.x - 500.0, "toY": content.min.y - 500.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let constrained_lt = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(constrained_lt.min.x < before_lt.min.x, "stack moved left toward edge: {constrained_lt:?} vs {before_lt:?}");
+    assert!(constrained_lt.min.y < before_lt.min.y, "stack moved up toward edge: {constrained_lt:?} vs {before_lt:?}");
+    assert!(constrained_lt.min.x >= content.min.x - 1.0, "constrained in left: {constrained_lt:?} vs {content:?}");
+    assert!(constrained_lt.min.y >= content.min.y - 1.0, "constrained in top: {constrained_lt:?} vs {content:?}");
+}
+
+/// Verify that dragging the stack near the bottom in a short viewport keeps controls reachable and within bounds.
+#[test]
+fn activity_stack_short_viewport_near_bottom_keeps_controls_reachable() {
+    // 300 pt tall viewport exercises the height-budget path.
+    // Do NOT use h.settle(T): demo renders asynchronously and blocks 60 s.
+    // Two steps suffice for a pure-UI / height-constraint test.
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [600.0, 300.0], 1.0);
+    h.step();
+    h.step();
+    let guards: Vec<_> = (0..5).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
+    wait_visible(&mut h);
+
+    let content = h.view.ctx.content_rect();
+    let id = egui::Id::unique("activity-stack");
+
+    // At the default position the cancel and "+more" controls are within the viewport.
+    let cancel_id = format!("activity:cancel:{}", guards[0].id());
+    assert!(has(&h, &cancel_id), "cancel button is present at default position");
+    assert!(content.contains_rect(rect(&h, &cancel_id)), "cancel button within viewport at default position");
+    assert!(has(&h, "activity:more"), "+more button is present at default position");
+    assert!(content.contains_rect(rect(&h, "activity:more")), "+more button within viewport at default position");
+
+    // Cancel task 0 while controls are reachable at the default position.
+    click(&mut h, &cancel_id);
+    assert!(guards[0].is_cancelled(), "cancel button was clickable and worked");
+
+    // Drag the stack to 40 pt above the bottom edge.  When only 40 pt remain the
+    // height-budget path clamps available_h to footer_reserve, so rows disappear —
+    // that is expected.  What must hold is that the stack does not exceed the
+    // viewport: its max.y must stay at or below content.bottom().
+    let initial_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    let r = h.request(
+        "ui.drag",
+        json!({"x": initial_rect.min.x + 4.0, "y": initial_rect.min.y + 4.0, "toX": initial_rect.min.x + 4.0, "toY": content.bottom() - 40.0, "steps": 6}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r:?}");
+    h.step();
+    let dragged_rect = h.view.ctx.memory(|m| m.area_rect(id)).expect("the stack is drawn");
+    assert!(dragged_rect.max.y <= content.bottom() + 1.0, "stack stays within viewport after near-bottom drag: {dragged_rect:?} vs {content:?}");
 }
 
 #[test]

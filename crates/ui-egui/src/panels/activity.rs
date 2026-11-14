@@ -20,7 +20,9 @@ pub const MAX_ROWS: usize = 3;
 /// The stack's width (points).
 pub const WIDTH: f32 = 280.0;
 
+/// Inner margin around the activity stack frame (points).
 const MARGIN: i8 = 8;
+/// Size of the ✕ cancel cross (points).
 const CROSS: f32 = 16.0;
 
 /// "3 of 25", "12 of 340 MB", "40 %"; empty while the amount of work isn't known.
@@ -35,6 +37,7 @@ pub fn count_text(t: &TaskInfo) -> String {
     }
 }
 
+/// Format bytes as a decimal megabyte string ("1.2", "42").
 fn megabytes(bytes: u64) -> String {
     let mb = bytes as f64 / 1_048_576.0;
     if mb < 10.0 { format!("{mb:.1}") } else { format!("{:.0}", mb.floor()) }
@@ -69,38 +72,64 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let shown = if app.activity_expanded { tasks.len() } else { tasks.len().min(MAX_ROWS) };
     let hidden = tasks.len().saturating_sub(shown);
-    let max_height = (ctx.content_rect().height() - t.top_bar_h - 60.0).max(80.0);
     let mut cancel = None;
     let mut toggle = false;
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(6).inner_margin(Margin::same(MARGIN));
-    egui::Area::new(egui::Id::unique("activity-stack")).order(egui::Order::Middle).fixed_pos(pos2(8.0, t.top_bar_h + 8.0)).show(ctx, |ui| {
-        // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
-        // is: the stack would never grow when rows are added. Give it the whole height below the top bar instead
-        // (the scroll area keeps to `max_height`).
-        ui.set_max_height((ctx.content_rect().height() - t.top_bar_h - 16.0).max(80.0));
-        frame.show(ui, |ui| {
-            let inner = WIDTH - 2.0 * (f32::from(MARGIN) + 1.0);
-            ui.set_width(inner);
-            ui.spacing_mut().item_spacing.y = 3.0;
-            egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, true]).show(ui, |ui| {
-                for (i, task) in tasks.iter().take(shown).enumerate() {
-                    if i > 0 {
-                        ui.add_space(6.0);
+    let area_resp = egui::Area::new(egui::Id::unique("activity-stack"))
+        .order(egui::Order::Middle)
+        .default_pos(pos2(8.0, t.top_bar_h + 8.0))
+        .movable(true)
+        .constrain(true)
+        .show(ctx, |ui| {
+            // An area lays out in the size it had last frame, and the scroll area would take that as all the room there
+            // is: the stack would never grow when rows are added. Give it the whole height below its position instead
+            // (the scroll area keeps to `max_scroll_h`).
+            let has_footer = hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS);
+            let footer_reserve = if has_footer { 44.0 } else { 20.0 };
+            let space_below = (ctx.content_rect().bottom() - ui.cursor().top() - 16.0).max(0.0);
+            // Cap at the true viewport capacity so the stack never claims more height
+            // than the viewport can provide, even when it is shorter than `footer_reserve`.
+            let max_stack_h = (ctx.content_rect().height() - 16.0).max(0.0);
+            let available_h = space_below.clamp(max_stack_h.min(footer_reserve), max_stack_h);
+            ui.set_max_height(available_h);
+            let frame_resp = frame.show(ui, |ui| {
+                let inner = WIDTH - 2.0 * (f32::from(MARGIN) + 1.0);
+                ui.set_width(inner);
+                ui.spacing_mut().item_spacing.y = 3.0;
+                let mut interactive_hovered = false;
+                let max_scroll_h = (available_h - footer_reserve).max(0.0);
+                egui::ScrollArea::vertical().max_height(max_scroll_h).min_scrolled_height(0.0).auto_shrink([false, true]).show(ui, |ui| {
+                    for (i, task) in tasks.iter().take(shown).enumerate() {
+                        if i > 0 {
+                            ui.add_space(6.0);
+                        }
+                        let (clicked, hovered) = row(ui, &t, task, inner);
+                        if clicked {
+                            cancel = Some(task.id);
+                        }
+                        interactive_hovered |= hovered;
                     }
-                    if row(ui, &t, task, inner) {
-                        cancel = Some(task.id);
-                    }
+                });
+                if has_footer {
+                    ui.add_space(4.0);
+                    let text = if hidden > 0 { tr_format!("+{n} more", n = hidden) } else { tr("Show less").to_string() };
+                    let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
+                    register(ui, "activity:more", r.rect);
+                    toggle = r.clicked();
+                    interactive_hovered |= r.hovered();
                 }
+                interactive_hovered
             });
-            if hidden > 0 || (app.activity_expanded && tasks.len() > MAX_ROWS) {
-                ui.add_space(4.0);
-                let text = if hidden > 0 { tr_format!("+{n} more", n = hidden) } else { tr("Show less").to_string() };
-                let r = ui.add(egui::Label::new(RichText::new(text).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
-                register(ui, "activity:more", r.rect);
-                toggle = r.clicked();
-            }
+            frame_resp.inner
         });
-    });
+    let interactive_hovered = area_resp.inner;
+    if area_resp.response.dragged() {
+        ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if interactive_hovered {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+    } else if area_resp.response.hovered() {
+        ctx.set_cursor_icon(egui::CursorIcon::Grab);
+    }
     if let Some(id) = cancel {
         self::cancel(app, id);
     }
@@ -115,9 +144,10 @@ pub(crate) fn cancel(app: &mut LightcraftApp, id: u64) {
     let _ = app.session.execute("activity.cancel", &json!({"id": id}));
 }
 
-/// One task: name and ✕, the bar, the detail line. True when ✕ was clicked.
-fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
+/// One task: name and ✕, the bar, the detail line. Returns `(cancel_clicked, cross_hovered)`.
+fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> (bool, bool) {
     let mut clicked = false;
+    let mut cross_hovered = false;
     let r = ui.vertical(|ui| {
         ui.set_width(width);
         ui.horizontal(|ui| {
@@ -133,6 +163,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
                 crate::widgets::announce(&resp, crate::i18n::tr("Cancel"));
                 paint(ui.painter(), rect.shrink(2.0), Icon::Close, if resp.hovered() { t.text } else { t.icon });
                 register(ui, format!("activity:cancel:{}", task.id), rect);
+                cross_hovered = resp.hovered();
                 clicked = resp.on_hover_text(tr("Cancel")).clicked();
             }
         });
@@ -143,7 +174,7 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
         }
     });
     register(ui, format!("activity:row:{}", task.id), r.response.rect);
-    clicked
+    (clicked, cross_hovered)
 }
 
 /// The progress bar, named after its task for screen readers; while the amount of work isn't
