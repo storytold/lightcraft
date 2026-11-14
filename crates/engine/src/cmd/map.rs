@@ -65,6 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = format!("loc-{}", s.saved_locations.len() + 1);
                 let loc = SavedLocation::new(&id, &name, lat, lon, radius, is_private);
                 s.saved_locations.push(loc.clone());
+                let _ = s.save_prefs();
                 Ok(json!(loc))
             }
         ),
@@ -83,6 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if s.saved_locations.len() == before_len {
                     return Err(bad(C, format!("saved location `{id}` not found")));
                 }
+                let _ = s.save_prefs();
                 Ok(json!({ "deleted": true }))
             }
         ),
