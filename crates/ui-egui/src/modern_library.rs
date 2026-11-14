@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Id, Rect, Sense, Stroke, WidgetType, pos2, vec2};
+use egui::{Align2, Color32, Id, Rect, Stroke, pos2, vec2};
 use lcc_catalog::Photo;
 use serde_json::{Value, json};
 
@@ -31,7 +31,6 @@ pub(crate) fn show(app: &mut LccApp, ui: &egui::Ui, area: Rect) {
     if !(sheet && app.ui.modern.info) {
         search(app, ui, area);
     }
-    scroll_handle(app, ui, area);
     if app.ui.modern.info {
         info_card(app, ui, area);
     }
@@ -128,86 +127,6 @@ fn search(app: &mut LccApp, ui: &egui::Ui, area: Rect) {
         {
             app.toast_error(ui.ctx(), e);
         }
-    });
-}
-
-// ------------------------------------------------------------------------ fast-scroll handle
-
-/// How long the fast-scroll handle stays after the view stops moving (s).
-const HANDLE_FADE: f64 = 1.2;
-
-/// The fast-scroll handle along the grid's right edge: while the view moves — a swipe, a glide,
-/// the thumb itself dragged — a finger-sized thumb appears on a faint track and fades out
-/// [`HANDLE_FADE`] after it stops. Dragging the thumb takes the view straight to where it is
-/// taken: one drag reaches the start or the end of the library. The thumb covers the share of the
-/// track the view covers of the shoot, so it is never smaller than a finger. The "1,234 / 2,233"
-/// pill beside the bar says where it lands.
-fn scroll_handle(app: &mut LccApp, ui: &egui::Ui, area: Rect) {
-    if app.ui.modern.menu.is_some() {
-        return;
-    }
-    let ctx = ui.ctx().clone();
-    let Some((offset, max, total)) = ctx.data(|d| d.get_temp::<(f32, f32, f32)>(Id::new("modern-grid-scroll"))) else { return };
-    if max <= 0.0 || !(offset.is_finite() && total.is_finite()) {
-        return; // everything on screen: nothing to scroll
-    }
-    // the track hugs the grid's own right edge (last frame's rect), clear of the search pill at
-    // the bottom centre
-    let grid = app.widgets.iter().rev().find(|(w, _)| *w == "grid:scroll").map_or(area, |(_, r)| *r);
-    let right = grid.right() - app.ui.modern.insets.right - 8.0;
-    let bottom = grid.bottom() - MARGIN - 36.0 - 10.0;
-    let top = grid.top() + 10.0;
-    if bottom - top < 80.0 {
-        return;
-    }
-    let track_h = bottom - top;
-    let thumb_h = ((total - max) / total * track_h).clamp(44.0, track_h);
-    let span = (track_h - thumb_h).max(1.0);
-    let at = (offset / max).clamp(0.0, 1.0) * span;
-    // hidden until the view first moves; shown from then on while it moves or the thumb is held
-    let now = ctx.input(|i| i.time);
-    let moved = ctx.data(|d| d.get_temp::<f32>(Id::new("modern-scroll-handle-prev"))).is_some_and(|y| (y - offset).abs() > 0.5);
-    ctx.data_mut(|d| d.insert_temp(Id::new("modern-scroll-handle-prev"), offset));
-    let seen = Id::new("modern-scroll-handle-at");
-    let shown = moved || ctx.data(|d| d.get_temp::<f64>(seen)).is_some();
-    if !shown {
-        return;
-    }
-    let t = Tokens::get(&ctx);
-    let thumb = Rect::from_min_size(pos2(right - 24.0, top + at), vec2(24.0, thumb_h));
-    egui::Area::new(Id::new("modern-scroll-handle")).fixed_pos(pos2(right - 6.0, top)).order(egui::Order::Middle).show(&ctx, |ui| {
-        let (track, _) = ui.allocate_exact_size(vec2(6.0, track_h), Sense::hover());
-        // grab-friendly (24 points) though it draws 6: only while it shows, so a faded handle
-        // never stands between a swipe and the grid
-        let resp = ui.interact(thumb, Id::new("modern-scroll-handle-thumb"), Sense::click_and_drag());
-        resp.widget_info(|| egui::WidgetInfo::labeled(WidgetType::Other, true, crate::i18n::tr("Fast Scroll")));
-        register(&ctx, "modern:scrollHandle", thumb);
-        // the thumb tracks the finger: its drag is the view's offset, taken by the grid next frame
-        if resp.dragged() {
-            let next = offset + resp.drag_delta().y / span * max;
-            ctx.data_mut(|d| d.insert_temp(Id::new("modern-grid-scroll-to"), next.clamp(0.0, max)));
-        }
-        let active = moved || resp.hovered() || resp.is_pointer_button_down_on() || resp.dragged();
-        let last = ctx.data(|d| d.get_temp::<f64>(seen)).unwrap_or(now);
-        let last = if active { now } else { last };
-        ctx.data_mut(|d| d.insert_temp(seen, last));
-        let fade = ((now - last) as f32 / HANDLE_FADE as f32).clamp(0.0, 1.0);
-        if fade >= 1.0 {
-            ctx.data_mut(|d| d.remove::<f64>(seen));
-            return;
-        }
-        if fade > 0.0 {
-            ctx.request_repaint_after(std::time::Duration::from_millis(40));
-        }
-        let a = 1.0 - fade;
-        let p = ui.painter();
-        p.rect_filled(track, 3.0, Color32::from_white_alpha((26.0 * a) as u8));
-        let held = resp.is_pointer_button_down_on();
-        p.rect_filled(
-            Rect::from_min_size(pos2(track.left(), top + at), vec2(6.0, thumb_h)),
-            3.0,
-            if held { t.text } else { Color32::from_white_alpha((150.0 * a) as u8) },
-        );
     });
 }
 
