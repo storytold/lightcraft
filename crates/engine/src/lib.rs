@@ -21,6 +21,9 @@ pub mod apple_photos;
 pub mod availability;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
+// a catalog is a folder on disk, and its times go through chrono (native only here)
+#[cfg(not(target_arch = "wasm32"))]
+pub mod capture_one_catalog;
 pub mod cmd;
 pub mod config;
 pub mod contact_sheet;
