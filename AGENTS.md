@@ -175,9 +175,29 @@ of it.
 - Text boxes use `crates/ui-egui/src/widgets/text_field.rs` (`TextField`), not `egui::TextEdit`: it gives every field the
   Cut / Copy / Paste / Select All menu, Esc restoring the text, and reports how an edit ended. Give each a widget id
   that is unique on screen. Older fields still on `TextEdit` move over as they are touched.
-- Parallel agents: separate git worktrees and `CARGO_TARGET_DIR=target/agent-<name>`; each agent uses its **own control port** (pick one in 18000–19999, never the default 7980) and its own scratch subfolder (`<scratch>/<agent-name>/`) — never `rm -rf` shared paths; delete your target dir when done (disk is shared); keep every `Cargo.toml` valid at all times (the `crates/*` glob means one broken manifest breaks everyone).
+- Parallel agents: separate git worktrees and `CARGO_TARGET_DIR=target/agent-<name>`; each agent uses its **own control port** (pick one in 18000–19999, never the default 7980) and its own scratch subfolder (`<scratch>/<agent-name>/`) — never `rm -rf` shared paths; delete your target dir when done (disk is shared); keep every `Cargo.toml` valid at all times (the `crates/*` glob means one broken manifest breaks everyone). Test runs share the machine's memory too (the ui-egui tests alone take several GB): run them through `cargo xtask test` or `ci`, whose slot lets one run at a time per machine (below).
 - Test corpora: `cargo xtask corpus --download` into `corpus/` (gitignored, CC0 only). Never commit media.
 - Shared real-file test corpora (Photoshop-authored PSDs, etc.) live in [`storytold/photocraft-corpus`](https://github.com/storytold/photocraft-corpus). Never commit large binary fixtures to this repo; fetch them pinned by commit and sha256-verified, as PhotoCraft does with `cargo xtask corpus`.
+
+## Running tests
+- **Run tests through xtask:** `cargo xtask test [-p PKG]… [-- FILTER]` (`--keep-going` runs every test binary and
+  names each that fails, instead of stopping at the first) or `cargo xtask ci --quick`. Both take the machine's CI slot
+  and `ci`'s RAM-aware caps: build jobs and test threads sized by the memory available, at most 4 tests at once in
+  each binary unless you set `RUST_TEST_THREADS` (a value other than 4 wins). README → Quick start describes them
+  and the settings that change them. Plain `cargo test -p PKG` on a small crate is fine while you iterate.
+- **Never run plain `cargo test --workspace`**, with or without `--no-fail-fast`. It takes no CI slot, so it runs on
+  top of every other agent's tests, and gets none of `ci`'s caps (`.cargo/config.toml` only limits it to 4 tests at
+  once in each binary).
+- **When `ci` fails on a test your change doesn't touch,** rerun only that package's tests: `cargo xtask test -p PKG`
+  (`-- --exact TEST_PATH` narrows it to the one test; a bare `-- NAME` runs every test whose path contains it). If
+  it fails without your change too, say so in the PR and link its issue, or file one; if it passes on a rerun, it's
+  flaky (**Flaky tests** below). Don't widen the run or bypass xtask to get past it. `ci`'s test step runs every
+  test binary, but it runs the doctests only when they all pass, and `ci` stops at the first failing step, so cover
+  what it didn't reach: `cargo xtask test --doc -p …` for the packages you changed (their tests, then their
+  doctests), and `cargo xtask parity`, `layers`, `assets`, `roots` and `wasm` for the steps after `test`.
+- **Nothing outlives your session:** never leave a test run going in the background when you finish, and wrap a long
+  run in `timeout` (`timeout 60m cargo xtask test -p …`; on macOS that's `gtimeout`, from Homebrew's
+  `coreutils`). Before you stop, check that no `cargo` or test process you started is still running.
 
 ## Testing & performance (do this often)
 - Unit/property tests next to the code; end-to-end tests drive real binaries (`crates/mcp/tests/e2e.rs`,
