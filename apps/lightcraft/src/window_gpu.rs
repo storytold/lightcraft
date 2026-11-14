@@ -101,9 +101,21 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
     let mut problems = Vec::new();
     let chosen = if cfg!(windows) {
         pick_probed(files, &order, &mut problems, compose_window)
-    } else if forced == Some(WindowRenderer::Glow) || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow)) {
-        // elsewhere eframe's own wgpu set-up stays the default; glow after a failed start
+    } else if forced == Some(WindowRenderer::Glow)
+        || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow && (os != "linux" || f != WindowRenderer::Wgpu(wgpu::Backends::GL))))
+    {
+        // elsewhere eframe's own wgpu set-up stays the default; glow after a failed start (on Linux a
+        // failed GL start falls back to Vulkan, the next renderer in the order)
         Some((WindowRenderer::Glow, None))
+    } else if os == "linux" {
+        // When the user explicitly sets LIGHTCRAFT_GPU_BACKEND/WGPU_BACKEND, honor that choice
+        // via window_backends() instead of probing with platform order (GL first).
+        let env_choice = backend::env_choice();
+        if matches!(env_choice, backend::BackendChoice::Auto) {
+            pick_probed(files, &order, &mut problems, compose_window)
+        } else {
+            Some((WindowRenderer::Wgpu(backend::window_backends()), None))
+        }
     } else {
         Some((WindowRenderer::Wgpu(backend::window_backends()), None))
     };

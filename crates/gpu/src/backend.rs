@@ -5,7 +5,8 @@
 //! adapters, even when it then picks another one: with Vulkan in the set, a broken Vulkan driver
 //! can crash the process (an access violation inside the driver DLL, which nothing can catch)
 //! although DX12 would have been used. So Windows defaults to DX12 alone. macOS uses Metal, Linux
-//! Vulkan (plus GL for the window when the build has it).
+//! uses GL alone for the window: a multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and
+//! the GUI can fail to appear.
 //!
 //! Overrides, read once per process:
 //! - `LIGHTCRAFT_GPU_BACKEND` = `dx12` | `vulkan` | `metal` | `gl` (comma lists allowed), `auto`
@@ -82,14 +83,20 @@ pub fn default_window_backends(os: &str) -> Backends {
     match os {
         "windows" => Backends::DX12,
         "macos" | "ios" => Backends::METAL,
-        // eframe's default (GL only when the build has it)
+        // GL only on Linux: a multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and the GUI can fail to appear
+        "linux" => Backends::GL,
+        // other platforms keep the previous default (Vulkan-capable plus GL)
         _ => Backends::PRIMARY | Backends::GL,
     }
 }
 
 /// Resolve `choice` against the backends this build contains (`compiled`): `None` = GPU off.
-/// Asked-for backends that aren't compiled in fall back to `default`.
+/// Asked-for backends that aren't compiled in fall back to `default`, and a `default` this build
+/// does not contain falls back to `compiled`.
 pub fn resolve(choice: BackendChoice, default: Backends, compiled: Backends) -> Option<Backends> {
+    // A platform default this build does not contain (e.g. GL without `gles`) can select no
+    // adapter: fall back to a backend it does contain.
+    let default = if default.intersects(compiled) { default & compiled } else { compiled };
     match choice {
         BackendChoice::Off => None,
         BackendChoice::Auto => Some(default),
@@ -101,7 +108,7 @@ pub fn resolve(choice: BackendChoice, default: Backends, compiled: Backends) -> 
     }
 }
 
-fn env_choice() -> BackendChoice {
+pub fn env_choice() -> BackendChoice {
     static C: std::sync::OnceLock<BackendChoice> = std::sync::OnceLock::new();
     *C.get_or_init(|| {
         let lc = std::env::var("LIGHTCRAFT_GPU_BACKEND").ok();
@@ -118,12 +125,16 @@ pub fn compute_backends() -> Option<Backends> {
 /// The backends for the desktop window's renderer (eframe/egui-wgpu). The window always needs
 /// one: `off` keeps the platform default.
 pub fn window_backends() -> Backends {
+    let compiled = wgpu::Instance::enabled_backend_features();
     let default = default_window_backends(std::env::consts::OS);
+    // A platform default this build does not contain (e.g. GL without `gles`) can select no
+    // adapter: fall back to a backend it does contain.
+    let default = if default.intersects(compiled) { default & compiled } else { compiled };
     let choice = match env_choice() {
         BackendChoice::Off => BackendChoice::Auto,
         c => c,
     };
-    resolve(choice, default, wgpu::Instance::enabled_backend_features()).unwrap_or(default)
+    resolve(choice, default, compiled).unwrap_or(default)
 }
 
 /// The DX12 shader compiler: FXC (`d3dcompiler_47.dll`, part of Windows) unless
@@ -454,15 +465,22 @@ impl WindowRenderer {
         }
     }
 
-    /// One renderer name (`dx12`, `vulkan`, `metal`, `gl`, `glow`); anything else (lists, `auto`,
-    /// `off`, unknown names) is `None`.
+    /// One renderer name (`dx12`, `vulkan`, `metal`, `gl`, `glow`); comma-separated lists of
+    /// `dx12`, `vulkan`, `metal`, `gl`; anything else (`auto`, `off`, unknown names) is `None`.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim().to_ascii_lowercase();
         if s == "glow" {
             return Some(WindowRenderer::Glow);
         }
         match parse_backends(&s)? {
-            BackendChoice::Use(b) if [Backends::DX12, Backends::VULKAN, Backends::METAL, Backends::GL].contains(&b) => Some(WindowRenderer::Wgpu(b)),
+            BackendChoice::Use(b) => {
+                let valid = Backends::DX12 | Backends::VULKAN | Backends::METAL | Backends::GL;
+                if !b.is_empty() && (b & valid) == b {
+                    Some(WindowRenderer::Wgpu(b))
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }
@@ -494,6 +512,7 @@ pub fn window_renderer_order(
         // no Vulkan on Windows: its driver can crash the process uncatchably (issue #136)
         "windows" => vec![Backends::DX12, Backends::GL],
         "macos" | "ios" => vec![Backends::METAL],
+        "linux" => vec![Backends::GL, Backends::VULKAN],
         _ => vec![Backends::VULKAN, Backends::GL],
     };
     let chain = platform.into_iter().map(WindowRenderer::Wgpu).chain([WindowRenderer::Glow]);
@@ -508,6 +527,27 @@ pub fn window_renderer_order(
     let no_vulkan = |r: &WindowRenderer| os != "windows" || !matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN));
     let candidates = forced
         .into_iter()
+        .flat_map(|r| {
+            if let WindowRenderer::Wgpu(b) = r {
+                let count = [Backends::DX12, Backends::VULKAN, Backends::METAL, Backends::GL]
+                    .into_iter()
+                    .filter(|backend| b.contains(*backend))
+                    .count();
+                if count > 1 {
+                    let platform_order = match os {
+                        "windows" => vec![Backends::DX12, Backends::GL],
+                        "macos" | "ios" => vec![Backends::METAL],
+                        "linux" => vec![Backends::GL, Backends::VULKAN],
+                        _ => vec![Backends::VULKAN, Backends::GL],
+                    };
+                    return platform_order.into_iter()
+                        .filter(|backend| b.contains(*backend))
+                        .map(WindowRenderer::Wgpu)
+                        .collect::<Vec<_>>();
+                }
+            }
+            vec![r]
+        })
         .chain(remembered.filter(|r| not_failed(r) && no_vulkan(r)))
         .chain(chain.filter(not_failed))
         .chain(failed.filter(no_vulkan));
@@ -518,7 +558,8 @@ pub fn window_renderer_order(
         }
     }
     if out.is_empty() {
-        out.push(WindowRenderer::Wgpu(default_window_backends(os) & compiled));
+        let fallback = default_window_backends(os) & compiled;
+        out.push(WindowRenderer::Wgpu(if fallback.is_empty() { compiled } else { fallback }));
     }
     out
 }
@@ -574,7 +615,7 @@ mod tests {
         assert!(!default_window_backends("windows").contains(Backends::VULKAN));
         assert_eq!(default_compute_backends("macos"), Backends::METAL);
         assert!(default_compute_backends("linux").contains(Backends::VULKAN));
-        assert!(default_window_backends("linux").contains(Backends::VULKAN | Backends::GL));
+        assert_eq!(default_window_backends("linux"), Backends::GL);
     }
 
     /// Issue #471: DX12 shaders compile with FXC, never a `dxcompiler.dll` found on the search path,
@@ -780,6 +821,53 @@ mod tests {
         assert_eq!(window_renderer_order(Some(vk), None, None, "windows", all, true).first(), Some(&vk));
     }
 
+    /// On Linux the GL software rasterizer is tried before Vulkan, so a machine that
+    /// only has a software GL adapter still brings the GUI up instead of selecting
+    /// the Vulkan software rasterizer first.
+    #[test]
+    fn linux_window_tries_gl_before_vulkan_software() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        let vk = WindowRenderer::Wgpu(Backends::VULKAN);
+        let gl = WindowRenderer::Wgpu(Backends::GL);
+        let automatic = window_renderer_order(None, None, None, "linux", all, true);
+        assert_eq!(automatic, [gl, vk, WindowRenderer::Glow]);
+        // regression control: other platforms keep Vulkan first, with GL behind it
+        let other = window_renderer_order(None, None, None, "freebsd", all, true);
+        assert_eq!(other.first(), Some(&vk), "freebsd chain: {other:?}");
+        assert_eq!(default_window_backends("freebsd"), Backends::PRIMARY | Backends::GL);
+        assert_eq!(automatic.first(), Some(&gl));
+    }
+
+    /// On Linux the window must use GL only: `window_renderer_order` puts GL first, but a
+    /// multi-backend set lets wgpu pick Vulkan (e.g. llvmpipe) and the GUI can fail to appear.
+    /// A build without GL returns the compiled fallback instead, and an environment override
+    /// wins over both.
+    #[test]
+    fn linux_window_backends_are_gl_only() {
+        assert_eq!(default_window_backends("linux"), Backends::GL);
+        assert!(!default_window_backends("linux").contains(Backends::VULKAN));
+        if cfg!(target_os = "linux") {
+            let compiled = wgpu::Instance::enabled_backend_features();
+            let default = default_window_backends("linux");
+            let default = if default.intersects(compiled) { default & compiled } else { compiled };
+            let choice = match env_choice() {
+                BackendChoice::Off => BackendChoice::Auto,
+                c => c,
+            };
+            let expected = resolve(choice, default, compiled).unwrap_or(default);
+            assert_eq!(window_backends(), expected);
+            if matches!(choice, BackendChoice::Auto) {
+                assert_eq!(window_backends(), default);
+                if compiled.contains(Backends::GL) {
+                    assert_eq!(window_backends(), Backends::GL);
+                    assert!(!window_backends().contains(Backends::VULKAN));
+                } else if !compiled.is_empty() {
+                    assert_eq!(window_backends(), compiled);
+                }
+            }
+        }
+    }
+
     #[test]
     fn window_renderer_names_round_trip() {
         for n in ["dx12", "vulkan", "metal", "gl", "glow"] {
@@ -794,6 +882,25 @@ mod tests {
         assert_eq!(forced_window_renderer(None, None), None);
         // `glow` only concerns the window: compute keeps its default, without a warning
         assert_eq!(parse_backends("glow"), Some(BackendChoice::Auto));
+    }
+
+    /// WindowRenderer::parse incorrectly rejects comma-separated backend lists that parse_backends
+    /// accepts. On Linux there is no probing, so explicit backend selection via
+    /// LIGHTCRAFT_GPU_BACKEND=vulkan,gl must work. This test fails before the fix.
+    #[test]
+    fn window_renderer_names_round_trip_review_regression_1() {
+        // parse_backends accepts comma-separated lists
+        assert_eq!(parse_backends("vulkan,gl"), Some(BackendChoice::Use(Backends::VULKAN | Backends::GL)));
+        assert_eq!(parse_backends("dx12,vulkan"), Some(BackendChoice::Use(Backends::DX12 | Backends::VULKAN)));
+
+        // WindowRenderer::parse should accept them for explicit backend selection on Linux (no probing)
+        // but currently rejects them - this is the regression
+        assert_eq!(WindowRenderer::parse("vulkan,gl"), Some(WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)));
+        assert_eq!(WindowRenderer::parse("dx12,vulkan"), Some(WindowRenderer::Wgpu(Backends::DX12 | Backends::VULKAN)));
+
+        // Single backends still work
+        assert_eq!(WindowRenderer::parse("vulkan"), Some(WindowRenderer::Wgpu(Backends::VULKAN)));
+        assert_eq!(WindowRenderer::parse("gl"), Some(WindowRenderer::Wgpu(Backends::GL)));
     }
 
     #[test]
@@ -833,5 +940,46 @@ mod tests {
         assert!(r.is_err());
         assert!(!m.exists(), "the process survived, so nothing is left to report");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On Linux the window is GL-only when GL is compiled in; a build without GL returns the
+    /// compiled fallback instead of GL, and an environment override wins over both.
+    #[test]
+    fn linux_window_backends_are_gl_only_review_regression_1() {
+        // Run on every host: pass "linux" explicitly instead of relying on the host OS, so
+        // this fails on a Windows host too when the Linux default is not GL only.
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
+        assert_eq!(default_window_backends("linux"), Backends::GL);
+        assert!(!default_window_backends("linux").contains(Backends::VULKAN));
+        assert_eq!(resolve(BackendChoice::Auto, default_window_backends("linux"), all), Some(Backends::GL));
+        let gl = WindowRenderer::Wgpu(Backends::GL);
+        let order = window_renderer_order(None, None, None, "linux", all, true);
+        assert_eq!(order.first(), Some(&gl), "Linux window must try GL first: {order:?}");
+        assert_eq!(order, [gl, WindowRenderer::Wgpu(Backends::VULKAN), WindowRenderer::Glow]);
+        // A build without GL: the compiled fallback, not GL.
+        let without_gl = Backends::VULKAN | Backends::DX12;
+        assert_eq!(resolve(BackendChoice::Auto, default_window_backends("linux"), without_gl), Some(without_gl));
+        assert!(!window_renderer_order(None, None, None, "linux", without_gl, true).contains(&gl));
+        // The host route itself, only where the host is Linux.
+        if cfg!(target_os = "linux") {
+            let compiled = wgpu::Instance::enabled_backend_features();
+            let default = default_window_backends("linux");
+            let default = if default.intersects(compiled) { default & compiled } else { compiled };
+            let choice = match env_choice() {
+                BackendChoice::Off => BackendChoice::Auto,
+                c => c,
+            };
+            let expected = resolve(choice, default, compiled).unwrap_or(default);
+            assert_eq!(window_backends(), expected);
+            if matches!(choice, BackendChoice::Auto) {
+                assert_eq!(window_backends(), default);
+                if compiled.contains(Backends::GL) {
+                    assert_eq!(window_backends(), Backends::GL);
+                    assert!(!window_backends().contains(Backends::VULKAN));
+                } else if !compiled.is_empty() {
+                    assert_eq!(window_backends(), compiled);
+                }
+            }
+        }
     }
 }
