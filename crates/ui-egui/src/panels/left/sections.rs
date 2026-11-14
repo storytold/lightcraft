@@ -388,11 +388,21 @@ fn new_album_menu(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// takes seconds, a headless run's fast simulated clock would start the next one before settling.
 /// A catalog change during a timed refresh is pending from the frame it is seen, although its
 /// recount starts only when the refresh ends.
+///
+/// A count lists the files on the UI thread and checks them later on its thread, so a photo
+/// that moved, was relinked or left the library in between is found gone at its old place. Such
+/// a count is still shown, so the row keeps up while edits keep coming, but only with the files
+/// it found gone that are still the library's ([`still_listed`]): a move doesn't bring up a
+/// Missing Photos row that its recount then takes away, moving every row below it twice.
 pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::AcqRel, Ordering::Relaxed};
     #[derive(Clone, Default)]
     struct Job {
+        /// The count shown: set on this thread from what a count found.
         n: std::sync::Arc<AtomicUsize>,
+        /// What the last count found gone, and the catalog revision it listed the files at;
+        /// taken by the next frame.
+        found: std::sync::Arc<std::sync::Mutex<Option<(u64, Vec<String>)>>>,
         running: std::sync::Arc<AtomicBool>,
         at: f64,
         rev: u64,
@@ -404,6 +414,10 @@ pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize
     let now = ui.input(|i| i.time);
     let rev = app.session.catalog.revision;
     let mut job: Job = ui.data(|d| d.get_temp(id)).unwrap_or(Job { rev: u64::MAX, at: f64::MIN, ..Default::default() });
+    if let Some((listed_at, gone)) = job.found.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+        let n = if listed_at == rev { gone.len() } else { still_listed(&gone, &lightcraft_engine::cmd::missing::candidates(&app.session.catalog)) };
+        job.n.store(n, Relaxed);
+    }
     let running = job.running.load(Relaxed);
     if running && job.rev != rev && !job.owed {
         // the recount waits for the running count (a timed refresh, not waited for), but settling
@@ -429,16 +443,17 @@ pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize
         job.rev = rev;
         #[cfg(test)]
         let test_delay = app.missing_count_test_delay;
-        let (n, running, ctx, done) = (job.n.clone(), job.running.clone(), ui.ctx().clone(), pending.clone());
+        let (found, running, ctx, done) = (job.found.clone(), job.running.clone(), ui.ctx().clone(), pending.clone());
         let work = move || {
             #[cfg(test)]
             if let Some(d) = test_delay {
                 std::thread::sleep(d);
             }
-            let missing = if cfg!(target_arch = "wasm32") { 0 } else { paths.iter().filter(|p| !std::path::Path::new(p).exists()).count() };
-            n.store(missing, Relaxed);
+            let gone: Vec<String> =
+                if cfg!(target_arch = "wasm32") { Vec::new() } else { paths.into_iter().filter(|p| !std::path::Path::new(p).exists()).collect() };
+            *found.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((rev, gone));
             running.store(false, Relaxed);
-            // after the count is stored: a frame that sees the pending count drop also sees the row
+            // after the result is stored: a frame that sees the pending count drop also sees the row
             if let Some(d) = done {
                 d.fetch_sub(1, AcqRel);
             }
@@ -457,4 +472,12 @@ pub(super) fn missing_count(app: &mut LightcraftApp, ui: &mut egui::Ui) -> usize
         ui.data_mut(|d| d.insert_temp(id, job.clone()));
     }
     job.n.load(Relaxed)
+}
+
+/// How many of the files a count found `gone` are still among the library's files (`listed`, as
+/// [`lightcraft_engine::cmd::missing::candidates`] lists them now): one counted once per photo
+/// that still has it.
+fn still_listed(gone: &[String], listed: &[String]) -> usize {
+    let listed: std::collections::HashSet<&str> = listed.iter().map(String::as_str).collect();
+    gone.iter().filter(|p| listed.contains(p.as_str())).count()
 }
