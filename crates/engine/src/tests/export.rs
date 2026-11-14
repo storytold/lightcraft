@@ -1075,7 +1075,6 @@ fn remove_location_refuses_a_psd_with_unreadable_resources() {
     let mut session = Session::new().with_fs();
     session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
     let id = session.catalog.photos().next().unwrap().id;
-
     // Import the decodable original first. The malformed resource list below is the file state the
     // export safety check must refuse; it is not a fixture the image importer should have to decode.
     let mut bytes = valid_bytes;

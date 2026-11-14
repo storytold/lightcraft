@@ -11,8 +11,65 @@
 //! packet is a `mime` item whose content type is `application/rdf+xml`. The ICC profile is an item
 //! *property*, not an item, and is read by the decoder instead.
 
-use crate::container::Embedded;
-use crate::cr3::{MAX_BOXES, be16, be32, be64, boxes};
+use crate::Embedded;
+
+const MAX_BOXES: usize = 4096;
+
+#[derive(Clone, Copy)]
+struct BoxRef {
+    kind: [u8; 4],
+    body: usize,
+    end: usize,
+}
+
+fn be16(b: &[u8], at: usize) -> Option<u16> {
+    let s = b.get(at..at + 2)?;
+    Some(u16::from_be_bytes([s[0], s[1]]))
+}
+
+fn be32(b: &[u8], at: usize) -> Option<u32> {
+    let s = b.get(at..at + 4)?;
+    Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+}
+
+fn be64(b: &[u8], at: usize) -> Option<u64> {
+    let s = b.get(at..at + 8)?;
+    Some(u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
+}
+
+fn boxes(bytes: &[u8], mut at: usize, end: usize, budget: &mut usize) -> Vec<BoxRef> {
+    let mut out = Vec::new();
+    let end = end.min(bytes.len());
+    while at + 8 <= end && *budget > 0 {
+        *budget -= 1;
+        let Some(size32) = be32(bytes, at) else { break };
+        let Some(kind_slice) = bytes.get(at + 4..at + 8) else { break };
+        let mut kind = [0u8; 4];
+        kind.copy_from_slice(kind_slice);
+        let (hdr, box_end) = match size32 {
+            0 => (8, end),
+            1 => {
+                let Some(s64) = be64(bytes, at + 8) else { break };
+                let Ok(s) = usize::try_from(s64) else { break };
+                if s < 16 {
+                    break;
+                }
+                (16, at.saturating_add(s).min(end))
+            }
+            s if s >= 8 => (8, at.saturating_add(s as usize).min(end)),
+            _ => break,
+        };
+        if at + hdr > box_end {
+            break;
+        }
+        out.push(BoxRef { kind, body: at + hdr, end: box_end });
+        if box_end <= at {
+            break;
+        }
+        at = box_end;
+    }
+    out
+}
 
 /// Brands that declare a still image in the ISO base media container.
 const IMAGE_BRANDS: [&[u8]; 12] = [b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1", b"avif", b"avis"];
@@ -79,7 +136,7 @@ pub fn metadata(bytes: &[u8]) -> Embedded {
 
 /// `iinf` → one `(item_ID, item_type, content_type)` per `infe` entry. Entries of version 0 and 1
 /// name no item type and are skipped; HEIF files use version 2 or 3.
-fn item_infos(bytes: &[u8], iinf: &crate::cr3::BoxRef, budget: &mut usize) -> Vec<(u32, [u8; 4], String)> {
+fn item_infos(bytes: &[u8], iinf: &BoxRef, budget: &mut usize) -> Vec<(u32, [u8; 4], String)> {
     // FullBox version and flags, then a 16- or 32-bit entry count before the `infe` boxes
     let version = *bytes.get(iinf.body).unwrap_or(&0);
     let entries_at = iinf.body.saturating_add(if version == 0 { 6 } else { 8 });
