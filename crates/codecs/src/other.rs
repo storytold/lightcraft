@@ -1,8 +1,7 @@
-//! GIF through `craft-gif` and BMP through the `image` crate's pure-Rust decoder.
+//! GIF through `craft-gif` and BMP through `craft-image-codecs`.
 
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::{DecodeOptions, Decoded, Error, Format, Result};
-use image::{DynamicImage, ImageDecoder};
 
 /// Canvases up to this many pixels are still decoded by [`header`] (at most 16 MB), so a truncated
 /// small file is refused at import as before.
@@ -27,10 +26,15 @@ pub(crate) fn header(bytes: &[u8], format: Format) -> Result<(u32, u32, u16)> {
         }
         return Ok((w, h, 1));
     }
-    let err = |e: image::ImageError| Error::Malformed(format, e.to_string());
-    let cursor = std::io::Cursor::new(bytes);
+    if format == Format::Bmp {
+        let (w, h) = bmp_dims(bytes).ok_or_else(|| Error::Malformed(format, "invalid BMP header".into()))?;
+        if w == 0 || h == 0 {
+            return Err(Error::Malformed(format, "zero dimension".into()));
+        }
+        check_fillable(format, bytes, w, h)?;
+    }
     let (w, h) = match format {
-        Format::Bmp => image::codecs::bmp::BmpDecoder::new(cursor).map_err(err)?.dimensions(),
+        Format::Bmp => craft_image_codecs::probe_size(bytes).map_err(|e| Error::Malformed(format, e.to_string()))?,
         _ => return Err(Error::Unsupported(format, "not handled by this decoder")),
     };
     if w == 0 || h == 0 {
@@ -42,16 +46,6 @@ pub(crate) fn header(bytes: &[u8], format: Format) -> Result<(u32, u32, u16)> {
         return Ok((d.source_width, d.source_height, d.orientation));
     }
     Ok((w, h, 1))
-}
-
-/// The decoder's allocation limit: the RGBA buffer of the largest image `opts` allows. It bounds the
-/// decoders' own frame buffers only: `DynamicImage::from_decoder` allocates the canvas without
-/// consulting it, so the canvas is bounded by `check_size` and [`check_fillable`] beforehand (a
-/// mostly blank one by [`SPARSE_MAX_PIXELS`]).
-fn limits(opts: &DecodeOptions) -> image::Limits {
-    let mut l = image::Limits::default();
-    l.max_alloc = Some(opts.max_pixels.saturating_mul(4));
-    l
 }
 
 /// The largest canvas allowed that the file's pixel data leaves mostly blank: a GIF screen its
@@ -197,35 +191,52 @@ fn bmp_rle_pixels(bytes: &[u8], offset: usize, rle4: bool, w: u32, h: u32) -> u6
     covered
 }
 
+/// Reads BMP `(width, height)` from the DIB header without allocating.
+fn bmp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.get(0..2) != Some(b"BM") {
+        return None;
+    }
+    let dib = u32::from_le_bytes(bytes.get(14..18)?.try_into().ok()?);
+    let (w, h) = if dib == 12 {
+        (u16::from_le_bytes(bytes.get(18..20)?.try_into().ok()?) as u32, u16::from_le_bytes(bytes.get(20..22)?.try_into().ok()?) as u32)
+    } else {
+        let w = i32::from_le_bytes(bytes.get(18..22)?.try_into().ok()?);
+        let h = i32::from_le_bytes(bytes.get(22..26)?.try_into().ok()?);
+        (u32::try_from(w).ok()?, h.unsigned_abs())
+    };
+    Some((w, h))
+}
+
 pub(crate) fn decode(bytes: &[u8], format: Format, opts: &DecodeOptions) -> Result<Decoded> {
     if format == Format::Gif {
         return decode_gif(bytes, opts);
     }
-    let err = |e: image::ImageError| Error::Malformed(format, e.to_string());
-    let cursor = std::io::Cursor::new(bytes);
-    let (img, icc) = match format {
-        Format::Bmp => {
-            let mut d = image::codecs::bmp::BmpDecoder::new(cursor).map_err(err)?;
-            let (w, h) = d.dimensions();
-            check_size(format, w as u64, h as u64, opts)?;
-            check_fillable(format, bytes, w, h)?;
-            d.set_limits(limits(opts)).map_err(err)?;
-            let icc = d.icc_profile().ok().flatten();
-            (DynamicImage::from_decoder(d).map_err(err)?, icc)
-        }
-        _ => return Err(Error::Unsupported(format, "not handled by this decoder")),
+    if format != Format::Bmp {
+        return Err(Error::Unsupported(format, "not handled by this decoder"));
+    }
+    let (w, h) = bmp_dims(bytes).ok_or_else(|| Error::Malformed(format, "invalid BMP header".into()))?;
+    check_size(format, w as u64, h as u64, opts)?;
+    check_fillable(format, bytes, w, h)?;
+    let (w, h) = craft_image_codecs::probe_size(bytes).map_err(|e| Error::Malformed(format, e.to_string()))?;
+    let ic_opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits {
+            max_width: u32::MAX,
+            max_height: u32::MAX,
+            max_pixels: opts.max_pixels,
+            max_alloc: opts.max_pixels.saturating_mul(4),
+        },
+        keep_orientation: true,
     };
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Bmp, bytes, &ic_opts).map_err(|e| match e {
+        craft_image_codecs::CodecError::LimitExceeded(_) => Error::TooLarge(w as u64, h as u64),
+        other => Error::Malformed(format, other.to_string()),
+    })?;
     let (w, h) = (img.width(), img.height());
-    let alpha = img.color().has_alpha();
-    let gray = !img.color().has_color();
-    let (model, alpha, buf) = match (gray, alpha) {
-        (true, false) => (Model::Gray, false, img.into_luma8().into_raw()),
-        (true, true) => (Model::Gray, true, img.into_luma_alpha8().into_raw()),
-        (false, false) => (Model::Rgb, false, img.into_rgb8().into_raw()),
-        (false, true) => (Model::Rgb, true, img.into_rgba8().into_raw()),
-    };
+    let alpha = img.layout().has_alpha();
+    let model = if img.layout().is_gray() { Model::Gray } else { Model::Rgb };
+    let buf = img.as_u8().ok_or_else(|| Error::Malformed(format, "expected 8-bit BMP samples".into()))?.to_vec();
     let raw = Raw { width: w as usize, height: h as usize, model, alpha, premultiplied: false, buf: Buf::U8(buf), bit_depth: 8 };
-    finish(format, raw, Meta { icc, ..Default::default() }, (w, h), opts)
+    finish(format, raw, Meta { icc: img.icc, ..Default::default() }, (w, h), opts)
 }
 
 fn decode_gif(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
@@ -325,14 +336,21 @@ mod tests {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             (seed >> 24) as u8
         };
-        let frames = [
-            ("solid", image::RgbaImage::from_pixel(w, h, image::Rgba([90, 90, 90, 255]))),
-            ("gradient", image::RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x / 40 * 16) as u8, (y / 30 * 16) as u8, 0, 255]))),
-            ("noise", image::RgbaImage::from_fn(w, h, |_, _| image::Rgba([noise(), noise(), noise(), 255]))),
-        ];
-        for (name, frame) in frames {
-            let mut gif = Vec::new();
-            image::codecs::gif::GifEncoder::new_with_speed(&mut gif, 30).encode_frame(image::Frame::new(frame)).unwrap();
+        let encode_gif = |rgba: Vec<u8>| -> Vec<u8> {
+            let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, rgba).unwrap();
+            craft_image_codecs::encode(&img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap()
+        };
+        let solid = [90, 90, 90, 255].repeat((w * h) as usize);
+        let mut gradient = Vec::with_capacity((w * h * 4) as usize);
+        let mut noise_buf = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                gradient.extend_from_slice(&[((x / 40 * 16) as u8), ((y / 30 * 16) as u8), 0, 255]);
+                noise_buf.extend_from_slice(&[noise(), noise(), noise(), 255]);
+            }
+        }
+        for (name, rgba) in [("solid", solid), ("gradient", gradient), ("noise", noise_buf)] {
+            let gif = encode_gif(rgba);
             let first = craft_gif::scan(&gif, 1).unwrap().frames.remove(0);
             assert_eq!((u32::from(first.width), u32::from(first.height)), (w, h), "{name}");
             assert_eq!(craft_gif::first_frame_decoded_pixels(&gif), Some(u64::from(w * h)), "{name}");
@@ -341,10 +359,8 @@ mod tests {
 
     #[test]
     fn gif_icc_profile_is_preserved_by_the_codec_adapter() {
-        let mut bytes = Vec::new();
-        image::codecs::gif::GifEncoder::new_with_speed(&mut bytes, 30)
-            .encode_frame(image::Frame::new(image::RgbaImage::from_pixel(2, 2, image::Rgba([80, 120, 160, 255]))))
-            .unwrap();
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgba, [80, 120, 160, 255].repeat(4)).unwrap();
+        let mut bytes = craft_image_codecs::encode(&img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap();
         let frame = craft_gif::scan(&bytes, 1).unwrap().frames[0];
         let profile = [1, 2, 3, 4, 5];
         let mut extension = vec![0x21, 0xff, 0x0b];
@@ -360,14 +376,17 @@ mod tests {
 
     #[test]
     fn gif_first_frame_pixels_match_the_previous_image_decoder() {
-        let mut bytes = Vec::new();
-        let pixels =
-            image::RgbaImage::from_fn(16, 12, |x, y| image::Rgba([(x * 13) as u8, (y * 17) as u8, 91, if (x + y) % 3 == 0 { 127 } else { 255 }]));
-        image::codecs::gif::GifEncoder::new_with_speed(&mut bytes, 30).encode_frame(image::Frame::new(pixels)).unwrap();
+        let mut pixels = Vec::with_capacity(16 * 12 * 4);
+        for y in 0..12 {
+            for x in 0..16 {
+                pixels.extend_from_slice(&[(x * 13) as u8, (y * 17) as u8, 91, if (x + y) % 3 == 0 { 127 } else { 255 }]);
+            }
+        }
+        let img = craft_image_codecs::Image::from_u8(16, 12, craft_image_codecs::ChannelLayout::Rgba, pixels).unwrap();
+        let bytes = craft_image_codecs::encode(&img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap();
 
-        let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(&bytes)).unwrap();
-        let legacy = DynamicImage::from_decoder(decoder).unwrap().into_rgba8().into_raw();
+        let decoded = craft_image_codecs::decode_as(craft_image_codecs::Format::Gif, &bytes).unwrap();
         let shared = craft_gif::frames::read_frames(&bytes, &craft_gif::frames::FrameLimits::default()).unwrap();
-        assert_eq!(shared.frames[0].rgba, legacy);
+        assert_eq!(shared.frames[0].rgba, decoded.as_u8().unwrap());
     }
 }
