@@ -1,10 +1,14 @@
 //! Map module view: interactive slippy map canvas, dual-provider tile engine (OSM & Esri),
 //! photo marker clustering, loupe popover, GPX tracklog overlay, and saved locations.
 
-use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Mutex, PoisonError};
+
+use egui::{Align2, Color32, ColorImage, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::map::{LocationFilter, MapProvider};
-use lightcraft_geom::{GeoBounds, LatLon};
+use lightcraft_geom::{GeoBounds, LatLon, TileCoord};
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -16,6 +20,31 @@ const TILE_SIZE: f32 = 256.0;
 
 /// Screen distance threshold in points for merging photo markers into a cluster.
 const CLUSTER_RADIUS_PTS: f32 = 36.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TileKey {
+    provider: MapProvider,
+    z: u8,
+    x: u32,
+    y: u32,
+    layer: u8,
+}
+
+struct TileStore {
+    textures: HashMap<TileKey, TextureHandle>,
+    pending: HashSet<TileKey>,
+    tx: Sender<(TileKey, ColorImage)>,
+    rx: Receiver<(TileKey, ColorImage)>,
+}
+
+impl TileStore {
+    fn new() -> Self {
+        let (tx, rx) = channel();
+        Self { textures: HashMap::new(), pending: HashSet::new(), tx, rx }
+    }
+}
+
+static TILES: Mutex<Option<TileStore>> = Mutex::new(None);
 
 /// Represents a clustered group of photos on the map screen.
 struct MapCluster {
@@ -179,6 +208,35 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.ui.map = map_ui;
 }
 
+fn fetch_and_cache_tile(key: TileKey, url: String, disk_path: std::path::PathBuf, tx: Sender<(TileKey, ColorImage)>, ctx: egui::Context) {
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = std::thread::Builder::new().name("lc-tile-fetch".into()).spawn(move || {
+        let bytes = if disk_path.exists() {
+            std::fs::read(&disk_path).ok()
+        } else {
+            match lightcraft_engine::map::fetch_tile_bytes(&url) {
+                Ok(b) => {
+                    if let Some(parent) = disk_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&disk_path, &b);
+                    Some(b)
+                }
+                Err(e) => {
+                    log::debug!("tile fetch error for {url}: {e}");
+                    None
+                }
+            }
+        };
+
+        if let Some(rgba) = bytes.and_then(|b| lightcraft_engine::map::decode_tile(&b).ok()) {
+            let img = egui::ColorImage::from_rgba_unmultiplied([rgba.width, rgba.height], &rgba.as_bytes());
+            let _ = tx.send((key, img));
+            ctx.request_repaint();
+        }
+    });
+}
+
 fn render_tile_grid(p: &Painter, canvas: Rect, center_pos: Pos2, center_tx: f64, center_ty: f64, zoom: f64, provider: MapProvider) {
     let int_zoom = zoom.floor() as u8;
     let n = 2.0_f64.powi(int_zoom as i32);
@@ -200,20 +258,57 @@ fn render_tile_grid(p: &Painter, canvas: Rect, center_pos: Pos2, center_tx: f64,
         _ => Color32::from_rgba_unmultiplied(80, 90, 100, 120),
     };
 
+    let mut store_guard = TILES.lock().unwrap_or_else(PoisonError::into_inner);
+    let store = store_guard.get_or_insert_with(TileStore::new);
+
+    while let Ok((key, img)) = store.rx.try_recv() {
+        let name = format!("tile-{}-{}-{}-{}-{}", key.provider.id(), key.layer, key.z, key.x, key.y);
+        let tex = p.ctx().load_texture(name, img, TextureOptions::LINEAR);
+        store.textures.insert(key, tex);
+        store.pending.remove(&key);
+    }
+
+    if store.textures.len() > 300 {
+        store.textures.retain(|k, _| k.provider == provider && (k.z as i32 - int_zoom as i32).abs() <= 1);
+    }
+
+    let cache_root = lightcraft_engine::map::tile_cache_dir();
+
     for x in min_x..=max_x {
         for y in min_y..=max_y {
             let left = center_pos.x + ((x as f64 - center_tx) * tile_screen_size as f64) as f32;
             let top = center_pos.y + ((y as f64 - center_ty) * tile_screen_size as f64) as f32;
             let tile_rect = Rect::from_min_size(pos2(left, top), vec2(tile_screen_size, tile_screen_size));
 
-            p.rect_stroke(tile_rect, 0.0, grid_stroke, StrokeKind::Inside);
-            p.text(
-                pos2(tile_rect.left() + 8.0, tile_rect.top() + 8.0),
-                Align2::LEFT_TOP,
-                format!("{int_zoom}/{x}/{y}"),
-                FontId::proportional(11.0),
-                text_color,
-            );
+            let coord = TileCoord::new(int_zoom, x as u32, y as u32);
+            let urls = provider.tile_urls(coord);
+            let mut all_loaded = true;
+
+            for (layer_idx, url) in urls.into_iter().enumerate() {
+                let key = TileKey { provider, z: int_zoom, x: x as u32, y: y as u32, layer: layer_idx as u8 };
+
+                if let Some(tex) = store.textures.get(&key) {
+                    p.image(tex.id(), tile_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                } else {
+                    all_loaded = false;
+                    if !store.pending.contains(&key) {
+                        store.pending.insert(key);
+                        let disk_path = lightcraft_engine::map::tile_cache_path(&cache_root, provider, coord, layer_idx);
+                        fetch_and_cache_tile(key, url, disk_path, store.tx.clone(), p.ctx().clone());
+                    }
+                }
+            }
+
+            if !all_loaded {
+                p.rect_stroke(tile_rect, 0.0, grid_stroke, StrokeKind::Inside);
+                p.text(
+                    pos2(tile_rect.left() + 8.0, tile_rect.top() + 8.0),
+                    Align2::LEFT_TOP,
+                    format!("{int_zoom}/{x}/{y}"),
+                    FontId::proportional(11.0),
+                    text_color,
+                );
+            }
         }
     }
 }

@@ -113,3 +113,14 @@ fn test_map_filter_photos() {
     assert!(!untagged_photos.iter().any(|p| p.get("id").and_then(|v| v.as_u64()) == Some(ids[0].0)));
     assert!(untagged_photos.iter().any(|p| p.get("id").and_then(|v| v.as_u64()) == Some(ids[1].0)));
 }
+
+#[test]
+fn test_tile_fetch_and_decode() {
+    let esri_url = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/6/25/31";
+    if let Ok(b) = crate::map::fetch_tile_bytes(esri_url) {
+        assert!(!b.is_empty());
+        let decoded = crate::map::decode_tile(&b).unwrap();
+        assert_eq!(decoded.width, 256);
+        assert_eq!(decoded.height, 256);
+    }
+}

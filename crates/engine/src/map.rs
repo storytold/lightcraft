@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Available slippy map tile providers for LightCraft.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum MapProvider {
     /// OpenStreetMap standard cartographic style.
@@ -161,15 +161,70 @@ impl LocationFilter {
     }
 }
 
+/// Base directory for caching downloaded map tiles locally.
+pub fn tile_cache_dir() -> PathBuf {
+    crate::config::config_dir().map(|d| d.join("map-tiles")).unwrap_or_else(|| std::env::temp_dir().join("lightcraft-tiles"))
+}
+
 /// Construct the disk cache file path for a map tile.
 pub fn tile_cache_path(cache_root: &Path, provider: MapProvider, coord: TileCoord, layer_index: usize) -> PathBuf {
+    let ext = match provider {
+        MapProvider::EsriImagery => "jpg",
+        MapProvider::EsriHybrid if layer_index == 0 => "jpg",
+        _ => "png",
+    };
     cache_root
         .join("tiles")
         .join(provider.id())
         .join(layer_index.to_string())
         .join(coord.z.to_string())
         .join(coord.x.to_string())
-        .join(format!("{}.bin", coord.y))
+        .join(format!("{}.{ext}", coord.y))
+}
+
+/// Pure-Rust network fetch for a map tile.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn fetch_tile_bytes(url_str: &str) -> std::result::Result<Vec<u8>, String> {
+    use lightcraft_fetch::http::{Limits, Url};
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+
+    let url = Url::parse(url_str).map_err(|e| format!("invalid tile url: {e}"))?;
+    let headers = [
+        ("User-Agent", "LightCraft/0.9 (https://github.com/storytold/lightcraft; photo-editor)".to_string()),
+        ("Accept", "image/png,image/jpeg,image/*,*/*".to_string()),
+    ];
+    let cancel = AtomicBool::new(false);
+    let limits = Limits { connect: Duration::from_secs(6), stall: Duration::from_secs(12), cancel: &cancel };
+    let mut resp = lightcraft_fetch::http::get(&url, &headers, &limits).map_err(|e| format!("fetch tile failed: {e}"))?;
+    if resp.status != 200 {
+        return Err(format!("fetch tile HTTP {}", resp.status));
+    }
+    let mut bytes = Vec::with_capacity(resp.content_length().unwrap_or(32 * 1024) as usize);
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = resp.read(&mut buf, &limits).map_err(|e| format!("read tile stream: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        bytes.extend_from_slice(buf.get(..n).unwrap_or_default());
+        if bytes.len() > 2 * 1024 * 1024 {
+            return Err("tile size exceeds 2 MiB".into());
+        }
+    }
+    Ok(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn fetch_tile_bytes(_url_str: &str) -> std::result::Result<Vec<u8>, String> {
+    Err("tile fetching on web is not implemented via sync engine".into())
+}
+
+/// Decodes tile PNG or JPEG bytes into 8-bit RGBA raster pixels.
+pub fn decode_tile(bytes: &[u8]) -> std::result::Result<lightcraft_raster::Rgba8, String> {
+    let opts = lightcraft_codecs::DecodeOptions::default();
+    let decoded = lightcraft_codecs::decode(bytes, opts).map_err(|e| format!("decode tile: {e}"))?;
+    Ok(decoded.to_srgb8())
 }
 
 #[cfg(test)]
