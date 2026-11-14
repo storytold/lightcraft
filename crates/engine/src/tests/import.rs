@@ -683,6 +683,116 @@ fn missing_files_are_found_and_relinked() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Find Missing brings the photo up to date with the file it found, as `photo.relink` does: a
+/// file orientation on record that the found file doesn't have is replaced right away (not only
+/// on the next Reload), and undo puts it back.
+#[test]
+fn find_missing_refreshes_the_file_orientation_from_the_found_file() {
+    use lightcraft_catalog::{Op, PhotoId};
+    use lightcraft_geom::Orientation;
+    let dir = temp_dir("missing-orientation");
+    std::fs::create_dir_all(dir.join("old")).unwrap();
+    std::fs::create_dir_all(dir.join("moved")).unwrap();
+    write_png(&dir.join("old/a.png"), 1);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.join("old/a.png").to_string_lossy()]})).unwrap();
+    let id = PhotoId(r["imported"][0].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    let probed = p.file_orientation;
+    // the library remembers the previous file as turned
+    let stale = if probed == Some(Orientation::Rotate90) { Orientation::Normal } else { Orientation::Rotate90 };
+    s.apply_system(Op::SetContent {
+        id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+        file_orientation: Some(stale),
+    })
+    .unwrap();
+    std::fs::rename(dir.join("old/a.png"), dir.join("moved/a.png")).unwrap();
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("moved").to_string_lossy()})).unwrap();
+    assert_eq!(r["found"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().file_orientation, probed, "the found file's orientation, without a Reload");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().file_orientation, Some(stale), "undo puts back what was on record");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A photo imported from `old/a.png`, its file moved away, with `orientation` on record, and the
+/// path Find Missing will be told it found (`found/a.png`, written by the test).
+fn missing_photo_with_orientation(
+    tag: &str,
+    orientation: lightcraft_geom::Orientation,
+) -> (std::path::PathBuf, Session, lightcraft_catalog::PhotoId, String) {
+    use lightcraft_catalog::{Op, PhotoId};
+    let dir = temp_dir(tag);
+    std::fs::create_dir_all(dir.join("old")).unwrap();
+    std::fs::create_dir_all(dir.join("found")).unwrap();
+    write_png(&dir.join("old/a.png"), 1);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.join("old/a.png").to_string_lossy()]})).unwrap();
+    let id = PhotoId(r["imported"][0].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+        file_orientation: Some(orientation),
+    })
+    .unwrap();
+    std::fs::remove_file(dir.join("old/a.png")).unwrap();
+    let from = match &p.source {
+        lightcraft_catalog::Source::File { path } => path.clone(),
+        other => panic!("{other:?}"),
+    };
+    (dir, s, id, from)
+}
+
+/// Find Missing relinking to a file it can't read (what a search on a worker found, unreadable
+/// by the time it is relinked) forgets the former file's orientation, as `photo.relink` does;
+/// undo puts it back.
+#[test]
+fn find_missing_forgets_the_orientation_when_the_found_file_is_unreadable() {
+    use lightcraft_geom::Orientation;
+    let (dir, mut s, id, from) = missing_photo_with_orientation("missing-unreadable", Orientation::Rotate90);
+    let to = dir.join("found/a.png");
+    std::fs::write(&to, b"not an image").unwrap();
+    let found = json!({"found": [{"id": id.0, "from": from, "to": to.to_string_lossy(), "by": "name"}], "missing": 0, "ambiguous": []});
+    let r = s.execute("library.findMissing", &found).unwrap();
+    assert_eq!(r["found"].as_array().map(Vec::len), Some(1), "{r}");
+    let p = s.catalog.photo(id).unwrap();
+    assert!(matches!(&p.source, lightcraft_catalog::Source::File { path } if std::path::Path::new(path) == to), "relinked: {:?}", p.source);
+    assert_eq!(p.file_orientation, None, "the former file's orientation is not the found one's");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().file_orientation, Some(Orientation::Rotate90), "undo puts it back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// In a session without a file probe Find Missing only relinks: nothing reads the found file,
+/// so what is on record (orientation included) is left as it was.
+#[test]
+fn find_missing_without_a_file_probe_only_relinks() {
+    use lightcraft_geom::Orientation;
+    let (dir, mut s, id, from) = missing_photo_with_orientation("missing-no-probe", Orientation::Rotate90);
+    let to = dir.join("found/a.png");
+    write_png(&to, 2);
+    s.media.file_probe = None;
+    let found = json!({"found": [{"id": id.0, "from": from, "to": to.to_string_lossy(), "by": "name"}], "missing": 0, "ambiguous": []});
+    let r = s.execute("library.findMissing", &found).unwrap();
+    assert_eq!(r["found"].as_array().map(Vec::len), Some(1), "{r}");
+    let p = s.catalog.photo(id).unwrap();
+    assert!(matches!(&p.source, lightcraft_catalog::Source::File { path } if std::path::Path::new(path) == to), "relinked: {:?}", p.source);
+    assert_eq!(p.file_orientation, Some(Orientation::Rotate90), "not read, not changed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn recently_added_covers_recent_imports_newest_first() {
     let dir = std::env::temp_dir().join(format!("lc-recent-{}", std::process::id()));
@@ -3549,5 +3659,38 @@ fn a_broken_link_before_dotdot_is_an_error() {
     assert!(crate::import::browse_path(&link.join("..")).is_err());
     // without reading the disk the spelling is still the folder by name
     assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Relinking to a file that can't be read forgets the orientation on record: it was the former
+/// file's, and the new file's is unknown. Undo puts it back.
+#[test]
+fn relinking_to_an_unreadable_file_forgets_the_former_files_orientation() {
+    use lightcraft_catalog::{Op, PhotoId};
+    use lightcraft_geom::Orientation;
+    let dir = temp_dir("relink-unreadable");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_png(&dir.join("a.png"), 1);
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [dir.join("a.png").to_string_lossy()]})).unwrap();
+    let id = PhotoId(r["imported"][0].as_u64().unwrap());
+    let p = s.catalog.photo(id).unwrap().clone();
+    s.apply_system(Op::SetContent {
+        id,
+        width: p.width,
+        height: p.height,
+        file_size: p.file_size,
+        content_hash: p.content_hash.clone(),
+        preview_only: p.preview_only.clone(),
+        preview_checked: p.preview_checked.clone(),
+        file_orientation: Some(Orientation::Rotate90),
+    })
+    .unwrap();
+    let broken = dir.join("b.png");
+    std::fs::write(&broken, b"not an image").unwrap();
+    s.execute("photo.relink", &json!({"id": id.0, "path": broken.to_string_lossy()})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().file_orientation, None, "the former file's orientation is not the new one's");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(id).unwrap().file_orientation, Some(Orientation::Rotate90), "undo puts it back");
     let _ = std::fs::remove_dir_all(&dir);
 }

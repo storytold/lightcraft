@@ -200,6 +200,21 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
     Ok(json!({"path": out, "id": new, "original": id.0}))
 }
 
+/// The op that forgets a photo's [`lightcraft_catalog::Photo::file_orientation`] (`None` when it has none): after a
+/// relink to a file that could not be read, the former file's orientation would otherwise stand for the new one.
+pub(crate) fn forget_orientation_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo) -> Option<Op> {
+    ph.file_orientation.is_some().then(|| Op::SetContent {
+        id,
+        width: ph.width,
+        height: ph.height,
+        file_size: ph.file_size,
+        content_hash: ph.content_hash.clone(),
+        preview_only: ph.preview_only.clone(),
+        preview_checked: ph.preview_checked.clone(),
+        file_orientation: None,
+    })
+}
+
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or
 /// `None` when nothing changed. Covers a raw that became decodable (or stopped being: a different
 /// file relinked), i.e. a change of [`lightcraft_catalog::Photo::preview_only`], and a
@@ -207,11 +222,19 @@ fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: 
 /// again (see [`lightcraft_catalog::Photo::preview_checked`]).
 pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: crate::media::ProbeInfo) -> Option<Op> {
     let preview_checked = ph.preview_stamp(&info.preview_only);
+    // a probe that can't tell the orientation (a raw shown from its preview) doesn't forget the
+    // one on record while the bytes are the same; for other bytes only the probe's answer counts.
+    // Without a hash on both sides the bytes can't be shown to be the same, and an equal size
+    // proves nothing (turning a JPEG losslessly rewrites only its orientation tag): the
+    // orientation on record is dropped rather than kept for a file that may be turned since
+    let same_bytes = info.content_hash.is_some() && info.content_hash == ph.content_hash && info.file_size == ph.file_size;
+    let file_orientation = info.orientation.or(if same_bytes { ph.file_orientation } else { None });
     let same = info.content_hash == ph.content_hash
         && info.file_size == ph.file_size
         && (info.width, info.height) == (ph.width, ph.height)
         && info.preview_only == ph.preview_only
-        && preview_checked == ph.preview_checked;
+        && preview_checked == ph.preview_checked
+        && file_orientation == ph.file_orientation;
     (!same).then_some(Op::SetContent {
         id,
         width: info.width,
@@ -220,6 +243,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
         content_hash: info.content_hash,
         preview_only: info.preview_only,
         preview_checked,
+        file_orientation,
     })
 }
 
@@ -312,10 +336,14 @@ pub(crate) fn reload_ops(
         ops.append(&mut mine);
         changed.push(id);
     }
-    // virtual copies share the file
-    for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+    // virtual copies that share the file (a copy linked to a file of its own is not this file's)
+    for c in cat.photos().filter(|c| c.copy_of == Some(id) && c.source == ph.source) {
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(fill_missing_meta(c.id, c, info))
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
@@ -441,6 +469,31 @@ mod tests {
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
     }
 
+    /// Reloading a photo fills the camera fields its virtual copies lack too (each keeps its own
+    /// metadata), and leaves alone a copy linked to a file of its own.
+    #[test]
+    fn reload_fills_missing_camera_fields_on_copies_of_the_file() {
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let photo = |id: u64, path: &str, copy_of: Option<u64>| {
+            let mut ph = Photo::new(PhotoId(id), Source::File { path: path.into() }, "x.cr3", "CR3", 1620, 1080, "2026-10-06T00:00:00");
+            ph.copy_of = copy_of.map(PhotoId);
+            ph
+        };
+        for ph in [photo(1, "/x.cr3", None), photo(2, "/x.cr3", Some(1)), photo(3, "/y.cr3", Some(1))] {
+            cat.apply(Op::AddPhoto { photo: Box::new(ph) }).unwrap();
+        }
+        let mut info = crate::media::ProbeInfo { width: 1620, height: 1080, ..Default::default() };
+        info.meta.camera = "Canon EOS R6 Mark III".into();
+        let (mut ops, mut changed) = (Vec::new(), Vec::new());
+        reload_ops(&cat, PhotoId(1), &info, &mut ops, &mut changed);
+        let filled: Vec<u64> = ops
+            .iter()
+            .filter_map(|op| if let Op::SetMeta { id, meta } = op { (meta.camera == "Canon EOS R6 Mark III").then_some(id.0) } else { None })
+            .collect();
+        assert_eq!(filled, vec![1, 2], "{ops:?}");
+        assert_eq!(changed, vec![PhotoId(1), PhotoId(2)]);
+    }
+
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
     /// and never replaces one it has.
     #[test]
@@ -460,6 +513,123 @@ mod tests {
         assert_eq!(meta.focus, Some(fp(0.3)));
         ph.meta.focus = Some(fp(0.1));
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a known focus point is kept");
+    }
+
+    /// Reload from Disk stores the orientation the file reads now (rotated by an external editor),
+    /// with its size and hash, instead of keeping the one import read; undo restores it.
+    #[test]
+    fn reload_stores_the_files_new_orientation() {
+        use lightcraft_geom::Orientation;
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.jpg".into() }, "x.jpg", "JPEG", 6000, 4000, "2026-10-06T00:00:00");
+        ph.file_size = 10;
+        ph.content_hash = Some("old".into());
+        ph.file_orientation = Some(Orientation::Normal);
+        cat.apply(Op::AddPhoto { photo: Box::new(ph.clone()) }).unwrap();
+        // the same bytes and size: nothing to do
+        let same = crate::media::ProbeInfo {
+            width: 6000,
+            height: 4000,
+            file_size: 10,
+            content_hash: Some("old".into()),
+            orientation: Some(Orientation::Normal),
+            ..Default::default()
+        };
+        assert!(content_op(ph.id, &ph, same.clone()).is_none());
+        // turned on disk: new size, hash and orientation
+        let info = crate::media::ProbeInfo {
+            width: 4000,
+            height: 6000,
+            file_size: 11,
+            content_hash: Some("new".into()),
+            orientation: Some(Orientation::Rotate90),
+            ..same
+        };
+        let (mut ops, mut changed) = (Vec::new(), Vec::new());
+        reload_ops(&cat, ph.id, &info, &mut ops, &mut changed);
+        assert_eq!(changed, vec![ph.id]);
+        let inv = cat.apply(Op::Batch { ops }).unwrap();
+        let p = cat.photo(ph.id).unwrap();
+        assert_eq!((p.width, p.height, p.file_size, p.content_hash.as_deref()), (4000, 6000, 11, Some("new")));
+        assert_eq!(p.file_orientation, Some(Orientation::Rotate90));
+        cat.apply(inv).unwrap();
+        assert_eq!(cat.photo(ph.id).unwrap().file_orientation, Some(Orientation::Normal), "undo restores it");
+    }
+
+    /// A probe that can't tell the orientation keeps the one on record while the bytes are the
+    /// same (a raw shown from its preview, rechecked), and drops it for other bytes.
+    #[test]
+    fn an_unknown_orientation_keeps_the_known_one_only_for_the_same_bytes() {
+        use lightcraft_geom::Orientation;
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.cr3".into() }, "x.cr3", "CR3", 6000, 4000, "2026-10-06T00:00:00");
+        ph.file_size = 10;
+        ph.content_hash = Some("old".into());
+        ph.file_orientation = Some(Orientation::Rotate90);
+        let unknown = crate::media::ProbeInfo {
+            width: 6000,
+            height: 4000,
+            file_size: 10,
+            content_hash: Some("old".into()),
+            orientation: None,
+            ..Default::default()
+        };
+        // same bytes: nothing about the content changes
+        assert!(content_op(ph.id, &ph, unknown.clone()).is_none());
+        // same bytes, now shown from the preview: that is stored, the orientation is kept
+        let preview = crate::media::ProbeInfo { preview_only: Some("no decoder".into()), ..unknown.clone() };
+        let Some(Op::SetContent { file_orientation, preview_only, .. }) = content_op(ph.id, &ph, preview) else { panic!() };
+        assert_eq!((file_orientation, preview_only.as_deref()), (Some(Orientation::Rotate90), Some("no decoder")));
+        // other bytes: the probe's answer (unknown) counts
+        let other = crate::media::ProbeInfo { content_hash: Some("new".into()), ..unknown.clone() };
+        let Some(Op::SetContent { file_orientation, .. }) = content_op(ph.id, &ph, other) else { panic!() };
+        assert_eq!(file_orientation, None);
+        // a probe that knows it wins, whatever was on record
+        let known = crate::media::ProbeInfo { orientation: Some(Orientation::Normal), ..unknown };
+        let Some(Op::SetContent { file_orientation, .. }) = content_op(ph.id, &ph, known) else { panic!() };
+        assert_eq!(file_orientation, Some(Orientation::Normal));
+    }
+
+    /// With no content hash on either side, an equal size doesn't show the bytes are the same (a
+    /// lossless JPEG turn rewrites only the orientation tag): a probe that can't tell the
+    /// orientation drops the one on record instead of keeping it for a file that may be turned.
+    #[test]
+    fn an_unknown_orientation_without_hashes_drops_the_known_one() {
+        use lightcraft_geom::Orientation;
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.jpg".into() }, "x.jpg", "JPEG", 6000, 4000, "2026-10-06T00:00:00");
+        ph.file_size = 10;
+        ph.file_orientation = Some(Orientation::Rotate90);
+        let unknown = crate::media::ProbeInfo { width: 6000, height: 4000, file_size: 10, orientation: None, ..Default::default() };
+        let Some(Op::SetContent { file_orientation, content_hash, file_size, .. }) = content_op(ph.id, &ph, unknown.clone()) else {
+            panic!("the orientation on record changes")
+        };
+        assert_eq!((file_orientation, content_hash, file_size), (None, None, 10));
+        // nothing on record: nothing to drop, nothing changes
+        ph.file_orientation = None;
+        assert!(content_op(ph.id, &ph, unknown).is_none());
+    }
+
+    /// `forget_orientation_op` clears only the orientation (size, hash and preview state stay as
+    /// recorded), undo puts it back, and a photo with none gets no op.
+    #[test]
+    fn forget_orientation_clears_only_the_orientation_and_undoes() {
+        use lightcraft_geom::Orientation;
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.cr3".into() }, "x.cr3", "CR3", 4000, 6000, "2026-10-06T00:00:00");
+        ph.file_size = 10;
+        ph.content_hash = Some("old".into());
+        ph.set_preview_only(Some("no decoder".into()));
+        ph.file_orientation = Some(Orientation::Rotate90);
+        cat.apply(Op::AddPhoto { photo: Box::new(ph.clone()) }).unwrap();
+        let op = forget_orientation_op(ph.id, &ph).expect("an orientation to forget");
+        let inv = cat.apply(op).unwrap();
+        let p = cat.photo(ph.id).unwrap();
+        assert_eq!(p.file_orientation, None);
+        assert_eq!((p.width, p.height, p.file_size, p.content_hash.as_deref()), (4000, 6000, 10, Some("old")));
+        assert_eq!((p.preview_only.as_deref(), p.preview_checked.as_str()), (Some("no decoder"), ph.preview_checked.as_str()));
+        cat.apply(inv).unwrap();
+        assert_eq!(cat.photo(ph.id).unwrap().file_orientation, Some(Orientation::Rotate90), "undo puts it back");
+        ph.file_orientation = None;
+        assert!(forget_orientation_op(ph.id, &ph).is_none(), "no orientation, no op");
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {

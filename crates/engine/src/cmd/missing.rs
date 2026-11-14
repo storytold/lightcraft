@@ -142,9 +142,13 @@ fn relink(s: &mut Session, p: &Value) -> Result<Value> {
     // its size, dimensions and preview-only state follow it
     let mut ops = vec![relink_op(id, &abs)];
     if s.media.file_probe.is_some()
-        && let (Some(Ok(info)), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
+        && let (Some(info), Some(ph)) = (crate::import::probe_paths(s, std::slice::from_ref(&abs)).pop(), s.catalog.photo(id))
     {
-        ops.extend(crate::cmd::convert::content_op(id, ph, info));
+        ops.extend(match info {
+            Ok(info) => crate::cmd::convert::content_op(id, ph, info),
+            // unread, the new file's orientation is unknown: the former file's isn't kept for it
+            Err(_) => crate::cmd::convert::forget_orientation_op(id, ph),
+        });
     }
     let op = match <[Op; 1]>::try_from(ops) {
         Ok([op]) => op,
@@ -475,7 +479,22 @@ fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
     // ambiguous photos relinked meanwhile aren't missing any more
     missing = missing.saturating_sub(planned - ambiguous.len());
     if !found.is_empty() {
-        s.commit("Find Missing Photos", Op::Batch { ops: found.iter().map(|f| relink_op(f.id, &f.to)).collect() })?;
+        let mut ops: Vec<Op> = found.iter().map(|f| relink_op(f.id, &f.to)).collect();
+        // as `photo.relink` does: the file found (same name and size, maybe not the same content)
+        // brings its own dimensions, preview-only state and orientation
+        if s.media.file_probe.is_some() {
+            let paths: Vec<String> = found.iter().map(|f| f.to.clone()).collect();
+            let infos = crate::import::probe_paths(s, &paths);
+            for (f, info) in found.iter().zip(infos) {
+                let Some(ph) = s.catalog.photo(f.id) else { continue };
+                ops.extend(match info {
+                    Ok(info) => crate::cmd::convert::content_op(f.id, ph, info),
+                    // unread, the found file's orientation is unknown: the former file's isn't kept for it
+                    Err(_) => crate::cmd::convert::forget_orientation_op(f.id, ph),
+                });
+            }
+        }
+        s.commit("Find Missing Photos", Op::Batch { ops })?;
         for f in &found {
             s.media.forget(f.id);
         }

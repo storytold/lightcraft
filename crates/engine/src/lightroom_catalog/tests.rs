@@ -214,6 +214,7 @@ fn a_content_duplicate_of_a_trashed_photo_or_virtual_copy_is_a_new_live_photo() 
                 file: Some(Box::new(crate::import::FileFacts {
                     meta: lightcraft_catalog::Meta { camera: "Same Camera".into(), ..Default::default() },
                     captured: None,
+                    orientation: None,
                 })),
             }],
             ..Default::default()
@@ -1731,4 +1732,275 @@ fn oversized_optional_table_warns_and_is_skipped() {
     let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// A crop and a gradient on the stored image, as a catalog's develop row has them.
+const CROP_AND_GRADIENT: &str = r#"s = { CropLeft = 0.1, CropRight = 0.6, CropTop = 0.2, CropBottom = 0.9,
+    MaskGroupBasedCorrections = { { What = "Correction", CorrectionAmount = 1, LocalExposure2012 = 0.1, CorrectionMasks = {
+    { What = "Mask/Gradient", FullX = 0.1, FullY = 0.2, ZeroX = 0.3, ZeroY = 0.6 } } } } }"#;
+
+/// The photo's crop and its gradient's start and end, rounded: `[x0, y0, x1, y1]` each.
+fn crop_and_gradient(p: &Photo) -> ([f64; 4], [f64; 4]) {
+    let round = |v: f64| (v * 1e9).round() / 1e9;
+    let r = p.develop.crop.geometry.rect;
+    let g = &serde_json::to_value(&p.develop.masks).unwrap()[0]["components"][0]["shape"];
+    let gradient = [&g["start"]["x"], &g["start"]["y"], &g["end"]["x"], &g["end"]["y"]].map(|v| round(v.as_f64().unwrap()));
+    ([r.x0, r.y0, r.x1, r.y1].map(round), gradient)
+}
+
+/// [`CROP_AND_GRADIENT`] in the frame of a photo shown with orientation `o`, worked out from the
+/// geometry alone: each stored point goes through `o`.
+fn crop_and_gradient_shown(o: Orientation) -> ([f64; 4], [f64; 4]) {
+    let round = |v: f64| (v * 1e9).round() / 1e9;
+    let r = o.map_norm_rect(Rect::new(0.1, 0.2, 0.6, 0.9));
+    let (a, b) = (o.map(0.1, 0.2, 1.0, 1.0), o.map(0.3, 0.6, 1.0, 1.0));
+    ([r.x0, r.y0, r.x1, r.y1].map(round), [a.0, a.1, b.0, b.1].map(round))
+}
+
+/// A folder of its own for a test's files.
+fn scratch(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("lightcraft-lr-turn-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A 40 × 20 JPEG with EXIF orientation `exif` (1 = none), written to `dir/name`.
+fn oriented_jpeg(dir: &Path, name: &str, exif: u16) -> String {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta};
+    let image = lightcraft_raster::Rgba8::from_fn(40, 20, |x, _| if x < 20 { [255, 0, 0, 255] } else { [0, 0, 255, 255] });
+    let meta = lightcraft_meta::Metadata { orientation: Some(Orientation::from_exif(exif)), ..Default::default() };
+    let exif = lightcraft_meta::write_exif(&meta);
+    let encode = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let bytes = lightcraft_codecs::encode_jpeg(&EncodeImage::rgba8(&image), 90, ChromaSubsampling::S444, &encode).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).unwrap();
+    path.to_string_lossy().into()
+}
+
+/// A catalog of one photo, the file at `path` (40 × 20 stored) shown with Lightroom orientation
+/// `code` and the develop row `settings`.
+fn one_photo(path: &str, code: &str, settings: &str) -> CatalogImport {
+    let mut data = sample();
+    let mut photo = data.photos.remove(1);
+    photo.image = row(json!({"id_local":1,"fileFormat":"JPG","fileWidth":40,"fileHeight":20,"orientation":code}));
+    photo.path = path.into();
+    photo.settings = settings.into();
+    photo.xmp = String::new();
+    photo.history.clear();
+    data.photos = vec![photo];
+    data.members.clear();
+    data
+}
+
+/// `data`'s photo plus a virtual copy of it (catalog id `copy_id`) that Lightroom shows with
+/// orientation `code`.
+fn with_copy(mut data: CatalogImport, copy_id: i64, code: &str) -> CatalogImport {
+    let mut copy = data.photos[0].clone();
+    copy.source_id = copy_id;
+    copy.uuid = format!("copy-{copy_id}");
+    copy.image = row(json!({"id_local":copy_id,"masterImage":1,"copyName":"Copy","orientation":code}));
+    copy.settings = String::new();
+    data.photos.push(copy);
+    data
+}
+
+/// Lightroom keeps one orientation per photo: the file's own, turned by any Rotate Left / Right
+/// made there. A file with no rotation of its own (an EOS D60 CRW: the camera has no orientation
+/// sensor) turned clockwise in Lightroom (`BC`) came in upright, because the import took the
+/// catalog's orientation for the file's. The photo now gets the turn as its own rotation; a file
+/// that is upright only through its own EXIF orientation is left alone; a mirror carries over too;
+/// a virtual copy turns from its master's file; and the crop and masks land where Lightroom shows
+/// them (worked out here from the geometry, not by the import's own mapping).
+#[test]
+fn a_rotation_made_in_lightroom_becomes_the_photos_own() {
+    use Orientation::{FlipH, Normal, Rotate90, Rotate180, Rotate270};
+    let cases = [
+        // (the file's own orientation, the catalog's, the rotation the photo gets)
+        (Normal, "BC", Rotate90),
+        (Normal, "DA", Rotate270),
+        (Normal, "CD", Rotate180),
+        (Normal, "BA", FlipH),
+        (Rotate90, "BC", Normal),
+        (Rotate90, "AB", Rotate270),
+        (Rotate270, "CD", Rotate270),
+        (FlipH, "AB", FlipH),
+    ];
+    for (file, code, want) in cases {
+        let data = with_copy(one_photo("/missing/test.JPG", code, CROP_AND_GRADIENT), 2, "AB");
+        let mut s = crate::Session::new();
+        // as the file import before it adds the photo: at its size as the file shows it, with the
+        // file's own orientation
+        let (w, h) = if file.swaps_axes() { (20, 40) } else { (40, 20) };
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: "/missing/test.JPG".into() }, "test.JPG", "JPEG", w, h, "before");
+        p.file_orientation = Some(file);
+        s.commit("Import", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        let files = crate::import::ImportReport { imported: vec![id.0], ..Default::default() };
+        let undo0 = s.undo.len();
+        let r = apply_prepared(
+            &mut s,
+            data,
+            ApplyPrepared {
+                update_existing: false,
+                files,
+                index: &mut ImportIndex::default(),
+                archive_path: None,
+                missing_sources: &HashSet::new(),
+                undo0,
+            },
+        )
+        .unwrap()
+        .report;
+        let case = format!("file {file:?}, catalog {code}");
+        let master = s.catalog.photo(id).unwrap();
+        assert_eq!(master.develop.orientation, want, "{case}: {r}");
+        let shown = lightroom_orientation(code).unwrap();
+        assert_eq!(crop_and_gradient(master), crop_and_gradient_shown(shown), "{case}: the crop and gradient are where Lightroom shows them");
+        let copy = s.catalog.photos().find(|p| p.copy_of == Some(id)).unwrap();
+        assert_eq!(in_photo_frame(file, copy.develop.orientation), Normal, "{case}: the copy is upright, as in Lightroom");
+    }
+    // every pair has a rotation that shows the file as Lightroom does
+    for a in 1..=8 {
+        for b in 1..=8 {
+            let (file, shown) = (Orientation::from_exif(a), Orientation::from_exif(b));
+            assert_eq!(in_photo_frame(file, user_turn(file, shown)), shown, "file {file:?}, shown {shown:?}");
+        }
+    }
+}
+
+/// The turn is read from the file itself: a JPEG with no EXIF rotation turned in Lightroom gets it,
+/// one upright only through its EXIF orientation 6 gets none, and the photo keeps what its file says
+/// for a later import.
+#[test]
+fn the_turn_comes_from_the_file_on_disk() {
+    let dir = scratch("disk");
+    for (exif, code, want) in [(1, "BC", Orientation::Rotate90), (6, "BC", Orientation::Normal), (6, "CD", Orientation::Rotate90)] {
+        let path = oriented_jpeg(&dir, &format!("exif{exif}-{code}.jpg"), exif);
+        let mut s = crate::Session::new().with_fs();
+        let r = apply(&mut s, one_photo(&path, code, ""), false).unwrap();
+        let p = s.catalog.photos().next().unwrap();
+        assert_eq!(p.file_orientation, Some(Orientation::from_exif(exif)), "EXIF {exif}: {r}");
+        assert_eq!(p.develop.orientation, want, "EXIF {exif}, catalog {code}: {r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Importing the catalog again leaves a photo turned by the first import as it was: the update
+/// once put the masks through the turn twice (the catalog's orientation, then the turn the photo
+/// had from the first import), so a gradient landed half a turn away. A rotation the user made here
+/// after the first import is kept by an update, with the crop and masks in its frame.
+#[test]
+fn a_reimport_leaves_a_turned_photo_as_it_was() {
+    let dir = scratch("reimport");
+    let path = oriented_jpeg(&dir, "d60.jpg", 1);
+    let data = one_photo(&path, "BC", CROP_AND_GRADIENT);
+    let mut s = crate::Session::new().with_fs();
+    apply(&mut s, data.clone(), false).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let first = s.catalog.photo(id).unwrap().clone();
+    assert_eq!(first.develop.orientation, Orientation::Rotate90);
+    assert_eq!(crop_and_gradient(&first), crop_and_gradient_shown(Orientation::Rotate90));
+    for update_existing in [true, false] {
+        apply(&mut s, data.clone(), update_existing).unwrap();
+        let again = s.catalog.photo(id).unwrap();
+        assert_eq!(s.catalog.len(), 1);
+        assert_eq!(again.develop.orientation, Orientation::Rotate90, "update {update_existing}");
+        assert_eq!(crop_and_gradient(again), crop_and_gradient(&first), "update {update_existing}: the crop and gradient stay put");
+    }
+    // Rotate Left here: the photo shows as its file is stored, and an update keeps that
+    let upright = lightcraft_develop::DevelopSettings { orientation: Orientation::Normal, ..(*first.develop).clone() };
+    s.set_develop(id, upright, "Rotate Left").unwrap();
+    apply(&mut s, data, true).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(p.develop.orientation, Orientation::Normal, "the update keeps the photo's own rotation");
+    assert_eq!(crop_and_gradient(p), crop_and_gradient_shown(Orientation::Normal), "the crop and gradient in the frame it shows in");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A virtual copy made in Lightroom after the catalog was first imported turns from its master's
+/// file, not from the turn its master was given: an upright copy of a turned master came in turned.
+#[test]
+fn a_virtual_copy_added_later_turns_from_the_file() {
+    let dir = scratch("copy");
+    let path = oriented_jpeg(&dir, "d60.jpg", 1);
+    let mut s = crate::Session::new().with_fs();
+    apply(&mut s, one_photo(&path, "BC", ""), false).unwrap();
+    let master = s.catalog.photos().next().unwrap().id;
+    assert_eq!(s.catalog.photo(master).unwrap().develop.orientation, Orientation::Rotate90);
+    for (copy_id, code, want) in [(2, "AB", Orientation::Normal), (3, "DA", Orientation::Rotate270)] {
+        apply(&mut s, with_copy(one_photo(&path, "BC", ""), copy_id, code), false).unwrap();
+        let copies: Vec<_> = s.catalog.photos().filter(|p| p.copy_of == Some(master)).map(|p| p.develop.orientation).collect();
+        assert!(copies.contains(&want), "catalog {code}: {copies:?}");
+    }
+    assert_eq!(s.catalog.photo(master).unwrap().develop.orientation, Orientation::Rotate90, "the master keeps its turn");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A photo seen while browsing its folder (a Local record) and then imported with the catalog
+/// takes the turn: the browse read its file, and the catalog import doesn't read it again.
+#[test]
+fn a_browsed_photo_takes_the_turn() {
+    let dir = scratch("browse");
+    let path = oriented_jpeg(&dir, "d60.jpg", 1);
+    let mut s = crate::Session::new().with_fs();
+    let browse = crate::import::ImportOptions { local: true, ..Default::default() };
+    let r = crate::import::import_with(&mut s, std::slice::from_ref(&path), &browse).unwrap();
+    let id = PhotoId(r.imported[0]);
+    assert!(s.catalog.photo(id).unwrap().local);
+    apply(&mut s, one_photo(&path, "BC", ""), false).unwrap();
+    let p = s.catalog.photo(id).unwrap();
+    assert_eq!(s.catalog.len(), 1);
+    assert!(!p.local, "the catalog import adds it to the library");
+    assert_eq!(p.develop.orientation, Orientation::Rotate90);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Two originals with the same bytes are two photos; the second, turned in Lightroom, takes the
+/// turn from the file it shares with the first (the import reads it as a duplicate's).
+#[test]
+fn a_content_duplicate_takes_its_own_turn() {
+    let dir = scratch("duplicate");
+    let a = oriented_jpeg(&dir, "a.jpg", 1);
+    let b = oriented_jpeg(&dir, "b.jpg", 1);
+    let mut data = one_photo(&a, "AB", "");
+    let mut second = one_photo(&b, "BC", "").photos.remove(0);
+    second.source_id = 3;
+    second.uuid = "second".into();
+    second.image.insert("id_local".into(), json!(3));
+    data.photos.push(second);
+    let mut s = crate::Session::new().with_fs();
+    let r = apply(&mut s, data, false).unwrap();
+    let turn = |path: &str| s.catalog.photos().find(|p| source_path(p) == Some(path)).map(|p| p.develop.orientation);
+    assert_eq!(turn(&a), Some(Orientation::Normal), "{r}");
+    assert_eq!(turn(&b), Some(Orientation::Rotate90), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file with Lightroom's XMP sidecar beside it comes in with the sidecar's edits, which the
+/// catalog import then keeps; the turn is the catalog's alone (the sidecar's orientation isn't
+/// read) and is kept with them.
+#[test]
+fn a_photo_with_sidecar_edits_takes_the_turn() {
+    let dir = scratch("sidecar");
+    let path = oriented_jpeg(&dir, "d60.jpg", 1);
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="+1.00"/></rdf:RDF></x:xmpmeta>"#;
+    std::fs::write(dir.join("d60.xmp"), xmp).unwrap();
+    let mut s = crate::Session::new().with_fs();
+    let r = apply(&mut s, one_photo(&path, "BC", "s = { Exposure2012 = 0.5 }"), false).unwrap();
+    let p = s.catalog.photos().next().unwrap();
+    assert!(p.edited.is_some(), "the sidecar's edits: {r}");
+    assert_eq!(p.develop.orientation, Orientation::Rotate90, "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without the file's own orientation (an offline original, or a photo the library already had)
+/// nothing is turned: the catalog's orientation is taken for the file's, as before.
+#[test]
+fn without_the_files_orientation_nothing_is_turned() {
+    let mut data = sample();
+    data.photos[1].image.insert("orientation".into(), json!("BC"));
+    let mut s = crate::Session::new();
+    apply(&mut s, data, false).unwrap();
+    assert!(s.catalog.photos().all(|p| p.develop.orientation == Orientation::Normal));
 }
