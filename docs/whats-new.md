@@ -283,7 +283,6 @@
   `folder.rename` and `folder.move` commands now refuse the home folder and its Pictures, Desktop and Downloads too,
   so a script or an agent can't do it either.
 
-
 ## 2026-10-27
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
@@ -381,7 +380,6 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
-
 ## 2026-10-25
 
 ### `>=` and `<=` work in the search box
@@ -411,7 +409,6 @@
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
 
-
 ## 2026-10-24
 
 ### AI Denoise follows the photo's real noise
@@ -431,6 +428,20 @@
   it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
   Denoise ▸ Run on chooses; Automatic times both). Photos
   denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
+### Menus look the same everywhere
+- Every menu row, in the menu bar, in right-click menus and in the dropdowns of the panels, now has one height, one
+  hover look and one check mark column. Where a menu lists shortcuts (the menu bar, the bottom bar's dropdowns and the
+  text-field right-click menu) a row shows its shortcut at the right edge as the menu bar does; the photo right-click
+  menu lists none. Choices that are on show a check mark that screen readers announce as checked, and a disabled
+  row can't be chosen. (The list of
+  effects in a mask's Effect menu keeps its own rows: its current effect has a check mark that screen readers don't
+  announce.)
+- Help ▸ Keyboard Shortcuts shows the fixed keys on keycaps.
+- The tooltips of the tool strip, the bottom bar's view buttons, the top bar's right-side action icons and the mask
+  overlay buttons name the key their command has now, so a key you remapped shows as remapped (the filter and
+  appearance buttons keep their plain tooltips). The tool strip's History & Activity button no longer shows a Y it
+  never had.
 
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
@@ -475,7 +486,6 @@
   names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
   reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
   saved.
-
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
@@ -544,6 +554,7 @@
   every launch. A video is recognised by its type, by the format `VIDEO` that Lightroom catalogs
   give videos, or by its extension (`.mp4`, `.mov`, `.m4v`, `.avi`, `.mts`, `.m2ts`, `.3gp`, `.mkv`, `.webm`, `.wmv`,
   `.mpg`, `.mpeg`).
+
 ### Right-button drags no longer pick up photos in the grid
 - Dragging with the right mouse button over a photo in the grid used to pick up the photos and, on a photo that wasn't
   selected, replace the selection with it. Now only the left button drags photos, and a right-button release while you
@@ -587,7 +598,6 @@
   in a flat area the noise alone decided which. Where neither guess is clearly better it now blends the two, so the
   noise looks like grain. Edges are as sharp as before. Thumbnails and previews that LightCraft rendered from a raw
   are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
-
 
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
@@ -650,7 +660,6 @@
   import adds some, others are removed, moved to Recently Deleted or relinked), the answer leaves out the photos that
   no longer apply, a photo added meanwhile is not part of that check, and the answer is not kept for a later request.
 
-
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the
   library open now, or create a new library for them, named after the catalog and placed next to the open library
@@ -684,12 +693,14 @@
 
 ### Editing a smart album made from an album keeps the album
 - A smart album saved from the view of an album stays limited to that album when you edit its rules and press OK. It used to match the whole library afterwards, because the rules dialog has no album field and replaced the album along with the rules.
+
 ### Drag photos from the filmstrip
 - You can now drag a photo from the filmstrip onto the sidebar, as you can from the grid: onto an
   album, a folder or a keyword. Dragging a selected photo takes the whole selection; dragging one that isn't selected
   takes just that photo and selects it. In the Compare view, a photo that isn't selected is dragged alone and the
   selection, the active photo and the two photos on screen stay as they were. Clicking a filmstrip photo works as
   before: outside Compare it selects the photo, and in Compare a plain click puts the photo into the active side.
+
 ### Dropping photos on a folder or album that shares its name
 - When photos are dragged onto a Folders row and another folder has the same name (two folders called `Home` on
   different disks), the label at the pointer, the Move Photos question and the message afterwards name the folder
@@ -708,7 +719,6 @@
   English before. So did "The download failed", shown under a denoise or face recognition model's download when the
   download gives no reason.
 
-
 ## 2026-10-22
 
 ### Exports don't create a photo's sidecar
@@ -721,7 +731,6 @@
   the brush stroke you are painting is no longer drawn in the overlay colour while you hold the button, so the photo
   stays visible as you dodge and burn (issue #2549). The stroke's effect still appears when you let go. With the
   overlay shown, the stroke is tinted as before; a colour overlay at opacity 0 leaves it untinted too.
-
 
 ### Reliability
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
@@ -764,16 +773,19 @@
 - A long folder (General ▸ Library ▸ Location, the folder Auto Import watches, the smart previews folder, a monitor
   profile's file) is shortened to its last folders ("…/Pictures/Library") on one line; rest the pointer on it for
   the whole path.
+
 ### One star rating control
 - The stars in the bottom bar, the Info panel and the filter bar are now one shared control, and the badges on grid
   cells, filmstrip thumbnails and the Compare caption use the same drawing. Hovering a star in the filter bar now
   previews the rating like the others do, and with a star focused (Tab), ← and → lower and raise the rating.
+
 ### Progress looks the same everywhere
 - Download, scan, denoise and activity progress now use one bar that fills the width it is given, with its text on
   it, and a gentle sweep while the amount of work isn't known yet. Waits that only said "Selecting…", "Waiting to
   start…" or "Installing…" now show a small turning arc beside the text, and a thumbnail still being made shows a
   quiet placeholder that fits the theme in the grid, the filmstrip and Compare. Screen readers hear a progress
   indicator with its percentage.
+
 ### Menu names that say what they are
 - Switches in the menus are named for what they show, with the check mark saying whether it is on: Filmstrip ✓,
   Focus Point ✓, Clipping ✓, Photo Counts ✓, Mask Overlay ✓ instead of Show Focus Point ✓. No two commands share a
@@ -781,6 +793,7 @@
   Panel, and Compare Before and After is Before/After Side by Side, next to Split and Top/Bottom.
 - The preview cache command has one name, Discard Preview Cache, in File ▸ Previews and in the toast that confirms
   it. Keyboard shortcuts are unchanged.
+
 ### Dropping files shows what will happen
 - While files are dragged over the window, it dims and a card says what dropping will do: review the photos and
   folders for import, import the presets, or open the face model. If a dialog is open, the card asks you to close it
@@ -794,6 +807,7 @@
 - In the web version, a dropped file the browser can't read, or that can't be imported, now shows a message instead of
   failing silently.
 - For scripts: `ui.dropFiles` hovers files over the window or drops them, as the operating system does.
+
 ### Counting many smart albums is faster
 - Counting every smart album at once (the numbers in the Albums list, and the `albums.list` command) now works out an
   album that other smart albums test (“album is …”) once for the whole library, instead of again for every album
@@ -807,6 +821,7 @@
   it also shows on a white one) and the other selected photos a lighter one (1.5 pt), in colours each theme picks to
   stand out from its grid. The filmstrip rings its photos the same way, and so do Compare, Reference and Survey (where
   the ring is the only sign of the active photo) and the People view's chosen person.
+
 ### Smart albums open and count faster on large libraries
 - A smart album that tests another smart album and also a file path or other text (for example "in Rejects, and the
   path contains …") now checks the quick rules first and the slow ones last, so most photos are ruled out before the
@@ -815,6 +830,7 @@
   you make, or test each other 32 deep, keeps testing the rules as written.) On a 312,000-photo test library, opening
   51 such albums in turn went from about 19 s to about 5.8 s (about 377 ms to 113 ms each; a busy machine,
   so rough numbers).
+
 ### A count never covers a name in the sidebar
 - In the left panel, the count of a deeply indented row (a folder, keyword or album) no longer prints over its icon
   and name when the panel is narrow. It follows the name, wholly past the panel's edge, and scrolling sideways
@@ -828,7 +844,6 @@
   Slideshow Export no longer say "1 photos" or "1 stacks". The Import review's Move button counts photos that are
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
-
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a
@@ -1141,6 +1156,7 @@
   #1236). The D7000, D5100, D800, D800E, Df, D4, D3, D3S, D700, D300, D300S, D600, D610, D810, D4S, D5600,
   Coolpix A, D3000, D40X, D60, D80, D2Xs, D200, D3200, D3100, D5000, D40, D50, D70, D70s and Nikon 1 V1 now show
   the area the camera itself frames, a few pixels smaller than before.
+
 ### An empty library leads to Import
 - A library with no photos now opens on the Photo Grid with the sidebar (Square Grid stays as it is), instead of a
   Detail view that pointed at an empty grid. The grid and Detail view offer Import Photos… and, in the desktop app,
@@ -1160,6 +1176,7 @@
 - In dialogs, the confirm button is on the right with Cancel to its left, and filled with the accent when it makes or
   brings in something (Import N Photos, Merge, Save, Create, Download…). Delete and Remove stay plain, so a destructive
   choice is never the eye-catching default.
+
 ### Straight brush strokes with ⇧-click
 - With the brush, click once, then ⇧-click somewhere else: the brush paints a straight line between the two, and
   further ⇧-clicks carry on from the last point, as in Lightroom. Change the brush size, feather or flow before the
@@ -1358,11 +1375,13 @@
   contains it: `Canon EOS R6` stays `Canon EOS R6`, rather than `Canon Canon EOS R6` (the camera
   identity subissue in #840). The separate Make and Model tags keep their original values.
   This does not change colour matrices, camera calibration or RAW noise rendering.
+
 ### Building from source
 - The English and Simplified Chinese build guides now describe command-local job and release
   profile overrides for memory-constrained builders (issue #1196), including why packaging
   recipes can override inherited settings. Default release profiles and application behavior
   are unchanged; the guidance does not guarantee a build will fit every 16 GB machine.
+
 ### Lightroom catalog import
 - A Lightroom Classic catalog whose changes are all still in its `.lrcat-wal` file (a new catalog Lightroom has
   open and hasn't written back yet) imports instead of failing with "unsupported SQLite schema format".
@@ -1371,6 +1390,7 @@
 - An export enlarged far past the photo's size (20000 typed for 2000 with Don't Enlarge off) no longer ends
   LightCraft: an enlargement stops at 512 megapixels, as in Lightroom, and one that needs more memory than the
   computer has is refused with the size it would take, before it starts.
+
 ### Confirm matching faces together
 - On a person's page, the ↑ control on a suggested face confirms it and all shown suggestions with equal or higher
   similarity as one undo step. Hover or focus that face and press A for the same action; hidden suggestions stay hidden.
@@ -1398,10 +1418,12 @@
   previews for up to a second.
 - A thumbnail of the photo open in Detail is made from its already decoded preview instead of decoding the file
   again.
+
 ### Dehaze while zoomed in
 - With Dehaze on, panning a photo zoomed to 1:1 or moving a slider while zoomed no longer samples the whole
   original again to find the haze colour. On a 64 MP raw (Sony A7R VI) that took ~0.2 s of CPU per pan and per
   slider step; a slider step now takes ~5 ms on the GPU.
+
 ### Thumbnails of raw files appear sooner
 - Grid thumbnails and the first picture in the loupe of an unedited raw now come from the smallest JPEG the camera
   stored that is big enough, not always from the largest one. On a Sony A7R VI file a 512 px thumbnail decodes
@@ -1427,6 +1449,7 @@
 - The starting look fitted from a raw's camera JPEG now uses its darkest tones too (issue #1307).
   Photos with deep shadows no longer have to extend the first measured tone in a straight line to black.
   Existing smart previews are refreshed when their originals are online, and cached renders are redrawn.
+
 ### Slider drags follow the pointer more closely
 - With a GPU, a slider drag's preview is drawn in the same frame as the slider moves instead of one frame later,
   when the preview renders in a few milliseconds (it waits at most 40 % of a frame for it; slower renders, such as
@@ -1453,6 +1476,7 @@
 ### Older raw cameras
 - Olympus E-10 raws open with the camera's white balance (White Balance ▸ As Shot) and without the grey haze in
   the shadows: the black level recorded in the file is now subtracted.
+
 ### Told when there is no GPU
 - When GPU rendering is on but no graphics processor can be found, LightCraft now says so once at start-up instead
   of quietly rendering everything on the CPU, much more slowly. Help ▸ System Info says why. On NixOS this happens
@@ -1504,6 +1528,7 @@
 - Photo Merge of Canon CR2 (and other raws whose colour LightCraft fits from the camera's own JPEG, such as NEF and
   ARW) gives the merged DNG the colour each photo has when opened alone (issue #965). An HDR merge of CR2s used to come
   out green and dark.
+
 ### "Rendering…" on the photo
 - The loupe says "Rendering…" at the bottom of the photo when what it shows isn't the finished photo yet: the
   camera's embedded JPEG while a raw decodes, the previous render while an edit renders, or the magnified frame
@@ -1512,6 +1537,7 @@
   its embedded JPEG or a thumbnail to show, the loupe now says so at the bottom of the photo ("Original offline · no
   smart preview" or "This photo can't be opened", the reason on hover) instead of showing that preview as if it were
   the photo.
+
 ### `--import <folder>` takes HEIC
 - `lightcraft-cli run --import <folder>` (and the MCP tools that take folders) now picks up HEIC, HEIF and Nikon NRW
   files, the same files as `library.import` (issue #1080). They used to be skipped without a word.

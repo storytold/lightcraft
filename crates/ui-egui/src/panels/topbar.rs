@@ -5,6 +5,7 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::menu_item::MenuItem;
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
@@ -177,16 +178,12 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
     let cloud_tip = unsaved.as_deref().unwrap_or_default();
     // Import Photos… beside Export, always one click away, with the key it is bound to now
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let import_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "file.addPhotos") {
-        Some(sc) => format!("{} ({})", crate::i18n::tr("Import Photos…"), crate::menubar::shortcut_text(sc, mac)),
-        None => crate::i18n::tr("Import Photos…").to_string(),
-    };
     for (id, icon, tip, cmd) in [
         ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
         ("cloud", Icon::Cloud, cloud_tip, ""),
         ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
         ("share", Icon::Share, "Export", "dialog.export"),
-        ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
+        ("import", Icon::Plus, "Import Photos…", "file.addPhotos"),
         ("bell", Icon::Bell, "Activity", "panel.activity"),
     ] {
         let warn = id == "cloud" && unsaved.is_some();
@@ -194,11 +191,15 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
             continue;
         }
         let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
-        let tip = crate::i18n::tr(tip);
         let resp = ui.interact(r, egui::Id::unique(("top", id)), Sense::click());
-        let name = crate::widgets::accessible_label(&resp, tip);
-        let resp = resp.on_hover_text(tip);
-        crate::widgets::announce(&resp, name);
+        // (the tooltip names the key the command has now; screen readers hear the name alone)
+        crate::widgets::announce(&resp, crate::i18n::tr(tip));
+        let resp = crate::kbd::tooltip_with_shortcut(resp, crate::i18n::tr(tip), cmd, &app.ui.settings.keymap, mac);
+        // (a screen reader hears the label as the name and, after a pause, the key alone as the description, not the whole tooltip)
+        if let Some(sc) = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, cmd) {
+            let key = crate::menubar::shortcut_text(sc, mac);
+            resp.ctx.accesskit_node_builder(resp.id, |node| node.set_description(key));
+        }
         register(ui, format!("icon:{id}"), r);
         let colour = if warn {
             t.caution
@@ -240,8 +241,7 @@ fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, ful
         let _ = app.run("view.appearance", json!({}));
     }
     crate::widgets::context_menu(&resp, |ui| {
-        let settings = ui.button(crate::i18n::tr("Appearance Settings…"));
-        register(ui, "menu:appearanceSettings", settings.rect);
+        let settings = MenuItem::new(crate::i18n::tr("Appearance Settings…")).check_slot(true).widget("menu:appearanceSettings").show(ui);
         if settings.clicked() {
             let _ = app.run("app.settings", json!({"tab": "interface"}));
             ui.close();
@@ -254,8 +254,8 @@ fn appearance_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, ful
                 ui.separator();
             }
             for kind in group {
-                let r = ui.selectable_label(app.ui.settings.theme(app.system_theme(ui.ctx())) == *kind, crate::i18n::tr(kind.label()));
-                register(ui, format!("menu:themeFavorite-{}", kind.id()), r.rect);
+                let current = app.ui.settings.theme(app.system_theme(ui.ctx())) == *kind;
+                let r = MenuItem::new(crate::i18n::tr(kind.label())).selected(current).widget(format!("menu:themeFavorite-{}", kind.id())).show(ui);
                 if r.clicked() {
                     let _ = app.run("view.theme", json!({"theme": kind.id()}));
                     ui.close();
