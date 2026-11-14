@@ -43,8 +43,6 @@
 pub use craft_raw::gaintable::GainTableMap;
 use serde::{Deserialize, Serialize};
 
-
-
 /// Applying a gain table map (the map, and reading and writing its tag, is `craft-raw`'s).
 pub trait GainTableMapApply {
     /// The gain at relative active-area position (`x`, `y`) for `p`, a linear ProPhoto (RIMM)
@@ -188,172 +186,6 @@ impl SourcePlacement {
 mod tests {
     use super::*;
 
-    /// Tag bytes: the header fields (`v2`: data type, gamma, gain min, gain max), then `data`.
-    fn tag(
-        order: ByteOrder,
-        dims: [u32; 3],
-        spacing: [f64; 2],
-        origin: [f64; 2],
-        weights: [f32; 5],
-        v2: Option<(u32, f32, f32, f32)>,
-        data: &[u8],
-    ) -> Vec<u8> {
-        let be = order == ByteOrder::Big;
-        let u = |v: u32| if be { v.to_be_bytes() } else { v.to_le_bytes() };
-        let d = |v: f64| if be { v.to_be_bytes() } else { v.to_le_bytes() };
-        let mut b = Vec::new();
-        b.extend_from_slice(&u(dims[0]));
-        b.extend_from_slice(&u(dims[1]));
-        for v in [spacing[0], spacing[1], origin[0], origin[1]] {
-            b.extend_from_slice(&d(v));
-        }
-        b.extend_from_slice(&u(dims[2]));
-        for w in weights {
-            b.extend_from_slice(&u(w.to_bits()));
-        }
-        if let Some((dt, gamma, min, max)) = v2 {
-            for v in [dt, gamma.to_bits(), min.to_bits(), max.to_bits()] {
-                b.extend_from_slice(&u(v));
-            }
-        }
-        b.extend_from_slice(data);
-        b
-    }
-
-    fn floats(order: ByteOrder, g: &[f32]) -> Vec<u8> {
-        g.iter().flat_map(|v| if order == ByteOrder::Big { v.to_be_bytes() } else { v.to_le_bytes() }).collect()
-    }
-
-    const GREEN: [f32; 5] = [0.0, 1.0, 0.0, 0.0, 0.0];
-
-    /// 2 × 2 tables of N = 4 points: table (r, c) = base · [1, 2, 3, 4] with base 1, 2, 3, 4.
-    fn grid() -> Vec<f32> {
-        (0..4).flat_map(|t| (1..=4).map(move |i| (t + 1) as f32 * i as f32)).collect()
-    }
-
-    #[test]
-    fn version_2_storage_types_and_gamma() {
-        let order = ByteOrder::Little;
-        let v2 = |dt: u32, gamma: f32, data: &[u8]| {
-            GainTableMap::parse(&tag(order, [1, 1, 4], [1.0, 1.0], [0.0, 0.0], GREEN, Some((dt, gamma, 0.5, 2.5)), data), order, true)
-        };
-        // u8: 0 → GainMin, 255 → GainMax
-        let m = v2(0, 1.0, &[0, 51, 255, 255]).unwrap();
-        let want = [0.5, 0.9, 2.5, 2.5];
-        assert!(m.gains.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{:?}", m.gains);
-        // u16
-        let m = v2(1, 1.0, &[0, 0, 0xff, 0xff, 0, 0, 0xff, 0xff]).unwrap();
-        assert_eq!(m.gains, vec![0.5, 2.5, 0.5, 2.5]);
-        // f16 ignores GainMin/GainMax: 1.0, 2.0, 0.5, 0
-        let m = v2(2, 1.0, &[0x00, 0x3c, 0x00, 0x40, 0x00, 0x38, 0, 0]).unwrap();
-        assert_eq!(m.gains, vec![1.0, 2.0, 0.5, 0.0]);
-        // f32 with gamma 2
-        let m = v2(3, 2.0, &floats(order, &[1.0, 2.0, 3.0, 4.0])).unwrap();
-        assert_eq!((m.gains.clone(), m.gamma), (vec![1.0, 2.0, 3.0, 4.0], 2.0));
-        // unknown data type, gamma out of range, size for another type: ignored
-        assert!(v2(4, 1.0, &[0; 4]).is_none());
-        assert!(v2(0, 0.1, &[0; 4]).is_none());
-        assert!(v2(0, 5.0, &[0; 4]).is_none());
-        assert!(v2(1, 1.0, &[0; 4]).is_none());
-        // negative integer range
-        let neg = tag(order, [1, 1, 4], [1.0, 1.0], [0.0, 0.0], GREEN, Some((0, 1.0, -1.0, 1.0)), &[0; 4]);
-        assert!(GainTableMap::parse(&neg, order, true).is_none());
-    }
-
-    #[test]
-    fn malformed_tags_are_rejected() {
-        let order = ByteOrder::Big;
-        let good = tag(order, [2, 2, 4], [0.5, 0.5], [0.25, 0.25], GREEN, None, &floats(order, &grid()));
-        assert!(GainTableMap::parse(&good, order, false).is_some());
-        // every truncation (and an extra byte)
-        for n in 0..good.len() {
-            assert!(GainTableMap::parse(&good[..n], order, false).is_none(), "{n} bytes");
-        }
-        let mut long = good.clone();
-        long.push(0);
-        assert!(GainTableMap::parse(&long, order, false).is_none());
-        // the wrong byte order reads absurd dimensions
-        assert!(GainTableMap::parse_in(&good, ByteOrder::Little, false).is_none());
-        // read as version 2 the header is too short for the data
-        assert!(GainTableMap::parse(&good, order, true).is_none());
-        let bad = |dims: [u32; 3], spacing: [f64; 2], origin: [f64; 2], gains: &[f32]| {
-            GainTableMap::parse(&tag(order, dims, spacing, origin, GREEN, None, &floats(order, gains)), order, false)
-        };
-        let mut g = grid();
-        g[5] = f32::NAN;
-        assert!(bad([2, 2, 4], [0.5, 0.5], [0.0, 0.0], &g).is_none(), "NaN gain");
-        g[5] = -1.0;
-        assert!(bad([2, 2, 4], [0.5, 0.5], [0.0, 0.0], &g).is_none(), "negative gain");
-        g[5] = f32::INFINITY;
-        assert!(bad([2, 2, 4], [0.5, 0.5], [0.0, 0.0], &g).is_none(), "infinite gain");
-        assert!(bad([2, 2, 4], [0.0, 0.5], [0.0, 0.0], &grid()).is_none(), "zero spacing");
-        assert!(bad([2, 2, 4], [0.5, f64::NAN], [0.0, 0.0], &grid()).is_none(), "NaN spacing");
-        assert!(bad([2, 2, 4], [0.5, 0.5], [f64::INFINITY, 0.0], &grid()).is_none(), "infinite origin");
-        assert!(bad([0, 2, 4], [0.5, 0.5], [0.0, 0.0], &[]).is_none(), "no rows");
-        assert!(bad([1, 1, 0], [0.5, 0.5], [0.0, 0.0], &[]).is_none(), "no points");
-        // huge dimensions (whose product overflows or exceeds the cap) are rejected before allocating
-        assert!(bad([u32::MAX, u32::MAX, u32::MAX], [0.5, 0.5], [0.0, 0.0], &grid()).is_none());
-        assert!(bad([4096, 4096, 1], [0.5, 0.5], [0.0, 0.0], &grid()).is_none());
-        assert!(bad([1, 1, u32::MAX], [0.5, 0.5], [0.0, 0.0], &grid()).is_none());
-        // a single table needs no spacing
-        assert!(bad([1, 1, 2], [0.0, 0.0], [0.0, 0.0], &[1.0, 2.0]).is_some());
-        let mut w = GREEN;
-        w[3] = f32::NAN;
-        assert!(GainTableMap::parse(&tag(order, [1, 1, 1], [1.0, 1.0], [0.0, 0.0], w, None, &floats(order, &[1.0])), order, false).is_none());
-    }
-
-    /// The payload is read in the file's byte order, else big-endian; a little-endian payload in
-    /// a big-endian file is malformed.
-    #[test]
-    fn byte_order_is_the_files_with_a_big_endian_fallback() {
-        use ByteOrder::{Big, Little};
-        let v1 = |o: ByteOrder| tag(o, [2, 2, 4], [0.5, 0.5], [0.25, 0.25], GREEN, None, &floats(o, &grid()));
-        let v2 = |o: ByteOrder| {
-            let mut gains = Vec::new();
-            for q in [0u16, 0x1234, 0xffff, 0x8000] {
-                gains.extend_from_slice(&if o == Big { q.to_be_bytes() } else { q.to_le_bytes() });
-            }
-            tag(o, [1, 1, 4], [1.0, 1.0], [0.0, 0.0], GREEN, Some((1, 2.0, 0.5, 2.5)), &gains)
-        };
-        let (want1, want2) = (GainTableMap::parse_in(&v1(Big), Big, false).unwrap(), GainTableMap::parse_in(&v2(Big), Big, true).unwrap());
-        assert_eq!(want1.gains, grid());
-        assert_eq!((want2.gains[0], want2.gains[2], want2.gamma), (0.5, 2.5, 2.0));
-        // in the file's order
-        assert_eq!(GainTableMap::parse(&v1(Little), Little, false).as_ref(), Some(&want1));
-        assert_eq!(GainTableMap::parse(&v2(Little), Little, true).as_ref(), Some(&want2));
-        assert_eq!(GainTableMap::parse(&v1(Big), Big, false).as_ref(), Some(&want1));
-        // a big-endian payload in a little-endian file: the fallback
-        assert_eq!(GainTableMap::parse(&v1(Big), Little, false).as_ref(), Some(&want1));
-        assert_eq!(GainTableMap::parse(&v2(Big), Little, true).as_ref(), Some(&want2));
-        // no little-endian fallback in a big-endian file
-        assert!(GainTableMap::parse(&v1(Little), Big, false).is_none());
-        assert!(GainTableMap::parse(&v2(Little), Big, true).is_none());
-        // whatever the grid, a read in the wrong order fails the size checks
-        for dims in [[1, 1, 1], [6, 8, 257], [48, 64, 2], [255, 16, 1], [256, 16, 1], [1, 4096, 1]] {
-            for (o, wrong) in [(Big, Little), (Little, Big)] {
-                let g = vec![1.0; dims.iter().product::<u32>() as usize];
-                let b = tag(o, dims, [0.5, 0.5], [0.0, 0.0], GREEN, None, &floats(o, &g));
-                assert!(GainTableMap::parse_in(&b, o, false).is_some(), "{dims:?}");
-                assert!(GainTableMap::parse_in(&b, wrong, false).is_none(), "{dims:?} read {wrong:?}");
-            }
-        }
-    }
-
-    #[test]
-    fn writes_what_it_reads() {
-        for order in [ByteOrder::Big, ByteOrder::Little] {
-            let m =
-                GainTableMap::parse(&tag(order, [2, 2, 4], [0.5, 0.5], [0.25, 0.25], GREEN, None, &floats(order, &grid())), order, false).unwrap();
-            let (v2, b) = m.to_bytes(order);
-            assert!(!v2);
-            assert_eq!(GainTableMap::parse(&b, order, false).unwrap(), m);
-            let g = GainTableMap { gamma: 2.0, ..m };
-            let (v2, b) = g.to_bytes(order);
-            assert!(v2);
-            assert_eq!(GainTableMap::parse(&b, order, true).unwrap(), g);
-        }
-    }
-
     fn map(dims: [usize; 3], spacing: [f64; 2], origin: [f64; 2], weights: [f32; 5], gains: Vec<f32>) -> GainTableMap {
         let [points_v, points_h, points_n] = dims;
         let [spacing_v, spacing_h] = spacing;
@@ -438,6 +270,7 @@ mod tests {
 /// the cost of [`GainEval::gain`] per pixel on a real file's map.
 #[cfg(test)]
 mod bench {
+    use super::GainTableMapApply;
     #[test]
     #[ignore]
     fn gain_throughput() {

@@ -79,11 +79,6 @@ impl<'a> Bits<'a> {
     pub fn consumed_bits(&self) -> usize {
         self.pos * 8 - self.n as usize
     }
-    /// Whether more bits were handed out than the source holds (the zeros read past its end are lookahead padding,
-    /// not data; using them would fabricate samples).
-    pub fn overrun(&self) -> bool {
-        self.consumed_bits() > self.src.len() * 8
-    }
 }
 
 /// Decode one difference: Huffman category then T.81 additional bits.

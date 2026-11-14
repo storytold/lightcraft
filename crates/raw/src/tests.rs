@@ -393,6 +393,7 @@ fn private_compression_99_is_a_raw() {
 /// without the block, or an RGB image carrying it, stays an ordinary image.
 #[test]
 fn uncompressed_leaf_mos_is_a_raw() {
+    const LEAF_DATA: u16 = 0x8606;
     let mosaic = |leaf_data: bool| {
         let mut ifd = IfdBuilder::new();
         ifd.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
@@ -540,20 +541,6 @@ fn lossless_jpeg_cfa_tiff_decodes() {
     let r = decode(&bytes).unwrap();
     assert_eq!(r.data, RawData::U16(cfa_samples()));
     assert_eq!(r.cfa.unwrap().name(), "RGGB");
-}
-
-/// Hasselblad's own lossless-JPEG coding (selection value 8, as in FFF and most compressed 3FR files) of the
-/// same layout decodes: the file is read like the uncompressed one.
-#[test]
-fn selection_value_8_cfa_tiff_decodes() {
-    let strip = crate::ljpeg_fixtures::encode_hasselblad(&cfa_samples(), 8, 6);
-    let bytes = plain_cfa_tiff(7, strip, None);
-    assert_eq!(probe(&bytes), Some(RawFormat::CfaTiff));
-    let r = decode(&bytes).unwrap();
-    assert_eq!((r.format, r.width, r.height), (RawFormat::CfaTiff, 8, 6));
-    assert_eq!(r.data, RawData::U16(cfa_samples()));
-    assert_eq!(r.cfa.unwrap().name(), "RGGB");
-    assert_eq!(probe_info(&bytes).unwrap().format, RawFormat::CfaTiff);
 }
 
 /// A lossless-JPEG scan whose predictor selection value is neither 0 to 7 (T.81) nor 8 (Hasselblad) is not a

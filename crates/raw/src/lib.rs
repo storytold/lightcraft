@@ -46,6 +46,7 @@ pub mod opcodes;
 mod preview;
 pub mod profile;
 mod saturation;
+pub mod semantic;
 pub mod sparse;
 pub mod spectral;
 mod tiffraw;
@@ -53,7 +54,9 @@ mod unpack;
 mod vendor;
 mod wb_estimate;
 
-pub use craft_raw::{BlackLevel, Cfa, MAX_SAMPLES, RawData, RawError, RawFormat, Rect, Result, SemanticMask, ljpeg, probe, semantic_masks, stretched_height};
+pub use craft_raw::{
+    BlackLevel, Cfa, MAX_SAMPLES, RawData, RawError, RawFormat, Rect, Result, SemanticMask, ljpeg, probe, semantic_masks, stretched_height,
+};
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
 pub use hotpixel::HOT_PIXEL_MAX_SHARE;
@@ -89,14 +92,13 @@ pub fn is_supported(format: RawFormat) -> bool {
 /// A 2×2 Bayer layout named in code (`"RGGB"`, `"BGGR"`, `"GRBG"`, `"GBRG"`). Only for literal names (tested);
 /// anything else falls back to RGGB instead of failing.
 pub(crate) fn bayer(s: &'static str) -> Cfa {
-    Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, pattern: vec![0, 1, 1, 2] })
+    Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, origin_x: 0, origin_y: 0, pattern: vec![0, 1, 1, 2] })
 }
 
 /// A CFA pattern this crate can address: 1 to 16 sites a side, one colour index per site.
 pub(crate) fn cfa_valid(c: &Cfa) -> bool {
     c.width > 0 && c.height > 0 && c.width <= 16 && c.height <= 16 && c.pattern.len() == c.width * c.height
 }
-
 
 /// Decode a raw file.
 pub fn decode(bytes: &[u8]) -> Result<RawImage> {
@@ -147,7 +149,6 @@ fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         _ => convert::decode(bytes, mode),
     }
 }
-
 
 /// A raw file's description without its samples (see [`probe_info`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -26,7 +26,6 @@ pub use craft_raw::profile::{HsvTable, ProfileLook, ToneCurve};
 use lightcraft_color::transfer::{linear_to_srgb, srgb_to_linear};
 use lightcraft_color::{D50, D65, Mat3, PROPHOTO, REC2020, bradford};
 
-
 /// Applying a hue/saturation/value table (the table, and reading it from its tags, is `craft-raw`'s).
 pub trait HsvTableApply: Sized {
     /// The entry-wise blend `g · a + (1 − g) · b` of two tables of the same shape (`None` otherwise).
@@ -40,7 +39,6 @@ pub trait HsvTableApply: Sized {
 }
 
 impl HsvTableApply for HsvTable {
-
     /// The entry-wise blend `g · a + (1 − g) · b` of two tables of the same shape (`None` otherwise).
     fn blend(a: &HsvTable, b: &HsvTable, g: f64) -> Option<HsvTable> {
         if (a.hue_divisions, a.sat_divisions, a.val_divisions) != (b.hue_divisions, b.sat_divisions, b.val_divisions) {
@@ -50,7 +48,6 @@ impl HsvTableApply for HsvTable {
         let data = a.data.iter().zip(&b.data).map(|(x, y)| std::array::from_fn(|i| g * x[i] + (1.0 - g) * y[i])).collect();
         Some(HsvTable { data, ..a.clone() })
     }
-
 
     /// Tri-linear lookup at hue `h` (degrees), saturation `s` and value `v` (table coordinates).
     fn lookup(&self, h: f32, s: f32, v: f32) -> [f32; 3] {
@@ -206,8 +203,6 @@ impl HsvTableApply for HsvTable {
         }
         out
     }
-
-
 }
 
 fn entry(table: &HsvTable, v: usize, h: usize, s: usize) -> [f32; 3] {
@@ -362,7 +357,6 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [f32; 3] {
     }
 }
 
-
 /// Evaluating a profile tone curve.
 pub trait ToneCurveEval {
     /// The curve at `x` (0..=1): monotone cubic (Fritsch–Carlson) through the samples.
@@ -370,7 +364,6 @@ pub trait ToneCurveEval {
 }
 
 impl ToneCurveEval for ToneCurve {
-
     /// The curve at `x` (0..=1): monotone cubic (Fritsch–Carlson) through the samples.
     fn eval(&self, x: f32) -> f32 {
         let p = &self.points;
@@ -400,7 +393,6 @@ impl ToneCurveEval for ToneCurve {
     }
 }
 
-
 /// The hue/saturation map of a profile look for a white balance.
 pub trait ProfileLookHueSat {
     /// The hue/saturation map for calibration-1 weight `g` (one table: used for any white).
@@ -408,7 +400,6 @@ pub trait ProfileLookHueSat {
 }
 
 impl ProfileLookHueSat for ProfileLook {
-
     /// The hue/saturation map for calibration-1 weight `g` (one table: used for any white).
     fn hue_sat_for(&self, g: f64) -> Option<HsvTable> {
         match &self.hue_sat_map {
