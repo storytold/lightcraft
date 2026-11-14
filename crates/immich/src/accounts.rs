@@ -26,8 +26,11 @@ pub struct Account {
     /// External library folder mapping (IMM-EXTLIB).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub path_maps: Vec<PathMap>,
-    /// The newest `updatedAt` the link pass has seen (incremental listing).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// No longer used or written. The link pass's cursor was kept here, per machine: every
+    /// catalog on the machine then shared it, so a second catalog's first pass skipped everything
+    /// the first catalog's pass had seen. It now lives with each catalog
+    /// (`<library>/Immich/link/<account>.json`); old files still parse.
+    #[serde(skip_serializing)]
     pub linked_until: Option<String>,
     /// Two-way metadata sync settings (IMM-SYNC).
     #[serde(skip_serializing_if = "is_default_sync")]
