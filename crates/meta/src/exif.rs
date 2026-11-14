@@ -34,6 +34,7 @@ pub(crate) fn ifd0_orientation(bytes: &[u8]) -> Option<Orientation> {
 #[cfg(test)]
 mod write_tests {
     use super::*;
+    use crate::{DateTime, Gps};
 
     #[test]
     fn capture_time_offset_and_subsec_round_trip() {
