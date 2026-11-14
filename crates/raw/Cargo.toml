@@ -20,15 +20,14 @@ chrono = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 miniz_oxide = { workspace = true }
-zune-jpeg = { workspace = true }
-zune-core = { workspace = true }
-jpeg-encoder = { workspace = true }
+craft-image-codecs = { workspace = true }
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }
 zune-jpegxl = { workspace = true }
+zune-core = { workspace = true }
 # Pinned CC0 corpus identities; not a product dependency.
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 # Peak-heap regression tests (tests/sr2_heap.rs); not a product dependency.

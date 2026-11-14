@@ -23,8 +23,10 @@ fn best<T>(n: usize, mut f: impl FnMut() -> T) -> (T, f64) {
 fn main() {
     let (w, h, rgb) = match std::env::args().nth(1) {
         Some(p) => {
-            let img = image::open(p).expect("open").to_rgb8();
-            (img.width() as usize, img.height() as usize, img.into_raw())
+            let bytes = std::fs::read(p).expect("read");
+            let img = lightcraft_codecs::decode(&bytes, lightcraft_codecs::DecodeOptions::default()).expect("open").to_srgb8();
+            let rgb = img.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+            (img.width as usize, img.height as usize, rgb)
         }
         None => {
             let (w, h) = (6000, 4000);
@@ -50,7 +52,15 @@ fn main() {
             e.encode(&rgb, w as u16, h as u16, jpeg_encoder::ColorType::Rgb).unwrap();
             out
         });
-        let dec = |b: &[u8]| jpeg_decoder::Decoder::new(b).decode().unwrap();
+        let dec = |b: &[u8]| {
+            lightcraft_codecs::decode(b, lightcraft_codecs::DecodeOptions::default())
+                .unwrap()
+                .to_srgb8()
+                .data
+                .into_iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .collect::<Vec<_>>()
+        };
         println!(
             "{w}x{h} {sub:?} q90: craft-jpeg {t_ours:.0} ms, {} KB, PSNR {:.2} dB | jpeg-encoder {t_theirs:.0} ms, {} KB, PSNR {:.2} dB",
             ours.len() / 1024,
