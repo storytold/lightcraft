@@ -59,9 +59,25 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let t = Tokens::get(ui.ctx());
     ui.painter().rect_filled(r, 0.0, t.canvas);
     ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), 4.0)), 0.0, Color32::from_gray(0x20));
+    // its top edge resizes it, as in Lightroom: drag up for bigger thumbnails, double-click for the usual
+    // height (issue #4110). The height is kept with the window layout.
+    let edge = Rect::from_min_size(r.min, vec2(r.width(), 6.0));
+    let grip = ui.interact(edge, egui::Id::unique("filmstripResize"), Sense::click_and_drag());
+    crate::widgets::announce(&grip, crate::i18n::tr("Filmstrip height"));
+    register(ui, "filmstripResize", edge);
+    if grip.hovered() || grip.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    if grip.dragged() {
+        app.ui.film_height = crate::state::film_height(r.height() - grip.drag_delta().y, ui.max_rect().height());
+    }
+    if grip.double_clicked() {
+        app.ui.film_height = crate::state::FILM_HEIGHT_MIN;
+    }
     let ids = app.session.visible_cloned();
     let active = app.session.selection.active;
-    let cell_w = 120.0;
+    // the cells grow with the strip, so a taller strip shows bigger thumbnails (the usual height: 120)
+    let cell_w = 120.0 * (r.height() / crate::state::FILM_HEIGHT_MIN).max(1.0);
     let ppp = ui.ctx().pixels_per_point();
     if ids.is_empty() {
         let why = if app.session.filter != Default::default() { "No photos match the filters (View → Clear Filters)" } else { "No photos" };
