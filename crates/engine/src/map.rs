@@ -183,6 +183,10 @@ pub fn tile_cache_path(cache_root: &Path, provider: MapProvider, coord: TileCoor
 }
 
 /// Pure-Rust network fetch for a map tile.
+/// Largest map tile accepted from a server; real 256 px tiles are tens of KiB.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_TILE_BYTES: usize = 2 * 1024 * 1024;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn fetch_tile_bytes(url_str: &str) -> std::result::Result<Vec<u8>, String> {
     use lightcraft_fetch::http::{Limits, Url};
@@ -200,7 +204,13 @@ pub fn fetch_tile_bytes(url_str: &str) -> std::result::Result<Vec<u8>, String> {
     if resp.status != 200 {
         return Err(format!("fetch tile HTTP {}", resp.status));
     }
-    let mut bytes = Vec::with_capacity(resp.content_length().unwrap_or(32 * 1024) as usize);
+    // The announced length comes from the server: refuse one past the cap instead of reserving it.
+    let announced = resp.content_length();
+    if announced.is_some_and(|n| n > MAX_TILE_BYTES as u64) {
+        return Err("tile size exceeds 2 MiB".into());
+    }
+    let capacity = announced.and_then(|n| usize::try_from(n).ok()).unwrap_or(32 * 1024).min(MAX_TILE_BYTES);
+    let mut bytes = Vec::with_capacity(capacity);
     let mut buf = [0u8; 8192];
     loop {
         let n = resp.read(&mut buf, &limits).map_err(|e| format!("read tile stream: {e}"))?;
@@ -208,7 +218,7 @@ pub fn fetch_tile_bytes(url_str: &str) -> std::result::Result<Vec<u8>, String> {
             break;
         }
         bytes.extend_from_slice(buf.get(..n).unwrap_or_default());
-        if bytes.len() > 2 * 1024 * 1024 {
+        if bytes.len() > MAX_TILE_BYTES {
             return Err("tile size exceeds 2 MiB".into());
         }
     }
@@ -255,5 +265,41 @@ mod tests {
         assert!(loc.contains(LatLon { lat: 51.5080, lon: -0.1278 }));
         // Point 10 km away
         assert!(!loc.contains(LatLon { lat: 51.6000, lon: -0.1278 }));
+    }
+
+    /// Serves one response with `head` (status line and headers) and `body` from a local server
+    /// (never the internet) and returns the tile URL that reaches it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn serve_once(head: &'static str, body: &'static [u8]) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else { return };
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body);
+        });
+        (format!("http://127.0.0.1:{port}/6/25/31.png"), server)
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_huge_announced_tile_length_is_an_error_not_an_allocation() {
+        // A server announcing u64::MAX bytes used to size the buffer from that number and panic
+        // with a capacity overflow before reading a byte.
+        let (url, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551615\r\n\r\n", b"tile");
+        let err = fetch_tile_bytes(&url).unwrap_err();
+        assert!(err.contains("2 MiB"), "{err}");
+        server.join().unwrap();
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_tile_with_an_honest_length_is_read_whole() {
+        let (url, server) = serve_once("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n", b"tile");
+        assert_eq!(fetch_tile_bytes(&url).unwrap(), b"tile");
+        server.join().unwrap();
     }
 }
