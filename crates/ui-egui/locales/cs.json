@@ -2500,5 +2500,7 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Recently Added always shows the newest imports first.": "Nedávno přidané vždy zobrazuje nejnovější importy jako první.",
+  "Recently Deleted shows no date groups.": "Nedávno odstraněné nezobrazuje skupiny podle data."
 }

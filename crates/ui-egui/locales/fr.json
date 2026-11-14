@@ -3637,5 +3637,7 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Démarrez l'application avec --control 7980 (ou LIGHTCRAFT_CONTROL_PORT), puis lightcraft-cli mcp --connect y connecte un agent.",
   "Welcome": "Bienvenue",
   "Next": "Suivant",
-  "Get Started": "Commencer"
+  "Get Started": "Commencer",
+  "Recently Added always shows the newest imports first.": "Ajoutées récemment affiche toujours les importations les plus récentes en premier.",
+  "Recently Deleted shows no date groups.": "Supprimées récemment n'affiche aucun groupe par date."
 }
