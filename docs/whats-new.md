@@ -221,6 +221,11 @@
 
 ## 2026-10-29
 
+### Loading thumbnails look different from unreadable ones
+- A grid cell or filmstrip tile whose thumbnail hasn't arrived yet now shows three small dots on its gray placeholder.
+  One whose file can't be read still shows "!". The dots stand still (so a Reduce motion setting has nothing
+  to stop), and they are left off tiles too small to hold them. A video's placeholder stays plain.
+
 ### A person's page opens in seconds in a large library
 - Finding the unnamed faces that look like a person (a person's page, and again after each face confirmed there) now
   runs on every processor core, and each comparison of two faces uses the processor's vector instructions. In a
