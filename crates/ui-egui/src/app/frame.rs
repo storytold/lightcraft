@@ -59,11 +59,67 @@ impl LightcraftApp {
         }
     }
 
+    /// Tell the host what should keep the machine awake (`services.keep_awake`), when that changes. While a job
+    /// holds, a repaint is asked for every second so its end is noticed (and the hold released) even when nothing
+    /// else is drawn. Once the app is shutting down the hold is gone for good ([`LightcraftApp::release_keep_awake`]).
+    pub(super) fn sync_keep_awake(&mut self, ctx: &egui::Context) {
+        if lightcraft_engine::gpu::shutting_down() {
+            return;
+        }
+        let Some(keep_awake) = self.services.keep_awake.as_mut() else { return };
+        let reason = self.session.activity.wake_reason();
+        if reason.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        if reason != self.awake_told {
+            keep_awake(reason.as_deref());
+            self.awake_told = reason;
+        }
+    }
+
+    /// Let go of the hold the host was told about, if any (quitting).
+    pub(super) fn release_keep_awake(&mut self) {
+        if let Some(keep_awake) = self.services.keep_awake.as_mut()
+            && self.awake_told.take().is_some()
+        {
+            keep_awake(None);
+        }
+    }
+
+    /// Tell the host how many jobs are running (`services.dock_badge`), when that changes. A job still stopping counts
+    /// until it has stopped, so the count is also looked at every second while it is above zero. Once the app is
+    /// shutting down the badge is gone for good ([`LightcraftApp::release_dock_badge`]).
+    pub(super) fn sync_dock_badge(&mut self, ctx: &egui::Context) {
+        if lightcraft_engine::gpu::shutting_down() {
+            return;
+        }
+        let Some(dock_badge) = self.services.dock_badge.as_mut() else { return };
+        let running = self.session.activity.running_jobs();
+        if running > 0 {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        if running != self.badge_told {
+            dock_badge(running);
+            self.badge_told = running;
+        }
+    }
+
+    /// Clear the badge the host was told about, if any (quitting).
+    pub(super) fn release_dock_badge(&mut self) {
+        if let Some(dock_badge) = self.services.dock_badge.as_mut()
+            && std::mem::take(&mut self.badge_told) != 0
+        {
+            dock_badge(0);
+        }
+    }
+
     /// Queues and timers. Each consumed queue is drained once per call; time-gated work uses the
     /// monotonic app clock, so a hidden `run_logic` keeps it advancing and a second layout pass is
     /// a no-op rather than a duplicate.
     pub(super) fn logic_background(&mut self, ctx: &egui::Context) {
         self.background_prep(ctx);
+        self.sync_dock_badge(ctx);
+        self.sync_keep_awake(ctx);
         panels::notices::logic(self, ctx);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
@@ -519,4 +575,78 @@ impl LightcraftApp {
 /// wall-clock gate cannot express that (a slow first pass could re-run it within one frame).
 pub(crate) fn import_tick_allowed(ctx: &egui::Context) -> bool {
     ctx.current_pass_index() == 0
+}
+
+#[cfg(test)]
+mod keep_awake_tests {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use crate::Services;
+    use lightcraft_engine::activity::Cancel;
+
+    use super::*;
+
+    /// A context that records every delay it is asked to repaint after.
+    fn recording_context() -> (egui::Context, Arc<Mutex<Vec<Duration>>>) {
+        let ctx = egui::Context::default();
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let sink = asked.clone();
+        ctx.set_request_repaint_callback(move |info| sink.lock().unwrap().push(info.delay));
+        (ctx, asked)
+    }
+
+    fn app_with_keep_awake() -> LightcraftApp {
+        let keep_awake: crate::KeepAwakeFn = Box::new(|_| {});
+        LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, keep_awake: Some(keep_awake), ..Default::default() })
+    }
+
+    #[test]
+    fn a_holding_job_asks_for_a_repaint_within_a_second_and_an_idle_app_asks_for_none() {
+        let (ctx, asked) = recording_context();
+        let mut app = app_with_keep_awake();
+        app.sync_keep_awake(&ctx);
+        assert!(asked.lock().unwrap().is_empty(), "nothing runs: no repaint is asked for");
+
+        let _job = app.session.activity.start("export", "Exporting", Cancel::Yes);
+        app.sync_keep_awake(&ctx);
+        assert_eq!(*asked.lock().unwrap(), [Duration::from_secs(1)], "the end of the job is looked for every second");
+    }
+
+    fn app_with_dock_badge() -> (LightcraftApp, Arc<Mutex<Vec<usize>>>) {
+        let told = Arc::new(Mutex::new(Vec::new()));
+        let sink = told.clone();
+        let dock_badge: crate::DockBadgeFn = Box::new(move |n| sink.lock().unwrap().push(n));
+        let app =
+            LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, dock_badge: Some(dock_badge), ..Default::default() });
+        (app, told)
+    }
+
+    #[test]
+    fn a_running_job_asks_for_a_repaint_within_a_second_until_it_has_stopped() {
+        let (ctx, asked) = recording_context();
+        let (mut app, told) = app_with_dock_badge();
+        app.sync_dock_badge(&ctx);
+        assert!(asked.lock().unwrap().is_empty(), "nothing runs: no repaint is asked for");
+        assert!(told.lock().unwrap().is_empty(), "nothing runs: the host is told nothing");
+
+        let job = app.session.activity.start("export", "Exporting", Cancel::Yes);
+        app.sync_dock_badge(&ctx);
+        assert_eq!(*asked.lock().unwrap(), [Duration::from_secs(1)], "the end of the job is looked for every second");
+        assert_eq!(*told.lock().unwrap(), [1]);
+
+        // asked to stop, a job still counts, so the count is still looked at (a fresh context: egui asks its host
+        // again only for a delay shorter than the one still pending)
+        let (ctx, asked) = recording_context();
+        app.session.activity.cancel(job.id()).unwrap();
+        app.sync_dock_badge(&ctx);
+        assert_eq!(*asked.lock().unwrap(), [Duration::from_secs(1)], "a job still stopping is still looked for every second");
+        assert_eq!(*told.lock().unwrap(), [1], "the count did not change: the host is not told again");
+
+        let (ctx, asked) = recording_context();
+        drop(job);
+        app.sync_dock_badge(&ctx);
+        assert!(asked.lock().unwrap().is_empty(), "nothing runs any more: no repaint is asked for");
+        assert_eq!(*told.lock().unwrap(), [1, 0]);
+    }
 }
