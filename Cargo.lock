@@ -4178,6 +4178,7 @@ dependencies = [
  "craft-raw",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "dhat",
+ "jixel",
  "lightcraft-color",
  "lightcraft-geom",
  "lightcraft-meta",
