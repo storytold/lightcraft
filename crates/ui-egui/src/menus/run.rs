@@ -604,28 +604,61 @@ fn ui_commands_4(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             // Classic's F8: hide the right panel, and bring back the same one next time (Edit when
             // none was hidden). Hiding a tool ends it, as closing its panel does.
             if app.ui.right != RightPanel::None && crate::docking::exposed(app, crate::docking::Panel::Tools) {
-                app.ui.right_hidden = app.ui.right;
-                app.ui.right = RightPanel::None;
-                if app.ui.tool != "wbPicker" {
-                    app.ui.tool.clear();
-                }
-                let _ = app.session.end_interaction();
+                hide_right_panel(app);
             } else if app.ui.right == RightPanel::None {
-                let p = match std::mem::take(&mut app.ui.right_hidden) {
-                    RightPanel::None => RightPanel::Edit,
-                    p => p,
-                };
-                app.ui.right = p;
-                if p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
-                    app.ui.view = ViewMode::Detail;
-                }
-                if p == RightPanel::Remove && app.ui.tool.is_empty() {
-                    app.ui.tool = "remove".into();
-                }
+                show_right_panel(app, true);
             }
             // A right panel that is open but not showing (minimized, or behind another tab)
             // keeps its mode; reveal_command brings it to the front.
             Ok(json!({"open": app.ui.right != RightPanel::None}))
+        }
+        "view.allPanels" => {
+            // Classic's Shift+Tab: hide the side panels, the Presets column and the filmstrip,
+            // remembering what was shown; again, bring back exactly that. With nothing shown and
+            // nothing remembered it shows the usual panels. {hide?: bool} forces the direction.
+            if !(p.is_object() || p.is_null()) {
+                return Some(Err(format!("view.allPanels: parameters must be an object such as {{\"hide\": true}}, not {p}")));
+            }
+            let forced = match p.get("hide") {
+                None | Some(Value::Null) => None,
+                Some(Value::Bool(b)) => Some(*b),
+                Some(other) => return Some(Err(format!("view.allPanels: `hide` must be true or false, not {other}"))),
+            };
+            let u = &app.ui;
+            let hide = forced.unwrap_or(!u.all_panels_hidden() && !(u.no_panel_shown() && u.hidden_panels.is_none()));
+            if hide {
+                if !app.ui.no_panel_shown() {
+                    let u = &mut app.ui;
+                    u.hidden_panels =
+                        Some(crate::state::HiddenPanels { left_panel: u.left_panel, right: u.right, presets: u.presets, filmstrip: u.filmstrip });
+                    u.left_panel = false;
+                    u.presets = false;
+                    u.filmstrip = false;
+                    if u.right != RightPanel::None {
+                        hide_right_panel(app);
+                    }
+                }
+            } else {
+                match app.ui.hidden_panels.take() {
+                    Some(was) if app.ui.no_panel_shown() => {
+                        app.ui.left_panel = was.left_panel;
+                        app.ui.presets = was.presets;
+                        app.ui.filmstrip = was.filmstrip;
+                        if was.right != RightPanel::None {
+                            show_right_panel(app, false);
+                        }
+                    }
+                    _ => {
+                        app.ui.left_panel = true;
+                        app.ui.filmstrip = true;
+                        if app.ui.right == RightPanel::None {
+                            show_right_panel(app, false);
+                        }
+                    }
+                }
+            }
+            // whether every panel is hidden now (also when they already were, with nothing to bring back)
+            Ok(json!({"hidden": app.ui.no_panel_shown()}))
         }
         "view.beforeAfter" => {
             app.ui.before_after = if app.ui.before_after == BeforeAfter::SideBySide { BeforeAfter::Off } else { BeforeAfter::SideBySide };
@@ -2246,4 +2279,31 @@ fn file_export_curve_presets_command(app: &mut LightcraftApp, ctx: &egui::Contex
         app.toast(ctx, crate::i18n::tr_format!("Exported {} point curve preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
     }
     r
+}
+
+/// F8 and Hide All Panels hide the right panel: it is remembered for the next F8, and a tool in
+/// use ends, as closing its panel does.
+fn hide_right_panel(app: &mut LightcraftApp) {
+    app.ui.right_hidden = app.ui.right;
+    app.ui.right = RightPanel::None;
+    if app.ui.tool != "wbPicker" {
+        app.ui.tool.clear();
+    }
+    let _ = app.session.end_interaction();
+}
+
+/// Bring back the right panel F8 (or Hide All Panels) hid; Edit when none was. F8 opens an edit
+/// tool in the loupe (`to_detail`); Hide All Panels brings the panels back without changing the view.
+fn show_right_panel(app: &mut LightcraftApp, to_detail: bool) {
+    let p = match std::mem::take(&mut app.ui.right_hidden) {
+        RightPanel::None => RightPanel::Edit,
+        p => p,
+    };
+    app.ui.right = p;
+    if to_detail && p.is_edit_tool() && !matches!(app.ui.view, ViewMode::Detail) {
+        app.ui.view = ViewMode::Detail;
+    }
+    if p == RightPanel::Remove && app.ui.tool.is_empty() {
+        app.ui.tool = "remove".into();
+    }
 }

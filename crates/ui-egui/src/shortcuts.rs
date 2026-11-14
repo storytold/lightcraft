@@ -222,6 +222,8 @@ pub const ALIASES: &[(&str, &str, &str)] = &[
     ("F7", "view.leftPanel", "{}"),
     // and F8 the right panel
     ("F8", "view.rightPanel", "{}"),
+    // Shift+Tab hides all the panels, and brings back exactly those
+    ("Shift+Tab", "view.allPanels", "{}"),
     ("Shift+M", "version.create", "{}"),
     // grid thumbnail size: Classic's key is `=`; `+` (keypad, or Shift+= reported as Plus) agrees
     ("Plus", "view.thumbSizeUp", "{}"),
@@ -389,6 +391,14 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let (mut fire, aliased, h_press) = pressed_commands(app, ctx);
+    // Shift+Tab is also egui's "focus the previous widget", decided when the pass began and without
+    // consuming the key: with nothing focused it would put the keyboard in the last text field
+    // that took part in focus traversal. Hiding the panels must not do that.
+    // (from the fixed key, or from a saved binding of the command)
+    if aliased.iter().any(|(id, _)| *id == "view.allPanels") || fire.iter().any(|f| f == "view.allPanels") {
+        ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::Tab));
+        ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+    }
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
     }
