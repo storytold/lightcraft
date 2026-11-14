@@ -27,6 +27,7 @@ fn std(v: &[f64]) -> f64 {
     (v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len() as f64).sqrt()
 }
 
+/// V1 to V6 keep the value-noise grain, V7 on draw crystal grain, and Amount 0 gives no grain on any.
 #[test]
 fn processes_before_v7_keep_the_value_noise() {
     for p in Process::ALL {
@@ -35,7 +36,7 @@ fn processes_before_v7_keep_the_value_noise() {
             Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 => {
                 assert!(matches!(model, Some(GrainModel::Value(_))), "{p:?}")
             }
-            Process::V7 | Process::V8 => assert!(matches!(model, Some(GrainModel::Crystal(_))), "{p:?}"),
+            Process::V7 | Process::V8 | Process::V9 => assert!(matches!(model, Some(GrainModel::Crystal(_))), "{p:?}"),
         }
         assert!(GrainModel::new(&on(p, 0.0), 2000.0, false).is_none(), "{p:?}: no grain at Amount 0");
     }

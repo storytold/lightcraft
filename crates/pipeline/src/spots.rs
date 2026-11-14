@@ -1,8 +1,11 @@
 //! Remove / Heal / Clone spots, rendered at output resolution in scene-linear light.
 //!
 //! - **Clone** copies the source patch with a feathered edge.
-//! - **Heal** copies the source's *detail* and keeps the target's *tone*: result = src + blur(target − src)
-//!   (frequency separation — a fast, stable approximation of gradient-domain healing).
+//! - **Heal** copies the source's *detail* and keeps the target's *tone*. How depends on the photo's
+//!   process ([`HealMethod`]): from V9 the patch is pinned to the photo on the spot's edge by a membrane
+//!   fill of the log ratio, with the source's fine detail matched to its surroundings ([`pinned`]);
+//!   before V9 it is src + blur(target − src), a Gaussian-weighted average of the difference around the
+//!   spot (frequency separation).
 //! - **Remove** is Heal with an automatically chosen source: candidate offsets on rings around the
 //!   spot are scored by how well the source's surrounding annulus matches the target's.
 //! - **Fill** (content-aware) rebuilds the spot from patches of its surroundings instead of one
@@ -10,11 +13,34 @@
 //!   structure is chosen at a scale set by the spot's size (the same at preview and export size).
 //!   Deterministic; the source offset is ignored.
 
-use lightcraft_develop::{Spot, SpotMode};
+use lightcraft_develop::{DevelopSettings, Process, Spot, SpotMode};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgb32f;
 
 use crate::geometry::Frame;
+
+mod pinned;
+
+/// How Heal and Remove spots blend their source in, and how every spot reads it: chosen by the
+/// photo's process (`docs/process-versions.md`), so a photo keeps its look until it is updated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum HealMethod {
+    /// V1 to V8: the source plus a Gaussian-weighted average of the difference around the spot
+    /// (not pinned to the spot's edge, added in linear light), the source read where its offset
+    /// lands, between pixels.
+    Averaged,
+    /// V9 on: pinned to the photo on the spot's edge in log space, the source's fine detail matched
+    /// to its surroundings ([`pinned`]), and every spot (Clone too) reads its source at whole pixels,
+    /// so the grain isn't averaged away.
+    Pinned,
+}
+
+impl HealMethod {
+    /// The method `s`'s process renders spots with.
+    pub fn of(s: &DevelopSettings) -> HealMethod {
+        if s.process.process() >= Process::V9 { HealMethod::Pinned } else { HealMethod::Averaged }
+    }
+}
 
 #[inline]
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
@@ -207,28 +233,30 @@ pub fn window_for_reads_checked(
     if spots.is_empty() && autos.is_empty() {
         return Some(win);
     }
-    let to_out = frame.norm_to_out(full_w, full_h);
-    let origin = to_out.apply(Point::new(0.0, 0.0));
-    // (target box, source box) of each spot, in output pixels: [x0, y0, x1, y1]
+    let method = HealMethod::of(s);
+    // (target box, source box) of each spot, in output pixels: [x0, y0, x1, y1), the pixels
+    // `apply` reads with a weight, worked out as it lays the spot out (a pixel more would refuse a
+    // window that fits at the span limit, a pixel less would read the window's edge instead)
     let boxes: Vec<([f64; 4], [f64; 4])> = spots
         .iter()
         .filter_map(|spot| {
-            let r = radius_px(spot.size, ppl);
-            let pts: Vec<_> = spot.points.iter().map(|p| to_out.apply(*p)).collect();
-            let first = pts.first()?;
-            let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
-            for p in &pts {
-                (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
-            }
-            // the box `apply` works in: the stroke plus a radius, plus a radius of padding
-            let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
-            let s = match spot.source_offset {
-                Some(o) => {
-                    let b = to_out.apply(o);
-                    let (dx, dy) = (b.x - origin.x, b.y - origin.y);
-                    [t[0] + dx, t[1] + dy, t[2] + dx, t[3] + dy]
+            let l = layout(spot, frame, full_w, full_h, ppl)?;
+            let t = [l.bx, l.by, l.bx + l.bw, l.by + l.bh].map(|v| v as f64);
+            let s = match l.offset {
+                // whole pixels from V9; before, the bilinear neighbour too unless the offset is whole
+                Some((dx, dy)) => {
+                    let reach = |d: f32| match method {
+                        HealMethod::Pinned => (d.round(), d.round()),
+                        HealMethod::Averaged => (d.floor(), d.ceil()),
+                    };
+                    let ((x0, x1), (y0, y1)) = (reach(dx), reach(dy));
+                    [t[0] + f64::from(x0), t[1] + f64::from(y0), t[2] + f64::from(x1), t[3] + f64::from(y1)]
                 }
-                None => [t[0] - 4.2 * r, t[1] - 4.2 * r, t[2] + 4.2 * r, t[3] + 4.2 * r],
+                // the source is chosen as the spot renders, up to 4.2 radii away
+                None => {
+                    let d = 4.2 * f64::from(l.r) + 1.0;
+                    [t[0] - d, t[1] - d, t[2] + d, t[3] + d]
+                }
             };
             Some((t, s)).filter(|(t, s)| t.iter().chain(s).all(|v| v.is_finite()))
         })
@@ -383,17 +411,22 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
     }
 }
 
-/// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
-pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
+/// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit; `method`
+/// is [`HealMethod::of`] the photo's settings.
+pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, method: HealMethod) {
     let (w, h) = (img.width, img.height);
+    let pinned = method == HealMethod::Pinned;
     for spot in spots {
         let Some(SpotLayout { r, pts, offset, bx: bx0, by: by0, bw, bh, inner, opacity, heal, fill }) = layout(spot, frame, w, h, ppl) else {
             continue;
         };
         let Some(&first) = pts.first() else { continue };
         let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
-        // alpha of the stroke and source patch in the box
+        // (V9 reads whole pixels: between them, bilinear sampling averages the source's grain away)
+        let offset = if pinned { (offset.0.round(), offset.1.round()) } else { offset };
+        // alpha of the stroke, its distance and the source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];
+        let mut dist = vec![0.0f32; bw * bh];
         let mut src = vec![[0.0f32; 3]; bw * bh];
         let mut tgt = vec![[0.0f32; 3]; bw * bh];
         for y in 0..bh {
@@ -401,6 +434,7 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
                 let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
                 alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
+                dist[y * bw + x] = d;
                 src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
                 tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
             }
@@ -408,7 +442,13 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
         if fill {
             fill_box(&mut src, &tgt, &alpha, bw, bh);
         }
-        let low = if heal {
+        // (a box too big for the pinned heal's working memory gets the averaged one)
+        let healed = if heal && pinned { pinned::heal(&pinned::Patch { w: bw, h: bh, src: &src, tgt: &tgt, dist: &dist, r }) } else { None };
+        let pinned_here = healed.is_some();
+        if let Some(healed) = healed {
+            src = healed;
+        }
+        let low = if heal && !pinned_here {
             // Tone correction from the spot's *surroundings* only: normalized convolution of
             // (target − source) over pixels outside the stroke (a membrane-like interpolation).
             let outside: Vec<f32> = alpha.iter().map(|a| if *a < 0.02 { 1.0 } else { 0.0 }).collect();
@@ -458,11 +498,15 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lightcraft_develop::DevelopSettings;
 
+    /// Both processes' spot rendering (before and from V9).
+    const BOTH: [HealMethod; 2] = [HealMethod::Averaged, HealMethod::Pinned];
+
+    /// A hard-edged spot of every mode at opacity 0, in the middle and at a corner, leaves every
+    /// pixel as it was, with either heal.
     #[test]
     fn hard_edge_spots_at_zero_opacity_leave_every_pixel_unchanged() {
-        for mode in [SpotMode::Clone, SpotMode::Heal, SpotMode::Remove, SpotMode::Fill] {
+        for (mode, method) in [SpotMode::Clone, SpotMode::Heal, SpotMode::Remove, SpotMode::Fill].into_iter().flat_map(|m| BOTH.map(|h| (m, h))) {
             for (cx, cy) in [(32.5, 24.5), (0.5, 0.5)] {
                 let original = Rgb32f::from_fn(64, 48, |x, y| [0.2 + x as f32 / 128.0, 0.3 + y as f32 / 128.0, 0.4]);
                 let mut img = original.clone();
@@ -475,17 +519,21 @@ mod tests {
                     opacity: 0.0,
                     source_offset: Some(Point::new(8.0 / 64.0, 0.0)),
                 };
-                apply(&mut img, &[spot], &frame, frame.px_per_long(64));
+                apply(&mut img, &[spot], &frame, frame.px_per_long(64), method);
                 for (i, (actual, expected)) in img.data.iter().zip(&original.data).enumerate() {
-                    assert_eq!(actual, expected, "zero-opacity {mode:?} at ({cx}, {cy}), pixel {i}");
+                    assert_eq!(actual, expected, "zero-opacity {mode:?} ({method:?}) at ({cx}, {cy}), pixel {i}");
                 }
             }
         }
     }
 
+    /// A hard-edged Clone copies the source inside its radius and leaves the pixels on the radius
+    /// unchanged, at two output sizes and with either heal.
     #[test]
     fn hard_edge_clone_copies_inside_and_preserves_pixels_on_the_radius() {
-        for (w, h, cx, cy, radius) in [(64, 48, 32.5, 24.5, 5.0), (128, 96, 64.5, 48.5, 10.0)] {
+        for ((w, h, cx, cy, radius), method) in
+            [(64, 48, 32.5, 24.5, 5.0), (128, 96, 64.5, 48.5, 10.0)].into_iter().flat_map(|c| BOTH.map(|m| (c, m)))
+        {
             let original = Rgb32f::from_fn(w, h, |x, y| [0.2 + x as f32 / w as f32, y as f32 / h as f32, 0.4]);
             let mut img = original.clone();
             let frame = Frame::new(w, h, &DevelopSettings::default(), true);
@@ -497,7 +545,7 @@ mod tests {
                 opacity: 100.0,
                 source_offset: Some(Point::new(0.125, 0.0)),
             };
-            apply(&mut img, &[spot], &frame, frame.px_per_long(w));
+            apply(&mut img, &[spot], &frame, frame.px_per_long(w), method);
             let (x, y) = (cx as usize, cy as usize);
             assert_eq!(img.get(x, y), original.get(x + w / 8, y), "inside copies the source at {w}px");
             assert_eq!(img.get(x + radius as usize, y), original.get(x + radius as usize, y), "radius stays unchanged at {w}px");
@@ -505,20 +553,23 @@ mod tests {
         }
     }
 
+    /// Remove with an automatic source erases a black dot on a gentle gradient, with either heal.
     #[test]
     fn remove_erases_a_dot() {
-        // flat grey with a gentle gradient and a black dot in the middle
-        let mut img = Rgb32f::from_fn(120, 80, |x, _| [0.2 + x as f32 * 0.001; 3]);
-        for y in 36..44 {
-            for x in 56..64 {
-                img.set(x, y, [0.0; 3]);
+        for method in BOTH {
+            // flat grey with a gentle gradient and a black dot in the middle
+            let mut img = Rgb32f::from_fn(120, 80, |x, _| [0.2 + x as f32 * 0.001; 3]);
+            for y in 36..44 {
+                for x in 56..64 {
+                    img.set(x, y, [0.0; 3]);
+                }
             }
+            let frame = Frame::new(120, 80, &DevelopSettings::default(), true);
+            let spot = Spot { points: vec![Point::new(0.5, 0.5)], size: 8.0 / 120.0, feather: 30.0, ..Default::default() };
+            apply(&mut img, &[spot], &frame, frame.px_per_long(120), method);
+            let c = img.get(60, 40);
+            assert!((c[0] - 0.26).abs() < 0.03, "{method:?}: {c:?}");
         }
-        let frame = Frame::new(120, 80, &DevelopSettings::default(), true);
-        let spot = Spot { points: vec![Point::new(0.5, 0.5)], size: 8.0 / 120.0, feather: 30.0, ..Default::default() };
-        apply(&mut img, &[spot], &frame, frame.px_per_long(120));
-        let c = img.get(60, 40);
-        assert!((c[0] - 0.26).abs() < 0.03, "{c:?}");
     }
 
     /// Vertical stripes (period `period` px) with a black blot over the middle.
@@ -547,12 +598,13 @@ mod tests {
         }
     }
 
+    /// Fill rebuilds the stripes through the blot it covers, and renders the same twice.
     #[test]
     fn fill_rebuilds_structure_deterministically() {
         let (w, h) = (200, 160);
         let mut img = striped_with_blot(w, h, 8);
         let frame = Frame::new(w, h, &DevelopSettings::default(), true);
-        apply(&mut img, &[fill_spot()], &frame, frame.px_per_long(w));
+        apply(&mut img, &[fill_spot()], &frame, frame.px_per_long(w), HealMethod::Pinned);
         // the blot is gone and the stripes continue through it
         let mut err = 0.0f32;
         for x in 90..110 {
@@ -561,17 +613,18 @@ mod tests {
         }
         assert!(err / 20.0 < 0.12, "mean error {}", err / 20.0);
         let mut again = striped_with_blot(w, h, 8);
-        apply(&mut again, &[fill_spot()], &frame, frame.px_per_long(w));
+        apply(&mut again, &[fill_spot()], &frame, frame.px_per_long(w), HealMethod::Pinned);
         assert_eq!(img.data, again.data);
     }
 
+    /// Fill at half size matches the full-size fill box-downscaled (resolution independence).
     #[test]
     fn fill_matches_between_preview_and_export_size() {
         // the same photo at two sizes: the half-size fill matches the full-size one, downsampled
         let (mut big, mut small) = (striped_with_blot(320, 240, 16), striped_with_blot(160, 120, 8));
         let (fb, fs) = (Frame::new(320, 240, &DevelopSettings::default(), true), Frame::new(160, 120, &DevelopSettings::default(), true));
-        apply(&mut big, &[fill_spot()], &fb, fb.px_per_long(320));
-        apply(&mut small, &[fill_spot()], &fs, fs.px_per_long(160));
+        apply(&mut big, &[fill_spot()], &fb, fb.px_per_long(320), HealMethod::Pinned);
+        apply(&mut small, &[fill_spot()], &fs, fs.px_per_long(160), HealMethod::Pinned);
         let (mut err, mut n) = (0.0f32, 0);
         for y in 50..70 {
             for x in 70..90 {
@@ -583,32 +636,37 @@ mod tests {
         assert!(err / n as f32 <= 0.08, "mean difference {}", err / n as f32);
     }
 
+    /// Fill spots off the image, of size 0, 2 or infinity, or at a NaN position render finite pixels.
     #[test]
     fn fill_survives_hostile_spots() {
         let frame = Frame::new(40, 30, &DevelopSettings::default(), true);
         for (p, size) in [((0.0, 0.0), 2.0), ((-5.0, 9.0), 0.1), ((0.5, 0.5), 0.0), ((f64::NAN, 0.5), 0.1), ((0.5, 0.5), f64::INFINITY)] {
             let mut img = Rgb32f::from_fn(40, 30, |x, _| [x as f32 / 40.0; 3]);
             let spot = Spot { mode: SpotMode::Fill, points: vec![Point::new(p.0, p.1)], size, ..Default::default() };
-            apply(&mut img, &[spot], &frame, frame.px_per_long(40));
+            apply(&mut img, &[spot], &frame, frame.px_per_long(40), HealMethod::Pinned);
             assert!(img.data.iter().flatten().all(|v| v.is_finite()));
         }
     }
 
+    /// Clone copies the bright source half into a spot on the dark half and leaves pixels away from
+    /// the spot alone, with either heal.
     #[test]
     fn clone_copies_source() {
-        let mut img = Rgb32f::from_fn(100, 100, |x, _| if x < 50 { [0.1; 3] } else { [0.9; 3] });
-        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
-        let spot = Spot {
-            mode: SpotMode::Clone,
-            points: vec![Point::new(0.25, 0.5)],
-            size: 0.05,
-            feather: 0.0,
-            source_offset: Some(Point::new(0.5, 0.0)),
-            ..Default::default()
-        };
-        apply(&mut img, &[spot], &frame, frame.px_per_long(100));
-        assert!(img.get(25, 50)[0] > 0.8);
-        assert!(img.get(5, 50)[0] < 0.2);
+        for method in BOTH {
+            let mut img = Rgb32f::from_fn(100, 100, |x, _| if x < 50 { [0.1; 3] } else { [0.9; 3] });
+            let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+            let spot = Spot {
+                mode: SpotMode::Clone,
+                points: vec![Point::new(0.25, 0.5)],
+                size: 0.05,
+                feather: 0.0,
+                source_offset: Some(Point::new(0.5, 0.0)),
+                ..Default::default()
+            };
+            apply(&mut img, &[spot], &frame, frame.px_per_long(100), method);
+            assert!(img.get(25, 50)[0] > 0.8, "{method:?}");
+            assert!(img.get(5, 50)[0] < 0.2, "{method:?}");
+        }
     }
 
     fn with_spots(spots: Vec<Spot>) -> DevelopSettings {
@@ -684,6 +742,47 @@ mod tests {
         // a hidden mask reads nothing
         let hidden = DevelopSettings { masks: vec![Mask { visible: false, ..auto.masks[0].clone() }], ..Default::default() };
         assert_eq!(window_for_reads(&hidden, &frame, 4000, 3000, ppl, win), win);
+    }
+
+    /// A window holds exactly the pixels [`apply`] reads with a weight, whatever the spot's sub-pixel
+    /// position and offset: the whole pixels V9 rounds the offset to, and V8's bilinear neighbours.
+    /// One pixel short, the window's edge pixel was read instead and a tile differed from the whole
+    /// render; one pixel more refused windows that fit at the span limit.
+    #[test]
+    fn a_window_holds_every_source_pixel_a_spot_reads() {
+        use crate::PixelWindow;
+        let (fw, fh) = (4000, 3000);
+        let frame = Frame::new(fw, fh, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(fw);
+        // whole pixels read along one axis from box start `b`, length `n`, offset `o`
+        let reads = |b: usize, n: usize, o: f32, method: HealMethod| -> (i64, i64) {
+            let at = |i: usize| (b + i) as f32 + o;
+            match method {
+                HealMethod::Pinned => (b as i64 + o.round() as i64, (b + n - 1) as i64 + o.round() as i64),
+                HealMethod::Averaged => {
+                    let last = at(n - 1);
+                    (at(0).floor() as i64, last.floor() as i64 + i64::from(last.fract() > 0.0))
+                }
+            }
+        };
+        for i in 0..40 {
+            let f = f64::from(i) / 40.0;
+            let (cx, cy) = (2000.0 + 7.0 * f, 1500.0 + 3.0 * f);
+            let (ox, oy) = (300.0 + 11.0 * f, -200.0 - 5.0 * f);
+            let spot = spot_at(cx / 4000.0, cy / 3000.0, 12.3 / 4000.0, Some(Point::new(ox / 4000.0, oy / 3000.0)));
+            let win = PixelWindow { x: 1995, y: 1495, w: 10, h: 10 };
+            let l = layout(&spot, &frame, fw, fh, ppl).expect("a spot inside the image");
+            let (dx, dy) = l.offset.expect("an explicit source");
+            for process in [Process::V8, Process::V9] {
+                let s = DevelopSettings { process: process.version(), ..with_spots(vec![spot.clone()]) };
+                let method = HealMethod::of(&s);
+                let g = window_for_reads(&s, &frame, fw, fh, ppl, win);
+                let ((x0, x1), (y0, y1)) = (reads(l.bx, l.bw, dx, method), reads(l.by, l.bh, dy, method));
+                // the target box and the pixels its source is read from, and nothing more
+                let want = (l.bx.min(x0 as usize), l.by.min(y0 as usize), (l.bx + l.bw).max(x1 as usize + 1), (l.by + l.bh).max(y1 as usize + 1));
+                assert_eq!((g.x, g.y, g.x + g.w, g.y + g.h), want, "{process:?}, step {i}: reads x {x0}..={x1}, y {y0}..={y1}");
+            }
+        }
     }
 
     // Given a window that would have to grow past the cap, there is no answer (never a wrong one)
