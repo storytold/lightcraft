@@ -663,6 +663,27 @@ pub fn specs() -> Vec<CommandSpec> {
             select_after_deletion(s, &before);
             Ok(json!({"changed": n}))
         }),
+        // Lightroom Classic's Photo ▸ Delete Rejected Photos (⌘⌫ / Ctrl+Backspace): the rejects the
+        // view shows go to Recently Deleted as one undo step; photos the filter hides are left alone
+        cmd!(
+            "library.deleteRejected",
+            "Delete Rejected Photos",
+            ["Photo"],
+            Some("Cmd+Delete"),
+            "{} → {changed} — moves every rejected photo in the view to Recently Deleted",
+            always,
+            |s, _| {
+                let before = s.visible_cloned();
+                let rejects: Vec<PhotoId> =
+                    before.iter().copied().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.flag == Flag::Reject && !p.deleted)).collect();
+                s.end_interaction()?;
+                let n = mark_deleted(s, &rejects, "Delete Rejected Photos")?;
+                if n > 0 {
+                    select_after_deletion(s, &before);
+                }
+                Ok(json!({"changed": n}))
+            }
+        ),
         cmd!("photo.restore", "Restore", ["Photo"], None, "{ids?}", has_selection, |s, p| for_targets(s, p, "Restore", |id| Some(Op::SetDeleted {
             id,
             deleted: false

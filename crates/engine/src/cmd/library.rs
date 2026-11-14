@@ -30,6 +30,10 @@ mod flag_cycle_tests;
 mod rated_out_tests;
 
 #[cfg(test)]
+#[path = "library/tests_delete_rejected.rs"]
+mod delete_rejected_tests;
+
+#[cfg(test)]
 #[path = "library/tests_clear_label.rs"]
 mod clear_label_tests;
 

@@ -643,6 +643,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-CREATEVERSION | Create version — ⇧M | P1 | ✅ | `cmd:version.create` | secondary binding (primary ⌘⇧S) |
 | KEY-CLOSEWINDOW | Close window — ⌘W | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | native File ▸ Close Window; with the main window in front it quits the app like ⌘Q (see MENU-FILE-CLOSE); the second window just closes |
 | KEY-DELETE | Delete photo — ⌫ | P0 | ✅ | `cmd:photo.delete`, `cmd:album.removePhotos` | in a normal album ⌫ removes from the album only (`album.removePhotos`, issue #1805); in a smart album it does nothing; elsewhere it deletes (to Recently Deleted) |
+| KEY-DELETEREJECTED | Delete rejected photos — ⌘⌫ | P1 | ✅ | `cmd:library.deleteRejected` | Photo ▸ Delete Rejected Photos; ⌘⌫ (Ctrl+Backspace off macOS); every reject the view shows goes to Recently Deleted as one undo step; rejects the filter hides stay |
 | KEY-ADDPHOTOS | Import photos — ⇧⌘I | P0 | ✅ | `cmd:file.addPhotos` | |
 | KEY-VERSIONS | Versions panel — ⇧V | P1 | ✅ | `cmd:panel.versions` | |
 | KEY-SECTIONS | Expand/collapse edit sections — ⌘1…⌘6 | P1 | ✅ | `cmd:section.light`, `cmd:section.color`, `cmd:section.effects`, `cmd:section.detail`, `cmd:section.optics`, `cmd:section.lensBlur` | ⌘1–⌘6 (Light, Color, Effects, Detail, Optics, Lens Blur) as observed; our Edit panel has no Geometry section for ⌘7; Zoom 100% moved to ⌥⌘0 |
