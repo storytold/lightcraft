@@ -179,10 +179,34 @@ impl NetRunner {
             product: zeros(self.plan.product)?,
         })
     }
+    /// The largest absolute value of every tensor (0 is the input) of a run on `input`, to tell how far the
+    /// activations reach (a 16-bit float tops out at 65504).
+    pub fn peaks(&self, input: &[f32]) -> Result<Vec<f32>> {
+        let first = self.plan.tensors.first().ok_or_else(|| bad("no input"))?;
+        if input.len() != count(first.channels, first.side)? || input.iter().any(|v| !v.is_finite()) {
+            return Err(bad("the tile has the wrong size or non-finite values"));
+        }
+        let mut w = self.workspace()?;
+        let mut peaks = Vec::new();
+        let result = self.execute_with(input, &mut w, Some(&mut peaks));
+        let mut idle = self.idle.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if idle.len() < MAX_IDLE {
+            idle.push(w);
+        }
+        result.map(|_| peaks)
+    }
+    /// Runs the network on one tile.
     fn execute(&self, input: &[f32], w: &mut Workspace) -> Result<Vec<f32>> {
+        self.execute_with(input, w, None)
+    }
+    /// Runs the network on one tile, and when `peaks` is given pushes the largest absolute value of every layer's output onto it.
+    fn execute_with(&self, input: &[f32], w: &mut Workspace, mut peaks: Option<&mut Vec<f32>>) -> Result<Vec<f32>> {
         let first = self.plan.tensors.first().ok_or_else(|| bad("no input"))?;
         let want = count(first.channels, first.side)?;
         w.buffers.first_mut().and_then(|b| b.get_mut(..want)).ok_or_else(|| bad("missing input buffer"))?.copy_from_slice(input);
+        if let Some(p) = peaks.as_deref_mut() {
+            p.push(input.iter().fold(0f32, |m, v| m.max(v.abs())));
+        }
         let profile = std::env::var_os("LIGHTCRAFT_PROFILE").is_some();
         for (i, op) in self.plan.net.ops().iter().enumerate() {
             let started = web_time::Instant::now();
@@ -220,6 +244,9 @@ impl NetRunner {
             }
             if dest.iter().any(|v| !v.is_finite()) {
                 return Err(bad("the model produced non-finite values"));
+            }
+            if let Some(p) = peaks.as_deref_mut() {
+                p.push(dest.iter().fold(0f32, |m, v| m.max(v.abs())));
             }
             if profile {
                 eprintln!("[denoise-cpu] layer {i}: {}x{}x{} {:.2} ms", out.channels, out.side, out.side, started.elapsed().as_secs_f64() * 1e3);
