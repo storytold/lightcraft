@@ -1517,9 +1517,9 @@ fn corpus_raf_colour_and_white_balance() {
         .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"))
         .join("raw");
     // (the GFX100S shares the GFX 100's measured sensor, so its white balance is in Kelvin through those
-    // matrices; the X-T2 and X-T20 have none and stay relative)
+    // matrices; the X-T2 and X-T20 have none but read Kelvin from the RAF's own Illuminant A / D65 neutral pair, #730)
     for (name, accepted, kelvin) in
-        [("raf-fuji-xt2-865.raf", true, false), ("raf-fuji-gfx100s-4503.raf", true, true), ("raf-fuji-xt20-compressed.raf", true, false)]
+        [("raf-fuji-xt2-865.raf", true, true), ("raf-fuji-gfx100s-4503.raf", true, true), ("raf-fuji-xt20-compressed.raf", true, true)]
     {
         let Ok(bytes) = std::fs::read(dir.join(name)) else { continue };
         let header = crate::files::probe_bytes(name, &bytes).unwrap();
