@@ -164,9 +164,14 @@ pub fn instance_flags(flags: wgpu::InstanceFlags, env: Option<&str>) -> wgpu::In
     }
 }
 
-/// [`instance_flags`] with `WGPU_VALIDATION_INDIRECT_CALL` read from the environment.
+/// [`instance_flags`] with wgpu's environment variables applied to `flags` (`WGPU_VALIDATION`,
+/// `WGPU_DEBUG`, `WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER`…, see `wgpu::InstanceFlags::with_env`)
+/// and `WGPU_VALIDATION_INDIRECT_CALL` read from the environment. The compute devices pass wgpu's
+/// defaults here, so this is where those variables reach them: a Vulkan driver that reports no
+/// conformance version, like Mesa's Dozen (the only one on WSL2), is listed only with
+/// `WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER=1`.
 pub fn instance_flags_from_env(flags: wgpu::InstanceFlags) -> wgpu::InstanceFlags {
-    instance_flags(flags, std::env::var("WGPU_VALIDATION_INDIRECT_CALL").ok().as_deref())
+    instance_flags(flags.with_env(), std::env::var("WGPU_VALIDATION_INDIRECT_CALL").ok().as_deref())
 }
 
 /// The graphics card `LIGHTCRAFT_GPU_ADAPTER` asks for: (part of) its name, trimmed and in lower
@@ -536,6 +541,30 @@ mod tests {
         assert_eq!(instance_flags(base, Some("0")), F::DEBUG);
         assert_eq!(instance_flags(F::empty(), Some("1")), F::VALIDATION_INDIRECT_CALL);
         assert_eq!(instance_flags(F::empty(), None), F::empty());
+    }
+
+    /// #3636: the compute devices start from wgpu's default flags, so `instance_flags_from_env` applies
+    /// wgpu's own variables. Run in a child process, which has them set.
+    #[test]
+    fn instance_flags_from_env_reads_wgpu_variables() {
+        use wgpu::InstanceFlags as F;
+        const CHILD: &str = "LIGHTCRAFT_TEST_WGPU_FLAGS_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "backend::tests::instance_flags_from_env_reads_wgpu_variables", "--nocapture"])
+                .env(CHILD, "1")
+                .env("WGPU_ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER", "1")
+                .env("WGPU_VALIDATION", "0")
+                .env_remove("WGPU_VALIDATION_INDIRECT_CALL")
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            assert!(out.status.success() && stdout.contains("1 passed"), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+            return;
+        }
+        let flags = instance_flags_from_env(F::VALIDATION | F::VALIDATION_INDIRECT_CALL);
+        assert!(flags.contains(F::ALLOW_UNDERLYING_NONCOMPLIANT_ADAPTER), "{flags:?}");
+        assert!(!flags.intersects(F::VALIDATION | F::VALIDATION_INDIRECT_CALL), "{flags:?}");
     }
     use super::*;
 

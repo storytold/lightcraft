@@ -86,3 +86,7 @@ sync_github_name = true
 [people.Peaperfish]
 real_name = "Yule Wang"
 display_name = "Brian Wang"
+
+[people.JonRC]
+real_name = "Jonathan Cardoso"
+display_name = "Jonathan Cardoso"
