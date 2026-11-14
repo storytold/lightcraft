@@ -13,6 +13,7 @@ pub mod crx;
 pub(crate) mod crx_wavelet;
 pub(crate) mod huffman;
 pub mod orf;
+pub(crate) mod orf_compressed;
 pub mod raf;
 mod raf_lens;
 mod rafc;

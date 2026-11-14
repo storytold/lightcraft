@@ -15,8 +15,8 @@ have their own documents: [raw-parity.md](raw-parity.md), [file-format-parity.md
 | **Feature breadth**, checklist | **83.2%** of 543 in-scope rows (P0 97.5%, P1 94.4%, P2 56.7%) | **measured**: recount of [parity-checklist.md](parity-checklist.md) rows (✅ 1, 🟡 ½, 🚫 left out), the same rule `cargo xtask parity` uses |
 | **Feature breadth**, weighted by use | **~77%** | estimated: feature-area table below |
 | **Ready for real work** (full target) | **~62%** (range 57–67%) | estimated: weighted sum over the dimensions with written weights, see [below](#ready-for-real-work-mainstream-practitioner-and-essentials-user) |
-| **Mainstream practitioner** | **~51%** (range 46–56%) | estimated: weekly areas of a working photographer, depth 74.5% × 0.804 × colour 0.85 |
-| **Essentials user** | **~65%** (range 60–70%) | estimated: core features at default settings, depth 78.1% × 0.830 |
+| **Mainstream practitioner** | **~51%** (range 46–56%) | estimated: weekly areas of a working photographer, depth 75.3% × 0.804 × colour 0.85 |
+| **Essentials user** | **~65%** (range 60–70%) | estimated: core features at default settings, depth 78.4% × 0.830 |
 | Remaining to **beta** | **~340–600 h** | estimated; ~60% parallelizes |
 | Remaining to **full parity** | **~980–1,750 h** | estimated; ~70% parallelizes |
 | **Stage** | **alpha** | see [Stage](#stage) |
@@ -67,7 +67,7 @@ from the checklist sections and the deep-dive documents.
 | Area | Weight | Breadth | Ready | Remaining | Notes |
 |---|---:|---:|---:|---:|---|
 | Import and library (import, folders, albums, smart albums, keywords, metadata, search, faces) | 15% | 90% | 80% | 25–45 h | checklist A–E 83–92%; robust journal; 85k-photo libraries |
-| RAW decoding and camera coverage | 15% | 85% | 85% | 110–205 h | [raw-parity.md](raw-parity.md), measured model by model: 94% of photographers' cameras decode (use-weighted), × 0.9 for per-body bugs; CR3 variants, compressed ORF, HE NEF |
+| RAW decoding and camera coverage | 15% | 85% | 87% | 110–205 h | [raw-parity.md](raw-parity.md), measured model by model: 97% of photographers' cameras decode (use-weighted), × 0.9 for per-body bugs; CR3 variants, compressed ORF, HE NEF |
 | Colour, camera profiles, render fidelity | 10% | 65% | 35% | 80–150 h | 10 bundled profiles vs Adobe's 1,500; per-file fits median ΔE ~5 vs the camera JPEG, ~10% far off; no fidelity suite ([raw-parity.md](raw-parity.md#colour)) |
 | Global develop adjustments (light, colour, curves, grading, effects, detail) | 15% | 93% | 70% | 30–60 h | checklist F 91.7%; character tuned by eye |
 | Optics, lens profiles, crop and geometry | 6% | 80% | 50% | 40–80 h | no lens database; crop / Upright complete |
@@ -131,7 +131,7 @@ valued from the model-by-model measurement in [raw-parity.md](raw-parity.md):
 | Dimension | Weight | Ready |
 |---|---:|---:|
 | Features: the other 11 areas, weighted depth from [Features](#features) | 45% | 60.9% |
-| RAW decoding and camera coverage | 9% | 85% (94% use-weighted × 0.9) |
+| RAW decoding and camera coverage | 9% | 87% (97% use-weighted × 0.9) |
 | Camera colour and default rendering | 6% | 35% |
 | UI/UX fidelity | 8% | 70% |
 | File formats (non-raw) | 6% | 70% |
@@ -173,18 +173,18 @@ than the user's own.
 |---|---:|---:|
 | Import and library | 18% | 80% |
 | Cull: views, compare, zoom, ratings | 12% | 70% |
-| Raw decoding for their camera | 27% | 94% (measured use-weighted share whose camera fully works, [raw-parity.md](raw-parity.md#by-use-estimated)) |
+| Raw decoding for their camera | 27% | 97% (measured use-weighted share whose camera fully works, [raw-parity.md](raw-parity.md#by-use-estimated)) |
 | Global develop adjustments | 15% | 70% |
 | Crop, geometry, lens corrections | 6% | 50% |
 | Masking (manual, subject / sky; no generative) | 8% | 45% |
 | Heal / remove (no generative), denoise | 5% | 40% |
 | Presets, copy / paste / sync | 5% | 85% |
 | Export | 4% | 75% |
-| **Weighted depth** | 100% | **74.5%** |
+| **Weighted depth** | 100% | **75.3%** |
 
 Colour fidelity is a written discount, **×0.85**: most raws start near the camera's own look (median
 ΔE ~5), about 10% far off (ΔE ~18), none calibrated to Adobe Standard, so a working photographer
-corrects colour by hand (33 open colour issues). 74.5% × 0.804 × 0.85 = **~51%** (range 46–56%).
+corrects colour by hand (33 open colour issues). 75.3% × 0.804 × 0.85 = **~51%** (range 46–56%).
 
 ### Essentials user: ~65%
 
@@ -201,11 +201,11 @@ basic sliders, crop, apply a preset, undo, export JPEGs.
 | Crop and straighten | 10% | 80% |
 | Presets and profiles | 8% | 80% |
 | Undo and history | 5% | 90% |
-| Their camera's raws: decode × default look | 10% | 70.5% (94% whose camera fully works × colour factor 0.75) |
+| Their camera's raws: decode × default look | 10% | 72.8% (97% whose camera fully works × colour factor 0.75) |
 | Export JPEG | 10% | 85% |
-| **Weighted depth** | 100% | **78.1%** |
+| **Weighted depth** | 100% | **78.4%** |
 
-78.1% × 0.830 = **~65%** (range 60–70%).
+78.4% × 0.830 = **~65%** (range 60–70%).
 
 ### User evidence (GitHub issues, excluding the four maintainers)
 
@@ -230,7 +230,7 @@ evidence. The stage stays **alpha**.
 
 **Alpha.** Core workflows exist end to end (import, cull, develop, mask, export, catalog migration),
 but ready-for-real-work is ~62%, below the ~75% beta bar, and the main file formats have blocking
-gaps: Canon CR3 decodes from sensor data on 26 verified bodies, compressed ORF and HE NEF use embedded previews when available, while colour on every non-DNG raw is estimated rather than measured.
+gaps: Canon CR3 decodes from sensor data on 26 verified bodies, compressed ORF can decode from sensor data, and HE NEF uses embedded previews when available, while colour on every non-DNG raw is estimated rather than measured.
 
 **Alpha gate:** all six core workflows (import, cull, develop, save and reopen, batch looks, export)
 work end to end on macOS; see the table in [roadmap.md](roadmap.md#alpha-gate). The partial rows (CR3
@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Compressed ORF clean-room decoder restored; camera coverage regenerated: 560 verified, 720 unverified, 129 preview-only, 37 unsupported; 97% use-weighted coverage |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | minor | AI table: Lens Blur ⬜ → 🟡 (subject- or mask-focused disc blur, no depth map); headline numbers unchanged |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |

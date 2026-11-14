@@ -80,10 +80,8 @@ def classify(maker, camera, ext_field):
             return "unverified", e, "Panasonic decoder, every raw format"
         if e == "PEF":
             return "unverified", "PEF", "PEF decoder (uncompressed, Huffman, packed 12-bit)"
-        if e == "ORF":
-            if ORF_DECODED.search(camera):
-                return "unverified", "ORF", "uncompressed / packed ORF"
-            return "preview", "ORF", "compressed ORF is unsupported; embedded preview when available"
+        if e in ("ORF", "ORI"):
+            return "unverified", "ORF", "ORF decoder (uncompressed, packed 12-bit, 12.8 bpp, clean-room compressed bitstream)"
         if e == "SRW":
             if SRW_COMPRESSED.search(camera):
                 return "preview", "SRW", "compressed SRW is not decoded"

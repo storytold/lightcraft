@@ -1,4 +1,4 @@
-//! Olympus ORF — uncompressed variants; compressed sensor data is unsupported.
+//! Olympus ORF — uncompressed and compressed variants.
 //!
 //! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), Exif 2.3 (`CFAPattern`,
 //! tag `0xa302`), the ExifTool Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings —
@@ -28,8 +28,8 @@
 //!   (last), the bit order and the pixel order were fixed by measurement on the CC0 files 2878 (E-300), 3540 (E-500)
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
-//! - Compressed ORF sensor data is unsupported. The previous decoder was removed pending provenance
-//!   resolution; embedded previews remain available. See `docs/orf-compression.md`.
+//! - Olympus's compressed ORF: clean-room pure-Rust implementation in `orf_compressed.rs`, derived from US patents
+//!   US7333035B2 and US7715639B2 (predictive edge-directed spatial model and adaptive Golomb-Rice entropy coding).
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
@@ -212,8 +212,52 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let mut two_field = false;
     let mn = maker_note(bytes, &tiff);
     let ip = mn.as_ref().and_then(|m| sub_ifd(bytes, m, IMAGE_PROCESSING));
+    let chunk = chunks.first();
+    let src = chunk.and_then(|c| chunk_bytes(bytes, c));
+    // Try to build a compression config from the ImageProcessing SubIFD.
+    // If config parsing succeeds but the stream header is invalid the strip is a
+    // damaged compressed file and we return Corrupt (per the review requirement).
+    // If config parsing fails it means this file uses an uncompressed layout and
+    // we fall through to the Word16 / block16 / field-row paths below.
+    let compressed = ip
+        .as_ref()
+        .and_then(|i| super::orf_compressed::OrfCompressionConfig::from_subifd(i, mn.as_ref()))
+        .map(|config| -> std::result::Result<_, RawError> {
+            let s = src.ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+            if !super::orf_compressed::verify_stream_header(s, config.header_prefix_len) {
+                return Err(RawError::Corrupt("corrupt ORF compressed stream header".into()));
+            }
+            Ok((config, s))
+        })
+        .transpose()?;
     let (mut data, bits, from_word16) = if info.compression != 1 {
         return Err(RawError::Unsupported(format!("ORF compression {}", info.compression)));
+    } else if let Some((config, src)) = compressed {
+        let stream =
+            src.get(config.header_prefix_len.saturating_add(2)..).ok_or_else(|| RawError::Corrupt("ORF compressed stream truncated".into()))?;
+        let has_valid_bits = mn.as_ref().and_then(|m| m.ifd.u64(MN_VALID_BITS)).is_some();
+        let mut d = if mode == Mode::Full || stated.is_none() || !has_valid_bits {
+            super::orf_compressed::decompress_stream(stream, w, h, &config)?
+        } else {
+            Vec::new()
+        };
+        let sensor_bits = if has_valid_bits {
+            config.sensor_bits
+        } else if let Some(&mx) = d.iter().step_by(31).max() {
+            if mx < 4096 {
+                12
+            } else if mx < 16384 {
+                14
+            } else {
+                16
+            }
+        } else {
+            config.sensor_bits
+        };
+        if mode == Mode::Header && stated.is_some() {
+            d = Vec::new();
+        }
+        (RawData::U16(d), sensor_bits, false)
     } else if total >= (n as u64) * 2 {
         let d = read_image(bytes, &info, tiff.order, Packing::Word16)?;
         (d, 16, true)
@@ -226,26 +270,6 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         let d = if mode == Mode::Full || stated.is_none() {
             let mut d = vec![0u16; n];
             d.par_chunks_mut(w).enumerate().try_for_each(|(y, row)| unpack_row_blocks16(&src[y * stride..(y + 1) * stride], row))?;
-            d
-        } else {
-            Vec::new()
-        };
-        (RawData::U16(d), 12, false)
-    } else if info.bits() == 12 && total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
-        let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
-        // Only the declared 12-bit layout is supported here. A compressed stream in a 16-bit
-        // ORF container must not fall through to packed decoding just because its length fits.
-        // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
-        // for the samples is a truncated file, refused before they are allocated
-        if (src.len() as u64).saturating_mul(8) < (n as u64).saturating_mul(12) {
-            return Err(RawError::Corrupt("ORF strip shorter than its samples".into()));
-        }
-        // the depth is fixed here, so a header-only probe needs the samples only when the file doesn't state its
-        // colour-filter layout
-        let d = if mode == Mode::Full || stated.is_none() {
-            let stride = src.len() / h;
-            let mut d = vec![0u16; n];
-            d.par_chunks_mut(w).enumerate().for_each(|(y, row)| unpack_row_le32_msb(&src[y * stride..(y + 1) * stride], 12, row));
             d
         } else {
             Vec::new()
@@ -266,6 +290,26 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
                     unpack_msb(src, 12, row);
                 }
             });
+            d
+        } else {
+            Vec::new()
+        };
+        (RawData::U16(d), 12, false)
+    } else if info.bits() == 12 && total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
+        let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        // Only the declared 12-bit layout is supported here. A compressed stream in a 16-bit
+        // ORF container must not fall through to packed decoding just because its length fits.
+        // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
+        // for the samples is a truncated file, refused before they are allocated
+        if (src.len() as u64).saturating_mul(8) < (n as u64).saturating_mul(12) {
+            return Err(RawError::Corrupt("ORF strip shorter than its samples".into()));
+        }
+        // the depth is fixed here, so a header-only probe needs the samples only when the file doesn't state its
+        // colour-filter layout
+        let d = if mode == Mode::Full || stated.is_none() {
+            let stride = src.len() / h;
+            let mut d = vec![0u16; n];
+            d.par_chunks_mut(w).enumerate().for_each(|(y, row)| unpack_row_le32_msb(&src[y * stride..(y + 1) * stride], 12, row));
             d
         } else {
             Vec::new()
@@ -808,5 +852,87 @@ mod tests {
         for cut in [bytes.len() - 1, bytes.len() - 40, bytes.len() / 2, 100] {
             let _ = crate::decode(&bytes[..cut]);
         }
+    }
+
+    #[test]
+    fn compressed_orf_synthetic_fixture_decodes() {
+        let (w, h) = (4u32, 2u32);
+        // Prefix of 4 bytes equal to 1, followed by [0x00, 0x00], then 8 symbols of 0x10 (sign=0, sub=0, q=0, rem=0 with k=4), plus padding
+        let strip = vec![0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x00];
+        let mut ip_ifd = 1u16.to_le_bytes().to_vec();
+        // tag 0x0653, SHORT, count 1, value 4
+        ip_ifd.extend_from_slice(&[0x53, 0x06, 3, 0, 1, 0, 0, 0, 4, 0, 0, 0]);
+        ip_ifd.extend_from_slice(&0u32.to_le_bytes());
+        let entries = vec![(IMAGE_PROCESSING, 7, ip_ifd), (MN_VALID_BITS, 3, shorts(&[12]))];
+        let file = |at| orf_with_note(w, h, 16, strip.clone(), Some(RGGB), Some(olymp_note(at, &entries)));
+        let at = file(0).windows(6).position(|b| b == b"OLYMP\0").unwrap();
+        let bytes = file(at);
+        let raw = crate::decode(&bytes).unwrap();
+        assert_eq!((raw.width, raw.height, raw.bits), (4, 2, 12));
+        assert_eq!(raw.data, RawData::U16(vec![0; 8]));
+    }
+
+    #[test]
+    fn compressed_orf_synthetic_negative_residual_and_unary_escape() {
+        let (w, h) = (4u32, 2u32);
+
+        // 1. Negative residual regression: symbol 0 is 0x91 (sign=1, sub=0, q=0, rem=1 -> delta=-2, adj=-8).
+        // With boundary baseline predictor = 100 (tag 0x0642), sample 0 reconstructs to 100 - 8 = 92.
+        let strip_neg = vec![0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x91, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x00];
+        let mut ip_ifd = 2u16.to_le_bytes().to_vec();
+        ip_ifd.extend_from_slice(&[0x53, 0x06, 3, 0, 1, 0, 0, 0, 4, 0, 0, 0]); // tag 0x0653: prefix_len = 4
+        ip_ifd.extend_from_slice(&[0x42, 0x06, 3, 0, 1, 0, 0, 0, 100, 0, 0, 0]); // tag 0x0642: boundary_baseline = 100
+        ip_ifd.extend_from_slice(&0u32.to_le_bytes());
+        let entries = vec![(IMAGE_PROCESSING, 7, ip_ifd), (MN_VALID_BITS, 3, shorts(&[12]))];
+        let file = |at| orf_with_note(w, h, 16, strip_neg.clone(), Some(RGGB), Some(olymp_note(at, &entries)));
+        let at = file(0).windows(6).position(|b| b == b"OLYMP\0").unwrap();
+        let raw = crate::decode(&file(at)).unwrap();
+        assert_eq!(raw.data, RawData::U16(vec![92, 100, 88, 100, 100, 100, 100, 100]));
+
+        // 2. Unary escape reconstruction: 12 zero bits followed by 11-bit escape (value 1), boundary bit 1,
+        // and 4-bit remainder 0 -> delta = 16, adj = 64. With baseline = 100, sample 0 reconstructs to 164.
+        let strip_esc = vec![0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x60, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00];
+        let mut ip_ifd_esc = 2u16.to_le_bytes().to_vec();
+        ip_ifd_esc.extend_from_slice(&[0x53, 0x06, 3, 0, 1, 0, 0, 0, 4, 0, 0, 0]);
+        ip_ifd_esc.extend_from_slice(&[0x42, 0x06, 3, 0, 1, 0, 0, 0, 100, 0, 0, 0]);
+        ip_ifd_esc.extend_from_slice(&0u32.to_le_bytes());
+        let entries_esc = vec![(IMAGE_PROCESSING, 7, ip_ifd_esc), (MN_VALID_BITS, 3, shorts(&[12]))];
+        let file_esc = |at| orf_with_note(w, h, 16, strip_esc.clone(), Some(RGGB), Some(olymp_note(at, &entries_esc)));
+        let at_esc = file_esc(0).windows(6).position(|b| b == b"OLYMP\0").unwrap();
+        let raw_esc = crate::decode(&file_esc(at_esc)).unwrap();
+        assert_eq!(raw_esc.data, RawData::U16(vec![164, 164, 168, 168, 100, 100, 100, 100]));
+
+        // 3. Bit depth consistency between Mode::Header and Mode::Full when ValidBits is absent
+        // With boundary_baseline = 5000 (tag 0x0642 = 5000), sample values exceed 4096, yielding 14 bits in both modes.
+        let mut ip_ifd_14 = 2u16.to_le_bytes().to_vec();
+        ip_ifd_14.extend_from_slice(&[0x53, 0x06, 3, 0, 1, 0, 0, 0, 4, 0, 0, 0]);
+        let base_5000 = 5000u16.to_le_bytes();
+        ip_ifd_14.extend_from_slice(&[0x42, 0x06, 3, 0, 1, 0, 0, 0, base_5000[0], base_5000[1], 0, 0]);
+        ip_ifd_14.extend_from_slice(&0u32.to_le_bytes());
+        let entries_no_valid_bits = vec![(IMAGE_PROCESSING, 7, ip_ifd_14)];
+        let file_14 = |at| orf_with_note(w, h, 16, strip_neg.clone(), Some(RGGB), Some(olymp_note(at, &entries_no_valid_bits)));
+        let at_14 = file_14(0).windows(6).position(|b| b == b"OLYMP\0").unwrap();
+        let bytes_14 = file_14(at_14);
+        let header_probe = super::decode(&bytes_14, Mode::Header).unwrap();
+        let full_decode = super::decode(&bytes_14, Mode::Full).unwrap();
+        assert_eq!(header_probe.bits, 14);
+        assert_eq!(full_decode.bits, 14);
+        assert_eq!(header_probe.bits, full_decode.bits);
+    }
+
+    #[test]
+    fn damaged_compressed_orf_returns_corrupt_error_instead_of_word16() {
+        let (w, h) = (4u32, 2u32);
+        // A strip of at least 2 bytes per pixel (total = 16 bytes >= 2 * 8 = 16),
+        // but with a damaged header prefix ([0x00, 0x00, 0x00, 0x02] != 1).
+        let strip = vec![0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x00, 0x00];
+        let mut ip_ifd = 1u16.to_le_bytes().to_vec();
+        ip_ifd.extend_from_slice(&[0x53, 0x06, 3, 0, 1, 0, 0, 0, 4, 0, 0, 0]);
+        ip_ifd.extend_from_slice(&0u32.to_le_bytes());
+        let entries = vec![(IMAGE_PROCESSING, 7, ip_ifd), (MN_VALID_BITS, 3, shorts(&[12]))];
+        let file = |at| orf_with_note(w, h, 16, strip.clone(), Some(RGGB), Some(olymp_note(at, &entries)));
+        let at = file(0).windows(6).position(|b| b == b"OLYMP\0").unwrap();
+        let bytes = file(at);
+        assert!(matches!(crate::decode(&bytes), Err(RawError::Corrupt(_))));
     }
 }
