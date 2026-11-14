@@ -110,7 +110,7 @@ fn theme_card<V: PartialEq + Copy>(ui: &mut egui::Ui, t: &Tokens, card: ThemeCar
 /// the bottom bar.
 fn theme_preview(ui: &mut egui::Ui, kind: crate::theme::ThemeKind, width: f32) {
     use egui::{Color32, Rect, Stroke, StrokeKind, pos2, vec2};
-    let p = Tokens::for_kind(kind);
+    let p = Tokens::for_kind_with(kind, crate::increase_contrast::increased(ui.ctx()));
     let (rect, _) = ui.allocate_exact_size(vec2(width, (width * 0.56).round().min(130.0)), egui::Sense::hover());
     let painter = ui.painter_at(rect);
     let bar = |y: f32, x: f32, w: f32, c: Color32| painter.rect_filled(Rect::from_min_size(pos2(x, y), vec2(w, 2.0)), 1.0, c);
