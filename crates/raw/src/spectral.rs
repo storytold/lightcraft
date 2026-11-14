@@ -189,6 +189,21 @@ mod tests {
     }
 
     #[test]
+    fn d750_finds_approximate_colour_matrices() {
+        // without a row, D750 raws fall back to the muted neutral camera-RGB approximation;
+        // the row is approximate (the D850's matrices), see chart_table.rs
+        let found = find(Some("NIKON CORPORATION"), "NIKON D750");
+        assert_eq!(found.map(|c| (c.make, c.model)), Some(("NIKON CORPORATION", "D750")));
+        assert_eq!(find_camera("NIKON CORPORATION NIKON D750"), found);
+        assert_eq!(find(None, "NIKON D750"), found);
+        if let Some(cam) = found {
+            for m in cam.color_matrix.iter().chain(&cam.forward_matrix) {
+                assert!(m.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 4.0) && m.inverse().is_some());
+            }
+        }
+    }
+
+    #[test]
     fn other_cameras_and_other_makes_find_nothing() {
         assert_eq!(find(Some("Canon"), "Canon EOS 7D"), None);
         assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);
@@ -256,7 +271,7 @@ mod tests {
 
     #[test]
     fn every_row_is_a_usable_dng_profile() {
-        assert_eq!(cameras().count(), 53);
+        assert_eq!(cameras().count(), 54);
         for c in cameras() {
             assert_eq!(find(Some(c.make), c.model), Some(c), "{} {}", c.make, c.model);
             for m in c.color_matrix.iter().chain(&c.forward_matrix) {
