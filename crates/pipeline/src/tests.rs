@@ -439,6 +439,52 @@ fn calibration_shifts_colours_but_keeps_greys() {
     assert!(off[1].abs_diff(off[0]) <= 1, "{off:?}");
 }
 
+/// A ramp holding every 8-bit sRGB level (as linear light), rendered through `s`: the level out for
+/// each level in. Without a curve each comes back as itself.
+fn level_ramp(s: &DevelopSettings) -> Vec<u8> {
+    let src = Rgb32f::from_fn(256, 1, |x, _| [lightcraft_color::transfer::srgb_to_linear(x as f32 / 255.0); 3]);
+    render(&src, &SourceInfo::default(), s, &RenderRequest::fit(256, 1)).image.data.iter().map(|p| p[1]).collect()
+}
+
+#[test]
+fn point_curve_is_a_cubic_spline_that_swings_past_its_points_and_is_cut_off() {
+    use lightcraft_geom::Point;
+    let plain = level_ramp(&DevelopSettings::default());
+    assert!(plain.iter().enumerate().all(|(k, &v)| (v as i32 - k as i32).abs() <= 1), "{plain:?}");
+    // the five points of a Lightroom Classic capture, in levels: the curve it draws rises to 1 and
+    // stays there, then falls to 0 and stays there, between and after points that are all inside
+    let pts = [(0.0, 0.0), (63.0, 63.0), (133.0, 144.0), (137.0, 90.0), (255.0, 255.0)].map(|(x, y)| (x / 255.0, y / 255.0));
+    let mut s = DevelopSettings::default();
+    s.curve.master = pts.iter().map(|&(x, y)| Point::new(x, y)).collect();
+    let out = level_ramp(&s);
+    let spline = lightcraft_color::spline::PointCurve::new(&pts);
+    for (k, &v) in out.iter().enumerate() {
+        let want = (spline.eval(k as f64 / 255.0) * 255.0).round() as i32;
+        assert!((v as i32 - want).abs() <= 1, "level {k}: {v}, the spline gives {want}");
+    }
+    assert!(out[100..=118].iter().all(|&v| v == 255), "cut off at white: {:?}", &out[95..125]);
+    assert!(out[8..=40].iter().all(|&v| v == 0) && out[150..=220].iter().all(|&v| v == 0), "cut off at black");
+    // the same curve on one channel alone (red, green, blue) moves that channel only, with the same
+    // shape: a swap of two channels' curves would show here
+    let src = Rgb32f::from_fn(256, 1, |x, _| [lightcraft_color::transfer::srgb_to_linear(x as f32 / 255.0); 3]);
+    for channel in 0..3 {
+        let curve: Vec<Point> = pts.iter().map(|&(x, y)| Point::new(x, y)).collect();
+        let mut s = DevelopSettings::default();
+        match channel {
+            0 => s.curve.red = curve,
+            1 => s.curve.green = curve,
+            _ => s.curve.blue = curve,
+        }
+        let r = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(256, 1)).image;
+        for (k, px) in r.data.iter().enumerate() {
+            for (c, &v) in px.iter().take(3).enumerate() {
+                let want = if c == channel { out[k] } else { plain[k] };
+                assert!((v as i32 - want as i32).abs() <= 1, "curve on channel {channel}, level {k}, channel {c}: {v} instead of {want}");
+            }
+        }
+    }
+}
+
 #[test]
 fn refine_saturation_tames_a_contrast_curve() {
     let info = SourceInfo { raw: true, ..Default::default() };
