@@ -92,9 +92,9 @@ search embeddings; generative remove runs in Adobe's cloud.
 |---|---|---|
 | 2026-10-12 | minor | Mamiya MEF decoded (raw-parity.md): 241 verified, 35 unsupported; rounded numbers unchanged |
 | 2026-10-12 | minor | Epson ERF decoded (raw-parity.md): 240 models verified, 229 preview-only; shares and rounded numbers unchanged |
-| Subject / Sky / Background masks | classical heuristics; the file's own DNG semantic mattes | 🟡 |
+| Subject / Background masks | classical heuristics; the file's own DNG semantic mattes | 🟡 |
 | People (faces, body, hair, skin…) and Landscape masks | — | ⬜ |
-| Object / Describe masks | SAM 3 in pure Rust (Metal / CPU); opt-in 3.4 GB download, no mirror configured | 🟡 |
+| Sky / Object / Describe masks | SAM 3 in pure Rust (Metal / CPU); opt-in 3.4 GB download, no mirror configured; Sky falls back to legacy detection without the model; old Sky shapes retain their original rendering | 🟡 |
 | Depth range mask, Lens Blur | Lens Blur keeps the subject (or any mask, e.g. an Object mask) sharp and blurs the rest with disc bokeh and Boost; no depth map yet, so no focal range or depth range mask | 🟡 |
 | AI Denoise | Bayer only, built-in classical denoiser out of the box, optional user-installed weights, pure-Rust CPU / GPU | 🟡 |
 | Raw Details, Super Resolution | — | ⬜ |
@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | minor | New Sky selections prefer SAM 3 with the fixed sky prompt, falling back to legacy detection without the model, including mask components; existing edits keep their rendering. Gap 5 remains open; readiness and checklist status unchanged |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | minor | AI table: Lens Blur ⬜ → 🟡 (subject- or mask-focused disc blur, no depth map); headline numbers unchanged |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |

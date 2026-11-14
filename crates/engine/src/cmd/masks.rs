@@ -31,7 +31,9 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             feather: f64_or(p, "feather", 50.0),
             invert: bool_or(p, "invert", false),
         },
-        "sky" => MaskShape::Sky,
+        // New sky selections use SAM 3's concept mask. Keep MaskShape::Sky's legacy
+        // renderer unchanged so opening an existing edit never changes its appearance.
+        "sky" => MaskShape::Prompt { text: "sky".into(), seg: seg_param(p), detail: vec![], edge: 0.0 },
         "subject" => MaskShape::Subject,
         "background" => MaskShape::Background,
         "luminanceRange" => MaskShape::LuminanceRange {
@@ -64,6 +66,25 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             ));
         }
     })
+}
+
+/// Sky works without installing a model. Stored segmentations still replay as-is,
+/// and a configured remote worker can supply SAM 3 without local weights.
+fn new_shape(s: &Session, kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
+    let shape = shape_from(kind, p, c)?;
+    if kind == "sky" && matches!(shape, MaskShape::Prompt { seg: None, .. }) && !s.segmenter.installed() && s.segmenter.remote_endpoint().is_none() {
+        return Ok(MaskShape::Sky);
+    }
+    Ok(shape)
+}
+
+/// Tell the caller a Sky selection used legacy detection, so it can say so: the mask itself is
+/// not marked, and redoing it once SAM 3 is available can give a different selection.
+fn with_legacy_sky(mut out: Value, legacy: bool) -> Value {
+    if let (true, Some(o)) = (legacy, out.as_object_mut()) {
+        o.insert("legacySky".into(), json!(true));
+    }
+    out
 }
 
 /// `[[x, y], …]` normalized points under `key`.
@@ -256,21 +277,26 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; object/prompt: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt returns {pending} and the mask appears when found",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; sky/object/prompt: seg? a stored segmentation, no model needed), name?} — sky uses SAM 3 when installed or configured remotely, otherwise legacy sky detection and the result has legacySky: true; object/prompt need the model; in the app a text selection returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
-                let mut shape = shape_from(&kind, p, "mask.add")?;
+                let mut shape = new_shape(s, &kind, p, "mask.add")?;
+                let legacy_sky = matches!(shape, MaskShape::Sky);
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
                 if let Later::Text(text) = &later {
                     let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
-                    segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
+                    segment(s, |s| s.segment_text_later(id, None, "add", name, text, false))?;
                     return Ok(json!({"pending": true}));
                 }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 // the effect last applied to a mask of this kind
-                let adjust = super::mask_effects::new_mask_adjust(s, &kind);
+                let tool = match &shape {
+                    MaskShape::Prompt { text, .. } if text == "sky" => "sky",
+                    _ => &kind,
+                };
+                let adjust = super::mask_effects::new_mask_adjust(s, tool);
                 let out = masks_edit(s, "mask.add", "Add Mask", |masks, active| {
                     masks.push(Mask {
                         id: next,
@@ -282,7 +308,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     *active = Some(next);
                     Ok(())
                 })?;
-                queue_later(s, later, next, 0, out)
+                queue_later(s, later, next, 0, out).map(|out| with_legacy_sky(out, legacy_sky))
             }
         ),
         cmd!(
@@ -302,11 +328,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 if !s.develop_of(id).is_some_and(|d| d.masks.iter().any(|m| m.id == mid)) {
                     return Err(bad("mask.addComponent", format!("no mask {mid}")));
                 }
-                let mut shape = shape_from(&kind, p, "mask.addComponent")?;
+                let mut shape = new_shape(s, &kind, p, "mask.addComponent")?;
+                let legacy_sky = matches!(shape, MaskShape::Sky);
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
-                    segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
+                    segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text, bool_or(p, "invert", false)))?;
                     return Ok(json!({"pending": true}));
                 }
                 let mut comp = 0;
@@ -316,7 +343,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     comp = masks[i].components.len() - 1;
                     Ok(())
                 })?;
-                queue_later(s, later, mid, comp, out)
+                queue_later(s, later, mid, comp, out).map(|out| with_legacy_sky(out, legacy_sky))
             }
         ),
         cmd!(
