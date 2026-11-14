@@ -133,6 +133,28 @@ fn spatial_adjustments_agree_inside_the_halo() {
     }
 }
 
+// Given process V9's Highlights (relative to the frame's tonal range), a window takes the range of the whole frame,
+// not of its own pixels: a window over the bright or the dark part renders as the full render does there
+#[test]
+fn highlights_take_the_frames_range_not_the_windows() {
+    let mut s = DevelopSettings::default();
+    assert_eq!(s.process.process(), lightcraft_develop::Process::V9);
+    controls::set(&mut s, "light.highlights", -100.0);
+    for (x, y) in [(0, 0), (W - 400, H - 300), (300, 180)] {
+        check("highlights", &s, PixelWindow { x, y, w: 400, h: 300 }, 6, 0.8);
+    }
+}
+
+// Given process V9's Highlights, a thumbnail and a large render measure the same frame range
+#[test]
+fn highlights_range_is_the_same_for_small_and_large_renders() {
+    let mut s = DevelopSettings::default();
+    controls::set(&mut s, "light.highlights", -60.0);
+    let range = |w: usize, h: usize| crate::plan(&scene(), &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).hs_range.expect("range");
+    let (small, large) = (range(160, 120), range(W, H));
+    assert!((small.lo - large.lo).abs() < 1e-4 && (small.hi - large.hi).abs() < 1e-4, "{small:?} {large:?}");
+}
+
 // Given a huge virtual frame (48000 px: an 800 % zoom), only the window is rendered
 #[test]
 fn a_window_of_a_huge_frame_is_cheap() {

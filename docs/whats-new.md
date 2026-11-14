@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Calibration behaves as in Lightroom (process V9)
+- The Red, Green and Blue primary Hue and Saturation sliders in Calibration now follow Lightroom's measured response
+  and act as strongly as Lightroom's, so presets that lean on Calibration (strong blue skies, warm skin) look as they
+  do in Lightroom. Shadows tint is unchanged. This is part of rendering process 9: photos you already edited keep
+  their look until you choose Photo ▸ Update to Current Process. See [The colour mixer](mixer-stage.md).
+
+### Highlights behaves as in Lightroom (process V9)
+- Highlights now adapts to the photo, as Lightroom's does: on a photo with a wide range from its darkest to its
+  brightest tones it recovers more and reaches further into the upper midtones, and on a flat photo it acts more
+  gently. A zoomed-in view, a preview and an export of the same photo get the same result. Shadows is unchanged.
+  This is part of rendering process 9: photos you already edited keep their look until you choose Photo ▸ Update to
+  Current Process. See [Highlights relative to the frame's range](hs-range.md).
+
+### Adobe Standard profiles look as in Lightroom (process V9)
+- A raw developed with an imported camera profile that has no tone curve of its own, such as Adobe Standard, now gets
+  Lightroom's base tone curve, applied the way Lightroom applies it, instead of the tone of the camera's JPEG. An
+  unedited photo then matches Lightroom's in brightness, contrast and colour far more closely. Panasonic Lumix S9,
+  S5, S5 II and S5 IIX raws (RW2) are measured and match closely; other cameras get the same curve without a per-camera exposure offset,
+  so they can come out a little lighter or darker than in Lightroom. This is part of rendering process 9: photos you
+  already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [Lightroom's default base curve](default-tone.md).
+
+### Colour Grading behaves as in Lightroom (process V9)
+- The colour grading wheels now tint as strongly and in the same direction as Lightroom's, reach the same tones (the
+  shadows wheel spares the deepest blacks and reaches into the midtones, the global wheel acts most on the
+  midtones), and give less tint to colours that already lean its way, so a warm grade no longer oversaturates warm
+  colours. Blending, Balance and Luminance follow Lightroom's measured response too. This is part of rendering
+  process 9: photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [Colour Grading](grading-stage.md).
+
+### The colour mixer behaves as in Lightroom (process V9)
+- Each band of the colour mixer now covers the colours Lightroom's does (a red-orange such as skin answers to
+  Orange, Blue reaches further towards aqua and purple), and Hue, Saturation and Luminance follow Lightroom's
+  measured response, including how strongly they act at large amounts. The mixer works before the tone curves, as in
+  Lightroom. This is part of rendering process 9: photos you already edited keep their look until you choose
+  Photo ▸ Update to Current Process. See [The colour mixer](mixer-stage.md).
+
+### Whites and the tone curves behave as in Lightroom (process V9)
+- Whites now reaches into the upper midtones as Lightroom's does, and the Highlights, Lights, Darks and Shadows
+  regions of the parametric curve are as broad as Lightroom's and add up the same way: both follow Lightroom's
+  measured response. A contrast curve no longer turns orange towards red: the point curve keeps colours' hue, and
+  the red, green and blue curves act on their channel after it. This is rendering process 9: new photos (and Reset)
+  get it, photos you already edited keep their look until you choose Photo ▸ Update to Current Process. See
+  [Whites and the tone curves](curve-stage.md).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
@@ -283,7 +328,6 @@
   `folder.rename` and `folder.move` commands now refuse the home folder and its Pictures, Desktop and Downloads too,
   so a script or an agent can't do it either.
 
-
 ## 2026-10-27
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
@@ -381,7 +425,6 @@
   declared totals agree, and every APP2 segment is complete. Reordered valid chunks still work. An invalid
   sequence uses the existing unsupported-profile sRGB fallback, including when the JPEG is a raw preview.
 
-
 ## 2026-10-25
 
 ### `>=` and `<=` work in the search box
@@ -410,7 +453,6 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
-
 
 ## 2026-10-24
 
@@ -475,7 +517,6 @@
   names in `dc:subject` and the paths in `lr:hierarchicalSubject`, as Lightroom Classic writes them, and LightCraft
   reads them back as the same keywords. A sidecar written by an earlier version is put right the next time it is
   saved.
-
 
 ### Relative-date filters and smart albums follow the clock
 - A current view or source count using “in the last” rules now refreshes when the session clock moves into a new
@@ -588,7 +629,6 @@
   noise looks like grain. Edges are as sharp as before. Thumbnails and previews that LightCraft rendered from a raw
   are redrawn; the camera's own embedded preview, shown for an unedited raw until its render is ready, is unchanged.
 
-
 ### Tab leaves the name field in New Album, New Smart Album and the name prompts
 - In New Album, New Smart Album, Save Metadata Preset and the other dialogs with one name field, the field has the
   keyboard focus when the dialog opens, and Tab now moves on to the check box, Cancel and OK (Shift+Tab goes back).
@@ -650,7 +690,6 @@
   import adds some, others are removed, moved to Recently Deleted or relinked), the answer leaves out the photos that
   no longer apply, a photo added meanwhile is not part of that check, and the answer is not kept for a later request.
 
-
 ### Choose where a Lightroom catalog goes
 - File ▸ Import Lightroom Catalog… now asks first: merge the catalog's photos, collections and edits into the
   library open now, or create a new library for them, named after the catalog and placed next to the open library
@@ -708,7 +747,6 @@
   English before. So did "The download failed", shown under a denoise or face recognition model's download when the
   download gives no reason.
 
-
 ## 2026-10-22
 
 ### Exports don't create a photo's sidecar
@@ -721,7 +759,6 @@
   the brush stroke you are painting is no longer drawn in the overlay colour while you hold the button, so the photo
   stays visible as you dodge and burn (issue #2549). The stroke's effect still appears when you let go. With the
   overlay shown, the stroke is tinted as before; a colour overlay at opacity 0 leaves it untinted too.
-
 
 ### Reliability
 - Opening a library no longer writes through a link left at the lock's owner note (`catalog.lock.owner`): the link
@@ -828,7 +865,6 @@
   Slideshow Export no longer say "1 photos" or "1 stacks". The Import review's Move button counts photos that are
   in Recently Deleted apart, since they are restored and their files stay where they are: "Move 2 Photos · Restore 1
   Photo".
-
 
 ### Sharper resampling in HDR and panorama merges
 - Merged photos (HDR and panorama) are resampled with a sharper filter (Lanczos-3 instead of bilinear). Moving a

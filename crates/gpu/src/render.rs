@@ -790,6 +790,7 @@ pub fn render(
         image_size: (w, h),
         px_per_long: plan.px_per_long,
         air_pre: prep.air,
+        hs_range: plan.hs_range,
         space: req.space,
         draft: req.quality == lightcraft_pipeline::Quality::Draft,
     });
