@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Untouched raws keep their camera's preview
+- A raw you haven't edited that was imported before its camera's white balance moved to Kelvin shows the camera's
+  preview again, as its thumbnail and as the loupe's first picture, instead of a render of the whole raw
+  (issue #4259).
+- A raw whose as-shot white balance LightCraft hasn't read from its file yet no longer counts as edited, and Reset
+  Edits gives it a raw's sharpening, colour noise reduction and Remove Hot Pixels.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
