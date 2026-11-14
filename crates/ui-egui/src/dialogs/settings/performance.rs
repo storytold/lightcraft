@@ -108,10 +108,10 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             &path,
             egui::TextStyle::Body.resolve(ui.style()),
             if available { t.text } else { t.reject },
-            if custom { 0.0 } else { label_width(ui, "(numatytasis bibliotekos nustatymas)", egui::TextStyle::Body) },
+            if custom { 0.0 } else { label_width(ui, crate::i18n::tr("(library default)"), egui::TextStyle::Body) },
         );
         if !custom {
-            let r = ui.label(RichText::new("(library default)").color(t.text));
+            let r = ui.label(RichText::new(crate::i18n::tr("(library default)")).color(t.text));
             register(ui, "text:settingsSmartDefault", r.rect);
         }
     });
