@@ -2739,5 +2739,8 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Drag to move, or use the arrow keys": "Kéo để di chuyển, hoặc dùng phím mũi tên",
+  "A group can't go inside itself": "Nhóm không thể nằm trong chính nó",
+  "Groups can't nest any deeper": "Không thể lồng nhóm sâu hơn"
 }

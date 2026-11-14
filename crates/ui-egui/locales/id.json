@@ -2425,5 +2425,8 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "Drag to move, or use the arrow keys": "Seret untuk memindahkan, atau gunakan tombol panah",
+  "A group can't go inside itself": "Grup tidak dapat dimasukkan ke dalam dirinya sendiri",
+  "Groups can't nest any deeper": "Grup tidak dapat disarangkan lebih dalam"
 }

@@ -3535,5 +3535,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Starten Sie die App mit --control 7980 (oder LIGHTCRAFT_CONTROL_PORT), dann verbindet lightcraft-cli mcp --connect einen Agenten mit ihr.",
   "Welcome": "Willkommen",
   "Next": "Weiter",
-  "Get Started": "Loslegen"
+  "Get Started": "Loslegen",
+  "Drag to move, or use the arrow keys": "Zum Verschieben ziehen oder die Pfeiltasten verwenden",
+  "A group can't go inside itself": "Eine Gruppe kann nicht in sich selbst liegen",
+  "Groups can't nest any deeper": "Gruppen lassen sich nicht tiefer verschachteln"
 }

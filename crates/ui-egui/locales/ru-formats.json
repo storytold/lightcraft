@@ -326,5 +326,7 @@
   "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографии добавляются через Файл › Импорт фото… ({keys}).",
   "View › Detail View ({keys}).": "Вид › Режим детализации ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys}).",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Условие {n} из {m}: {what}. Перемещение стрелками",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Группа {n} из {m}: совпадение {mode}, внутри {count}. Перемещение стрелками"
 }

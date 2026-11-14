@@ -2411,5 +2411,8 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Drag to move, or use the arrow keys": "Siirrä vetämällä tai käytä nuolinäppäimiä",
+  "A group can't go inside itself": "Ryhmää ei voi siirtää itsensä sisään",
+  "Groups can't nest any deeper": "Ryhmiä ei voi sisentää syvemmälle"
 }

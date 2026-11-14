@@ -1007,7 +1007,7 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
 
 /// The body of the SmartRules dialog.
 fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
-    let Dialog::SmartRules { id, name, rules, .. } = dlg else { return };
+    let Dialog::SmartRules { id, name, rules, instance, .. } = dlg else { return };
     let r = crate::widgets::named(
         ui.add(egui::TextEdit::singleline(name).hint_text(crate::i18n::tr("Name")).desired_width(f32::INFINITY)),
         crate::i18n::tr("Name"),
@@ -1022,6 +1022,8 @@ fn smart_rules_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg:
     let now = (app.session.clock)();
     let view = app.caches.rules_view(&app.session.catalog, rules, *id, folder, &now);
     let env = crate::panels::rules_editor::Env { problems: view.problems.clone(), today: now, albums: view.albums.clone() };
+    // a drag that began in another dialog is not this one's, whatever its rules say
+    crate::panels::rules_reorder::bind(ui.ctx(), *instance);
     egui::ScrollArea::vertical().max_height(list_height(ui, 360.0)).auto_shrink([false, true]).show(ui, |ui| {
         crate::panels::rules_editor::edit(ui, rules, "rules", 0, &[], &env);
     });

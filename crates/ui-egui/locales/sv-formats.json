@@ -325,5 +325,7 @@
   "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
   "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}",
+  "Rule {n} of {m}: {what}. Move with the arrow keys": "Regel {n} av {m}: {what}. Flytta med piltangenterna",
+  "Group {n} of {m}: match {mode}, {count} inside. Move with the arrow keys": "Grupp {n} av {m}: matcha {mode}, antal i gruppen: {count}. Flytta med piltangenterna"
 }
