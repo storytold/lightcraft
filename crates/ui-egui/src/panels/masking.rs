@@ -802,7 +802,7 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let seg = &app.session.segmenter;
         let working = segmenter_working(seg.analyzing(), seg.busy(), seg.detail_busy(), app.ui.detail_due.is_some());
-        if crate::button::Button::new("Select").small().busy(working).widget("button:maskDescribeGo").show(ui).clicked() {
+        if crate::button::Button::new(tr("Select")).small().busy(working).widget("button:maskDescribeGo").show(ui).clicked() {
             submit = true;
         }
         let r = ui.add(
