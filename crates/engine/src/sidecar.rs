@@ -286,13 +286,25 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
                         && !matches!(*name, "UprightTransformCount" | "UprightCenterNormX" | "UprightCenterNormY" | "UprightVersion")
                 })
                 .collect();
-            if !other.is_empty() {
+            // adjustments that may make the photo differ, and bookkeeping that cannot, are
+            // separate warnings so the report never sells skipped digests as lost edits (#3050)
+            let (adjustments, metadata): (Vec<&str>, Vec<&str>) = other.into_iter().partition(|name| !crate::crs::non_rendering(name));
+            if !adjustments.is_empty() {
                 out.warnings.push(crate::import::ImportWarning {
                     path: String::new(),
                     code: crate::import::ImportWarningCode::UnmappedXmp,
                     profile: None,
                     mode: None,
-                    fields: other.into_iter().map(str::to_string).collect(),
+                    fields: adjustments.into_iter().map(str::to_string).collect(),
+                });
+            }
+            if !metadata.is_empty() {
+                out.warnings.push(crate::import::ImportWarning {
+                    path: String::new(),
+                    code: crate::import::ImportWarningCode::SkippedXmpMetadata,
+                    profile: None,
+                    mode: None,
+                    fields: metadata.into_iter().map(str::to_string).collect(),
                 });
             }
             Some(DevelopPatch::Partial(partial))
