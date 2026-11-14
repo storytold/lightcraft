@@ -6,6 +6,7 @@
 //! `check` works on already-read file contents so it is unit-testable without the real tree.
 //!
 //! Exception: `crates/wincolor` calls Windows' colour APIs, so it is exempt too (see its module docs).
+//! Exception: `crates/coreml` calls Apple's Core ML framework (`src/macos.rs`), the one way to reach the Neural Engine.
 //! Exception (documented in AGENTS.md): `crates/sysmem` holds LightCraft's other allowed `unsafe`
 //! (one FFI call), so it is exempt from `forbid(unsafe_code)` — it still needs the deny list, and
 //! carries it.
@@ -16,7 +17,7 @@ const DENY_LINTS: &[&str] =
     &["clippy::unwrap_used", "clippy::expect_used", "clippy::panic", "clippy::unimplemented", "clippy::todo", "clippy::unreachable"];
 
 /// Crate roots exempt from `forbid(unsafe_code)` (they still need the deny list).
-const UNSAFE_EXCEPTION: &[&str] = &["lightcraft-sysmem", "lightcraft-wincolor"];
+const UNSAFE_EXCEPTION: &[&str] = &["lightcraft-sysmem", "lightcraft-wincolor", "lightcraft-coreml"];
 
 #[derive(Debug, Clone)]
 pub struct CrateRoot {
