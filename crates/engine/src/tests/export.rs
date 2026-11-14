@@ -1071,6 +1071,13 @@ fn remove_location_refuses_a_psd_with_unreadable_resources() {
     let path = dir.join("Geo.psd");
     let valid_bytes = synthetic_psd_with_metadata(&gps);
     assert_eq!(lightcraft_meta::extract(&valid_bytes).gps, gps.gps, "the fixture embeds EXIF GPS before corruption");
+    std::fs::write(&path, &valid_bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+
+    // Import the decodable original first. The malformed resource list below is the file state the
+    // export safety check must refuse; it is not a fixture the image importer should have to decode.
     let mut bytes = valid_bytes;
     let colour_length = usize::try_from(u32::from_be_bytes(bytes[26..30].try_into().unwrap())).unwrap();
     let resource_length_at = 30 + colour_length;
@@ -1082,9 +1089,6 @@ fn remove_location_refuses_a_psd_with_unreadable_resources() {
 
     assert!(lightcraft_meta::extract(&bytes).gps.is_none(), "the malformed trailing resource reproduces the metadata gap");
     std::fs::write(&path, bytes).unwrap();
-    let mut session = Session::new().with_fs();
-    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
-    let id = session.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
     assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);

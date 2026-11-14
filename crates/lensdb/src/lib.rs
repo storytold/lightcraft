@@ -148,10 +148,12 @@ impl LensDb {
     /// Parse one lensfun-format XML document.
     pub fn parse(xml: &str) -> Result<LensDb, Error> {
         let root = xml::parse(xml)?;
-        let Some(top) = root.kid("lensdatabase") else { return Err(Error::Xml("no <lensdatabase> element".into())) };
-        let cameras = top.kids("camera").filter_map(camera).collect();
+        if root.name != "lensdatabase" {
+            return Err(Error::Xml("no <lensdatabase> element".into()));
+        }
+        let cameras = root.children("camera").filter_map(camera).collect();
         let mut budget = MAX_PROFILE_COPY_BYTES;
-        let lenses = top.kids("lens").flat_map(|n| lens(n, &mut budget)).collect();
+        let lenses = root.children("lens").flat_map(|n| lens(n, &mut budget)).collect();
         Ok(LensDb { cameras, lenses })
     }
 
@@ -384,10 +386,10 @@ fn is_teleconverter_marker(t: &str) -> bool {
 
 fn camera(n: &xml::Node) -> Option<Camera> {
     Some(Camera {
-        maker: n.kid_text("maker")?.to_string(),
-        model: n.kid_text("model")?.to_string(),
-        mount: n.kid_text("mount").unwrap_or_default().to_string(),
-        crop_factor: crop_of(n.kid_text("cropfactor")),
+        maker: xml::kid_text(n, "maker")?,
+        model: xml::kid_text(n, "model")?,
+        mount: xml::kid_text(n, "mount").unwrap_or_default(),
+        crop_factor: crop_of(xml::kid_text(n, "cropfactor").as_deref()),
     })
 }
 
@@ -411,15 +413,15 @@ fn positive(v: Option<f64>) -> Option<f64> {
 
 /// One `<lens>` element → one profile per `<calibration>` (newer files give each its own crop factor and aspect).
 fn lens(n: &xml::Node, copy_budget: &mut usize) -> Vec<Profile> {
-    let Some(maker) = n.kid_text("maker") else { return Vec::new() };
-    let models: Vec<String> = n.kids("model").map(|m| m.text.trim().to_string()).filter(|m| !m.is_empty()).collect();
+    let Some(maker) = xml::kid_text(n, "maker") else { return Vec::new() };
+    let models: Vec<String> = n.children("model").map(|m| m.text().trim().to_string()).filter(|m| !m.is_empty()).collect();
     if models.is_empty() {
         return Vec::new();
     }
-    let crop = crop_of(n.kid_text("cropfactor"));
-    let aspect = aspect_of(n.kid_text("aspect-ratio")).unwrap_or(1.5);
-    let rectilinear = n.kid_text("type").is_none_or(|t| t.eq_ignore_ascii_case("rectilinear"));
-    let mounts = n.kids("mount").map(|m| m.text.trim().to_string()).filter(|m| !m.is_empty()).collect::<Vec<_>>();
+    let crop = crop_of(xml::kid_text(n, "cropfactor").as_deref());
+    let aspect = aspect_of(xml::kid_text(n, "aspect-ratio").as_deref()).unwrap_or(1.5);
+    let rectilinear = xml::kid_text(n, "type").is_none_or(|t| t.eq_ignore_ascii_case("rectilinear"));
+    let mounts = n.children("mount").map(|m| m.text().trim().to_string()).filter(|m| !m.is_empty()).collect::<Vec<_>>();
     // every kept calibration owns a copy of the lens's names, charged to the document's shared copy budget (the
     // strings' own allocations count, not only their bytes): when it can't cover another copy, the rest are left out
     let meta_bytes = std::mem::size_of::<Profile>()
@@ -427,7 +429,7 @@ fn lens(n: &xml::Node, copy_budget: &mut usize) -> Vec<Profile> {
         + maker.len()
         + models.iter().chain(&mounts).map(|m| m.len() + NAME_ALLOCATION).sum::<usize>();
     let mut out = Vec::new();
-    for cal in n.kids("calibration") {
+    for cal in n.children("calibration") {
         if *copy_budget < meta_bytes {
             break;
         }
@@ -446,23 +448,23 @@ fn lens(n: &xml::Node, copy_budget: &mut usize) -> Vec<Profile> {
             tca: Vec::new(),
             vignetting: Vec::new(),
         };
-        for c in &cal.children {
-            let Some(focal) = positive(c.num("focal")) else { continue };
-            let k = |name: &str| c.num(name).unwrap_or(0.0);
+        for c in cal.elements() {
+            let Some(focal) = positive(xml::num(c, "focal")) else { continue };
+            let k = |name: &str| xml::num(c, name).unwrap_or(0.0);
             match (c.name.as_str(), c.attr("model")) {
                 ("distortion", Some("poly3")) => p.distortion.push((focal, Distortion::Poly3 { k1: k("k1") })),
                 ("distortion", Some("poly5")) => p.distortion.push((focal, Distortion::Poly5 { k1: k("k1"), k2: k("k2") })),
                 ("distortion", Some("ptlens")) => p.distortion.push((focal, Distortion::PtLens { a: k("a"), b: k("b"), c: k("c") })),
                 ("tca", Some("linear")) => {
-                    let one = |name: &str| c.num(name).unwrap_or(1.0);
+                    let one = |name: &str| xml::num(c, name).unwrap_or(1.0);
                     p.tca.push((focal, Tca::Linear { kr: one("kr"), kb: one("kb") }));
                 }
                 ("tca", Some("poly3")) => {
-                    let one = |name: &str| c.num(name).unwrap_or(1.0);
+                    let one = |name: &str| xml::num(c, name).unwrap_or(1.0);
                     p.tca.push((focal, Tca::Poly3 { vr: one("vr"), vb: one("vb"), cr: k("cr"), cb: k("cb"), br: k("br"), bb: k("bb") }));
                 }
                 ("vignetting", Some("pa")) => {
-                    let (Some(aperture), distance) = (positive(c.num("aperture")), positive(c.num("distance")).unwrap_or(1000.0)) else {
+                    let (Some(aperture), distance) = (positive(xml::num(c, "aperture")), positive(xml::num(c, "distance")).unwrap_or(1000.0)) else {
                         continue;
                     };
                     let model = Vignetting { k1: k("k1"), k2: k("k2"), k3: k("k3") };

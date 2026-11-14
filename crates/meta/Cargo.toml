@@ -10,6 +10,8 @@ workspace = true
 
 [dependencies]
 craft-tiff = { workspace = true }
+craft-metadata = { workspace = true }
+craft-psd = { workspace = true }
 lightcraft-geom = { workspace = true }
 serde = { workspace = true }
 quick-xml = { workspace = true }
