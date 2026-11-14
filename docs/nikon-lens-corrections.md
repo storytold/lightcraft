@@ -1,7 +1,5 @@
 # Nikon embedded distortion corrections
 
-> Last updated: 2026-11-05. Z 6 / Z 7 distortion validation; vignetting remains unfinished.
-
 Nikon writes its own distortion correction into NEFs from its mirrorless bodies, in the raw SubIFD tag `0xc7d5`
 (NikonNEFInfo). LightCraft reads it for the NIKON Z 6, NIKON Z 7, NIKON Z 6_2 (Z 6II), NIKON Z 8 and NIKON Z f and turns it into an
 `OpcodeList3` `WarpRectilinear`, so it goes through the same profile correction control, optics path, orientation
@@ -227,10 +225,12 @@ The decoder also skips data it doesn't recognise (another layout, radius or term
 values that are clearly wrong (coefficients past ±1, a zoom past ±0.5, a sensor shift over 5% of the frame) and any
 mapping that folds back on itself before the farthest corner.
 
-The tests in `nef_lens` cover the polynomial and zoom, the sensor-shift center and refusing other bodies, layouts
-and crops. `nikon_in_file_distortion_becomes_a_warp` runs a synthetic Z 6II NEF through the header and full decode
-and a DNG export. `nikon_in_file_distortion_is_limited_to_validated_bodies` checks the corpus: the Z f sample gets the
-warp and the D5100, D7000, D7500 and Coolpix B700 samples don't.
+The decoder and its unit tests live in craft-raw ([storytold/craft-libs](https://github.com/storytold/craft-libs),
+`crates/raw`; the Z 6 / Z 7 change is storytold/craft-libs#1314). The tests in `nef_lens` cover the polynomial and zoom,
+the sensor-shift center and refusing other bodies, layouts and crops. `nikon_in_file_distortion_becomes_a_warp` runs
+a synthetic Z 6II NEF through the header and full decode and a DNG export. LightCraft's
+`nikon_in_file_distortion_is_limited_to_validated_bodies` (`crates/raw/tests/it/corpus.rs`) checks the corpus: the Z f
+sample gets the warp and the D5100, D7000, D7500 and Coolpix B700 samples don't.
 
 None of my photos, crops or reference images are committed, only the numbers above.
 
