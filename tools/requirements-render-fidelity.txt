@@ -1,0 +1,7 @@
+# Python packages for tools/render_fidelity.py (docs/render-fidelity.md); everything else is the standard library.
+# Python 3.12+ uses the tested pins; Python 3.9 to 3.11 selects compatible numpy and tifffile releases.
+#   python3 -m venv .venv-fidelity && .venv-fidelity/bin/pip install -r tools/requirements-render-fidelity.txt
+numpy==2.4.6 ; python_version >= "3.12"
+numpy>=2.0 ; python_version < "3.12"
+tifffile==2026.9.15 ; python_version >= "3.12"
+tifffile>=2024.8 ; python_version < "3.12"
