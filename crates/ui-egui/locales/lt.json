@@ -4614,5 +4614,8 @@
   "日本語": "Japonų",
   "繁體中文（台灣）": "Tradicinė kinų (Taivanas)",
   "Debug": "Derinimas",
-  "Noise Reduction Strength": "Triukšmo slopinimo stiprumas"
+  "Noise Reduction Strength": "Triukšmo slopinimo stiprumas",
+  "(library default)": "(numatytasis bibliotekos nustatymas)",
+  "bars: blue = UI CPU, orange/red = waiting · ticks = a render arrived · line = 60 fps": "stulpeliai: mėlyni – sąsajos procesoriaus apkrova, oranžiniai / raudoni – laukimas · žymės – gautas atvaizdas · linija – 60 kadrų/s",
+  "Grey below SDR white; yellow, orange, red, magenta up to 1, 2, 3 and over 3 stops above it": "Pilka spalva – žemiau SDR baltos spalvos; geltona, oranžinė, raudona ir purpurinė – atitinkamai iki 1, 2, 3 ir daugiau nei 3 ekspozicijos žingsnių virš jos"
 }
