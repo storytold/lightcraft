@@ -1188,6 +1188,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cms"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+dependencies = [
+ "md-5",
+ "rayon",
+]
+
+[[package]]
 name = "craft-crw"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
@@ -1208,7 +1217,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955
 [[package]]
 name = "craft-gainmap"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b77af389f30bb10de10d8436ca9b39fe94e3bb67#b77af389f30bb10de10d8436ca9b39fe94e3bb67"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1225,7 +1234,7 @@ dependencies = [
 [[package]]
 name = "craft-heif"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b77af389f30bb10de10d8436ca9b39fe94e3bb67#b77af389f30bb10de10d8436ca9b39fe94e3bb67"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
 dependencies = [
  "heic-rs",
  "rayon",
@@ -1266,7 +1275,7 @@ dependencies = [
  "half",
  "image",
  "image-webp",
- "jpeg-encoder 0.6.1",
+ "jpeg-encoder",
  "png",
  "rayon",
  "serde_json",
@@ -1310,7 +1319,7 @@ dependencies = [
 [[package]]
 name = "craft-psd"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b77af389f30bb10de10d8436ca9b39fe94e3bb67#b77af389f30bb10de10d8436ca9b39fe94e3bb67"
+source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
 dependencies = [
  "encoding_rs",
  "flate2",
@@ -1407,7 +1416,7 @@ dependencies = [
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=b77af389f30bb10de10d8436ca9b39fe94e3bb67#b77af389f30bb10de10d8436ca9b39fe94e3bb67"
+source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
 dependencies = [
  "quick-xml 0.41.0",
  "thiserror 2.0.21",
@@ -3273,7 +3282,7 @@ dependencies = [
  "color_quant",
  "gif",
  "image-webp",
- "moxcms 0.8.1",
+ "moxcms",
  "num-traits",
  "png",
  "qoi",
@@ -3446,25 +3455,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "jpeg-decoder"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
-dependencies = [
- "rayon",
-]
-
-[[package]]
 name = "jpeg-encoder"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b454d911ac55068f53495488d8ccd0646eaa540c033a28ee15b07838afafb01f"
-
-[[package]]
-name = "jpeg-encoder"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 
 [[package]]
 name = "js-sys"
@@ -3834,33 +3828,26 @@ version = "0.21.1"
 dependencies = [
  "avif-serialize",
  "bytemuck",
+ "craft-cms",
  "craft-gainmap",
  "craft-gif",
  "craft-heif",
  "craft-image-codecs",
  "craft-jxl",
  "craft-psd",
+ "craft-tiff",
  "dhat",
- "image",
- "image-webp",
- "jpeg-decoder",
- "jpeg-encoder 0.7.1",
  "jxl-oxide",
  "lightcraft-color",
  "lightcraft-geom",
  "lightcraft-raster",
  "lightcraft-testkit",
- "moxcms 0.9.1",
- "png",
  "proptest",
  "rav1e",
  "ravif",
  "rayon",
  "serde",
  "thiserror 2.0.21",
- "tiff",
- "zune-core",
- "zune-jpeg",
 ]
 
 [[package]]
@@ -4087,7 +4074,6 @@ dependencies = [
  "craft-tiff",
  "lightcraft-geom",
  "proptest",
- "quick-xml 0.41.0",
  "serde",
  "serde_json",
 ]
@@ -4115,12 +4101,10 @@ dependencies = [
 name = "lightcraft-preview"
 version = "0.21.1"
 dependencies = [
- "jpeg-encoder 0.7.1",
+ "craft-image-codecs",
  "lightcraft-raster",
  "log",
  "siphasher",
- "zune-core",
- "zune-jpeg",
 ]
 
 [[package]]
@@ -4140,10 +4124,10 @@ name = "lightcraft-raw"
 version = "0.21.1"
 dependencies = [
  "chrono",
+ "craft-image-codecs",
  "craft-raw",
  "craft-tiff",
  "dhat",
- "jpeg-encoder 0.7.1",
  "lightcraft-color",
  "lightcraft-geom",
  "lightcraft-meta",
@@ -4156,7 +4140,6 @@ dependencies = [
  "sha2",
  "thiserror 2.0.21",
  "zune-core",
- "zune-jpeg",
  "zune-jpegxl",
 ]
 
@@ -4359,6 +4342,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "md-5"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89e7ee0cfbedfc4da3340218492196241d89eefb6dab27de5df917a6d2e78cf"
+dependencies = [
+ "cfg-if",
+ "digest",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4429,16 +4422,6 @@ name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb85c154ba489f01b25c0d36ae69a87e4a1c73a72631fc6c0eb6dde34a73e44b"
-dependencies = [
- "num-traits",
- "pxfm",
-]
-
-[[package]]
-name = "moxcms"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "396077b717181ce3f9a6b66739b269b82d756be5ec0f76be0bc40a7c51775830"
 dependencies = [
  "num-traits",
  "pxfm",
