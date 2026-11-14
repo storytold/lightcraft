@@ -10,7 +10,8 @@
   Per-machine install into Program Files (or the folder chosen in the installer, or
   `INSTALLFOLDER=...` on the msiexec command line; upgrades keep it) and a Start Menu shortcut. The
   UpgradeCode identifies the product to Windows Installer across versions: keep it when renaming, so
-  upgrades still replace the installed version.
+  upgrades still replace the installed version. The Start Menu shortcut is a plain link to the
+  installed exe (not advertised), so it keeps working across those upgrades.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package
@@ -175,9 +176,11 @@
       <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2"
           Condition="Installed AND NOT PATCH" />
 
-      <!-- Completion page: optionally launch, then close. -->
+      <!-- Completion page: optionally launch, then close. Launch on every successful run that
+           leaves the app installed (a first install, an upgrade, a repair) — `NOT Installed`
+           would keep an interactive upgrade from launching, for no reason — but not on a remove. -->
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp" Order="1"
-          Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+          Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT REMOVE" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
 
       <!-- One feature, nothing to change: no "Change" in Apps & features. -->
@@ -191,9 +194,15 @@
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component Id="LccApp" Guid="8A1D3A39-F7C1-47B1-97AE-40C80BF82F4A">
         <File Id="AppExe" Source="$(var.BinDir)\{{binary}}.exe" KeyPath="yes">
+          <!-- Not an advertised shortcut (Advertise="no" + an explicit Target). An advertised one
+               resolves through the installed product's advertisement, so it lives and dies with
+               that product's ProductCode: every upgrade is a MajorUpgrade (new ProductCode), and
+               the Start-menu entry and anything pinned from it stop working once the old product
+               is unregistered. This plain shortcut names the installed exe; the install folder
+               isn't versioned and upgrades keep it, so the same path is valid across upgrades. -->
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="{{display_name}}"
-              Description="{{display_name}}: {{tagline}}" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
-              Icon="AppIcon.ico" IconIndex="0" />
+              Description="{{display_name}}: {{tagline}}" WorkingDirectory="INSTALLFOLDER" Advertise="no"
+              Target="[INSTALLDIR]{{binary}}.exe" Icon="AppIcon.ico" IconIndex="0" />
         </File>
 
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\{{binary}}.exe" Value="[#AppExe]" Type="string" />

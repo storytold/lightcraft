@@ -6,7 +6,7 @@
 //!
 //! | Platform | Artifact | What happens |
 //! |---|---|---|
-//! | Windows | `.msi` | the installer runs (`msiexec`), then the app starts again |
+//! | Windows | `.msi` | a helper waits for the app to quit, the installer runs (`msiexec`), and the app starts again |
 //! | macOS | `.dmg` | mounted, its app copied beside the running bundle, checked and swapped in, relaunched |
 //! | Linux | `.AppImage` | once the app has quit, the running file is replaced and the new one started |
 //! | Windows, a copy unpacked from the portable zip | `.zip` | unpacked beside the program, its files swapped in, the new version started once the app has quit, undone if it can't start ([`zipswap`]) |
@@ -77,7 +77,7 @@ pub fn plan(kind: Kind, file: &Path, version: &str, copy: &CopyKind) -> Plan {
             summary: format!("Run the {version} installer"),
             steps: vec![
                 "The app quits so the installer can replace its files.".into(),
-                "Windows asks for permission when the installer needs it.".into(),
+                "The installer runs and Windows asks for permission when it needs it.".into(),
                 "The app starts again when the installer is done.".into(),
             ],
             destination: None,
@@ -358,21 +358,64 @@ fn zip_copy_exe() -> Option<PathBuf> {
     exe.file_name()?.to_string_lossy().eq_ignore_ascii_case(&format!("{}.exe", lcc_brand::BINARY)).then_some(exe)
 }
 
+/// A PowerShell single-quoted string: a `'` inside is doubled, nothing else is special (no
+/// variables, no escapes), so any path survives verbatim.
+#[cfg(any(windows, test))]
+fn ps_single_quoted(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
+}
+
+/// The one-line script the Windows update helper runs: wait for the app that started it (by pid; it
+/// quits right after, and the wait is what keeps `msiexec` from overlapping the running app, which
+/// would make Restart Manager defer replacing its files), run the installer passively without a
+/// reboot, and — only when the installer succeeded — start the app again.
+///
+/// `msiexec` exit codes: `0` is success, `3010` is success with a reboot required (`/norestart`
+/// suppressed it). `3010` deliberately starts nothing: files can still be scheduled for rename at
+/// the reboot, and Windows starts the app on the user's desktop again after it. Every other code
+/// is a failed install, and starting the old program over it would only mislead.
+///
+/// `relaunch` is the installed program (`None`: its path is not known, so nothing is started — the
+/// installer still runs). An upgrade replaces the exe in place at the same path, so the path this
+/// process runs from is the new version's path once the installer is done.
+#[cfg(any(windows, test))]
+fn msi_update_script(pid: u32, msi: &str, relaunch: Option<&str>) -> String {
+    // Wait-Process on a pid that is already gone is an error, not a stop: SilentlyContinue makes
+    // the helper carry on (the app may have quit before the helper came up).
+    let start = relaunch.map_or(String::new(), |exe| format!(" if ($LASTEXITCODE -eq 0) {{ Start-Process -FilePath {} }}", ps_single_quoted(exe)));
+    format!("Wait-Process -Id {pid} -ErrorAction SilentlyContinue; msiexec /i {} /passive /norestart;{start}", ps_single_quoted(msi))
+}
+
 #[cfg(windows)]
 fn install_msi(msi: &Path) -> Result<Outcome, UpdateError> {
-    // `/passive` shows the installer's progress bar without asking questions, `/norestart` keeps
-    // the machine up. The installer needs this process gone to replace the exe, so it is started
-    // and the caller exits; when it needs elevation Windows asks through `msiexec` itself.
-    // `Command` quotes the path itself when it holds spaces; quoting it again here would hand
-    // msiexec literal `\"` characters.
-    let child = Command::new("msiexec")
-        .arg("/i")
-        .arg(msi)
-        .arg("/passive")
-        .arg("/norestart")
+    use std::os::windows::process::CommandExt;
+
+    // The installer cannot be started directly: it must not run while this process lives (its
+    // files are replaced under it), and nothing would start the app again afterwards — the
+    // installer's own "Launch" checkbox lives in its interactive ExitDialog, which `/passive`
+    // never shows. Instead a small helper runs the whole sequence ([`msi_update_script`]):
+    // Windows PowerShell is built into every Windows, and `-Command` runs it whatever the
+    // execution policy is (that only governs script files).
+    // DETACHED_PROCESS gives the helper no console of ours to die with, so it outlives this
+    // process; `-WindowStyle Hidden` keeps any console it might make off the screen. Both are
+    // belt and braces: the helper only waits, runs msiexec, maybe starts the app.
+    // `creation_flags` is a safe std API — no `unsafe` here.
+    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    let relaunch = std::env::current_exe().map(|exe| exe.to_string_lossy().to_string()).ok();
+    let script = msi_update_script(std::process::id(), &msi.to_string_lossy(), relaunch.as_deref());
+    let child = Command::new("powershell.exe")
+        .arg("-NoProfile")
+        .arg("-WindowStyle")
+        .arg("Hidden")
+        .arg("-Command")
+        .arg(&script)
+        .creation_flags(DETACHED_PROCESS)
         .spawn()
         .map_err(|e| UpdateError::Install(format!("could not start the installer ({}): {e}", msi.display())))?;
-    Ok(Outcome { message: format!("The installer is running (process {}). The app will start again when it finishes.", child.id()), exit: true })
+    Ok(Outcome {
+        message: format!("The installer starts once the app has quit (process {}). The app starts again when the installer is done.", child.id()),
+        exit: true,
+    })
 }
 
 #[cfg(not(windows))]
@@ -542,7 +585,11 @@ mod tests {
         let other = CopyKind::Other;
         let p = plan(Kind::Msi, Path::new("/tmp/a.msi"), "1.2.3", &other);
         assert!(p.summary.contains("1.2.3") && p.summary.contains("installer"));
-        assert!(!p.steps.is_empty());
+        // the sequence the MSI path promises, in order: quit, install, start again
+        let steps = p.steps.join(" ");
+        assert!(steps.contains("quits so the installer"), "{steps}");
+        assert!(steps.contains("installer runs"), "{steps}");
+        assert!(steps.contains("starts again when the installer is done"), "{steps}");
         assert_eq!(p.restart, Restart::QuitAndRelaunch);
         let a = plan(Kind::Archive, Path::new("/tmp/a.zip"), "1.2.3", &other);
         assert_eq!(a.restart, Restart::Manual);
@@ -563,6 +610,32 @@ mod tests {
                 assert!(removed.iter().any(|k| k.eq_ignore_ascii_case(&format!("{prefix}_{name}"))), "{prefix}_{name}");
             }
         }
+    }
+
+    /// The MSI helper waits for the app that started it, runs the installer passively without a
+    /// reboot, and starts the app again only when the installer succeeded.
+    #[test]
+    fn the_msi_helper_waits_installs_and_relaunches() {
+        let script = msi_update_script(1234, r"C:\Updates\app 1.2.3.msi", Some(r"C:\Program Files\app\app.exe"));
+        assert!(script.starts_with("Wait-Process -Id 1234 -ErrorAction SilentlyContinue; "), "{script}");
+        assert!(script.contains(r"msiexec /i 'C:\Updates\app 1.2.3.msi' /passive /norestart;"), "{script}");
+        // relaunch on success alone: 3010 (success, reboot required) and every failure start nothing
+        assert!(script.ends_with(r"if ($LASTEXITCODE -eq 0) { Start-Process -FilePath 'C:\Program Files\app\app.exe' }"), "{script}");
+        // without a program to start, the installer runs all the same
+        let bare = msi_update_script(7, r"C:\x.msi", None);
+        assert!(bare.ends_with("/norestart;"), "{bare}");
+        assert!(!bare.contains("Start-Process"), "{bare}");
+    }
+
+    /// Paths keep their meaning inside the helper script: PowerShell single-quoted strings double
+    /// their quotes and treat nothing else specially, spaces included.
+    #[test]
+    fn the_msi_helper_quotes_paths_the_way_powershell_reads_them() {
+        assert_eq!(ps_single_quoted(r"C:\plain\path.msi"), r"'C:\plain\path.msi'");
+        assert_eq!(ps_single_quoted("it's O'Brien's.msi"), r"'it''s O''Brien''s.msi'");
+        let script = msi_update_script(1, r"C:\Users\O'Brien\app 1.2.3.msi", Some(r"C:\it's me\app.exe"));
+        assert!(script.contains(r"'C:\Users\O''Brien\app 1.2.3.msi'"), "{script}");
+        assert!(script.contains(r"'C:\it''s me\app.exe'"), "{script}");
     }
 
     /// A zip copy that can replace its own files plans to; one that can't (its folder can't be
