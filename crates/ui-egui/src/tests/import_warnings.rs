@@ -93,7 +93,7 @@ fn import(tag: &str, fields: &[&str]) -> (Headless, PathBuf, String) {
 /// files must not cover the viewer with N repeated lines (#3050).
 #[test]
 fn identical_warnings_are_one_counted_line() {
-    let (h, dir, text) = import("same", &["AutoToneDigest", "AutoToneDigest"]);
+    let (h, dir, text) = import("same", &["Look", "Look"]);
     assert_eq!(h.app.session.catalog.len(), 2, "both photos imported");
     assert!(text.contains("Import warnings (2):"), "{text}");
     assert!(text.contains("for 2 photos"), "{text}");
@@ -104,7 +104,7 @@ fn identical_warnings_are_one_counted_line() {
 /// One photo with a warning keeps the full per-photo message with its path.
 #[test]
 fn a_single_warning_keeps_the_photo_path() {
-    let (h, dir, text) = import("one", &["AutoToneDigest"]);
+    let (h, dir, text) = import("one", &["Look"]);
     assert_eq!(h.app.session.catalog.len(), 1, "the photo imported");
     assert!(text.contains("Import warnings (1):"), "{text}");
     assert!(text.contains("img0.png"), "the path is the actionability of a single warning: {text}");
@@ -177,5 +177,31 @@ fn a_press_on_the_toast_dismisses_it() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert_eq!(toast(&h), "", "the press on the toast dismissed it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Bookkeeping that cannot change the render keeps its own message with its path and never
+/// claims an adjustment was dropped (#3050).
+#[test]
+fn a_metadata_only_warning_says_it_cannot_differ() {
+    let (h, dir, text) = import("meta", &["AutoToneDigest"]);
+    assert_eq!(h.app.session.catalog.len(), 1, "the photo imported");
+    assert!(text.contains("Import warnings (1):"), "{text}");
+    assert!(text.contains("Non-rendering XMP metadata was skipped") && text.contains("img0.png"), "{text}");
+    assert!(!text.contains("XMP adjustments were not imported"), "bookkeeping is not sold as a lost adjustment: {text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An adjustment and skipped bookkeeping on the same photos are two counted lines, each kind
+/// with its own wording (#3050).
+#[test]
+fn adjustments_and_metadata_get_separate_lines() {
+    let (h, dir, text) =
+        import_with("split-kinds", &["crs:Look=\"{i}L\" crs:AutoToneDigest=\"{i}\"", "crs:Look=\"{i}L\" crs:AutoToneDigest=\"{i}\""]);
+    assert_eq!(h.app.session.catalog.len(), 2, "both photos imported");
+    assert!(text.contains("Import warnings (4):"), "{text}");
+    assert!(text.contains("XMP adjustments were not imported for 2 photos: Look."), "{text}");
+    assert!(text.contains("Non-rendering XMP metadata was skipped for 2 photos: AutoToneDigest."), "{text}");
+    assert!(!text.contains("img0.png") && !text.contains("img1.png"), "counted lines carry no paths: {text}");
     let _ = std::fs::remove_dir_all(&dir);
 }

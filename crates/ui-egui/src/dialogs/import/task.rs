@@ -419,6 +419,9 @@ fn xmp_warning_text(warning: &ImportWarning) -> String {
         ImportWarningCode::UnmappedXmp => {
             crate::i18n::tr_format!("XMP adjustments were not imported for {path}: {fields}.", path = path, fields = warning.fields.join(", "),)
         }
+        ImportWarningCode::SkippedXmpMetadata => {
+            crate::i18n::tr_format!("Non-rendering XMP metadata was skipped for {path}: {fields}.", path = path, fields = warning.fields.join(", "),)
+        }
     }
 }
 
@@ -440,7 +443,8 @@ fn grouped_warnings(warnings: &[ImportWarning]) -> Vec<(&ImportWarning, usize)> 
         let key = match w.code {
             ImportWarningCode::CameraProfile => format!("profile:{}", w.profile.as_deref().unwrap_or_default()),
             ImportWarningCode::UprightGeometry => format!("upright:{:?}", w.mode),
-            ImportWarningCode::UnmappedXmp => {
+            // the two unmapped buckets hold disjoint fields, so they share one set-shaped key
+            ImportWarningCode::UnmappedXmp | ImportWarningCode::SkippedXmpMetadata => {
                 let mut fields = w.fields.clone();
                 fields.sort_unstable();
                 format!("xmp:{}", fields.join("\u{1f}"))
@@ -455,6 +459,19 @@ fn grouped_warnings(warnings: &[ImportWarning]) -> Vec<(&ImportWarning, usize)> 
         }
     }
     groups
+}
+
+/// The field names one grouped line lists: in the grouping key's canonical order, capped with
+/// "+N more" (#3050).
+fn field_list(fields: &[String]) -> String {
+    let mut fields = fields.to_vec();
+    fields.sort_unstable();
+    let mut list = fields.iter().take(MAX_WARNING_FIELDS).map(String::as_str).collect::<Vec<_>>().join(", ");
+    if fields.len() > MAX_WARNING_FIELDS {
+        list.push_str(", ");
+        list.push_str(&crate::i18n::tr_format!("+{n} more", n = fields.len() - MAX_WARNING_FIELDS));
+    }
+    list
 }
 
 /// One line for a group of `n` photos the same warning covers: a single photo keeps the detailed
@@ -486,15 +503,10 @@ fn warning_line(w: &ImportWarning, n: usize) -> String {
             }
         }
         ImportWarningCode::UnmappedXmp => {
-            // the grouping key is the sorted set: the line shows the same canonical order
-            let mut fields = w.fields.clone();
-            fields.sort_unstable();
-            let mut list = fields.iter().take(MAX_WARNING_FIELDS).map(String::as_str).collect::<Vec<_>>().join(", ");
-            if fields.len() > MAX_WARNING_FIELDS {
-                list.push_str(", ");
-                list.push_str(&crate::i18n::tr_format!("+{n} more", n = fields.len() - MAX_WARNING_FIELDS));
-            }
-            crate::i18n::tr_format!("XMP adjustments were not imported for {n} photo{s}: {fields}.", n = n, fields = list,)
+            crate::i18n::tr_format!("XMP adjustments were not imported for {n} photo{s}: {fields}.", n = n, fields = field_list(&w.fields),)
+        }
+        ImportWarningCode::SkippedXmpMetadata => {
+            crate::i18n::tr_format!("Non-rendering XMP metadata was skipped for {n} photo{s}: {fields}.", n = n, fields = field_list(&w.fields),)
         }
     }
 }
