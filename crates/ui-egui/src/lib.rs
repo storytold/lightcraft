@@ -91,6 +91,7 @@ mod app;
 mod auto_settings;
 mod caches;
 mod clock;
+pub mod photo_menu;
 mod services;
 
 #[cfg(test)]
