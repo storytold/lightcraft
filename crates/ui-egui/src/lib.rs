@@ -351,6 +351,8 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Image exports asked for while `export` runs, started in turn after it (issue #2965).
+    pub export_queue: std::collections::VecDeque<export_task::Queued>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

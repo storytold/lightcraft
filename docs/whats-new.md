@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Exports wait their turn
+- Starting an export while another is still running no longer fails with "an export is already running": the new
+  one waits in the activity list (the bell) as "Waiting to export…" and starts as soon as the one before it ends.
+  ✕ on a waiting export drops it. Each export uses the photos as they were when you asked for it (issue #2965).
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

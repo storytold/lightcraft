@@ -544,6 +544,30 @@ fn export_never_overwrites_an_original() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #2965: an export that waited its turn is checked against the library as it is when it starts. A
+/// file catalogued at its destination while it waited is an original by then, and is not written over.
+#[test]
+fn a_waiting_export_checks_the_originals_catalogued_while_it_waited() {
+    use crate::export::{Conflict, Destination, prepare_export, run_batch};
+    let (mut s, id, dir, _src, _) = library_with_jpeg("export-waited");
+    let later = dir.join("LATER.jpg");
+    let img = lightcraft_raster::Rgba8::from_fn(16, 16, |x, _| [(x * 9) as u8, 40, 200, 255]);
+    let theirs = crate::export::encode_image(&img, &ExportOptions::default()).unwrap();
+    std::fs::write(&later, &theirs).unwrap();
+    let o = ExportOptions { conflict: Conflict::Overwrite, ..Default::default() };
+    let to = Destination { dir: String::new(), exact: Some(later.to_string_lossy().to_string()) };
+    // prepared while LATER.jpg is still an ordinary file…
+    let mut waiting = prepare_export(&mut s, id, &o, 1).unwrap();
+    // …which is imported while the export waits
+    s.execute("library.import", &json!({"paths": [later.to_string_lossy()]})).unwrap();
+    waiting.use_guard(std::sync::Arc::new(s.original_guard()));
+    let mut write = |path: &str, bytes: &[u8]| crate::export::write_file(path, bytes);
+    let files = run_batch(vec![waiting], &o, &to, &mut write, &|p| std::path::Path::new(p).exists(), false, &mut |_, _| true).unwrap();
+    assert!(files[0]["error"].as_str().is_some_and(|e| e.contains("original")), "{files:?}");
+    assert_eq!(std::fs::read(&later).unwrap(), theirs, "the photo catalogued while the export waited is untouched");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Issue #93: the XMP sidecar of an "Original" export ignored the conflict policy.
 #[test]
 fn export_sidecars_follow_the_conflict_policy() {

@@ -123,6 +123,7 @@ impl LightcraftApp {
             review_pending: None,
             shown_library: None,
             export: None,
+            export_queue: Default::default(),
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,

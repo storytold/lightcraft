@@ -208,6 +208,13 @@ pub(super) fn render_weight(full_px: usize, long: usize, level: crate::media::So
 }
 
 impl PreparedExport {
+    /// Check what it writes against `guard`, built now, instead of the library as it was when it was
+    /// prepared: an export that waited its turn (issue #2965) may write after more photos were catalogued,
+    /// and must not write over their originals either.
+    pub fn use_guard(&mut self, guard: std::sync::Arc<crate::originals::OriginalGuard>) {
+        self.guard = guard;
+    }
+
     pub fn run(self) -> Result<Exported, String> {
         let file_name = self.file_name;
         match self.work {
