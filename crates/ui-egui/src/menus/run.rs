@@ -144,6 +144,23 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     Ok(appearance_json(app))
 }
 
+/// View ▸ Loupe Background: `{color?}` sets the colour behind the photo, `{}` reads it; an unknown
+/// colour is refused and changes nothing.
+fn loupe_background_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    use crate::state::LoupeBackground;
+    if let Some(color) = p.get("color") {
+        let ids = LoupeBackground::ALL.map(LoupeBackground::id).join("|");
+        let Some(id) = color.as_str() else {
+            return Err(format!("view.loupeBackground: `color` must be a string ({ids})"));
+        };
+        let Some(bg) = LoupeBackground::ALL.into_iter().find(|b| b.id() == id) else {
+            return Err(format!("view.loupeBackground: unknown colour `{id}` ({ids})"));
+        };
+        app.ui.settings.loupe_background = bg;
+    }
+    Ok(json!({"color": app.ui.settings.loupe_background.id()}))
+}
+
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     if matches!(id, "ui.dock" | "ui.dock.reset") {
@@ -324,6 +341,7 @@ fn ui_commands_1(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "view.appearance" => appearance_command(app, p),
         "view.theme" => theme_command(app, p),
+        "view.loupeBackground" => loupe_background_command(app, p),
         "library.selectOnlyActive" => {
             let Some(active) = app.session.active() else { return Some(Err("no active photo".into())) };
             app.run("library.select", json!({"ids": [active.0], "active": active.0}))

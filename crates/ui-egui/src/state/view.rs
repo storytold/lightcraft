@@ -332,6 +332,71 @@ impl LightsOut {
     }
 }
 
+/// View ▸ Loupe Background (and a right-click on the canvas around the photo; issue #4102): the
+/// colour behind the photo in the Detail view and the full-screen preview. Theme keeps the theme's
+/// canvas colour (black in full screen); the others are fixed neutrals to judge the photo against,
+/// White exactly `#FFFFFF`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LoupeBackground {
+    #[default]
+    Theme,
+    Black,
+    DarkGray,
+    /// L* 50 (sRGB 119).
+    MediumGray,
+    LightGray,
+    White,
+}
+
+impl LoupeBackground {
+    /// Every choice, in menu order (Theme first).
+    pub const ALL: [LoupeBackground; 6] = [
+        LoupeBackground::Theme,
+        LoupeBackground::Black,
+        LoupeBackground::DarkGray,
+        LoupeBackground::MediumGray,
+        LoupeBackground::LightGray,
+        LoupeBackground::White,
+    ];
+
+    /// The id commands and `ui.json` use.
+    pub fn id(self) -> &'static str {
+        match self {
+            LoupeBackground::Theme => "theme",
+            LoupeBackground::Black => "black",
+            LoupeBackground::DarkGray => "darkGray",
+            LoupeBackground::MediumGray => "mediumGray",
+            LoupeBackground::LightGray => "lightGray",
+            LoupeBackground::White => "white",
+        }
+    }
+
+    /// The English menu label (translated where it is shown).
+    pub fn label(self) -> &'static str {
+        match self {
+            LoupeBackground::Theme => "Theme Color",
+            LoupeBackground::Black => "Black",
+            LoupeBackground::DarkGray => "Dark Gray",
+            LoupeBackground::MediumGray => "Medium Gray",
+            LoupeBackground::LightGray => "Light Gray",
+            LoupeBackground::White => "White",
+        }
+    }
+
+    /// The fixed colour, or `None` for the theme's own.
+    pub fn color(self) -> Option<egui::Color32> {
+        match self {
+            LoupeBackground::Theme => None,
+            LoupeBackground::Black => Some(egui::Color32::from_gray(0)),
+            LoupeBackground::DarkGray => Some(egui::Color32::from_gray(0x33)),
+            LoupeBackground::MediumGray => Some(egui::Color32::from_gray(0x77)),
+            LoupeBackground::LightGray => Some(egui::Color32::from_gray(0xb3)),
+            LoupeBackground::White => Some(egui::Color32::from_gray(0xff)),
+        }
+    }
+}
+
 /// Click-zoom ratios offered (percent): 1:1, 2:1, 3:1, 4:1, 8:1.
 pub const CLICK_ZOOMS: [u32; 5] = [100, 200, 300, 400, 800];
 

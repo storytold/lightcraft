@@ -442,9 +442,11 @@ impl LightcraftApp {
         // panels set it again this frame while the pointer rests on a preset or profile
         self.hover_preview = None;
         if self.ui.fullscreen {
-            // full-screen preview: the photo alone on black
+            // full-screen preview: the photo alone on black, or on the chosen loupe background (a
+            // slideshow composes its own slides on black)
+            let fixed = if self.ui.slideshow.is_some() { None } else { self.ui.settings.loupe_background.color() };
             egui::CentralPanel::default()
-                .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+                .frame(egui::Frame::NONE.fill(fixed.unwrap_or(egui::Color32::BLACK)))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
             panels::second::show(self, &ctx);
             if notice_blocks {
