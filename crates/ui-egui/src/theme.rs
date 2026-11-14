@@ -493,6 +493,9 @@ pub fn apply_kind(ctx: &egui::Context, kind: ThemeKind) {
 }
 
 #[cfg(test)]
+mod contrast;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::button::contrast;
