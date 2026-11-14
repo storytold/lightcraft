@@ -1,3 +1,4 @@
+use super::native_dialog;
 use super::prefs::config_dir;
 
 pub(crate) const HELP: &str = "\
@@ -131,12 +132,16 @@ pub(crate) fn stopped_while_running(text: &str, log_file: Option<&std::path::Pat
         return; // tests and scripts: no dialog to click away
     }
     let (title, text) = lightcraft_ui_egui::i18n::stopped_message(text, log_file.map(|p| p.display().to_string()).as_deref());
-    let _ = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Error)
-        .set_title(title)
-        .set_description(text)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
+    if let Err(error) = native_dialog::run(|| {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title(title)
+            .set_description(text)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show()
+    }) {
+        log::error!("Could not show the native error dialog: {error}");
+    }
 }
 
 /// The window could not start (e.g. no usable graphics device): say so in the log and in a native
@@ -148,12 +153,16 @@ pub(crate) fn startup_failed(error: &str, log_file: Option<&std::path::Path>) {
         return; // tests and scripts: no dialog to click away
     }
     let (title, text) = lightcraft_ui_egui::i18n::startup_failed_message(error, log_file.map(|p| p.display().to_string()).as_deref());
-    let _ = rfd::MessageDialog::new()
-        .set_level(rfd::MessageLevel::Error)
-        .set_title(title)
-        .set_description(text)
-        .set_buttons(rfd::MessageButtons::Ok)
-        .show();
+    if let Err(error) = native_dialog::run(|| {
+        rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Error)
+            .set_title(title)
+            .set_description(text)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show()
+    }) {
+        log::error!("Could not show the native error dialog: {error}");
+    }
 }
 
 #[cfg(test)]
