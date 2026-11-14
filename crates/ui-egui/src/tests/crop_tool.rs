@@ -95,3 +95,50 @@ fn x_in_the_crop_tool_swaps_the_aspect_once() {
     h.settle(SETTLE);
     assert_eq!(crop(&h), (true, Some((400, 300))), "X again turns it back");
 }
+
+/// The aspect menu stays open while its Custom fields are edited, and closes on Apply or on a
+/// preset. Every click closed it, the first one in a Custom field too: a custom ratio could not be
+/// typed.
+#[test]
+fn the_aspect_menu_stays_open_while_a_custom_ratio_is_typed() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let landscape =
+        |h: &Headless, id: &lightcraft_catalog::PhotoId| h.app.session.catalog.photo(*id).is_some_and(|p| p.width > p.height && !p.is_edited());
+    let id = h.app.session.visible_cloned().into_iter().find(|id| landscape(&h, id)).unwrap();
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+    h.app.ui.view = ViewMode::Detail;
+    h.request("engine.execute", json!({"command": "panel.crop"}), T);
+    h.settle(SETTLE);
+    let open =
+        |h: &mut Headless| h.request("ui.widgets", json!({"filter": "field:cropCustomW"}), T)["result"].as_array().is_some_and(|a| !a.is_empty());
+    let click = |h: &mut Headless, id: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+        h.settle(SETTLE);
+    };
+    let retype = |h: &mut Headless, field: &str, text: &str| {
+        click(h, field);
+        assert!(open(h), "a click in {field} keeps the menu open");
+        for _ in 0..4 {
+            h.request("ui.key", json!({"key": "Backspace"}), T);
+        }
+        h.request("ui.text", json!({"text": text}), T);
+        h.settle(SETTLE);
+        assert!(open(h), "typing in {field} keeps the menu open");
+    };
+    click(&mut h, "dropdown:cropAspect");
+    assert!(open(&mut h), "the menu opens");
+    retype(&mut h, "field:cropCustomW", "5");
+    retype(&mut h, "field:cropCustomH", "4");
+    click(&mut h, "button:cropCustomApply");
+    assert!(!open(&mut h), "Apply closes the menu");
+    let aspect = |h: &Headless| h.app.session.catalog.photo(id).and_then(|p| p.develop.crop.aspect);
+    assert_eq!(aspect(&h), Some((500, 400)), "the typed ratio is applied");
+    // a preset applies and closes the menu as before
+    click(&mut h, "dropdown:cropAspect");
+    assert!(open(&mut h), "the menu opens again");
+    click(&mut h, "cropAspect:16x9");
+    assert!(!open(&mut h), "a preset closes the menu");
+    assert_eq!(aspect(&h), Some((1600, 900)));
+}
