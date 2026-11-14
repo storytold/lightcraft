@@ -336,5 +336,5 @@
   "{n} photos got their lens profile": "Objektyvo profilis priskirtas nuotraukų: {n}",
   "{title}: {line}": "{title}: {line}",
   "{} of {} (no catalog has this)": "{} iš {} (tokio įrašo nėra jokiame kataloge)",
-  "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it{after}.": "Atsisiunčiama iš {host}. Kai atsisiuntimas bus baigtas ir patikrintas, „LightCraft“ ją įdiegs{after}."
+  "Downloads from {host}. Once it has arrived and checked out, LightCraft installs it{after}.": "Atsisiunčiama iš {host}. Kai failas bus gautas ir patikrintas, „LightCraft“ jį įdiegs{after}."
 }
