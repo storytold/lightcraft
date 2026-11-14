@@ -6,7 +6,7 @@ is saved for the next launch (`language: "ta"` in `ui.json`); the control comman
 `ta-LK` and `ta_IN.UTF-8`; the saved value is always `ta`. LightCraft does not follow the system
 language, for Tamil as for every other language.
 
-The Tamil catalogs cover every plain and formats message the gap report counts (2,650 + 337): menus,
+The Tamil catalogs cover every plain and formats message the gap report counts (2,662 + 337): menus,
 shortcuts, library, editing, crop, masks, people, import/export, print, slideshow, settings, built-in
 presets and profiles, history, date headings, status messages and the smart-album rule editor. The
 embedded release notes (What's New) stay in English. Technical errors from lower layers stay in English,
@@ -79,7 +79,7 @@ older revision, or without `CRAFT_FONTS_DIR`, has no Tamil face and shows boxes.
 
 ## Maintenance and checks
 
-Fixed texts: `crates/ui-egui/locales/ta.json` (2,650 entries). Messages with values:
+Fixed texts: `crates/ui-egui/locales/ta.json` (2,662 entries). Messages with values:
 `crates/ui-egui/locales/ta-formats.json` (337 entries). The English keys stay unchanged; Rust checks
 the placeholders at build time. Strings not yet in the plain catalog show in English.
 
