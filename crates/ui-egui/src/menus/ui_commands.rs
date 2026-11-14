@@ -57,6 +57,13 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
     }
 }
 
+/// LightCraft Help's shortcut: ⇧⌘? on macOS, where F1 needs the fn key, and F1 elsewhere.
+pub(super) const fn help_shortcut(macos: bool) -> &'static str {
+    if macos { "Cmd+Shift+/" } else { "F1" }
+}
+
+const HELP_SHORTCUT: &str = help_shortcut(cfg!(target_os = "macos"));
+
 pub const UI_COMMANDS: &[UiCommand] = &[
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
@@ -265,7 +272,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.frameRate", "Frame Rate", None, "Help>Debug"),
     ("app.whatsNew", "What's New", None, "Help"),
     ("dialog.cull", "Assisted Culling…", None, "Photo"),
-    ("app.help", "LightCraft Help", Some("F1"), "Help"),
+    ("app.help", "LightCraft Help", Some(HELP_SHORTCUT), "Help"),
     ("app.discord", "Join the ArtCraft Discord…", None, "Help"),
     ("app.feedback", "Send Feedback…", None, "Help"),
     ("app.website", "LightCraft Website", None, "Help"),
