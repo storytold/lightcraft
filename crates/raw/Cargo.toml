@@ -27,6 +27,7 @@ craft-image-codecs = { workspace = true }
 lightcraft-testkit = { workspace = true }
 proptest = { workspace = true }
 craft-jxl = { workspace = true }
+jixel = { workspace = true }
 # Pinned CC0 corpus identities; not a product dependency.
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 # Peak-heap regression tests (tests/sr2_heap.rs); not a product dependency.

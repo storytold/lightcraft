@@ -631,7 +631,18 @@ fn malformed_profile_look_tags_are_ignored() {
 
 /// Lossless JPEG XL codestream of `px` (`w × h × cpp` interleaved), 16-bit unless `eight`.
 fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8> {
-    let layout = if cpp == 1 { craft_jxl::Layout::Gray } else { craft_jxl::Layout::Rgb };
+    if cpp == 1 {
+        // craft-jxl's public image encoder deliberately widens Gray to RGB. DNG RAW tiles need
+        // a genuine single-plane codestream, so use jixel's grayscale encoder for these fixtures.
+        let config = jixel::EncodeConfig::default().with_lossless(true);
+        let u8_buf: Vec<u8> = if eight { px.iter().map(|&v| v as u8).collect() } else { Vec::new() };
+        return if eight {
+            jixel::encode_image_gray(&u8_buf, w, h, &config).unwrap()
+        } else {
+            jixel::encode_image_gray_16bit(px, w, h, &config).unwrap()
+        };
+    }
+    let layout = craft_jxl::Layout::Rgb;
     let u8_buf: Vec<u8> = if eight { px.iter().map(|&v| v as u8).collect() } else { Vec::new() };
     let samples = if eight { craft_jxl::Samples::U8(&u8_buf) } else { craft_jxl::Samples::U16(px) };
     let img = craft_jxl::ImageRef { width: w as u32, height: h as u32, layout, samples };
