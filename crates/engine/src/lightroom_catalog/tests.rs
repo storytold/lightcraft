@@ -1245,6 +1245,157 @@ fn two_catalogs_at_the_same_path_keep_their_own_albums() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A catalog whose original `Photos/test.ARW` is on disk below `photos`, with the collection “Keepers” holding it and,
+/// when given, the catalog's own id; written to `path`.
+fn catalog_with_original(path: &Path, photos: &Path, catalog_id: Option<&str>) {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let mut tables = one_row(photo_tables((photos.to_str().unwrap(), "")));
+    tables.push((
+        "AgLibraryCollection",
+        "id_local INTEGER PRIMARY KEY, creationId, name, parent, systemOnly",
+        vec![vec![N, T("com.adobe.ag.library.collection".into()), T("Keepers".into()), N, I(0)]],
+    ));
+    tables.push(("AgLibraryCollectionImage", "id_local INTEGER PRIMARY KEY, collection, image", vec![vec![N, I(1), I(1)]]));
+    if let Some(id) = catalog_id {
+        tables.push((
+            "Adobe_variablesTable",
+            "id_local INTEGER PRIMARY KEY, id_global, name, type, value",
+            vec![vec![N, T("v1".into()), T("Adobe_storeProviderID".into()), N, T(id.into())]],
+        ));
+    }
+    std::fs::create_dir_all(photos.join("Photos")).unwrap();
+    std::fs::write(photos.join("Photos/test.ARW"), photos.to_string_lossy().as_bytes()).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, native_catalog_rows(&tables, None)).unwrap();
+}
+
+/// What a library holds, to compare before and after an import: each photo's id, file, rating and flag, and each
+/// album's id, name and photos.
+fn library_state(s: &crate::Session) -> (Vec<(u64, String, u8, Flag)>, Vec<(u64, String, Vec<PhotoId>)>) {
+    let mut photos: Vec<_> = s.catalog.photos().map(|p| (p.id.0, source_path(p).unwrap_or_default().to_string(), p.rating, p.flag)).collect();
+    photos.sort_by_key(|p| p.0);
+    let mut albums: Vec<_> = s.catalog.albums().map(|a| (a.id.0, a.name.clone(), a.photos.clone())).collect();
+    albums.sort_by_key(|a| a.0);
+    (photos, albums)
+}
+
+/// An import that fails after it has added the catalog's originals takes them back: the library, its undo history,
+/// its file on disk and the import index are as they were, and the error still says why. The failure here is the
+/// collections' (a catalog without an id at a path an earlier catalog with one had); the originals are added before.
+#[test]
+fn a_failed_import_takes_back_the_originals_it_added() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrcat-failed-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let catalog = root.join("Lightroom").join("Cat.lrcat");
+    let lib = root.join("Library");
+    let mut s = crate::Session::new();
+    s.media.file_probe = Some(Arc::new(|_| Ok(crate::media::ProbeInfo { format: "ARW".into(), width: 20, height: 10, ..Default::default() })));
+    s.open_library(&lib, false).unwrap();
+    catalog_with_original(&catalog, &root.join("first"), Some("968AF29B-EEE2-481E-8AF9-55DD82965F49"));
+    s.execute("library.importLightroom", &json!({"path": catalog})).unwrap();
+    let before = library_state(&s);
+    assert_eq!((before.0.len(), before.1.len()), (1, 1), "{before:?}");
+    assert_eq!(s.undo.len(), 1, "an import that succeeds is one undo step, its originals' records with the rest");
+    let index = std::fs::read(lib.join("Interop/lightroom-index.json")).unwrap();
+    // the same path, now a catalog without an id whose original isn't in the library yet
+    catalog_with_original(&catalog, &root.join("second"), None);
+    let err = s.execute("library.importLightroom", &json!({"path": catalog})).unwrap_err().to_string();
+    assert!(err.contains("no stable identity"), "{err}");
+    assert_eq!(library_state(&s), before, "the original the import added is taken back");
+    assert_eq!(s.undo.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(), ["Import Lightroom Catalog"], "only the first import's step");
+    assert!(s.redo.is_empty());
+    assert_eq!(std::fs::read(lib.join("Interop/lightroom-index.json")).unwrap(), index);
+    assert!(root.join("second/Photos/test.ARW").is_file(), "the original stays where it was");
+    // and so is the library on disk (its log: closing would write a snapshot of the library in memory)
+    drop(s);
+    let log = std::fs::read_to_string(lib.join(lightcraft_catalog::journal::LOG)).unwrap();
+    assert!(log.contains("first/Photos/test.ARW"), "the log holds the first import");
+    // neither the records nor their removal: a write cut short can't keep one without the other
+    assert!(!log.contains("second/Photos/test.ARW"), "the failed import reached the log");
+    let mut reopened = crate::Session::new();
+    reopened.open_library(&lib, false).unwrap();
+    assert_eq!(library_state(&reopened), before);
+    reopened.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A catalog of the files `names` below `photos/Photos/` (each written there), with each photo's Lightroom capture time.
+fn catalog_with_capture_times(path: &Path, photos: &Path, names: &[(&str, &str)]) {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let rows = |row: fn(i64, &str, &str) -> Vec<SqlValue>| names.iter().zip(1..).map(|(&(name, time), i)| row(i, name, time)).collect();
+    let tables: Vec<(&str, &str, Vec<Vec<SqlValue>>)> = vec![
+        (
+            "AgLibraryRootFolder",
+            "id_local INTEGER PRIMARY KEY, absolutePath, name, relativePathFromCatalog",
+            vec![vec![N, T(photos.to_str().unwrap().into()), T("Photos".into()), T(String::new())]],
+        ),
+        ("AgLibraryFolder", "id_local INTEGER PRIMARY KEY, rootFolder, pathFromRoot", vec![vec![N, I(1), T("Photos/".into())]]),
+        ("AgLibraryFile", "id_local INTEGER PRIMARY KEY, folder, idx_filename", rows(|_, name, _| vec![N, I(1), T(name.into())])),
+        (
+            "Adobe_images",
+            "id_local INTEGER PRIMARY KEY, id_global, rootFile, fileFormat, fileWidth, fileHeight, rating, pick, captureTime",
+            rows(|i, name, time| vec![N, T(format!("image-{name}")), I(i), T("ARW".into()), I(20), I(10), I(4), I(1), T(time.into())]),
+        ),
+    ];
+    std::fs::create_dir_all(photos.join("Photos")).unwrap();
+    for (name, _) in names {
+        std::fs::write(photos.join("Photos").join(name), name.as_bytes()).unwrap();
+    }
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, native_catalog_rows(&tables, None)).unwrap();
+}
+
+/// A photo Lightroom dates by its year alone (a scanned print, #3501) fails the catalog step of an import on this
+/// version. The photos the import's file step touched are then as they were: the one it added is gone, the one
+/// browsed in Local is Local again, the one already in the library is unchanged; the undo history is too. The redo
+/// history is not kept: the file step's commit cleared it, as any new step does.
+#[test]
+fn a_failed_import_leaves_the_photos_that_were_there_as_they_were() {
+    let root = std::env::temp_dir().join(format!("lightcraft-lrcat-failed-capture-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let photos = root.join("photos");
+    let catalog = root.join("Lightroom").join("Cat.lrcat");
+    let lib = root.join("Library");
+    catalog_with_capture_times(&catalog, &photos, &[("local.ARW", "2001-02-03T04:05:06"), ("there.ARW", "2002-03-04T05:06:07"), ("new.ARW", "2004")]);
+    let file = |name: &str| photos.join("Photos").join(name).to_string_lossy().into_owned();
+    let mut s = crate::Session::new();
+    s.media.file_probe = Some(Arc::new(|_| Ok(crate::media::ProbeInfo { format: "ARW".into(), width: 20, height: 10, ..Default::default() })));
+    s.open_library(&lib, false).unwrap();
+    let add = |s: &mut crate::Session, name: &str, local: bool| {
+        let mut p = Photo::new(s.catalog.alloc_photo_id(), Source::File { path: file(name) }, name, "ARW", 20, 10, "before");
+        p.local = local;
+        p.rating = 2;
+        s.commit("Add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    };
+    add(&mut s, "local.ARW", true);
+    add(&mut s, "there.ARW", false);
+    let there = s.catalog.photos().find(|p| p.file_name == "there.ARW").unwrap().id;
+    s.commit("Rating", Op::SetRating { id: there, rating: 5 }).unwrap();
+    s.undo_step().unwrap();
+    let photos_now = |s: &crate::Session| {
+        let mut all: Vec<_> = s.catalog.photos().map(|p| serde_json::to_value(&**p).unwrap()).collect();
+        all.sort_by_key(|p| p["id"].as_u64());
+        all
+    };
+    let before = photos_now(&s);
+    let undo: Vec<_> = s.undo.iter().map(|e| e.label.clone()).collect();
+    assert_eq!((before.len(), s.redo.len()), (2, 1));
+    let err = s.execute("library.importLightroom", &json!({"path": catalog})).unwrap_err().to_string();
+    assert!(err.contains("not a date: 2004"), "{err}");
+    assert_eq!(photos_now(&s), before, "the added photo is gone and the others are as they were (the Local one still Local)");
+    assert!(s.catalog.photos().any(|p| p.file_name == "local.ARW" && p.local));
+    assert_eq!(s.undo.iter().map(|e| e.label.clone()).collect::<Vec<_>>(), undo);
+    assert!(s.redo.is_empty(), "the file step's commit cleared the redo history");
+    drop(s);
+    let mut reopened = crate::Session::new();
+    reopened.open_library(&lib, false).unwrap();
+    assert_eq!(reopened.catalog.len(), 2);
+    assert!(reopened.catalog.photos().all(|p| p.file_name != "new.ARW"));
+    assert!(reopened.catalog.photos().any(|p| p.file_name == "local.ARW" && p.local), "still Local after reopening");
+    reopened.close_library().unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Libraries imported by earlier releases (path keys) still find their albums.
 #[test]
 fn collections_imported_before_the_catalog_id_was_read_are_still_matched_by_path() {
