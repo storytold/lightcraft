@@ -1306,6 +1306,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             Ok(json!({"text": crate::panels::dialogs::WHATS_NEW}))
         }
         "app.systemInfo" => app_system_info_command(app, p),
+        "app.reportBug" => crate::bug_report::command(app, p),
         "app.shortcuts" => {
             app.ui.dialog = Some(Dialog::Shortcuts);
             Ok(Value::Null)
@@ -1677,44 +1678,7 @@ fn dialog_smart_album_command(app: &mut LightcraftApp, _id: &str, p: &Value) -> 
 
 /// The `app.systemInfo` command.
 fn app_system_info_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
-    let info = app.session.execute("library.info", &json!({})).unwrap_or_default();
-    let gpu = (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten();
-    let mb = |b: u64| format!("{:.0} MB", b as f64 / (1u64 << 20) as f64);
-    let mut rows = vec![
-        ("Version".to_string(), env!("CARGO_PKG_VERSION").to_string()),
-        ("System".to_string(), format!("{} ({})", std::env::consts::OS, std::env::consts::ARCH)),
-        ("CPU threads".to_string(), std::thread::available_parallelism().map(|n| n.get().to_string()).unwrap_or_else(|_| "?".into())),
-        (
-            "GPU".to_string(),
-            gpu.unwrap_or_else(|| match lightcraft_engine::gpu::unavailable_reason() {
-                Some(why) => crate::i18n::tr_format!("none (CPU rendering): {why}", why = why),
-                None => "none (CPU rendering)".into(),
-            }),
-        ),
-        ("GPU rendering".to_string(), if app.ui.settings.gpu { "on".into() } else { "off".into() }),
-        ("Memory budget".to_string(), mb(lightcraft_engine::memory::default_budget() as u64)),
-        (
-            "Preview size".to_string(),
-            match app.ui.settings.preview_limit {
-                0 => "automatic".to_string(),
-                n => format!("{n} px"),
-            },
-        ),
-        ("Photos".to_string(), info["photos"].to_string()),
-        ("Albums".to_string(), info["albums"].to_string()),
-    ];
-    if let Some(dir) = info["dir"].as_str().or(info["path"].as_str()) {
-        rows.push(("Library".into(), dir.to_string()));
-    }
-    rows.push(("Frame time".into(), format!("{:.1} ms ({:.0} fps)", app.perf.frame_ms, app.perf.fps)));
-    rows.push((
-        "Frame update".into(),
-        format!("{:.1} ms (logic {:.1} ms; slowest {:.0} ms)", app.perf.update_ms, app.perf.logic_ms, app.perf.max_update_ms),
-    ));
-    rows.push(("Last loupe render".into(), format!("{:.0} ms", app.renderer.last_main_ms)));
-    if let Some(f) = lightcraft_engine::gpu::last_fallback() {
-        rows.push(("Last GPU fallback".into(), f));
-    }
+    let rows = crate::bug_report::system_rows(app);
     let r = json!(rows.iter().map(|(k, v)| json!({"label": k, "value": v})).collect::<Vec<_>>());
     if p.get("open").and_then(Value::as_bool).unwrap_or(true) {
         app.ui.dialog = Some(Dialog::SystemInfo { rows });
