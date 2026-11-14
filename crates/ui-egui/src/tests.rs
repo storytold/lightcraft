@@ -35,6 +35,7 @@ mod filmstrip_drag;
 mod find_similar;
 mod focus_point;
 mod folder_drop;
+mod folder_move_message;
 mod grading;
 mod grid;
 mod grid_drag;
