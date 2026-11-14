@@ -362,3 +362,19 @@ fn a_proxy_from_an_older_encode_is_stale() {
     assert!(!look_checked(&dir), "a look-only marker is not enough to skip the rebuild");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A tail holding more mattes than any real preview is not trusted; a normal count is.
+#[test]
+fn a_tail_with_too_many_mattes_is_not_trusted() {
+    let img = lightcraft_scenes::demo_library()[0].render(32, 20);
+    let with = |n: usize| {
+        let mut mattes = Mattes::default();
+        for _ in 0..n {
+            mattes.push(MatteKind::Sky, Image { width: 1, height: 1, data: vec![255] });
+        }
+        let info = SourceInfo { mattes: Some(std::sync::Arc::new(mattes)), ..Default::default() };
+        decode(&encode(&img, Some(&info)).unwrap()).unwrap().2
+    };
+    assert!(with(MAX_STORED_MATTES).is_some_and(|i| i.mattes.is_some()));
+    assert!(with(MAX_STORED_MATTES + 1).is_none());
+}
