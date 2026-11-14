@@ -136,6 +136,17 @@ fn schema_names_and_integer_primary_key_alias_are_decoded() {
     assert_eq!(table_alias, Some(0));
 }
 
+#[test]
+fn a_create_table_past_the_column_limit_is_refused_while_parsing() {
+    // one column more than the limit, each name distinct: refused at the limit, not after a scan
+    // of every earlier name for each one
+    let cols: Vec<String> = (0..=MAX_COLUMNS).map(|i| format!("c{i} TEXT")).collect();
+    let sql = format!("CREATE TABLE t ({})", cols.join(", "));
+    assert!(parse_create_table(&sql).unwrap_err().contains("too many columns"));
+    assert!(parse_create_table("CREATE TABLE t (a TEXT, a INTEGER)").unwrap_err().contains("duplicate"));
+    assert!(parse_create_table("CREATE TABLE t (a TEXT, A INTEGER)").unwrap_err().contains("duplicate"));
+}
+
 /// A database file with no schema yet has schema format 0 in its header (file format
 /// §1.3.10): a catalog created in WAL mode whose tables are all still in its `-wal` file (one
 /// Lightroom has open and hasn't checkpointed) was refused as "unsupported SQLite schema
