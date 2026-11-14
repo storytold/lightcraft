@@ -1274,8 +1274,88 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         }
         return;
     }
-    click_zoom_and_pan(app, resp, img, canvas);
+    if app.ui.settings.loupe_double_click_grid && app.ui.view == crate::state::ViewMode::Detail {
+        double_click_to_grid(app, ui, resp, img, canvas);
+    } else {
+        app.ui.pending_click = None;
+        click_zoom_and_pan(app, resp, img, canvas);
+    }
     let _ = (native, aspect);
+}
+
+/// The loupe's click and drag with Double-Click Returns to Grid on: a double-click goes back to the
+/// grid as Esc does, and a single click zooms only once the double-click time has passed with no
+/// second click, so a double-click never shows the photo zooming in first. A drag pans as always.
+fn double_click_to_grid(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img: Rect, canvas: Rect) {
+    let photo = app.session.active().map(|p| p.0);
+    let (now, delay) = (ui.input(|i| i.time), ui.ctx().options(|o| o.input_options.max_double_click_delay));
+    let frame = ui.ctx().cumulative_frame_nr();
+    // a click waits only while this runs every frame: a tool taking the photo over, a gesture or
+    // another view in between ends it, so it can't zoom later when the loupe is back
+    match &mut app.ui.pending_click {
+        Some(click) if click.frame.saturating_add(1) >= frame => click.frame = frame,
+        pending => *pending = None,
+    }
+    if resp.double_clicked() {
+        app.ui.pending_click = None;
+        if app.ui.fullscreen {
+            // as Esc: the full-screen preview ends first, the view under it stays
+            crate::panels::slideshow::end(app);
+        } else {
+            crate::menus::leave_detail(app);
+        }
+        return;
+    }
+    let zoomed = zoomed(img, canvas);
+    if resp.clicked() {
+        let at = resp
+            .interact_pointer_pos()
+            .map(|q| (((q.x - img.left()) / img.width()).clamp(0.0, 1.0), ((q.y - img.top()) / img.height()).clamp(0.0, 1.0)));
+        app.ui.pending_click = Some(PendingClick { at, time: now, photo, frame });
+    } else if resp.dragged() {
+        app.ui.pending_click = None;
+    }
+    if let Some(click) = app.ui.pending_click {
+        let waited = now - click.time;
+        if click.photo != photo {
+            app.ui.pending_click = None;
+        } else if waited >= delay {
+            app.ui.pending_click = None;
+            apply_click_zoom(app, click.at, zoomed);
+            // the photo was laid out before this: draw the zoom now, not at the next event
+            ui.ctx().request_repaint();
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((delay - waited).max(0.0)));
+        }
+    }
+    if zoomed && resp.dragged() {
+        pan_image(app, canvas, img, resp.drag_delta());
+    }
+}
+
+/// A single click on the loupe's photo, held back by [`double_click_to_grid`] until it is not the
+/// first of a double-click: where it landed (normalized image coordinates), when, on which photo,
+/// and the last frame that kept it waiting.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PendingClick {
+    pub at: Option<(f32, f32)>,
+    pub time: f64,
+    pub photo: Option<u64>,
+    pub frame: u64,
+}
+
+/// A click's zoom: from Fit to the click-zoom ratio centred on `at`, and from a zoomed view
+/// back to Fit.
+fn apply_click_zoom(app: &mut LightcraftApp, at: Option<(f32, f32)>, zoomed: bool) {
+    if zoomed {
+        app.ui.zoom = Zoom::Fit;
+    } else {
+        if let Some(at) = at {
+            app.ui.pan = at;
+        }
+        app.ui.zoom = if matches!(app.ui.zoom, Zoom::Fit) { Zoom::Percent(app.ui.click_zoom as f32) } else { Zoom::Fit };
+    }
+    app.ui.zoom_anim = true;
 }
 
 /// The photo `img` reaches past its pane `canvas`: a drag pans it.

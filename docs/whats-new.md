@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Double-click back to the grid
+- View ▸ Double-Click Returns to Grid: with it on, a double-click on the photo in the loupe goes back to the grid (or
+  to the person's page the photo was opened from), as Esc does, so the grid and the loupe swap with the mouse as in
+  Lightroom. A single click still zooms, a moment later, once it is clear that no second click follows, so a
+  double-click never zooms in on the way. Off by default: a double-click toggles the zoom as before.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
