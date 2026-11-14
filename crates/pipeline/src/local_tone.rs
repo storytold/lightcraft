@@ -13,7 +13,7 @@
 use lightcraft_color::{D50, D65, PROPHOTO, REC2020, bradford};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgb32f;
-use lightcraft_raw::gaintable::{GainTableMap, SourcePlacement};
+use lightcraft_raw::gaintable::{GainTableMap, GainTableMapApply, SourcePlacement};
 
 use crate::{Plan, SourceInfo};
 use lightcraft_develop::DevelopSettings;

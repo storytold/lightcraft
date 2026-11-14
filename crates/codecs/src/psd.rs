@@ -40,36 +40,46 @@ impl<'a> Rd<'a> {
     }
 }
 
+/// The header, colour mode data and image resources (`craft-psd`), with a reader at the layer and mask section.
+struct Start<'a> {
+    psb: bool,
+    channels: usize,
+    width: usize,
+    height: usize,
+    depth: u16,
+    mode: u16,
+    head: craft_psd::Head,
+    r: Rd<'a>,
+}
+
+fn start<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<Start<'a>> {
+    // the size limit first, from the header's fixed fields, so an oversized file is `TooLarge` as for other formats
+    if let (Some(&[h0, h1, h2, h3]), Some(&[w0, w1, w2, w3])) = (bytes.get(14..18), bytes.get(18..22)) {
+        check_size(F, u64::from(u32::from_be_bytes([w0, w1, w2, w3])), u64::from(u32::from_be_bytes([h0, h1, h2, h3])), opts)?;
+    }
+    let head = craft_psd::Head::from_bytes(bytes).map_err(|e| match e {
+        craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
+        e => err(&e.to_string()),
+    })?;
+    let h = &head.header;
+    check_size(F, u64::from(h.width), u64::from(h.height), opts)?;
+    let p = usize::try_from(head.layer_section_offset).map_err(|_| err("truncated"))?;
+    Ok(Start {
+        psb: h.version.is_psb(),
+        channels: usize::from(h.channels),
+        width: h.width as usize,
+        height: h.height as usize,
+        depth: h.depth,
+        mode: h.color_mode.as_u16(),
+        r: Rd { b: bytes, p },
+        head,
+    })
+}
+
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    let mut r = Rd { b: bytes, p: 0 };
-    if r.take(4)? != b"8BPS" {
-        return Err(err("bad signature"));
-    }
-    let version = r.u16()?;
-    let psb = match version {
-        1 => false,
-        2 => true,
-        _ => return Err(err("bad version")),
-    };
-    r.take(6)?;
-    let channels = r.u16()? as usize;
-    let height = r.u32()? as usize;
-    let width = r.u32()? as usize;
-    let depth = r.u16()?;
-    let mode = r.u16()?;
-    check_size(F, width as u64, height as u64, opts)?;
-    if channels == 0 || channels > 56 {
-        return Err(err("bad channel count"));
-    }
-
-    // Colour mode data (palette for indexed).
-    let cm_len = r.u32()? as usize;
-    let color_mode_data = r.take(cm_len)?;
-
-    // Image resources.
-    let res_len = r.u32()? as usize;
-    let res = r.take(res_len)?;
-    let (icc, exif, xmp) = resources(res);
+    let Start { psb, channels, width, height, depth, mode, head, mut r } = start(bytes, opts)?;
+    let color_mode_data = head.color_mode_data.as_slice();
+    let (icc, exif, xmp) = resources(&head);
 
     // Layer and mask information: only the layer count sign matters (merged transparency).
     let lm_len = if psb { r.u64()? } else { u64::from(r.u32()?) };
@@ -342,29 +352,9 @@ fn packbits(src: &[u8], out: &mut Vec<u8>) {
 /// depth, colour mode or compression, or merged image data that runs past the end of the file
 /// (truncated). The run-length data itself is not unpacked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let mut r = Rd { b: bytes, p: 0 };
-    if r.take(4)? != b"8BPS" {
-        return Err(err("bad signature"));
-    }
-    let psb = match r.u16()? {
-        1 => false,
-        2 => true,
-        _ => return Err(err("bad version")),
-    };
-    r.take(6)?;
-    let channels = r.u16()? as usize;
-    let height = r.u32()? as usize;
-    let width = r.u32()? as usize;
-    let depth = r.u16()?;
-    let mode = r.u16()?;
-    check_size(F, width as u64, height as u64, &DecodeOptions::default())?;
-    if channels == 0 || channels > 56 {
-        return Err(err("bad channel count"));
-    }
-    let cm_len = r.u32()? as usize;
-    let color_mode_data = r.take(cm_len)?;
-    let res_len = r.u32()? as usize;
-    let (_, exif, _) = resources(r.take(res_len)?);
+    let Start { psb, channels, width, height, depth, mode, head, mut r } = start(bytes, &DecodeOptions::default())?;
+    let color_mode_data = head.color_mode_data.as_slice();
+    let (_, exif, _) = resources(&head);
     let lm_len = if psb { r.u64()? as usize } else { r.u32()? as usize };
     r.take(lm_len)?;
     let compression = r.u16()?;
@@ -444,28 +434,12 @@ fn unpackbits(mut src: &[u8], row: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
-fn resources(mut b: &[u8]) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) {
-    let (mut icc, mut exif, mut xmp) = (None, None, None);
-    while b.len() >= 12 && &b[0..4] == b"8BIM" {
-        let id = u16::from_be_bytes([b[4], b[5]]);
-        let name_len = b[6] as usize;
-        let name_total = (1 + name_len + 1) & !1;
-        let p = 6 + name_total;
-        if p + 4 > b.len() {
-            break;
-        }
-        let size = u32::from_be_bytes([b[p], b[p + 1], b[p + 2], b[p + 3]]) as usize;
-        let start = p + 4;
-        let Some(data) = start.checked_add(size).and_then(|end| b.get(start..end)) else { break };
-        match id {
-            1039 => icc = Some(data.to_vec()),
-            1058 => exif = Some(if data.starts_with(b"Exif\0\0") { data[6..].to_vec() } else { data.to_vec() }),
-            1060 => xmp = Some(String::from_utf8_lossy(data).trim_end_matches('\0').to_string()),
-            _ => {}
-        }
-        let next = start + ((size + 1) & !1);
-        b = b.get(next..).unwrap_or(&[]);
-    }
+/// ICC (1039), EXIF (1058, without its optional `Exif\0\0` prefix) and XMP (1060) resources; the last of each id.
+fn resources(head: &craft_psd::Head) -> (Option<Vec<u8>>, Option<Vec<u8>>, Option<String>) {
+    let last = |id: u16| head.resources.iter().rev().find(|r| r.id == id).map(|r| r.data.as_slice());
+    let icc = last(1039).map(<[u8]>::to_vec);
+    let exif = last(1058).map(|d| d.strip_prefix(b"Exif\0\0").unwrap_or(d).to_vec());
+    let xmp = last(1060).map(|d| String::from_utf8_lossy(d).trim_end_matches('\0').to_string());
     (icc, exif, xmp)
 }
 
@@ -514,8 +488,8 @@ mod tests {
 
     #[test]
     fn huge_rle_with_truncated_count_table_is_rejected_before_allocating() {
-        // 1 × 2^30 px, 56 channels: the row table alone would be 56 Gi entries; the file has 4 bytes.
-        let mut b = header(56, 1, 1 << 30, 32, 3, 1);
+        // 1 × 300 000 px, 56 channels: the row table alone would be 16.8 M entries; the file has 4 bytes.
+        let mut b = header(56, 1, 300_000, 32, 3, 1);
         b.extend_from_slice(&[0, 0, 0, 0]);
         let e = decode(&b, &DecodeOptions::default()).unwrap_err();
         assert!(matches!(e, Error::Malformed(_, ref m) if m == "truncated"), "{e:?}");
@@ -523,16 +497,27 @@ mod tests {
 
     #[test]
     fn huge_rle_of_empty_rows_is_rejected_before_allocating() {
-        // 2^30 × 1 px RGB at 32 bits: every row count is 0, which used to zero-pad 3 × 4 GiB.
-        let mut b = header(3, 1 << 30, 1, 32, 3, 1);
+        // 300 000 × 1 px RGB at 32 bits: every row count is 0, which used to zero-pad 3 × 1.2 MB.
+        let mut b = header(3, 300_000, 1, 32, 3, 1);
         b.extend_from_slice(&[0; 6]);
         let e = decode(&b, &DecodeOptions::default()).unwrap_err();
         assert!(matches!(e, Error::Malformed(_, ref m) if m.contains("too short")), "{e:?}");
-        // 1 Gpx RGB 8-bit whose (plausible) row counts claim more data than the file holds.
-        let mut b = header(3, 1 << 20, 1 << 10, 8, 3, 1);
+        // 0.27 Gpx RGB 8-bit whose (plausible) row counts claim more data than the file holds.
+        let mut b = header(3, 1 << 18, 1 << 10, 8, 3, 1);
         b.extend_from_slice(&[0xFF; 3 * 1024 * 2]);
         let e = decode(&b, &DecodeOptions::default()).unwrap_err();
         assert!(matches!(e, Error::Malformed(_, ref m) if m == "truncated"), "{e:?}");
+    }
+
+    #[test]
+    fn a_damaged_resource_section_is_malformed() {
+        // a resource section of 4 bytes that is not an `8BIM` record
+        let mut b = header(3, 1, 1, 8, 3, 0);
+        b[30..34].copy_from_slice(&4u32.to_be_bytes());
+        b.splice(34..34, *b"JUNK");
+        let e = decode(&b, &DecodeOptions::default()).unwrap_err();
+        assert!(matches!(e, Error::Malformed(_, ref m) if m.contains("signature")), "{e:?}");
+        assert!(super::header(&b).is_err());
     }
 
     #[test]
