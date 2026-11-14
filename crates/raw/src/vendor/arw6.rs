@@ -7,7 +7,7 @@
 
 use crate::llvc::{Bands3, Plane, band_rows, dequant, reconstruct3, vld_decode_line};
 use crate::vendor::arw6_curve::curve;
-use crate::vendor::pef::Bits;
+use crate::vendor::huffman::Bits;
 use crate::{RawError, Result};
 use rayon::prelude::*;
 use std::ops::Range;
@@ -542,7 +542,7 @@ pub(crate) fn decode(strip: &[u8], width: usize, height: usize, mode: crate::Mod
 mod tests {
     use super::*;
     use crate::vendor::arw6_testenc::*;
-    use crate::vendor::pef::Bits;
+    use crate::vendor::huffman::Bits;
     use craft_tiff::Tiff;
     use craft_tiff::image::chunk_bytes;
     use craft_tiff::tags as t;

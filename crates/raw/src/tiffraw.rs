@@ -51,8 +51,11 @@ pub fn check_image(data: &[u8], info: &ImageInfo) -> Result<usize> {
     let (across, down) = info.grid();
     let planes = if info.planar == 2 { cpp } else { 1 };
     let expected = (across as usize).saturating_mul(down as usize).saturating_mul(planes);
-    if chunks.len() < expected {
-        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", chunks.len())));
+    // the offsets table says how many chunks the image declares: craft-tiff builds at most one
+    // descriptor per byte of file (craft-libs#827), so `chunks` may be shorter on a grid of tiles
+    // sharing one payload, and the bytes behind it are what the bounds below count.
+    if info.offsets.len() < expected {
+        return Err(RawError::Corrupt(format!("{} image data chunks, expected {expected}", info.offsets.len())));
     }
     // Tile sizes don't depend on the image size, and every tile is decoded at its nominal size and held until the copy:
     // a grid of tiles no larger than the image covers less than twice its width and height, so more than four times
@@ -315,16 +318,11 @@ fn chunk_dims(info: &ImageInfo, c: &Chunk) -> (usize, usize, usize, usize) {
     (cw, ch, vw, vh)
 }
 
-#[cfg(feature = "jxl")]
-use crate::jxl::{check as jxl_chunk_check, decode as jxl_chunk};
-
-#[cfg(not(feature = "jxl"))]
 #[allow(clippy::too_many_arguments)]
 fn jxl_chunk(_: &[u8], _: usize, _: usize, _: usize, _: usize, _: usize, _: u32, _: bool) -> Result<ChunkPx> {
-    Err(RawError::Unsupported("JPEG XL DNG (built without the `jxl` feature)".into()))
+    Err(RawError::Unsupported("JPEG XL outside a DNG".into()))
 }
 
-#[cfg(not(feature = "jxl"))]
 #[allow(clippy::too_many_arguments)]
 fn jxl_chunk_check(src: &[u8], cw: usize, ch: usize, vw: usize, vh: usize, cpp: usize, bits: u32, float: bool) -> Result<()> {
     jxl_chunk(src, cw, ch, vw, vh, cpp, bits, float).map(|_| ())

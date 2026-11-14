@@ -2,73 +2,24 @@
 
 use crate::container::Embedded;
 
-struct Reader<'a> {
-    bytes: &'a [u8],
-    offset: usize,
-}
-
-impl<'a> Reader<'a> {
-    fn take(&mut self, length: usize) -> Option<&'a [u8]> {
-        let end = self.offset.checked_add(length)?;
-        let bytes = self.bytes.get(self.offset..end)?;
-        self.offset = end;
-        Some(bytes)
-    }
-
-    fn u16(&mut self) -> Option<u16> {
-        let bytes = self.take(2)?;
-        Some(u16::from_be_bytes([*bytes.first()?, *bytes.get(1)?]))
-    }
-
-    fn u32(&mut self) -> Option<u32> {
-        let bytes = self.take(4)?;
-        Some(u32::from_be_bytes([*bytes.first()?, *bytes.get(1)?, *bytes.get(2)?, *bytes.get(3)?]))
-    }
-}
-
 pub(crate) fn embedded(bytes: &[u8]) -> Embedded {
     parse(bytes).unwrap_or_default()
 }
 
+/// The EXIF (1058) and XMP (1060) resources of the head `craft-psd` reads (header, colour mode data, image
+/// resources). `None` for a head that does not parse, a second EXIF or XMP resource, or XMP that is not UTF-8.
 pub(crate) fn parse(bytes: &[u8]) -> Option<Embedded> {
-    let mut reader = Reader { bytes, offset: 0 };
-    if reader.take(4)? != b"8BPS" || !matches!(reader.u16()?, 1 | 2) {
-        return None;
-    }
-    // The fixed header after the version is reserved bytes, channels, dimensions, depth and colour mode.
-    reader.take(6 + 2 + 4 + 4 + 2 + 2)?;
-    let colour_mode_length = usize::try_from(reader.u32()?).ok()?;
-    reader.take(colour_mode_length)?;
-    let resource_length = usize::try_from(reader.u32()?).ok()?;
-    let resources = reader.take(resource_length)?;
-    parse_resources(resources)
-}
-
-fn parse_resources(bytes: &[u8]) -> Option<Embedded> {
-    let mut reader = Reader { bytes, offset: 0 };
+    let head = craft_psd::Head::from_bytes(bytes).ok()?;
     let (mut exif, mut xmp) = (None, None);
-    while reader.offset < bytes.len() {
-        if reader.take(4)? != b"8BIM" {
-            return None;
-        }
-        let id = reader.u16()?;
-        let name_length = usize::from(*reader.take(1)?.first()?);
-        let pascal_length = 1usize.checked_add(name_length)?.checked_add(1)? & !1;
-        reader.take(pascal_length.checked_sub(1)?)?;
-        let data_length = usize::try_from(reader.u32()?).ok()?;
-        let data = reader.take(data_length)?;
-        if !data_length.is_multiple_of(2) {
-            reader.take(1)?;
-        }
-        match id {
+    for r in &head.resources {
+        match r.id {
             1058 if exif.is_some() => return None,
-            1058 => exif = Some(data),
+            1058 => exif = Some(r.data.as_slice()),
             1060 if xmp.is_some() => return None,
-            1060 => xmp = Some(std::str::from_utf8(data).ok()?),
+            1060 => xmp = Some(std::str::from_utf8(&r.data).ok()?),
             _ => {}
         }
     }
-
     Some(Embedded {
         exif: exif.map(crate::strip_exif_header).map(<[u8]>::to_vec),
         xmp: xmp.map(|text| text.trim_end_matches('\0').to_string()),
