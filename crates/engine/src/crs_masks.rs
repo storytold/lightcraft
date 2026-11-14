@@ -274,14 +274,19 @@ pub fn masks(values: &Values, aspect: f64) -> (Vec<Value>, Vec<String>) {
             skipped.extend(unmapped_local(c));
             // brush dabs of one correction are one brush component
             let mut merged: Vec<Value> = Vec::new();
+            // where the brush of each op sits in `merged` (no scan of it per dab)
+            let mut brush_at: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
             for p in parts {
                 let is_brush = p["shape"]["kind"] == "brush";
                 if is_brush
-                    && let Some(prev) = merged.iter_mut().find(|q| q["shape"]["kind"] == "brush" && q["op"] == p["op"])
+                    && let Some(prev) = brush_at.get(&p["op"].to_string()).and_then(|&i| merged.get_mut(i))
                     && let (Some(a), Some(b)) = (prev["shape"]["strokes"].as_array_mut(), p["shape"]["strokes"].as_array())
                 {
                     a.extend(b.iter().cloned());
                     continue;
+                }
+                if is_brush {
+                    brush_at.insert(p["op"].to_string(), merged.len());
                 }
                 merged.push(p);
             }

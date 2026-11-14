@@ -32,8 +32,8 @@
 //! (issue #1504).
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use lightcraft_raster::Rgba8;
 
@@ -60,12 +60,19 @@ const TIDIED: &str = ".lightcraft-thumbs";
 /// to take a folder for more than a cache.
 const DROPPINGS: [&str; 3] = [".DS_Store", "desktop.ini", "Thumbs.db"];
 
+/// How many files a tidy goes through between two looks at the gate ([`DiskCache::set_gate`]):
+/// a pass over a big cache takes a while, and a `stat` for every file would add to it.
+pub(crate) const TIDY_GATE_EVERY: usize = 256;
+
 /// The file that says a folder is a cache, for backup programs and the like (the Cache
 /// Directory Tagging Specification: the first line is the signature).
 pub const TAG: &str = "CACHEDIR.TAG";
 const TAG_TEXT: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
 # This folder holds LightCraft's thumbnail cache. It is safe to delete: LightCraft renders what it needs again.\n\
 # See https://bford.info/cachedir/\n";
+
+/// Whether the cache may change its folder now (see [`DiskCache::set_gate`]).
+pub type WriteGate = Arc<dyn Fn() -> bool + Send + Sync>;
 
 pub struct DiskCache {
     dir: PathBuf,
@@ -78,6 +85,8 @@ pub struct DiskCache {
     pub writes: AtomicU64,
     /// The thumbnails read in this session: a full cache lets them go last ([`Self::prune`]).
     read: Mutex<std::collections::HashSet<u128>>,
+    /// Asked before anything in the folder is written, renamed or removed (issue #3240).
+    gate: OnceLock<WriteGate>,
 }
 
 impl DiskCache {
@@ -90,6 +99,7 @@ impl DiskCache {
             misses: AtomicU64::new(0),
             writes: AtomicU64::new(0),
             read: Mutex::new(Default::default()),
+            gate: OnceLock::new(),
         }
     }
 
@@ -106,6 +116,28 @@ impl DiskCache {
     /// keeps them; a smaller budget is enforced by the next write, like any other overflow.
     pub fn set_budget(&self, bytes: u64) {
         self.budget.store(bytes, Ordering::Relaxed);
+    }
+
+    /// Ask `gate` before this cache writes, renames or removes anything in its folder: a `false`
+    /// leaves the folder as it is (a write is not made and reports `false`, a tidy does nothing).
+    /// The library gives one that says `false` while its path leads to another folder than the one
+    /// it was opened from, so a share mounted over the library neither gets this library's
+    /// thumbnails nor has its own pruned to this library's budget (issue #3240). Reads are not
+    /// gated: a thumbnail is named after what it shows, so another folder's is as good. Set once
+    /// (a second gate is ignored), where the cache is made.
+    pub fn set_gate(&self, gate: WriteGate) {
+        let _ = self.gate.set(gate);
+    }
+
+    /// Whether the folder may be changed now: there is no gate, or it says so.
+    fn writable(&self) -> bool {
+        self.gate.get().is_none_or(|g| g())
+    }
+
+    /// Whether a pass over many files may go on at file number `done`: the gate is looked at every
+    /// [`TIDY_GATE_EVERY`] files, and the pass stops at the first look that says no.
+    fn may_go_on(&self, done: usize) -> bool {
+        done == 0 || !done.is_multiple_of(TIDY_GATE_EVERY) || self.writable()
     }
 
     fn path(&self, key: Hash128) -> PathBuf {
@@ -135,10 +167,11 @@ impl DiskCache {
             // (taken over by the tidying between the two looks: it is under the new name now)
             return std::fs::read(&p).ok().map(|bytes| (p, bytes));
         };
-        // (taken over; if that can't be done it is read where it is, and tried again next time)
-        match std::fs::rename(&old, &p) {
-            Ok(()) => Some((p, bytes)),
-            Err(_) => Some((old, bytes)),
+        // (taken over; if that can't be done, or the gate keeps the folder closed, it is read where
+        // it is, and tried again next time)
+        match self.writable().then(|| std::fs::rename(&old, &p)) {
+            Some(Ok(())) => Some((p, bytes)),
+            _ => Some((old, bytes)),
         }
     }
 
@@ -157,6 +190,7 @@ impl DiskCache {
                 let now = std::time::SystemTime::now();
                 let unused = std::fs::metadata(&p).and_then(|m| m.modified()).ok().and_then(|at| now.duration_since(at).ok());
                 if unused.is_some_and(|d| d > STALE)
+                    && self.writable()
                     && let Ok(f) = std::fs::File::options().write(true).open(&p)
                 {
                     let _ = f.set_modified(now);
@@ -164,8 +198,10 @@ impl DiskCache {
                 Some(img)
             }
             None => {
-                log::warn!("preview cache: dropping unreadable {}", p.display());
-                let _ = std::fs::remove_file(&p);
+                if self.writable() {
+                    log::warn!("preview cache: dropping unreadable {}", p.display());
+                    let _ = std::fs::remove_file(&p);
+                }
                 self.misses.fetch_add(1, Ordering::Relaxed);
                 None
             }
@@ -198,9 +234,12 @@ impl DiskCache {
         None
     }
 
-    /// Write `img` under `key`. Returns whether the file was written (a full or unwritable cache folder
-    /// gives `false`; the cache is unchanged then).
+    /// Write `img` under `key`. Returns whether the file was written (a full or unwritable cache folder,
+    /// or one the gate keeps closed, gives `false`; the cache is unchanged then).
     pub fn put(&self, key: Hash128, img: &Rgba8) -> bool {
+        if !self.writable() {
+            return false;
+        }
         let Some(bytes) = encode_jpeg(img) else { return false };
         let p = self.path(key);
         let Some(parent) = p.parent() else { return false };
@@ -299,11 +338,14 @@ impl DiskCache {
     pub fn take_over_old(&self, stop: &dyn Fn() -> bool, progress: &dyn Fn(usize, usize)) -> usize {
         // (listed in full before anything is renamed: a folder that changes while it is listed
         // lists some of its files twice)
+        if !self.writable() {
+            return 0;
+        }
         let Some(listed) = self.scan_until(stop) else { return 0 };
         let old: Vec<(PathBuf, u64)> = listed.into_iter().filter(|f| f.0.extension().is_some_and(|ext| ext == OLD_EXT)).map(|f| (f.0, f.1)).collect();
         let (mut taken, mut removed, mut blocked) = (0usize, 0u64, false);
         for (done, (path, len)) in old.iter().enumerate() {
-            if stop() {
+            if stop() || !self.may_go_on(done) {
                 self.forget(removed);
                 return taken;
             }
@@ -328,7 +370,7 @@ impl DiskCache {
         self.forget(removed);
         // done, also when the folder holds other things; not when something could not be taken
         // over (a folder that can't be written: it is tried again at the next open)
-        if !blocked {
+        if !blocked && self.writable() {
             let _ = std::fs::write(self.dir.join(TIDIED), b"");
             if self.holds_only_the_cache() {
                 let _ = std::fs::write(self.dir.join(TAG), TAG_TEXT);
@@ -373,6 +415,9 @@ impl DiskCache {
     /// Remove least recently used files until the cache is at most 80 % of its budget: by the
     /// date of each file, the ones read in this session last.
     pub fn prune(&self) {
+        if !self.writable() {
+            return;
+        }
         let mut files = self.scan();
         let mut total: u64 = files.iter().map(|f| f.1).sum();
         let target = self.budget() / 5 * 4;
@@ -380,8 +425,9 @@ impl DiskCache {
         let in_use = |p: &Path| key_of(p).is_some_and(|k| read.contains(&k));
         files.sort_by_cached_key(|f| (in_use(&f.0), f.2));
         let mut gone = Vec::new();
-        for (p, len, _) in files {
-            if total <= target {
+        for (done, (p, len, _)) in files.into_iter().enumerate() {
+            // (the gate may close midway: a share mounted over the library while a big cache is pruned)
+            if total <= target || !self.may_go_on(done) {
                 break;
             }
             if std::fs::remove_file(&p).is_ok() {
@@ -412,7 +458,15 @@ impl DiskCache {
     }
 
     pub fn clear(&self) {
-        for (p, _, _) in self.scan() {
+        if !self.writable() {
+            return;
+        }
+        for (done, (p, _, _)) in self.scan().into_iter().enumerate() {
+            if !self.may_go_on(done) {
+                // (the files left are counted again by the next look)
+                *self.total.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                return;
+            }
             let _ = std::fs::remove_file(p);
         }
         *self.total.lock().unwrap_or_else(|e| e.into_inner()) = Some(0);
