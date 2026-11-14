@@ -65,7 +65,7 @@ impl Review {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services::default());
         app.ui.dialog = Some(Dialog::Import { opts: Box::new(ImportDialog::new(candidates)) });
         let mut h = Headless::new(app, [1366.0, 1000.0], scale);
-        assert!(h.settle(T));
+        assert!(h.settle(super::ui_settle_timeout()));
         Self { h, dir }
     }
 
@@ -89,7 +89,7 @@ impl Review {
     /// Set thumbnail size through its command and wait for the resulting previews to settle.
     fn size(&mut self, size: f32) {
         self.request("engine.execute", json!({"command": "view.importThumbSize", "params": {"size": size}}));
-        assert!(self.h.settle(T));
+        assert!(self.h.settle(super::ui_settle_timeout()));
     }
 }
 
