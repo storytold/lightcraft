@@ -273,6 +273,8 @@ fn predict_spatial_baseline(west: i32, north: i32, north_west: i32, gradient_thr
                 } else {
                     baseline = north.saturating_add(west.saturating_sub(north_west));
                 }
+            } else {
+                baseline = north;
             }
         } else {
             baseline = west;
@@ -455,6 +457,9 @@ mod tests {
 
         let p2 = predict_spatial_baseline(100, 200, 100, 32);
         assert!((100..=200).contains(&p2));
+
+        let p3 = predict_spatial_baseline(100, 200, 50, 32);
+        assert_eq!(p3, 200);
     }
 
     #[test]
