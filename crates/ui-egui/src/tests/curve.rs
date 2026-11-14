@@ -671,6 +671,7 @@ fn lifting_the_finger_after_a_rest_leaves_the_point_where_it_rested() {
     let rested = pts(&develop(hand.h).curve.master);
     assert!(rested[1].1 < 0.45, "the drag pulled the point down: {rested:?}");
     hand.slide(-20.0, 4);
+    assert!(pts(&develop(hand.h).curve.master)[1].1 > rested[1].1, "the jerk itself still moves the point while the click is held");
     hand.lift();
     assert_eq!(pts(&develop(&h).curve.master), rested, "the point stays where the hand rested");
     assert_eq!(h.app.session.undo.len(), undo_before + 1, "one undo step for the gesture");

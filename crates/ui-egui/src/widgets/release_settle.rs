@@ -75,7 +75,8 @@ impl<V: Copy> ReleaseSettle<V> {
 
     /// The value to commit when the drag is released at time `t` instead of the last one pushed,
     /// or `None` to keep the last one: `Some` only when the pointer had rested after moving and
-    /// then jerked briefly and not far before the release.
+    /// then jerked briefly and not far (no frame since the rest farther than [`JERK_DISTANCE`]) before
+    /// the release.
     pub(crate) fn on_release(&self, t: f64) -> Option<V> {
         let last = self.samples.back()?;
         let moved_at = self.moved_at?;
@@ -83,13 +84,16 @@ impl<V: Copy> ReleaseSettle<V> {
             return None;
         }
         // the latest frame that ends a rest, searched back from the frame before the last
-        let (end, rest_start) = (0..self.samples.len().saturating_sub(1)).rev().find_map(|i| {
+        let (i, end, rest_start) = (0..self.samples.len().saturating_sub(1)).rev().find_map(|i| {
             let end = self.samples.get(i)?;
             let first = (0..=i).rev().map_while(|j| self.samples.get(j)).take_while(|s| distance(s.pos, end.pos) <= REST_DISTANCE).last()?;
-            (end.t - first.t >= REST_SECONDS).then_some((end, first.t))
+            (end.t - first.t >= REST_SECONDS).then_some((i, end, first.t))
         })?;
-        let jerked = distance(end.pos, last.pos);
-        (moved_at < rest_start && t - end.t <= JERK_SECONDS && jerked > 0.0 && jerked <= JERK_DISTANCE).then_some(end.value)
+        // the farthest the pointer got from the rest, not only where it ended: a pull out and back
+        // is the hand's
+        let reach = self.samples.iter().skip(i + 1).map(|s| distance(end.pos, s.pos)).fold(0.0_f32, f32::max);
+        // a rest may begin on the frame that moved the pointer there
+        (moved_at <= rest_start && t - end.t <= JERK_SECONDS && distance(end.pos, last.pos) > 0.0 && reach <= JERK_DISTANCE).then_some(end.value)
     }
 }
 
@@ -206,6 +210,28 @@ mod tests {
         path.extend(line(*path.last().unwrap(), [rested[0], rested[1] - (JERK_DISTANCE + 120.0)], 8));
         let (s, up) = drag(&path, 1.0);
         assert_eq!(s.on_release(up), None);
+    }
+
+    #[test]
+    fn a_pull_out_and_back_that_reaches_farther_than_a_jerk_is_kept() {
+        let (mut path, rested) = rocked_down();
+        path.extend(rest(rested, frames_for(REST_SECONDS * 2.0)));
+        // out 110 pt and back to 40 pt from the rest, all within the jerk window
+        path.extend(line(*path.last().unwrap(), [rested[0], rested[1] + 110.0], 4));
+        path.extend(line(*path.last().unwrap(), [rested[0], rested[1] + 40.0], 4));
+        let (s, up) = drag(&path, 1.0);
+        assert_eq!(s.on_release(up), None);
+    }
+
+    #[test]
+    fn a_rest_that_begins_on_the_frame_that_moved_there_counts() {
+        // one frame takes the pointer from the press 30 pt down, and it rests there
+        let mut path = vec![[0.0, 0.0]];
+        path.extend(rest([0.0, 30.0], frames_for(REST_SECONDS * 2.0)));
+        let resting_value = path.last().map(|p| p[1]);
+        path.extend(line(*path.last().unwrap(), [0.0, 12.0], 4));
+        let (s, up) = drag(&path, 1.0);
+        assert_eq!(s.on_release(up), resting_value);
     }
 
     #[test]
