@@ -1308,11 +1308,18 @@ fn record(values: &[SqlValue]) -> Vec<u8> {
                 body.extend(n.to_be_bytes());
                 6
             }
+            SqlValue::Real(n) => {
+                body.extend(n.to_be_bytes());
+                7
+            }
             SqlValue::Text(s) => {
                 body.extend(s.as_bytes());
                 13 + 2 * s.len() as u64
             }
-            _ => panic!("unexpected SqlValue in a test record: {value:?}"),
+            SqlValue::Blob(b) => {
+                body.extend(b);
+                12 + 2 * b.len() as u64
+            }
         };
         header.extend(varint(serial));
     }
@@ -1321,14 +1328,69 @@ fn record(values: &[SqlValue]) -> Vec<u8> {
     out.extend(body);
     out
 }
+#[test]
+fn a_reference_names_a_record_only_by_a_whole_number() {
+    let r = row(json!({
+        "int": 7, "zero": 0, "negative": -3, "real": 7.0, "fraction": 7.5, "text": "7", "null": null, "nan_like": "NaN",
+        "past_f64": 9_007_199_254_740_993_i64, "max": i64::MAX, "edge": 9_223_372_036_854_775_808.0,
+        "low_edge": -9_223_372_036_854_775_808.0, "too_big": 1e19, "too_small": -1e19
+    }));
+    let got: Vec<_> = [
+        "int",
+        "zero",
+        "negative",
+        "real",
+        "fraction",
+        "text",
+        "null",
+        "nan_like",
+        "missing",
+        "past_f64",
+        "max",
+        "edge",
+        "low_edge",
+        "too_big",
+        "too_small",
+    ]
+    .iter()
+    .map(|k| (*k, id_of(&r, k)))
+    .collect();
+    assert_eq!(
+        got,
+        [
+            ("int", Some(7)),
+            ("zero", Some(0)),
+            ("negative", Some(-3)),
+            ("real", Some(7)),
+            ("fraction", None),
+            ("text", None),
+            ("null", None),
+            ("nan_like", None),
+            ("missing", None),
+            // an integer rounds through f64 as `number` reads the `id_local` it names
+            ("past_f64", Some(number(&r, "past_f64"))),
+            ("max", Some(number(&r, "max"))),
+            // 2^63, the first value past i64::MAX: a cast would saturate onto record i64::MAX
+            ("edge", None),
+            ("low_edge", Some(i64::MIN)),
+            ("too_big", None),
+            ("too_small", None),
+        ]
+    );
+}
 fn leaf(page: &mut [u8], offset: usize, rows: &[Vec<SqlValue>]) {
+    let rows: Vec<_> = rows.iter().enumerate().map(|(i, values)| (i as u64 + 1, values.clone())).collect();
+    leaf_with_rowids(page, offset, &rows);
+}
+/// A table leaf page holding `rows`, each `(rowid, values)`.
+fn leaf_with_rowids(page: &mut [u8], offset: usize, rows: &[(u64, Vec<SqlValue>)]) {
     page[offset] = 13;
     page[offset + 3..offset + 5].copy_from_slice(&(rows.len() as u16).to_be_bytes());
     let mut end = page.len();
-    for (i, values) in rows.iter().enumerate() {
+    for (i, (rowid, values)) in rows.iter().enumerate() {
         let payload = record(values);
         let mut cell = varint(payload.len() as u64);
-        cell.extend(varint(i as u64 + 1));
+        cell.extend(varint(*rowid));
         cell.extend(payload);
         end -= cell.len();
         page[end..end + cell.len()].copy_from_slice(&cell);
@@ -1542,6 +1604,94 @@ fn images_with_incomplete_records_are_skipped_not_fatal() {
         assert_eq!(catalog.skipped, [SkippedImage { image: 1, reason }]);
         assert!(catalog.warnings.is_empty(), "{reason:?}: {:?}", catalog.warnings);
     }
+}
+
+/// [`native_catalog_rows`] with each table's rows stored as SQLite stores a rowid alias: a row whose first value is a
+/// whole number `n` (in an `id_local INTEGER PRIMARY KEY` table) gets rowid `n` and NULL in its place in the record,
+/// so a record with id 0 has rowid 0. Rows must come in rowid order, ids in `0..2^56` (the test `varint`'s range).
+fn native_catalog_by_rowid(tables: &[(&str, &str, Vec<Vec<SqlValue>>)]) -> Vec<u8> {
+    let mut bytes = native_catalog_rows(tables, None);
+    for (i, (name, columns, rows)) in tables.iter().enumerate() {
+        assert!(columns.starts_with("id_local INTEGER PRIMARY KEY"), "{name}: no rowid alias");
+        let mut last = None;
+        let rows: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .map(|(at, values)| {
+                let mut values = values.clone();
+                let rowid = match values[0] {
+                    SqlValue::Integer(id) => u64::try_from(id).ok().filter(|id| *id < 1 << 56).expect("an id in 0..2^56"),
+                    // a NULL alias takes the next rowid, as in [`leaf`]
+                    _ => last.map_or(at as u64 + 1, |r: u64| r + 1),
+                };
+                assert!(last.is_none_or(|r| r < rowid), "{name}: rows out of rowid order");
+                last = Some(rowid);
+                values[0] = SqlValue::Null;
+                (rowid, values)
+            })
+            .collect();
+        let page = &mut bytes[(i + 1) * 2048..(i + 2) * 2048];
+        page.fill(0);
+        leaf_with_rowids(page, 0, &rows);
+    }
+    bytes
+}
+
+/// A `rootFile`, `folder` or `rootFolder` that is NULL, text or a fraction names no record. It used to read as 0 (and
+/// 1.5 as 1), so the image took the path of the record with that id; now it is skipped like an image whose record is
+/// gone.
+#[test]
+fn an_image_whose_path_reference_is_not_a_whole_number_is_skipped() {
+    use SqlValue::{Integer as I, Null as N, Real as R, Text as T};
+    // (table, column, reason): the reference that is bad, and the reason the import gives
+    let links = [(3, 2, SkipReason::MissingFile), (2, 1, SkipReason::MissingFolder), (1, 1, SkipReason::MissingRoot)];
+    let mut wrong = Vec::new();
+    for (table, column, reason) in links {
+        for bad in [N, T("x".into()), R(0.5), R(1.5)] {
+            let mut tables = one_row(photo_tables(("/catalog/", "")));
+            // a record with id 0 (rowid 0, as SQLite stores it) before each step of the chain, where a reference
+            // read as 0 would land
+            tables[0].2.insert(0, vec![I(0), T("/zero/".into()), T("Zero".into()), T(String::new())]);
+            tables[1].2.insert(0, vec![I(0), I(1), T("Zero/".into())]);
+            tables[2].2.insert(0, vec![I(0), I(1), T("zero.ARW".into())]);
+            let at = usize::from(table < 3);
+            tables[table].2[at][column] = bad.clone();
+            let path = std::env::temp_dir().join(format!("lightcraft-bad-link-{reason:?}-{}.lrcat", std::process::id()));
+            std::fs::write(&path, native_catalog_by_rowid(&tables)).unwrap();
+            let catalog = read(&path).unwrap();
+            std::fs::remove_file(path).unwrap();
+            let got = (catalog.photos.iter().map(|p| p.path.clone()).collect::<Vec<_>>(), catalog.skipped);
+            if got != (Vec::new(), vec![SkippedImage { image: 1, reason }]) {
+                wrong.push(format!("{} = {bad:?}: {got:?}", tables[table].0));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// What a person sees: an image whose `rootFile` is NULL used to import as the file whose id is 0, merging into that
+/// file's photo and replacing its rating. It is skipped now, and the photo keeps its own rating.
+#[test]
+fn an_image_naming_no_file_does_not_merge_into_the_photo_of_file_0() {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-null-root-file-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("Photos")).unwrap();
+    std::fs::write(dir.join("Photos/test.ARW"), b"original").unwrap();
+    let mut tables = one_row(photo_tables((dir.to_str().unwrap(), "")));
+    tables[2].2[0][0] = I(0); // the file's id is 0 (its rowid, as SQLite stores it) …
+    tables[3].2[0][2] = I(0); // … and photo 1 (rating 5) is that file's
+    tables[3].2.push(vec![N, T("stray".into()), N, T("ARW".into()), I(20), I(10), I(1), I(0)]);
+    let source = dir.join("source.lrcat");
+    std::fs::write(&source, native_catalog_by_rowid(&tables)).unwrap();
+    let mut s = crate::Session::new();
+    s.media.file_probe = Some(Arc::new(|_| Ok(crate::media::ProbeInfo { format: "ARW".into(), width: 20, height: 10, ..Default::default() })));
+    let r = s.execute("library.importLightroom", &json!({"path": source})).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    let photos: Vec<_> = s.catalog.photos().map(|p| (p.file_name.clone(), p.rating)).collect();
+    assert_eq!(photos, [("test.ARW".to_string(), 5)], "{r}");
+    assert_eq!(r["mapping"].as_object().map(|m| m.keys().cloned().collect::<Vec<_>>()), Some(vec!["1".to_string()]), "{r}");
+    assert_eq!(r["skipped"], json!([{"image": 2, "reason": "missingFile"}]), "{r}");
 }
 
 #[test]
