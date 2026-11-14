@@ -325,5 +325,10 @@
   "View › Detail View ({keys}).": "Widok › Widok szczegółów ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Plik › Eksportuj… · Plik › Drukuj… ({keys}).",
   "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}",
+  " · {n} imported although another photo has the same content": " · zaimportowano {n}, mimo że inne zdjęcie ma tę samą zawartość",
+  "Same content as {path} in the library": "Taka sama zawartość jak {path} w bibliotece",
+  "Same file as {path} earlier in this import": "Taki sam plik jak wcześniejszy {path} w tym imporcie",
+  "· {n} copies of library photos": "· kopie zdjęć z biblioteki: {n}",
+  "· {n} repeated in this import": "· powtórzenia w tym imporcie: {n}"
 }
