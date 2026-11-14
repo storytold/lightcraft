@@ -161,7 +161,7 @@ pub fn show(ctx: &egui::Context, app: &LightcraftApp) {
                 ui.add_space(4.0);
                 graph(ui, &frames, width);
                 ui.label(
-                    egui::RichText::new("stulpeliai: mėlyni – sąsajos procesoriaus apkrova, oranžiniai / raudoni – laukimas · žymės – gautas atvaizdas · linija – 60 kadrų/s")
+                    egui::RichText::new(crate::i18n::tr("bars: blue = UI CPU, orange/red = waiting · ticks = a render arrived · line = 60 fps"))
                         .size(9.0)
                         .color(egui::Color32::from_gray(160)),
                 );
