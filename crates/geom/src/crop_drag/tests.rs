@@ -159,6 +159,92 @@ fn handle_numbering_matches_the_overlay() {
     assert_eq!(CropHandle::from_name("nope"), None);
 }
 
+#[test]
+fn box_anchors_the_press_corner_and_follows_the_pointer() {
+    let g = crop_box(p(0.2, 0.3), p(0.8, 0.9), 0.0, W, H, None);
+    let r = g.rect;
+    assert!((r.x0 - 0.2).abs() < 1e-9 && (r.y0 - 0.3).abs() < 1e-9, "anchor moved: {r:?}");
+    assert!((r.x1 - 0.8).abs() < 1e-9 && (r.y1 - 0.9).abs() < 1e-9, "{r:?}");
+    // dragging up-left from its own corner draws the other way
+    let g = crop_box(p(0.8, 0.9), p(0.2, 0.3), 0.0, W, H, None);
+    let r = g.rect;
+    assert!((r.x1 - 0.8).abs() < 1e-9 && (r.y1 - 0.9).abs() < 1e-9, "anchor moved: {r:?}");
+    assert!((r.x0 - 0.2).abs() < 1e-9 && (r.y0 - 0.3).abs() < 1e-9, "{r:?}");
+}
+
+#[test]
+fn box_honours_a_locked_ratio_from_the_anchor() {
+    let a = 16.0 / 9.0;
+    let g = crop_box(p(0.1, 0.2), p(0.6, 0.5), 0.0, W, H, Some(a));
+    assert!((px_aspect(&g) - a).abs() < 1e-9, "{} vs {a}", px_aspect(&g));
+    let r = g.rect;
+    assert!((r.x0 - 0.1).abs() < 1e-9 && (r.y0 - 0.2).abs() < 1e-9, "anchor moved: {r:?}");
+}
+
+#[test]
+fn box_never_gets_below_the_minimum_side() {
+    let g = crop_box(p(0.5, 0.5), p(0.5, 0.5), 0.0, W, H, None);
+    let r = g.rect;
+    let min = MIN_CROP_FRACTION * W.min(H);
+    assert!((r.width() * W - min).abs() < 1e-9 && (r.height() * H - min).abs() < 1e-9, "{r:?}");
+    // a locked ratio keeps both sides at their own minimums
+    let a = 4.0;
+    let g = crop_box(p(0.5, 0.5), p(0.5, 0.5), 0.0, W, H, Some(a));
+    let (min_w, min_h) = (min.max(min * a), min.max(min / a));
+    let r = g.rect;
+    assert!((r.width() * W - min_w).abs() < 1e-9 && (r.height() * H - min_h).abs() < 1e-9, "{r:?}");
+}
+
+#[test]
+fn box_stays_inside_a_rotated_image_shrinking_about_the_anchor() {
+    let angle = 30.0;
+    // inside the turned photo but towards a corner of the straightened frame it cannot fill
+    let g = crop_box(p(0.3, 0.3), p(1.2, 1.2), angle, W, H, None);
+    assert!(g.is_within_image(W, H), "{g:?}");
+    let r = g.rect;
+    assert!((r.x0 - 0.3).abs() < 1e-9 && (r.y0 - 0.3).abs() < 1e-9, "anchor moved: {r:?}");
+    assert!(r.width() * W >= MIN_CROP_FRACTION * W.min(H) - 1e-6, "{r:?}");
+    // an ever bigger drag from the same anchor never leaves the photo nor grows
+    let g2 = crop_box(p(0.3, 0.3), p(5.0, 5.0), angle, W, H, None);
+    assert!(g2.is_within_image(W, H));
+    assert!(g2.rect.width() <= r.width() + 1e-9, "{g2:?} grew past {r:?}");
+}
+
+#[test]
+fn box_with_the_anchor_off_the_photo_falls_back_to_the_fitted_full_crop() {
+    let angle = 40.0;
+    let want = crate::crop_fit_angle(W, H, angle, None);
+    let g = crop_box(p(-1.0, -1.0), p(0.3, 0.3), angle, W, H, None);
+    assert!((g.rect.x0 - want.rect.x0).abs() < 1e-9 && (g.rect.x1 - want.rect.x1).abs() < 1e-9, "{g:?} vs {want:?}");
+    assert!((g.angle - angle).abs() < 1e-12);
+}
+
+#[test]
+fn box_with_the_anchor_on_the_edge_never_degenerates() {
+    // the anchor on the right edge: a pointer past it leaves only t = 0 feasible,
+    // which would be a zero-size box at the anchor
+    let g = crop_box(p(1.0, 0.5), p(1.5, 0.6), 0.0, W, H, None);
+    let min = MIN_CROP_FRACTION * W.min(H);
+    assert!(g.rect.width() * W >= min - 1e-6, "{g:?}");
+    assert!(g.rect.height() * H >= min - 1e-6, "{g:?}");
+    assert!(g.is_within_image(W, H), "{g:?}");
+    // the same on a corner: a click that lands exactly on the image corner and drags out
+    let g = crop_box(p(1.0, 1.0), p(1.5, 1.5), 0.0, W, H, None);
+    assert!(g.rect.width() * W >= min - 1e-6, "{g:?}");
+    assert!(g.rect.height() * H >= min - 1e-6, "{g:?}");
+    assert!(g.is_within_image(W, H), "{g:?}");
+}
+
+#[test]
+fn box_hostile_input_never_panics() {
+    let g = crop_box(p(f64::NAN, 0.5), p(1.0, 1.0), 0.0, W, H, None);
+    assert!(g.rect.x0.is_finite() && g.is_within_image(W, H));
+    let g = crop_box(p(0.5, 0.5), p(1.0, 1.0), f64::INFINITY, W, H, Some(0.0));
+    assert!(g.rect.x0.is_finite() && g.rect.x1.is_finite());
+    let g = crop_box(p(0.5, 0.5), p(f64::NEG_INFINITY, 1.0), 0.0, -1.0, 0.0, None);
+    assert!(g.rect.x0.is_finite() && g.rect.y0.is_finite());
+}
+
 mod props {
     use super::*;
     use proptest::prelude::*;
@@ -215,6 +301,23 @@ mod props {
         ) {
             let g = drag_crop(CropGeometry { rect: Rect::new(x0, y0, x1, y1), angle }, hd, p(0.5, 0.5), p(tx, ty), W, H, ratio);
             prop_assert!(g.rect.x0.is_finite() && g.rect.y1.is_finite());
+        }
+
+        /// Whatever the box drag does, it stays valid: inside the photo, finite, shaped.
+        #[test]
+        fn box_is_always_inside_finite_and_shaped(
+            angle in -45.0f64..45.0,
+            ratio in prop::option::of(0.3f64..4.0),
+            ax in -1.0f64..2.0, ay in -1.0f64..2.0,
+            tx in -4.0f64..5.0, ty in -4.0f64..5.0,
+        ) {
+            let g = crop_box(p(ax, ay), p(tx, ty), angle, W, H, ratio);
+            prop_assert!(g.is_within_image(W, H), "{g:?}");
+            prop_assert!(g.rect.x0.is_finite() && g.rect.y0.is_finite() && g.rect.x1.is_finite() && g.rect.y1.is_finite());
+            prop_assert!(g.rect.width() > 0.0 && g.rect.height() > 0.0);
+            if let Some(a) = ratio {
+                prop_assert!((px_aspect(&g) - a).abs() < 1e-6 * a.max(1.0), "ratio {a}: {}", px_aspect(&g));
+            }
         }
     }
 }
