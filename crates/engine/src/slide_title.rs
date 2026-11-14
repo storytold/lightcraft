@@ -353,6 +353,8 @@ impl TitleCompose {
         let image = self.compose();
         let histogram = lightcraft_raster::Histogram::of_srgb8(&image);
         crate::media::RenderResult {
+            cache_generation: 0,
+            cache_owner: std::sync::Weak::new(),
             request_id,
             source_key: None,
             photo: lightcraft_catalog::PhotoId(0),

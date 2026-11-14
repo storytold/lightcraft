@@ -4212,6 +4212,7 @@ dependencies = [
  "egui",
  "egui_extras",
  "egui_kittest",
+ "fs4",
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",

@@ -1,0 +1,26 @@
+{
+  "Photos: {count}": {
+    "one": "Photos: {count}",
+    "few": "Photos: {count}",
+    "many": "Photos: {count}",
+    "other": "Photos: {count}"
+  },
+  "{count} smart previews · {size:.1} MiB": {
+    "one": "{count} smart preview · {size:.1} MiB",
+    "few": "{count} smart previews · {size:.1} MiB",
+    "many": "{count} smart previews · {size:.1} MiB",
+    "other": "{count} smart previews · {size:.1} MiB"
+  },
+  ". {count} existing previews kept unchanged": {
+    "one": ". {count} existing preview kept unchanged",
+    "few": ". {count} existing previews kept unchanged",
+    "many": ". {count} existing previews kept unchanged",
+    "other": ". {count} existing previews kept unchanged"
+  },
+  "Smart preview folder changed. {count} source files could not be removed.": {
+    "one": "Smart preview folder changed. {count} source file could not be removed.",
+    "few": "Smart preview folder changed. {count} source files could not be removed.",
+    "many": "Smart preview folder changed. {count} source files could not be removed.",
+    "other": "Smart preview folder changed. {count} source files could not be removed."
+  }
+}
