@@ -13,6 +13,20 @@ use lightcraft_engine::import::ImportCandidate;
 
 const T: Duration = Duration::from_secs(30);
 
+fn import_preview_settle_timeout_for_instrumentation(instrumented: bool) -> Duration {
+    Duration::from_secs(if instrumented { 600 } else { 30 })
+}
+
+fn import_preview_settle_timeout() -> Duration {
+    import_preview_settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn import_preview_timeout_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(import_preview_settle_timeout_for_instrumentation(false), Duration::from_secs(30));
+    assert_eq!(import_preview_settle_timeout_for_instrumentation(true), Duration::from_secs(600));
+}
+
 /// Size buckets follow physical pixels, with finite fallbacks and a fixed allocation ceiling.
 #[test]
 fn import_thumb_edges_follow_size_and_display_density() {
@@ -65,7 +79,7 @@ impl Review {
         let mut app = LightcraftApp::new(lightcraft_engine::Session::new().with_fs(), Services::default());
         app.ui.dialog = Some(Dialog::Import { opts: Box::new(ImportDialog::new(candidates)) });
         let mut h = Headless::new(app, [1366.0, 1000.0], scale);
-        assert!(h.settle(super::ui_settle_timeout()));
+        assert!(h.settle(import_preview_settle_timeout()));
         Self { h, dir }
     }
 
@@ -89,7 +103,7 @@ impl Review {
     /// Set thumbnail size through its command and wait for the resulting previews to settle.
     fn size(&mut self, size: f32) {
         self.request("engine.execute", json!({"command": "view.importThumbSize", "params": {"size": size}}));
-        assert!(self.h.settle(super::ui_settle_timeout()));
+        assert!(self.h.settle(import_preview_settle_timeout()));
     }
 }
 
@@ -147,7 +161,7 @@ fn import_thumbnail_previews_upgrade_for_density_and_stay_bounded_when_scrolling
     // Scrolling a large card retains only the nearby tiles and drops obsolete requests.
     review.request("ui.hoverWidget", json!({"id": "import:0"}));
     review.request("ui.scroll", json!({"dy": -20000.0}));
-    assert!(review.h.settle(super::ui_settle_timeout()));
+    assert!(review.h.settle(import_preview_settle_timeout()));
     assert!(!review.h.app.renderer.textures.contains_key(&Slot::Import(0)));
     let imports: Vec<_> = review.h.app.renderer.textures.keys().filter_map(|s| if let Slot::Import(i) = s { Some(*i) } else { None }).collect();
     assert!(!imports.is_empty() && imports.len() < 20, "bounded visible previews: {imports:?}");
