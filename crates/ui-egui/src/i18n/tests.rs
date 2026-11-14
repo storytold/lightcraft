@@ -189,6 +189,7 @@ fn locale_tags_normalize() {
     assert_eq!(Locale::parse_tag("zh-Hant-TW"), Some(Locale::ZhHant));
     assert_eq!(Locale::parse_tag("zh-CN"), Some(Locale::ZhHans));
     assert_eq!(Locale::parse_tag("ja_JP.UTF-8"), Some(Locale::Ja));
+    assert_eq!(Locale::parse_tag("he_IL.UTF-8"), Some(Locale::He));
     assert_eq!(Locale::parse_tag("pt-br"), Some(Locale::PtBr));
     assert_eq!(Locale::parse_tag("pt-BR"), Some(Locale::PtBr));
     assert_eq!(Locale::parse_tag("pt_BR.UTF-8"), Some(Locale::PtBr));
@@ -383,6 +384,7 @@ fn language_commands_cover_every_language() {
         ("app.language.german", Locale::De),
         ("app.language.russian", Locale::Ru),
         ("app.language.ukrainian", Locale::Uk),
+        ("app.language.hebrew", Locale::He),
         ("app.language.polish", Locale::Pl),
         ("app.language.czech", Locale::Cs),
         ("app.language.italian", Locale::It),
@@ -400,6 +402,9 @@ fn language_commands_cover_every_language() {
     }
     assert_eq!(crate::menus::language_from_command("app.language.klingon"), None);
     assert_eq!(crate::menus::language_from_command("view.detail"), None);
+    assert_eq!(Locale::He.code(), "he");
+    assert_eq!(Locale::He.script(), "Hebr");
+    assert_eq!(Locale::He.tr("Add"), "הוספה");
 }
 
 #[test]
@@ -1294,4 +1299,480 @@ fn polish_switches_formats_dates_and_reads_every_count() {
     assert!(text.contains("Plik") && text.contains("Ekspozycja"), "{text}");
     assert_polish_glyphs(&ctx);
     set_language(Locale::En);
+}
+
+/// The Hebrew catalog must expose actual photo workflows instead of silently falling back
+/// to English, while file names and the English source language remain unchanged.
+#[test]
+fn hebrew_photo_workflows_and_navigation_are_translated() {
+    let hebrew = Locale::He.catalog();
+    for key in [
+        "Import Photos…",
+        "Export…",
+        "Open Library…",
+        "New Library…",
+        "Remove from Album",
+        "Delete Permanently",
+        "Save as…",
+        "Next Photo",
+        "Previous Photo",
+        "Zoom In",
+        "Zoom Out",
+        "Show Original",
+        "Rotate Left",
+        "Rotate Right",
+        "Slideshow",
+        "Next Slide",
+        "Previous Slide",
+        "Photo Grid (G)",
+    ] {
+        let translated = hebrew.get(key).unwrap_or_else(|| panic!("missing Hebrew photo workflow translation for {key:?}"));
+        assert_ne!(translated, key, "{key:?} still falls back to English");
+        assert!(translated.chars().any(|ch| ('\u{05d0}'..='\u{05ea}').contains(&ch)), "{key:?} has no Hebrew letters: {translated:?}");
+    }
+    assert_eq!(Locale::He.tr("Import Photos…"), "ייבוא תמונות…");
+    assert_eq!(Locale::He.tr("Delete Permanently"), "מחיקה לצמיתות");
+    assert_eq!(Locale::He.tr("Next Photo"), "התמונה הבאה");
+    assert_eq!(Locale::He.tr("Photo Grid (G)"), "רשת תמונות (G)");
+    assert_eq!(Locale::He.tr("IMG_1234.CR3"), "IMG_1234.CR3");
+    assert_eq!(Locale::En.tr("Next Photo"), "Next Photo");
+}
+
+/// Rating/culling, albums, filters and metadata are visible native Hebrew UI labels.
+/// Command IDs and image file names remain the same, and untranslated values fall back.
+#[test]
+fn hebrew_photo_rating_filters_and_metadata_are_translated() {
+    let hebrew = Locale::He.catalog();
+    for english in [
+        "Rate ★",
+        "Rate ★★★ and advance",
+        "Rate ★★★★★ and advance",
+        "Pick Flag",
+        "Reject",
+        "Rejected",
+        "Compare (Shift+C)",
+        "New Smart Album…",
+        "Quick Collection",
+        "Search Photos",
+        "Filter Presets",
+        "Apply Filter Preset",
+        "Metadata Preset",
+        "Save Metadata to File",
+        "Rename Photos…",
+        "Import Lightroom Catalog…",
+        "Export with Preset",
+        "Export Album…",
+        "Print…",
+        "Show in Finder",
+        "Show in Explorer",
+    ] {
+        let translated = hebrew.get(english).unwrap_or_else(|| panic!("missing Hebrew photo UI source key: {english:?}"));
+        assert_ne!(translated, english, "untranslated: {english:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)), "no Hebrew letters: {english:?}");
+    }
+    assert_eq!(Locale::He.tr("Rate ★★★★★ and advance"), "דירוג ★★★★★ ומעבר הלאה");
+    assert_eq!(Locale::He.tr("Compare (Shift+C)"), "השוואה (Shift+C)");
+    assert_eq!(Locale::He.tr("Search Photos"), "חיפוש תמונות");
+    assert_eq!(Locale::He.tr("IMG_2026.CR3"), "IMG_2026.CR3");
+    assert_eq!(Locale::En.tr("Search Photos"), "Search Photos");
+}
+
+/// Person/face recognition and slideshow/print controls are native Hebrew
+/// interface labels. Image metadata, filenames and unknown strings stay source-authentic.
+#[test]
+fn hebrew_people_slideshow_and_print_workflows_are_translated() {
+    let hebrew = Locale::He.catalog();
+    for key in [
+        "Detect Faces",
+        "Face recognition",
+        "Face Recognition On/Off",
+        "Faces of a Person",
+        "Face Models",
+        "Camera make and model",
+        "GPS Track Log",
+        "Contact Sheet PDF…",
+        "Edit in Other Editor",
+        "Edit in PhotoCraft",
+        "Copy Metadata",
+        "Slideshow paused",
+        "Slideshow resumed",
+        "Slideshow Playback Settings",
+        "Slideshow Export Status",
+        "Print Settings",
+        "Print to PDF",
+        "Watermark",
+        "Show Person",
+        "Face recognition is on",
+    ] {
+        let translated = hebrew.get(key).unwrap_or_else(|| panic!("missing Hebrew photo source key: {key:?}"));
+        assert_ne!(translated, key, "source key still English: {key:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)), "not Hebrew: {key:?}");
+        assert_eq!(Locale::En.tr(key), key, "English source mutated");
+    }
+    assert_eq!(Locale::He.tr("Detect Faces"), "זיהוי פנים");
+    assert_eq!(Locale::He.tr("Slideshow paused"), "המצגת הושהתה");
+    assert_eq!(Locale::He.tr("Print to PDF"), "הדפסה ל־PDF");
+    assert_eq!(Locale::He.tr("IMG_1234.JPG"), "IMG_1234.JPG");
+}
+
+/// Native photo library's empty/error states and smart-preview workflow need
+/// actual Hebrew labels, while original metadata and unknown keys are unchanged.
+#[test]
+fn hebrew_library_empty_states_preview_and_export_are_translated() {
+    let he = Locale::He.catalog();
+    for source in [
+        "No photo selected",
+        "No matching photos",
+        "No metadata found",
+        "No masks yet. Choose a mask type above.",
+        "No photos match the active filters",
+        "No albums yet",
+        "No photos in this folder",
+        "Original offline · no smart preview",
+        "Smart Preview Status",
+        "Missing Photos",
+        "Restore Library from Backup…",
+        "Preview unavailable",
+        "Settings file problem",
+        "No usable GPU found: rendering on the CPU",
+        "No Camera or Card Found",
+        "Importing Lightroom Catalog",
+        "Export Slideshow…",
+        "Try Saving Again",
+        "New Folder on Disk…",
+        "Scanning folder",
+        "Checking free disk space",
+    ] {
+        let translated = he.get(source).unwrap_or_else(|| panic!("missing native Hebrew key: {source:?}"));
+        assert_ne!(translated, source, "English fallback for known source: {source:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)));
+        assert_eq!(Locale::En.tr(source), source, "English source must be preserved");
+    }
+    assert_eq!(Locale::He.tr("No photo selected"), "לא נבחרה תמונה");
+    assert_eq!(Locale::He.tr("No albums yet"), "עדיין אין אלבומים");
+    assert_eq!(Locale::He.tr("Preview unavailable"), "תצוגה מקדימה אינה זמינה");
+    assert_eq!(Locale::He.tr("IMG_001.CR3"), "IMG_001.CR3");
+}
+
+/// Editing keyword hierarchies, smart albums and searches must not silently
+/// fall back to English; filenames, original captions and unknown keys do.
+#[test]
+fn hebrew_keywords_smart_albums_and_search_workflows_are_translated() {
+    let he = Locale::He.catalog();
+    for key in [
+        "Advanced search…",
+        "Album",
+        "Albums",
+        "Any Searchable Text",
+        "Clear Filters",
+        "Create Smart Album from Filter…",
+        "Date Groups",
+        "Keyword",
+        "Keyword Painter",
+        "Keyword Set",
+        "Keyword Suggestions",
+        "Keywords",
+        "Merge Keywords",
+        "Set as Target Album",
+        "Some rules need fixing (Edit Smart Album…):",
+        "Search albums",
+        "Keyword Count",
+        "Filter Keywords",
+        "Purge Unused Keywords",
+        "Import Keywords…",
+        "Export Keywords…",
+        "Sort Albums by Name",
+    ] {
+        let translated = he.get(key).unwrap_or_else(|| panic!("missing native Hebrew key: {key:?}"));
+        assert_ne!(translated, key, "English fallback: {key:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)));
+        assert_eq!(Locale::En.tr(key), key, "English original must stay unchanged");
+    }
+    assert_eq!(Locale::He.tr("Clear Filters"), "ניקוי מסננים");
+    assert_eq!(Locale::He.tr("Create Smart Album from Filter…"), "יצירת אלבום חכם מהמסנן…");
+    assert_eq!(Locale::He.tr("Keyword"), "מילת מפתח");
+    assert_eq!(Locale::He.tr("IMG_1234.ARW"), "IMG_1234.ARW");
+}
+
+/// Common photo develop, lens, masks and denoise commands must have Hebrew
+/// labels without translating camera file names or changing source English.
+#[test]
+fn hebrew_develop_masks_lens_denoise_and_export_are_translated() {
+    let hebrew = Locale::He.catalog();
+    for key in [
+        "AI Mask Model Status",
+        "Auto",
+        "Auto-Stack by Capture Time…",
+        "Automatically Write Changes into XMP",
+        "Color space",
+        "Crop, Rotate, Geometry",
+        "Find Dust Spots",
+        "Find Missing Photos…",
+        "Find Similar Photos",
+        "Lens Blur",
+        "Sharpen",
+        "White Balance Selector (W)",
+        "Denoise Settings",
+        "Denoise Photos",
+        "Find Subject",
+        "Mask Overlay",
+        "Mask Pins",
+        "Lens Profiles",
+        "Download Lens Database",
+        "Export Contact Sheet PDF",
+        "Save Mask Effect",
+        "Export Effect Presets…",
+    ] {
+        let translated = hebrew.get(key).unwrap_or_else(|| panic!("missing Hebrew source key: {key:?}"));
+        assert_ne!(translated, key, "unexpected English fallback: {key:?}");
+        assert!(translated.chars().any(|c| ('\u{05d0}'..='\u{05ea}').contains(&c)), "not Hebrew: {key:?}");
+        assert_eq!(Locale::En.tr(key), key, "original English must not be mutated");
+    }
+    assert_eq!(Locale::He.tr("Lens Blur"), "טשטוש עדשה");
+    assert_eq!(Locale::He.tr("Denoise Settings"), "הגדרות הפחתת רעש");
+    assert_eq!(Locale::He.tr("Download Lens Database"), "הורדת מסד נתוני עדשות");
+    assert_eq!(Locale::He.tr("DSC_1249.NEF"), "DSC_1249.NEF");
+}
+
+#[test]
+fn hebrew_photo_mask_controls_are_localized() {
+    let catalog = Locale::He.catalog();
+    for source in [
+        "Brush",
+        "Brush Settings",
+        "Brush Stroke",
+        "Increase Brush Size",
+        "Decrease Brush Size",
+        "Increase Brush Feather",
+        "Decrease Brush Feather",
+        "Linear Gradient",
+        "Radial Gradient",
+        "Show/Hide Mask",
+    ] {
+        let translated = catalog
+            .get(source)
+            .expect("missing Hebrew photo workflow label");
+        assert!(
+            translated.chars().any(|c| ('א'..='ת').contains(&c)),
+            "{source} is not localized in Hebrew"
+        );
+    }
+}
+
+#[test]
+fn hebrew_photo_library_controls_are_localized() {
+    let catalog = Locale::He.catalog();
+    for source in [
+        "Move Photos",
+        "Move Folder",
+        "Move Folder To…",
+        "Move Selected Photos Here",
+        "Move to Folder",
+        "Move to Folder…",
+        "Relink Photo",
+        "Locate Photo",
+        "Synchronize Folder",
+        "Synchronize Folder…",
+    ] {
+        let translated = catalog
+            .get(source)
+            .expect("missing Hebrew photo workflow label");
+        assert!(
+            translated.chars().any(|c| ('א'..='ת').contains(&c)),
+            "{source} is not localized in Hebrew"
+        );
+    }
+}
+
+#[test]
+fn hebrew_photo_review_controls_are_localized() {
+    let catalog = Locale::He.catalog();
+    for source in [
+        "Aspect Ratio",
+        "Straighten",
+        "Straighten Tool",
+        "Set Crop",
+        "Swap Aspect (X)",
+        "Info Overlay: Exposure",
+        "Inspect Photo",
+        "Set as Reference Photo",
+        "Show/hide My Photos panel",
+        "Red Eye",
+    ] {
+        let translated = catalog
+            .get(source)
+            .expect("missing Hebrew photo workflow label");
+        assert!(
+            translated.chars().any(|c| ('א'..='ת').contains(&c)),
+            "{source} is not localized in Hebrew"
+        );
+    }
+}
+
+#[test]
+fn hebrew_round2_errors_labels_translate_exactly() {
+    for (source, expected) in [
+        ("Your library is empty", "ספריית התמונות ריקה"),
+        (
+            "Your library couldn't be opened",
+            "לא ניתן לפתוח את ספריית התמונות",
+        ),
+        ("This photo can't be opened", "לא ניתן לפתוח את התמונה"),
+        (
+            "There is no LightCraft library in this folder any more.",
+            "בתיקייה הזו כבר אין ספריית LightCraft.",
+        ),
+        ("This folder can't be read:", "לא ניתן לקרוא את התיקייה:"),
+        ("The download didn't work:", "ההורדה נכשלה:"),
+        ("Wait for the import to finish", "יש להמתין לסיום הייבוא"),
+        (
+            "A folder is already being synchronized",
+            "כבר מתבצע סנכרון של תיקייה",
+        ),
+        ("A folder is being synchronized", "מתבצע סנכרון של תיקייה"),
+        ("Looking for photos…", "מחפש תמונות…"),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew translation mismatch: {source}"
+        );
+    }
+}
+
+#[test]
+fn hebrew_round2_edit_labels_translate_exactly() {
+    for (source, expected) in [
+        ("Reset all edits", "איפוס כל העריכות"),
+        ("Reset All", "איפוס הכול"),
+        ("Reset Sliders", "איפוס המחוונים"),
+        (
+            "Copy History Step Settings to Before",
+            "העתקת הגדרות שלב בהיסטוריה למצב ״לפני״",
+        ),
+        ("Apply to All Masks", "החלה על כל המסכות"),
+        ("Clear Guides", "הסרת קווי עזר"),
+        ("Clear History", "ניקוי ההיסטוריה"),
+        ("Clear Reference", "הסרת תמונת הייחוס"),
+        ("Before/After Side by Side", "השוואת לפני ואחרי זה לצד זה"),
+        ("Before/After (Y)", "לפני/אחרי (Y)"),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew translation mismatch: {source}"
+        );
+    }
+}
+
+#[test]
+fn hebrew_round2_import_labels_translate_exactly() {
+    for (source, expected) in [
+        ("In library", "בספרייה"),
+        ("All Photos", "כל התמונות"),
+        (
+            "All the photos imported from this disk are included.",
+            "כל התמונות שיובאו מהדיסק הזה נכללות.",
+        ),
+        ("Into one folder", "לתיקייה אחת"),
+        ("Use Library Folder", "שימוש בתיקיית הספרייה"),
+        ("Clear Recent Libraries", "ניקוי רשימת הספריות האחרונות"),
+        ("Optimize Library", "מיטוב הספרייה"),
+        ("Open Log Folder", "פתיחת תיקיית יומני הרישום"),
+        ("Reading photos…", "קורא תמונות…"),
+        ("Adding photos…", "מוסיף תמונות…"),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew translation mismatch: {source}"
+        );
+    }
+}
+
+#[test]
+fn hebrew_parallel_round6_masking_labels() {
+    for (source, expected) in [
+        ("All Mask Overlays", "כל שכבות־העל של המסכות"),
+        (
+            "Cycle Mask Overlay Color",
+            "מעבר בין צבעי שכבת־העל של המסכה",
+        ),
+        ("Cycle Mask Overlay Mode", "מעבר בין מצבי שכבת־העל של המסכה"),
+        ("Overlay color", "צבע שכבת־העל"),
+        (
+            "Analyzing the photo for AI masks…",
+            "מנתח את התמונה לזיהוי מסכות באמצעות בינה מלאכותית…",
+        ),
+        ("Refining the mask's detail…", "משפר את פרטי המסכה…"),
+        ("Subtract from this mask", "החסרה מהמסכה הזו"),
+        ("Sharpness", "חדות"),
+        ("Create Preset…", "יצירת ערכת הגדרות…"),
+        ("More preset options", "אפשרויות נוספות לערכת ההגדרות"),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew source label regression: {source}"
+        );
+    }
+}
+
+#[test]
+fn hebrew_parallel_round6_culling_labels() {
+    for (source, expected) in [
+        ("Flagged as Pick", "סומנה כנבחרת"),
+        ("Flagged as Reject", "סומנה לדחייה"),
+        ("Clear rating", "ניקוי הדירוג"),
+        ("Clear rating and advance", "ניקוי הדירוג ומעבר לתמונה הבאה"),
+        ("Drop to import", "שחררו כדי לייבא"),
+        ("Favorite", "מועדף"),
+        ("Flag", "סימון בדגל"),
+        ("Generated demo photo", "תמונת הדגמה שנוצרה"),
+        (
+            "Increase Grid Thumbnail Size",
+            "הגדלת התמונות הממוזערות ברשת",
+        ),
+        (
+            "Decrease Grid Thumbnail Size",
+            "הקטנת התמונות הממוזערות ברשת",
+        ),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew source label regression: {source}"
+        );
+    }
+}
+
+#[test]
+fn hebrew_parallel_round6_export_labels() {
+    for (source, expected) in [
+        ("Quality", "איכות"),
+        ("Resolution (ppi)", "רזולוציה (ppi)"),
+        (
+            "Limit file size (KB, 0 = off)",
+            "מגבלת גודל קובץ (KB, 0 = ללא הגבלה)",
+        ),
+        ("If file exists", "אם הקובץ קיים"),
+        ("Include on Export", "הכללה בייצוא"),
+        ("Will Export", "ייכלל בייצוא"),
+        ("HDR output", "פלט HDR"),
+        (
+            "HDR TIFF needs 32-bit float.",
+            "TIFF ב־HDR מחייב נקודה צפה של 32 סיביות.",
+        ),
+        (
+            "Managed by Printer (Adobe RGB)",
+            "ניהול צבע בידי המדפסת (Adobe RGB)",
+        ),
+        ("Managed by Printer (sRGB)", "ניהול צבע בידי המדפסת (sRGB)"),
+    ] {
+        assert_eq!(
+            Locale::He.tr(source),
+            expected,
+            "Hebrew source label regression: {source}"
+        );
+    }
 }

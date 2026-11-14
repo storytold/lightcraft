@@ -1,5 +1,23 @@
 use super::{Icon, LightcraftApp, PhotoId, Sense, Tokens, divider, header, json, padded, register, text_button, vec2};
 
+/// Only translated field captions follow the reading direction; values, IDs and paths do not.
+fn meta_caption_layout(locale: crate::i18n::Locale, translated: bool) -> Option<egui::Layout> {
+    (locale == crate::i18n::Locale::He && translated).then(|| egui::Layout::right_to_left(egui::Align::Center))
+}
+
+fn meta_caption(ui: &mut egui::Ui, source: &str) {
+    let t = Tokens::get(ui.ctx());
+    let translated = crate::i18n::tr(source);
+    let text = egui::RichText::new(translated).size(11.5).color(t.text_dim);
+    if let Some(layout) = meta_caption_layout(crate::i18n::language(), translated != source) {
+        ui.with_layout(layout, |ui| {
+            ui.label(text);
+        });
+    } else {
+        ui.label(text);
+    }
+}
+
 pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(p) = app.session.catalog.photo(id).cloned() else { return };
     header(ui, "Info");
@@ -85,7 +103,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             meta_field(app, ui, label, key, value, lines, mixed.contains(&key), &targets);
         }
         // file: name (rename), path (reveal), capture time (edit)
-        let small = |ui: &mut egui::Ui, text: &str| ui.label(egui::RichText::new(crate::i18n::tr(text)).size(11.5).color(t.text_dim));
+        let small = |ui: &mut egui::Ui, text: &str| meta_caption(ui, text);
         small(ui, "File Name");
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::widgets::icon_button(ui, "infoRename", Icon::Pencil, vec2(20.0, 20.0), false, true, "Rename…").clicked() {
@@ -137,7 +155,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let gps_mixed = mixed.contains(&"gps");
         let gps = if gps_mixed { String::new() } else { m.gps.map(|(la, lo)| format!("{la:.6}, {lo:.6}")).unwrap_or_default() };
         let gid = egui::Id::unique("info-gps");
-        ui.label(egui::RichText::new("GPS").size(11.5).color(t.text_dim));
+        meta_caption(ui, "GPS");
         let mut edit: FieldEdit = ui.data(|d| d.get_temp(gid)).unwrap_or_else(|| FieldEdit::new(&gps, gps_mixed, &targets));
         let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
         let r = crate::text_field::TextField::singleline("field:gps", &mut edit.text).hint(hint).label("GPS").width(f32::INFINITY).show(ui);
@@ -399,8 +417,7 @@ pub(crate) fn mixed_meta(catalog: &lightcraft_catalog::Catalog, ids: &[PhotoId],
 /// Target Photo / Selected Photos: whose metadata the fields below show while several photos
 /// are selected (`view.infoSelectedPhotos`).
 fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(crate::i18n::tr("Show Metadata For")).size(11.5).color(t.text_dim));
+    meta_caption(ui, "Show Metadata For");
     ui.horizontal_wrapped(|ui| {
         let on = app.ui.settings.info_selected_photos;
         for (id, label, selected) in [("infoFor-target", "Target Photo", false), ("infoFor-selected", "Selected Photos", true)] {
@@ -416,8 +433,7 @@ fn metadata_for(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// selected photos' statuses differ, and any status picked is given to all of them. A status
 /// picked goes to the photos `targets`.
 fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcraft_catalog::CopyrightStatus, mixed: bool, targets: &[PhotoId]) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
+    meta_caption(ui, "Copyright Status");
     let shown = crate::i18n::tr(if mixed { MIXED } else { current.label() });
     let r = crate::widgets::combo_box("info-copyright-status").selected_text(shown).show_ui(ui, |ui| {
         for st in lightcraft_catalog::CopyrightStatus::ALL {
@@ -439,8 +455,7 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
 /// empty, it clears the field on every selected photo). The edit is saved to the photos `targets`.
 #[allow(clippy::too_many_arguments)]
 fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str, value: &str, lines: usize, mixed: bool, targets: &[PhotoId]) {
-    let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(crate::i18n::tr(label)).size(11.5).color(t.text_dim));
+    meta_caption(ui, label);
     let id = egui::Id::unique(("info-field", key));
     let value = if mixed { "" } else { value };
     let mut edit: FieldEdit = ui.data(|d| d.get_temp(id)).unwrap_or_else(|| FieldEdit::new(value, mixed, targets));
@@ -464,4 +479,18 @@ fn meta_field(app: &mut LightcraftApp, ui: &mut egui::Ui, label: &str, key: &str
         let _ = app.run("photo.setMeta", json!({"ids": edit.ids, key: edit.text}));
     }
     ui.add_space(6.0);
+}
+
+#[cfg(test)]
+mod hebrew_caption_tests {
+    use super::meta_caption_layout;
+    use crate::i18n::Locale;
+
+    #[test]
+    fn metadata_caption_rtl_is_opt_in_for_hebrew_only() {
+        assert!(meta_caption_layout(Locale::He, true).is_some());
+        assert!(meta_caption_layout(Locale::He, false).is_none(), "English fallback stays LTR");
+        assert!(meta_caption_layout(Locale::En, true).is_none());
+        assert!(meta_caption_layout(Locale::Fr, true).is_none());
+    }
 }
