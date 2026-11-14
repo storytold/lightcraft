@@ -1128,7 +1128,7 @@ fn hdr_jxl_export_is_pq_rec2020() {
     s.execute("develop.hdr", &json!({"enabled": true, "maxEv": 2})).unwrap();
     let hdr = export_photo(&mut s, id, &o, 1).unwrap();
     let encoding = |b: &[u8]| {
-        let dec = craft_jxl::decode(b, &craft_jxl::DecodeLimits::default()).unwrap();
+        let dec = craft_jxl::decode(b, craft_jxl::DecodeLimits::default()).unwrap();
         (dec.rendered_cicp, dec.bit_depth)
     };
     let (cicp, bits) = encoding(&hdr.bytes);

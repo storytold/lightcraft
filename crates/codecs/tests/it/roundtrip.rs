@@ -916,7 +916,7 @@ fn jxl_hdr_pq() {
         let o = JxlOptions { lossless, quality: 95, colour: JxlColour::Rec2020Pq, ..Default::default() };
         let b = encode_jxl(&EncodeImage::new(w as u32, h as u32, 3, Samples::F32(&px)), &o, &EncodeMeta::default()).unwrap();
         // the file's own samples: linear Rec. 2020 (1.0 = 203 cd/m², 4.0 = 812 cd/m²) and PQ CICP
-        let dec = craft_jxl::decode(&b, &craft_jxl::DecodeLimits::default()).unwrap();
+        let dec = craft_jxl::decode(&b, craft_jxl::DecodeLimits::default()).unwrap();
         assert_eq!(dec.rendered_cicp, Some([9, 16, 0, 1]));
         let ch = dec.layout.channels();
         let at = |x: usize| dec.pixels[((h / 2) * w + x) * ch + 1];
