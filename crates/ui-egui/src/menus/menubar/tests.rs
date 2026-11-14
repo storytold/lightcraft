@@ -852,3 +852,60 @@ fn edit_menu_places_the_select_and_paste_rows_with_their_kin() {
     let after = &nodes[pos("app.settings") + 1..];
     assert!(!after.iter().any(|n| matches!(n, MenuNode::Item { .. })), "no row follows Settings… but a submenu: {after:?}");
 }
+
+/// A folder-scoped later search keeps the relocated original and every owner as context.
+#[test]
+fn find_missing_within_follows_a_hashless_copys_original_outside_the_old_folder() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = std::env::temp_dir().join(format!("lc-ui-missing-copy-scope-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let old = dir.join("old");
+    let moved = dir.join("moved");
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::create_dir_all(&moved).unwrap();
+    let img = lightcraft_raster::Rgba8::from_fn(16, 12, |x, y| [(x * 9) as u8, (y * 11) as u8, 50, 255]);
+    let o = lightcraft_engine::export::ExportOptions { format: lightcraft_engine::export::ExportFormat::Png, ..Default::default() };
+    let bytes = lightcraft_engine::export::encode_image(&img, &o).unwrap();
+    std::fs::write(old.join("one.png"), &bytes).unwrap();
+    // A different missing photo outside the chosen old folder must not be relinked or counted.
+    std::fs::write(moved.join("outside.png"), &bytes).unwrap();
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    let mut ids = Vec::new();
+    for path in [old.join("one.png"), dir.join("elsewhere/outside.png")] {
+        let id = session.catalog.alloc_photo_id();
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let mut photo = Photo::new(id, Source::File { path: path.to_string_lossy().into() }, &name, "PNG", 16, 12, "2026-01-01T10:00:00");
+        photo.file_size = bytes.len() as u64;
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let original = ids[0];
+    let unrelated = ids[1];
+    session.execute("library.select", &json!({"ids": [original.0]})).unwrap();
+    let r = session.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = lightcraft_catalog::PhotoId(r["ids"][0].as_u64().unwrap());
+    assert!(session.catalog.photo(copy).unwrap().content_hash.is_none());
+    let target = moved.join("renamed.png");
+    std::fs::rename(old.join("one.png"), &target).unwrap();
+    session.execute("photo.relink", &json!({"id": original.0, "path": target})).unwrap();
+    let unrelated_before = session.catalog.photo(unrelated).unwrap().clone();
+    let copy_before = session.catalog.photo(copy).unwrap().clone();
+    let mut app = LightcraftApp::new(session, Default::default());
+    let params = json!({"folder": moved.to_string_lossy(), "within": old.to_string_lossy(), "wait": true});
+    let r = run_item(&mut app, "file.findMissing", params.clone()).unwrap();
+    assert_eq!(r["found"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["found"][0]["id"], copy.0, "{r}");
+    assert_eq!(r["found"][0]["by"], "original", "{r}");
+    assert_eq!(r["missing"], 0, "out-of-scope missing photos do not affect the count: {r}");
+    assert_eq!(app.session.catalog.photo(copy).unwrap().source, app.session.catalog.photo(original).unwrap().source);
+    assert_eq!(app.session.catalog.photo(unrelated).unwrap(), &unrelated_before);
+    app.session.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(app.session.catalog.photo(copy).unwrap(), &copy_before);
+    // An unrelated owner outside `within` must still block the shared destination.
+    app.session.execute("photo.relink", &json!({"id": unrelated.0, "path": target})).unwrap();
+    let r = run_item(&mut app, "file.findMissing", params).unwrap();
+    assert_eq!(r["found"].as_array().map(Vec::len), Some(0), "{r}");
+    assert_eq!(r["missing"], 1, "{r}");
+    assert_eq!(app.session.catalog.photo(copy).unwrap(), &copy_before);
+    let _ = std::fs::remove_dir_all(dir);
+}

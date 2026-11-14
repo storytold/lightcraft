@@ -494,6 +494,99 @@ fn find_missing_matches_renamed_files_by_content() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Issue #2853: copies share the original's file, but keep their own edits and metadata.
+#[test]
+fn find_missing_relinks_virtual_copies_in_one_undo_step() {
+    use crate::cmd::missing::{find_candidates, plan_find_missing};
+    let (dir, mut s) = renamed_and_ambiguous_scene("missing-copies");
+    let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let mut ids = vec![original];
+    for _ in 0..2 {
+        let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+        ids.push(PhotoId(r["ids"][0].as_u64().unwrap()));
+    }
+    s.execute("photo.rate", &json!({"ids": [ids[1].0], "rating": 5})).unwrap();
+    s.execute("library.select", &json!({"ids": [ids[1].0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.7})).unwrap();
+    let before: Vec<_> = ids.iter().map(|id| s.catalog.photo(*id).unwrap().clone()).collect();
+    let b_id = s.catalog.photos().find(|p| p.file_name == "b.png").unwrap().id;
+    let b_before = s.catalog.photo(b_id).unwrap().clone();
+    let mut candidates = find_candidates(&s.catalog);
+    // A copy may appear before its original in the worker's snapshot.
+    candidates.reverse();
+    let plan = plan_find_missing(&candidates, &dir.join("moved").to_string_lossy()).unwrap();
+    assert_eq!((plan.found.len(), plan.missing), (4, 1), "{plan:?}");
+    let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
+    assert_eq!(r["found"].as_array().unwrap().len(), 4, "{r}");
+    assert_eq!(r["missing"], 1);
+    for p in &before {
+        let mut expected = (**p).clone();
+        expected.source = lightcraft_catalog::Source::File { path: dir.join("moved").join("Trip-001.png").to_string_lossy().into() };
+        expected.file_name = "Trip-001.png".into();
+        assert_eq!(s.catalog.photo(p.id).unwrap().as_ref(), &expected);
+    }
+    s.execute("edit.undo", &json!({})).unwrap();
+    for p in &before {
+        assert_eq!(s.catalog.photo(p.id).unwrap(), p);
+    }
+    assert_eq!(s.catalog.photo(b_id).unwrap(), &b_before, "b.png is restored by the same undo step");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.execute("library.missing", &json!({})).unwrap().as_array().unwrap().len(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A located sibling may share its file; unrelated ownership blocks both new and stale plans.
+#[test]
+fn find_missing_virtual_copies_can_use_a_relinked_sibling_but_not_an_unrelated_photo() {
+    use crate::cmd::missing::{find_candidates, plan_find_missing};
+    let (dir, mut s) = renamed_and_ambiguous_scene("missing-copies-in-use");
+    let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let unrelated = s.catalog.photos().find(|p| p.file_name == "c.png").unwrap().id;
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let target = dir.join("moved").join("Trip-001.png").to_string_lossy().to_string();
+    // The copy was located by hand first. Its missing original can share that file.
+    s.execute("photo.relink", &json!({"id": copy.0, "path": target})).unwrap();
+    let plan = plan_find_missing(&find_candidates(&s.catalog), &dir.join("moved").to_string_lossy()).unwrap();
+    assert!(plan.found.iter().any(|f| f.id == original && f.to == target), "{plan:?}");
+    let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
+    assert_eq!(r["found"].as_array().unwrap().len(), 2, "{r}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    // An unrelated photo takes the destination while the worker's plan waits.
+    s.execute("photo.relink", &json!({"id": unrelated.0, "path": target})).unwrap();
+    let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
+    assert!(!r["found"].as_array().unwrap().iter().any(|f| f["id"] == original.0), "{r}");
+    assert_eq!(r["missing"], 1, "the original stays missing; the unrelated photo was located: {r}");
+    let fresh = plan_find_missing(&find_candidates(&s.catalog), &dir.join("moved").to_string_lossy()).unwrap();
+    assert!(!fresh.found.iter().any(|f| f.id == original), "{fresh:?}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A later search can locate a hashless copy through its already-renamed original.
+#[test]
+fn find_missing_virtual_copies_can_use_their_already_located_original_without_hashes() {
+    use crate::cmd::missing::{find_candidates, plan_find_missing};
+    let (dir, mut s) = renamed_and_ambiguous_scene("missing-copies-original");
+    let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let target = dir.join("moved").join("Trip-001.png");
+    s.execute("photo.relink", &json!({"id": original.0, "path": target})).unwrap();
+    let mut candidates = find_candidates(&s.catalog);
+    for c in &mut candidates {
+        if c.id == copy {
+            c.hash = None; // Lightroom imports may know only the file name and size.
+        }
+    }
+    let plan = plan_find_missing(&candidates, &dir.join("moved").to_string_lossy()).unwrap();
+    assert!(plan.found.iter().any(|f| f.id == copy && f.to == target.to_string_lossy()), "{plan:?}");
+    let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
+    assert_eq!(r["found"].as_array().unwrap().len(), 2, "{r}");
+    assert_eq!(s.catalog.photo(copy).unwrap().source, s.catalog.photo(original).unwrap().source);
+    assert_eq!(r["missing"], 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A renamed file whose size is unknown (0) but whose content hash is known is still found by
 /// content: the hash alone is enough to confirm it is the same photo.
 #[test]
@@ -3550,4 +3643,99 @@ fn a_broken_link_before_dotdot_is_an_error() {
     // without reading the disk the spelling is still the folder by name
     assert_eq!(crate::import::browse_spelling(&link.join("..")).unwrap(), dir);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A copy without a hash follows the renamed original even when it appears first in the snapshot.
+#[test]
+fn find_missing_hashless_copy_follows_renamed_original_in_either_order() {
+    use crate::cmd::missing::{FindPlan, find_candidates, plan_find_missing};
+    for (reverse, unknown_size) in [(false, false), (true, false), (false, true), (true, true)] {
+        let (dir, mut s) = renamed_and_ambiguous_scene(if reverse { "hashless-copy-first" } else { "hashless-original-first" });
+        let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+        let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+        let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+        // The original's content beats one misleading name match or several ambiguous ones.
+        let mut impostor = std::fs::read(dir.join("moved/Trip-001.png")).unwrap();
+        let at = impostor.len() - 20;
+        impostor[at] ^= 0xff;
+        for sub in ["lookalike1", "lookalike2"].into_iter().take(if reverse { 2 } else { 1 }) {
+            let parent = dir.join("moved").join(sub);
+            std::fs::create_dir_all(&parent).unwrap();
+            std::fs::write(parent.join("a.png"), &impostor).unwrap();
+        }
+        let mut candidates = find_candidates(&s.catalog);
+        for c in &mut candidates {
+            if c.id == copy {
+                c.hash = None;
+            }
+            if unknown_size && (c.id == original || c.id == copy) {
+                c.size = 0;
+            }
+        }
+        if reverse {
+            candidates.reverse();
+        }
+        let mut plan = plan_find_missing(&candidates, &dir.join("moved").to_string_lossy()).unwrap();
+        let target = dir.join("moved/Trip-001.png");
+        assert!(plan.found.iter().any(|f| f.id == copy && Path::new(&f.to) == target), "{plan:?}");
+        assert!(!plan.ambiguous.iter().any(|f| f.id == copy), "{plan:?}");
+        assert_eq!(FindPlan::from_json(&plan.to_json()), plan);
+        if reverse {
+            plan.found.reverse();
+            assert_eq!(plan.found[0].id, copy, "the submitted plan starts with the dependent copy");
+        }
+        let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
+        assert_eq!(r["found"].as_array().unwrap().len(), 3);
+        assert_eq!(r["missing"], 1);
+        assert_eq!(s.catalog.photo(copy).unwrap().source, s.catalog.photo(original).unwrap().source);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// An original's location is not evidence for an incompatible size, a known other hash, or an unrelated owner.
+#[test]
+fn find_missing_hashless_copy_rechecks_its_originals_destination() {
+    use crate::cmd::missing::{find_candidates, plan_find_missing};
+    let (dir, mut s) = renamed_and_ambiguous_scene("hashless-copy-guards");
+    let original = s.catalog.photos().find(|p| p.file_name == "a.png").unwrap().id;
+    let unrelated = s.catalog.photos().find(|p| p.file_name == "c.png").unwrap().id;
+    let r = s.execute("photo.virtualCopy", &json!({"ids": [original.0]})).unwrap();
+    let copy = PhotoId(r["ids"][0].as_u64().unwrap());
+    let target = dir.join("moved/Trip-001.png");
+    s.execute("photo.relink", &json!({"id": original.0, "path": target})).unwrap();
+    let folder = dir.join("moved");
+    let mut candidates = find_candidates(&s.catalog);
+    for c in &mut candidates {
+        if c.id == copy {
+            c.hash = None;
+            c.size += 1;
+        }
+    }
+    let incompatible = plan_find_missing(&candidates, &folder.to_string_lossy()).unwrap();
+    assert!(!incompatible.found.iter().any(|f| f.id == copy), "{incompatible:?}");
+    for c in &mut candidates {
+        if c.id == copy {
+            c.size -= 1;
+            c.hash = Some("different-content".into());
+        }
+    }
+    let incompatible = plan_find_missing(&candidates, &folder.to_string_lossy()).unwrap();
+    assert!(!incompatible.found.iter().any(|f| f.id == copy), "{incompatible:?}");
+    for c in &mut candidates {
+        if c.id == copy {
+            c.hash = None;
+        }
+    }
+    let outside = plan_find_missing(&candidates, &folder.join("real").to_string_lossy()).unwrap();
+    assert!(!outside.found.iter().any(|f| f.id == copy), "the original is outside this search: {outside:?}");
+    let plan = plan_find_missing(&candidates, &folder.to_string_lossy()).unwrap();
+    assert!(plan.found.iter().any(|f| f.id == copy), "{plan:?}");
+    s.execute("photo.relink", &json!({"id": original.0, "path": folder.join("b.png")})).unwrap();
+    let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
+    assert!(!r["found"].as_array().unwrap().iter().any(|f| f["id"] == copy.0), "the original moved meanwhile: {r}");
+    s.execute("photo.relink", &json!({"id": original.0, "path": target})).unwrap();
+    s.execute("photo.relink", &json!({"id": unrelated.0, "path": target})).unwrap();
+    let r = s.execute("library.findMissing", &plan.to_json()).unwrap();
+    assert!(!r["found"].as_array().unwrap().iter().any(|f| f["id"] == copy.0), "{r}");
+    let _ = std::fs::remove_dir_all(dir);
 }

@@ -1822,10 +1822,8 @@ fn file_find_missing_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Re
     if app.tasks.is_running(LABEL) {
         return Err("Find Missing Photos is already searching".into());
     }
-    let mut candidates = lightcraft_engine::cmd::missing::find_candidates(&app.session.catalog);
-    if let Some(within) = within {
-        candidates.retain(|candidate| lightcraft_catalog::query::folder_within(&candidate.path, &within));
-    }
+    // Keep originals and file owners outside the scope; only the worker's relink targets are scoped.
+    let candidates = lightcraft_engine::cmd::missing::find_candidates(&app.session.catalog);
     #[cfg(test)]
     let test_delay = app.ui.find_missing_test_delay;
     let work = move || {
@@ -1833,7 +1831,7 @@ fn file_find_missing_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Re
         if let Some(d) = test_delay {
             std::thread::sleep(d);
         }
-        lightcraft_engine::cmd::missing::plan_find_missing(&candidates, &folder)
+        lightcraft_engine::cmd::missing::plan_find_missing_within(&candidates, &folder, within.as_deref())
     };
     app.ui.last_find_missing = None;
     app.ui.last_find_missing_result = None;

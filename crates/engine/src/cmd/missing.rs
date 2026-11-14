@@ -245,20 +245,51 @@ mod tests {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FindCandidate {
     pub id: PhotoId,
+    /// The original shared by this photo and its virtual copies.
+    pub master: PhotoId,
     pub path: String,
     pub size: u64,
     pub hash: Option<String>,
 }
 
 /// Every in-scope photo, for [`plan_find_missing`]: the missing ones are looked for, and no
-/// photo's file is used for another. No file-system calls, so the app takes this snapshot on the
-/// UI thread and plans on a worker without holding the session.
+/// photo's file is used for an unrelated photo. No file-system calls: the app takes this snapshot
+/// on the UI thread and plans on a worker without holding the session.
 pub fn find_candidates(cat: &Catalog) -> Vec<FindCandidate> {
     cat.photos()
         .filter_map(|p| {
-            checked_path(p).map(|f| FindCandidate { id: p.id, path: f.to_string(), size: p.file_size, hash: stored_hash(p).map(str::to_string) })
+            checked_path(p).map(|f| FindCandidate {
+                id: p.id,
+                master: p.copy_of.unwrap_or(p.id),
+                path: f.to_string(),
+                size: p.file_size,
+                hash: stored_hash(p).map(str::to_string),
+            })
         })
         .collect()
+}
+
+/// A file can belong to one original and its virtual copies. `None` marks a file
+/// claimed by unrelated originals: it must not be offered to either family.
+#[derive(Default)]
+struct FileOwners(HashMap<String, Option<PhotoId>>);
+
+impl FileOwners {
+    /// Record a family, keeping conflicts sticky even if that family claims the path again.
+    fn claim(&mut self, path: &str, master: PhotoId) {
+        if let Some(owner) = self.0.get_mut(path) {
+            if *owner != Some(master) {
+                *owner = None;
+            }
+        } else {
+            self.0.insert(path.to_string(), Some(master));
+        }
+    }
+
+    /// Only unclaimed paths and paths owned exclusively by this family may be used.
+    fn available(&self, path: &str, master: PhotoId) -> bool {
+        self.0.get(path).is_none_or(|owner| *owner == Some(master))
+    }
 }
 
 /// How a missing photo's file was recognised.
@@ -268,13 +299,17 @@ pub enum MatchBy {
     Name,
     /// Renamed: same content hash (and size, when the library knows it).
     Content,
+    /// A hashless virtual copy shares the file located for its original.
+    Original,
 }
 
 impl MatchBy {
+    /// Stable identifier used by the command result and worker-plan round trip.
     pub fn as_str(self) -> &'static str {
         match self {
             MatchBy::Name => "name",
             MatchBy::Content => "content",
+            MatchBy::Original => "original",
         }
     }
 }
@@ -321,7 +356,11 @@ impl FindPlan {
         let found = list("found")
             .iter()
             .filter_map(|f| {
-                let by = if f.get("by").and_then(Value::as_str) == Some("content") { MatchBy::Content } else { MatchBy::Name };
+                let by = match f.get("by").and_then(Value::as_str) {
+                    Some("content") => MatchBy::Content,
+                    Some("original") => MatchBy::Original,
+                    _ => MatchBy::Name,
+                };
                 Some(FoundFile {
                     id: PhotoId(f.get("id")?.as_u64()?),
                     from: str_param(f, "from")?.to_string(),
@@ -366,42 +405,95 @@ fn name_key(path: &str) -> String {
 ///    name and size. Several such files are ambiguous: the photo is skipped and reported in
 ///    `ambiguous`, never guessed (two cameras' `IMG_0001.CR3` of one size are different photos).
 ///
-/// Files that are already some photo's original, or that another photo was just matched with,
-/// are not used.
+/// Files already owned or matched are shared only within an original and its virtual copies.
+/// Originals are matched before hashless copies, which prefer their original's located file over
+/// a name-only match. The file must be in the searched folder and its known size must agree.
 pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::result::Result<FindPlan, String> {
+    plan_find_missing_within(candidates, folder, None)
+}
+
+/// Limit relink targets to `within`, retaining every candidate for original and ownership context.
+/// Filtering the snapshot itself would hide already-located originals and unrelated file owners.
+pub fn plan_find_missing_within(candidates: &[FindCandidate], folder: &str, within: Option<&str>) -> std::result::Result<FindPlan, String> {
     if !Path::new(folder).is_dir() {
         return Err(format!("{folder}: not a folder"));
     }
     if cfg!(target_arch = "wasm32") {
         return Ok(FindPlan::default());
     }
-    let lost: Vec<&FindCandidate> = candidates.iter().filter(|c| !Path::new(&c.path).exists()).collect();
+    let mut lost: Vec<&FindCandidate> = candidates
+        .iter()
+        .filter(|c| within.is_none_or(|folder| lightcraft_catalog::query::folder_within(&c.path, folder)))
+        .filter(|c| !Path::new(&c.path).exists())
+        .collect();
     if lost.is_empty() {
         return Ok(FindPlan::default());
     }
-    let in_use: HashSet<&str> = candidates.iter().map(|c| c.path.as_str()).collect();
+    // Stable order within each group: no hashless copy guesses by name before its original is found.
+    lost.sort_by_key(|c| c.id != c.master && c.hash.is_none());
+    let mut owners = FileOwners::default();
+    for c in candidates {
+        owners.claim(&c.path, c.master);
+    }
+    // Keep already-located files only when a missing member of their family could use them.
+    // Otherwise a renamed-file search would stat the entire already-located library again.
+    let wanted: HashSet<PhotoId> = lost.iter().map(|c| c.master).collect();
     // file name (lower case) → candidate paths; size → paths (filled lazily)
     let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
-    let files: Vec<String> = crate::import::expand(&[folder.to_string()], None).into_iter().filter(|f| !in_use.contains(f.as_str())).collect();
+    let files: Vec<String> = crate::import::expand(&[folder.to_string()], None)
+        .into_iter()
+        .filter(|f| owners.0.get(f).is_none_or(|owner| owner.is_some_and(|master| wanted.contains(&master))))
+        .collect();
     for f in &files {
         let name = name_key(f);
         if !name.is_empty() {
             by_name.entry(name).or_default().push(f.clone());
         }
     }
+    // Only the original is authoritative for a hashless copy; another copy may have been
+    // deliberately relinked to a different file. Restrict existing originals to this search.
+    let originals: HashMap<PhotoId, &str> =
+        candidates.iter().filter(|c| c.id == c.master && wanted.contains(&c.id)).map(|c| (c.id, c.path.as_str())).collect();
+    let mut located = HashMap::new();
+    for path in &files {
+        if let Some(Some(master)) = owners.0.get(path)
+            && originals.get(master).is_some_and(|original| *original == path.as_str())
+        {
+            located.insert(*master, path.clone());
+        }
+    }
     let mut by_size: Option<HashMap<u64, Vec<String>>> = None;
     let mut hashes: HashMap<String, Option<String>> = HashMap::new();
     let mut hash_of = |f: &str| hashes.entry(f.to_string()).or_insert_with(|| file_hash(f)).clone();
-    let size_of = |f: &str| std::fs::metadata(f).map(|m| m.len()).ok();
-    let mut used: HashSet<String> = HashSet::new();
+    // Reuse successful and failed stats throughout this search, especially across virtual copies
+    // on a network share. Like the content hashes, sizes describe this worker's search snapshot.
+    let mut sizes = HashMap::new();
+    let mut size_of = |f: &str| {
+        if let Some(size) = sizes.get(f) {
+            return *size;
+        }
+        let size = std::fs::metadata(f).map(|m| m.len()).ok();
+        sizes.insert(f.to_string(), size);
+        size
+    };
     let mut plan = FindPlan::default();
     for c in &lost {
+        if c.id != c.master
+            && c.hash.is_none()
+            && let Some(path) = located.get(&c.master)
+            && owners.available(path, c.master)
+            && (c.size == 0 || size_of(path) == Some(c.size))
+        {
+            owners.claim(path, c.master);
+            plan.found.push(FoundFile { id: c.id, from: c.path.clone(), to: path.clone(), by: MatchBy::Original });
+            continue;
+        }
         let name = name_key(&c.path);
         let size = c.size;
         let hash = c.hash.as_deref();
         let named: Vec<&String> = by_name
             .get(&name)
-            .map(|v| v.iter().filter(|f| !used.contains(*f) && (size == 0 || size_of(f) == Some(size))).collect())
+            .map(|v| v.iter().filter(|f| owners.available(f, c.master) && (size == 0 || size_of(f) == Some(size))).collect())
             .unwrap_or_default();
         // 1. same name and size, confirmed by the content hash
         let mut hit: Option<(String, MatchBy)> =
@@ -422,10 +514,10 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
                 });
                 hit = sizes
                     .get(&size)
-                    .and_then(|v| v.iter().find(|f| !used.contains(*f) && hash_of(f).as_deref() == Some(h)))
+                    .and_then(|v| v.iter().find(|f| owners.available(f, c.master) && hash_of(f).as_deref() == Some(h)))
                     .map(|f| (f.clone(), MatchBy::Content));
             } else {
-                hit = files.iter().find(|f| !used.contains(*f) && hash_of(f).as_deref() == Some(h)).map(|f| (f.clone(), MatchBy::Content));
+                hit = files.iter().find(|f| owners.available(f, c.master) && hash_of(f).as_deref() == Some(h)).map(|f| (f.clone(), MatchBy::Content));
             }
         }
         // 3. same name and size only (no hash, or the file was edited in place): one candidate
@@ -441,7 +533,10 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
             }
         }
         let Some((path, by)) = hit else { continue };
-        used.insert(path.clone());
+        owners.claim(&path, c.master);
+        if originals.contains_key(&c.id) {
+            located.insert(c.id, path.clone());
+        }
         plan.found.push(FoundFile { id: c.id, from: c.path.clone(), to: path, by });
     }
     plan.missing = lost.len() - plan.found.len();
@@ -451,23 +546,46 @@ pub fn plan_find_missing(candidates: &[FindCandidate], folder: &str) -> std::res
 /// Relink what [`plan_find_missing`] found, in one undoable step, re-checked against the
 /// catalog as it is now (the search may have run on a worker while the library changed): a
 /// photo that no longer points at the path it was missing from (relinked, removed) is left
-/// alone, and a file that is now some photo's original — or that the plan names twice — is not
-/// used (that photo stays missing). `missing` is the plan's count, corrected for what changed
-/// among the photos the plan names.
-fn commit_find(s: &mut Session, plan: FindPlan) -> Result<Value> {
+/// alone, and a file now owned by an unrelated original is not used (that photo stays missing).
+/// Related originals and copies may share it; duplicate plan entries never relink a photo twice.
+/// A copy matched through its original is skipped if that original was moved or removed meanwhile.
+/// `missing` is the plan's count, corrected for what changed among the photos the plan names.
+fn commit_find(s: &mut Session, mut plan: FindPlan) -> Result<Value> {
     let still_at = |cat: &Catalog, id: PhotoId, from: &str| cat.photo(id).and_then(|p| checked_path(p)) == Some(from);
-    let mut in_use: HashSet<String> = candidates(&s.catalog).into_iter().collect();
-    let mut found = Vec::new();
+    let mut owners = FileOwners::default();
+    for p in s.catalog.photos() {
+        if let Some(path) = checked_path(p) {
+            owners.claim(path, p.copy_of.unwrap_or(p.id));
+        }
+    }
+    let mut seen = HashSet::new();
+    // Submitted worker plans need not retain the planner's order. Validate independent entries
+    // first, so an original must pass the same stale-path and ownership checks before its copies.
+    plan.found.sort_by_key(|f| matches!(f.by, MatchBy::Original));
+    let mut accepted_originals = HashMap::new();
+    let mut found: Vec<FoundFile> = Vec::new();
     let mut missing = plan.missing;
     for f in plan.found {
         if !still_at(&s.catalog, f.id, &f.from) {
             continue;
         }
-        if in_use.contains(&f.to) {
-            missing += 1;
+        let Some(p) = s.catalog.photo(f.id) else { continue };
+        let master = p.copy_of.unwrap_or(p.id);
+        if !seen.insert(f.id) {
             continue;
         }
-        in_use.insert(f.to.clone());
+        let original_still_matches = !matches!(f.by, MatchBy::Original)
+            || (p.id != master
+                && (s.catalog.photo(master).and_then(|original| checked_path(original)) == Some(f.to.as_str())
+                    || accepted_originals.get(&master) == Some(&f.to)));
+        if !owners.available(&f.to, master) || !original_still_matches {
+            missing = missing.saturating_add(1);
+            continue;
+        }
+        owners.claim(&f.to, master);
+        if p.id == master {
+            accepted_originals.insert(master, f.to.clone());
+        }
         found.push(f);
     }
     let planned = plan.ambiguous.len();
@@ -496,6 +614,7 @@ fn find_missing(s: &mut Session, p: &Value) -> Result<Value> {
     commit_find(s, plan)
 }
 
+/// Missing-file queries and the undoable locate/find commands shared by every frontend.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "library.missing", "Missing Photos", [], None, "{} → [{id, path}] — photos whose original file isn't where the library expects it (every file is looked at: on a network share that takes minutes, so the desktop app, asked over its control channel, checks on a worker thread, with a row in the activity stack that can stop it, and answers when it is done)", always, |s, _| {
@@ -515,7 +634,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Missing Photos",
             [],
             None,
-            "{folder} — relink every missing photo whose file is somewhere in the folder: same name and size (and content, when the library knows its hash), or — renamed — same size and content; or {found, missing, ambiguous} — relink what a search already found (the app searches on a worker thread; photos relinked meanwhile and files now in use are skipped) → {found: [{id, from, to, by: name|content}], missing, ambiguous: [{id, from, candidates}] (several same-name candidates and no hash to tell them apart: skipped)}",
+            "{folder} — relink every missing photo whose file is somewhere in the folder: same name and size (and content, when the library knows its hash), or — renamed — same size and content; a virtual copy without a hash may use its original's located file when its known size agrees; or {found, missing, ambiguous} — relink what a search already found (the app searches on a worker thread; photos relinked meanwhile and files now used by unrelated photos are skipped; originals and virtual copies may share a file) → {found: [{id, from, to, by: name|content|original}], missing, ambiguous: [{id, from, candidates}] (several same-name candidates and no hash or located original to tell them apart: skipped)}",
             always,
             find_missing
         ),
