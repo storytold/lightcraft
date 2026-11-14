@@ -21,7 +21,7 @@ What Lightroom does with the machine's hardware, per platform, and what LightCra
 | Printers | ✅ Print module, printer colour management | ⬜ (PDF contact sheets only) | ⬜ | ⬜ | — | ⬜ |
 | Control surfaces (MIDI / Loupedeck via plug-ins) | via SDK plug-ins | control channel and MCP can drive every command | same | same | — | 🟡 different mechanism; no MIDI mapping |
 | Multi-core CPU | ✅ | ✅ worker pools, parallel JPEG decode, parallel import copy | ✅ | ✅ | single thread | ✅ |
-| Memory pressure | managed | ✅ memory budget, `crates/sysmem` returns allocator pages on macOS | ✅ budget | ✅ budget | — | ✅ |
+| Memory pressure | managed | ✅ memory budget, `crates/sysmem` returns allocator pages on macOS | ✅ budget from the RAM, held to the job object's memory limit | ✅ budget | — | ✅ |
 
 ## Score
 
@@ -49,6 +49,7 @@ NVIDIA, Intel and Windows DX12 still rely on user reports.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | minor | Memory pressure: Windows sizes the memory budget from the RAM, held to the job object's memory limit (#3652) |
 | 2026-10-20 | minor | Monitor profile: Windows reads the window's monitor profile from Windows Color System (`crates/wincolor`), sRGB while Windows colour-manages the desktop; verified on Windows 11 by setting and clearing a Display P3 profile while the app ran. Remaining monitor-profile work 4–8 h → 2–4 h |
 | 2026-10-12 | minor | Monitor profile: Linux reads the display profile from colord; macOS row reflects #787 |
 | 2026-10-12 | minor | CPU ↔ GPU equivalence suite run on an AMD Radeon 8060S (Vulkan, RADV, Linux): 16 tests / 135 cases pass, max 2 LSB, mean ≤ 0.0003; first GPU verified outside Apple |

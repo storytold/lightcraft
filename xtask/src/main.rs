@@ -26,7 +26,7 @@ mod corpus;
 mod raw_samples;
 mod wasm;
 
-use ci::{available_ram_mb, ci_jobs, cmd_ci, total_ram_gb};
+use ci::{cmd_ci, machine_ci_sizing};
 use corpus::cmd_corpus;
 use layers::cmd_layers;
 use wasm::cmd_wasm;
@@ -143,14 +143,8 @@ pub fn cargo() -> Command {
     // tests run. Scope these overridable defaults to CI, including parity/WASM
     // subprocesses, without changing ordinary developer builds or GPU coverage.
     if std::env::args().nth(1).as_deref() == Some("ci") {
-        static JOBS: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
-        let (build, threads) = JOBS.get_or_init(|| {
-            let ram_mb = available_ram_mb().or_else(|| total_ram_gb().map(|gb| gb.saturating_mul(1024) / 2));
-            let jobs = ci_jobs(ram_mb, std::thread::available_parallelism().map_or(4, |n| n.get()));
-            // More test threads barely shorten CI (a few heavy tests dominate) but make the
-            // wall-clock frame-budget tests flaky on a loaded machine.
-            (jobs.to_string(), jobs.min(4).to_string())
-        });
+        let (build, threads) = machine_ci_sizing();
+        let (build, threads) = (build.to_string(), threads.to_string());
         for (key, value) in [
             ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
             ("CARGO_BUILD_JOBS", build.as_str()),
