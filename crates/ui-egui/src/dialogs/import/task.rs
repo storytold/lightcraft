@@ -486,10 +486,13 @@ fn warning_line(w: &ImportWarning, n: usize) -> String {
             }
         }
         ImportWarningCode::UnmappedXmp => {
-            let mut list = w.fields.iter().take(MAX_WARNING_FIELDS).cloned().collect::<Vec<_>>().join(", ");
-            if w.fields.len() > MAX_WARNING_FIELDS {
+            // the grouping key is the sorted set: the line shows the same canonical order
+            let mut fields = w.fields.clone();
+            fields.sort_unstable();
+            let mut list = fields.iter().take(MAX_WARNING_FIELDS).map(String::as_str).collect::<Vec<_>>().join(", ");
+            if fields.len() > MAX_WARNING_FIELDS {
                 list.push_str(", ");
-                list.push_str(&crate::i18n::tr_format!("+{n} more", n = w.fields.len() - MAX_WARNING_FIELDS));
+                list.push_str(&crate::i18n::tr_format!("+{n} more", n = fields.len() - MAX_WARNING_FIELDS));
             }
             crate::i18n::tr_format!("XMP adjustments were not imported for {n} photo{s}: {fields}.", n = n, fields = list,)
         }
