@@ -295,7 +295,7 @@
   "Move {n} photo{} to “{}”": "Perkelti {n} nuotrauką{} į „{}“",
   "Move {n} photo{} to “{}”?": "Perkelti {n} nuotrauką{} į „{}“?",
   "Listing folders — folders: {folders}, files: {files}": "Išvardijami aplankai – aplankų: {folders}, failų: {files}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Į „{}“ perkeltos {n} nuotraukos{}. Redagavimas → Anuliuoti grąžina jas atgal.",
+  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Į „{1}“ perkeltos {n} nuotraukos{0}. Redagavimas → Anuliuoti grąžina jas atgal.",
   "Drop to review {n} item{} for import": "Nuvilkite, kad peržiūrėtumėte importuojamus elementus ({n}{})",
   "Drop to import {n} item{}": "Nuvilkite, kad importuotumėte elementus ({n}{})",
   "Drop to import {n} preset{}": "Nuvilkite, kad importuotumėte išankstines nuostatas ({n}{})",
