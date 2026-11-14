@@ -477,11 +477,14 @@ fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32, top: f32) -> vec3<f32> {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
     let h = pu(F_H);
-    let x = gid.x;
-    let y = gid.y + pu(F_Y0);
-    if (x >= w || y >= h) {
+    let ox = gid.x;
+    let row = gid.y + pu(F_Y0);
+    let ow = pu(F_KEEP_W);
+    if (ox >= ow || row >= pu(F_KEEP_H)) {
         return;
     }
+    let x = ox + pu(F_KEEP_X);
+    let y = row + pu(F_KEEP_Y);
     let i = y * w + x;
     let n = w * h;
     let gain = pf(F_GAIN);
@@ -787,7 +790,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (deep) {
         // `finish_deep`: linear, 0..peak. The sign bit a value in that range leaves free says the
         // word was written (`DEEP_WRITTEN`: `out` starts cleared, and 0 is a valid value).
-        let o3 = 3u * i;
+        let o3 = 3u * (row * ow + ox);
         for (var k = 0u; k < 3u; k++) {
             let v = select(0.0, min(srgb_linear(e[k]), peak), e[k] > 0.0);
             out[o3 + k] = bitcast<u32>(v) | DEEP_WRITTEN;
@@ -798,5 +801,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let abs_x = u32(pf(F_VIG_VIEW)) + x;
     let abs_y = u32(pf(F_VIG_VIEW + 1u)) + y;
     let dither = (BAYER_8X8[(abs_y & 7u) * 8u + (abs_x & 7u)] + 0.5) / 64.0;
-    out[i] = enc8(e.x, dither) | (enc8(e.y, dither) << 8u) | (enc8(e.z, dither) << 16u) | (255u << 24u);
+    out[row * ow + ox] = enc8(e.x, dither) | (enc8(e.y, dither) << 8u) | (enc8(e.z, dither) << 16u) | (255u << 24u);
 }
