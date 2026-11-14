@@ -25,5 +25,11 @@ chacha20poly1305 = { version = "0.10", default-features = false, features = ["al
 # SO_REUSEADDR / SO_REUSEPORT on the mDNS socket (several copies of the app on one machine)
 socket2 = { version = "0.6", features = ["all"] }
 
+# Lists the network interfaces (getifaddrs), to join the mDNS group on each of them. Rust bindings
+# to the system library, nothing compiled from C; already in the lock. Other systems join on the
+# default interface only.
+[target.'cfg(any(target_os = "linux", target_os = "macos", target_os = "ios", target_os = "freebsd"))'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["net"] }
+
 [dev-dependencies]
 lcc-testkit = { workspace = true }
