@@ -96,6 +96,13 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### No point added on top of another on the point curve
+- Clicking the point curve's graph level with a point, but away from it, added a second point at the same spot in the
+  input range, and the curve fell off a cliff between the two. A drag already kept a point at least 1 % of the graph
+  from its neighbours (neighbours less than 2 % apart, as in a curve stored before this change or read from a file,
+  leave no room: the dragged point stays midway between them); adding a point now keeps the same distance from every
+  point, so a click or a drag that begins that close to a point adds nothing.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
