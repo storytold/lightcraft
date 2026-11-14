@@ -29,6 +29,7 @@ fn next_seed(prev: u64, now: &str) -> u64 {
     (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
 }
 
+/// Describe library commands and validate their parameters before dispatch, including per-import share grants.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ---- view source / filter / sort
@@ -1301,13 +1302,23 @@ pub fn specs() -> Vec<CommandSpec> {
             ok()
         }),
         // ---- import
+        cmd!(query "library.lightroomNetworkSources", "Review Lightroom Network Sources", [], None,
+        "{path: .lrcat or Lightroom backup .zip} → {networkSources: [UNC share]}; reads catalog root folders only, without contacting photo sources",
+        always, |s, p| {
+            let path = str_param(p, "path").ok_or_else(|| bad("library.lightroomNetworkSources", "missing path"))?;
+            let temp = crate::lightroom_catalog::backup_temp_root(s);
+            let shares = crate::lightroom_catalog::network_sources_from_source(std::path::Path::new(path), temp.as_deref(), &Default::default())
+                .map_err(|e| bad("library.lightroomNetworkSources", e))?;
+            Ok(json!({"networkSources": shares}))
+        }),
         cmd!(query "library.inspectLightroom", "Inspect Lightroom Catalog", [], None,
-        "{path: .lrcat, or a Lightroom catalog backup .zip} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
+        "{path: .lrcat or Lightroom backup .zip, networkShares?: [UNC folder]} → {photos, collections, missing, warnings}; read-only, no Lightroom required",
         always, |s, p| {
             let path = str_param(p,"path").ok_or_else(|| bad("library.inspectLightroom","missing path"))?;
+            let shares = crate::doc_path::NetworkShares::from_params(p).map_err(|e| bad("library.inspectLightroom", e))?;
             let (cancel, total, done) = Default::default();
             let temp = crate::lightroom_catalog::backup_temp_root(s);
-            let data = crate::lightroom_catalog::read_source(std::path::Path::new(path), temp.as_deref(), &cancel, &total, &done)
+            let data = crate::lightroom_catalog::read_source_with_network_shares(std::path::Path::new(path), temp.as_deref(), &shares, &cancel, &total, &done)
                 .map_err(|e| bad("library.inspectLightroom",e))?;
             Ok(json!({"photos":data.photos.len(),"collections":data.collections.iter().filter(|r|r.get("systemOnly").and_then(Value::as_f64).unwrap_or(0.0)==0.0).count(),"missing":data.photos.iter().filter(|p| !p.original_is_file()).map(|p|&p.path).collect::<Vec<_>>(),"warnings":data.warnings,"skipped":data.skipped}))
         }),
@@ -1316,11 +1327,12 @@ pub fn specs() -> Vec<CommandSpec> {
             "Import Lightroom Catalog",
             [],
             None,
-            "{path: .lrcat, or a Lightroom catalog backup .zip (unpacked to a temporary folder in the library, removed after reading; the zip is not changed), updateExisting?: false}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
+            "{path: .lrcat, or a Lightroom catalog backup .zip (unpacked to a temporary folder in the library, removed after reading; the zip is not changed), updateExisting?: false, networkShares?: [UNC folder]}; direct import of paths, ratings, flags, metadata, keywords, collections, virtual copies & mapped edits. Archives source settings/history first. Existing edited photos are preserved unless updateExisting=true; source catalog is read-only.",
             always,
             |s, p| {
                 let path = str_param(p, "path").ok_or_else(|| bad("library.importLightroom", "missing path"))?;
-                crate::lightroom_catalog::import(s, std::path::Path::new(path), bool_or(p, "updateExisting", false))
+                let shares = crate::doc_path::NetworkShares::from_params(p).map_err(|e| bad("library.importLightroom", e))?;
+                crate::lightroom_catalog::import_with_network_shares(s, std::path::Path::new(path), bool_or(p, "updateExisting", false), shares)
             }
         ),
         cmd!(

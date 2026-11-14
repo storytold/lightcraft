@@ -2515,5 +2515,8 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "Network sources in this catalog": "Nätverkskällor i den här katalogen",
+  "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.": "Välj vilka nätverksresurser LightCraft får läsa vid den här importen. Katalogen och dina foton ligger kvar där de är. Källor som inte är markerade importeras inte.",
+  "Select up to 32 network sources for this import.": "Välj upp till 32 nätverkskällor för den här importen."
 }

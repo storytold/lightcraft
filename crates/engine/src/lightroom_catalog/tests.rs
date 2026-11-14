@@ -1,5 +1,29 @@
 use super::*;
 use lightcraft_geom::CropGeometry;
+
+/// Each fixture owns only its uniquely created file, including when an assertion unwinds.
+struct CatalogFixture(PathBuf);
+
+impl CatalogFixture {
+    fn new(bytes: &[u8]) -> Self {
+        use std::io::Write;
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("lc-source-review-{}-{stamp}-{}.lrcat", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+        let fixture = Self(path);
+        file.write_all(bytes).unwrap();
+        fixture
+    }
+}
+
+impl Drop for CatalogFixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 fn row(v: Value) -> Row {
     serde_json::from_value(v).unwrap()
 }
@@ -1657,6 +1681,67 @@ fn a_root_missing_here_is_found_relative_to_the_catalog() {
 }
 
 #[test]
+/// Source discovery deduplicates catalog paths without touching their remote originals.
+fn discovers_distinct_network_sources_without_reading_originals() {
+    use SqlValue::{Integer as I, Text as T};
+    let paths = [
+        r"\\192.0.2.1\Photos\Trip",
+        "//192.0.2.1/photos/Family",
+        r"\\?\UNC\192.0.2.1\Photos\Other",
+        r"\\192.0.2.2\archive\Old",
+        r"\\192.0.2.1\photos-private",
+        "C:/Local",
+        r"\\.\COM1",
+        "file://192.0.2.3/photos/a.jpg",
+    ];
+    let roots = paths.iter().enumerate().map(|(i, path)| vec![I(i as i64 + 1), T((*path).into())]).collect();
+    let bytes = native_catalog_rows(&[("AgLibraryRootFolder", "id_local INTEGER PRIMARY KEY, absolutePath TEXT", roots)], None);
+    let fixture = CatalogFixture::new(&bytes);
+    let source = fixture.0.clone();
+    let expected = vec![r"\\192.0.2.1\Photos", r"\\192.0.2.1\photos-private", r"\\192.0.2.2\archive"];
+    assert_eq!(network_sources(&source).unwrap(), expected);
+    let mut session = crate::Session::new();
+    let before = session.catalog.to_snapshot();
+    let result = session.execute("library.lightroomNetworkSources", &json!({"path":source})).unwrap();
+    assert_eq!(result["networkSources"], json!(expected));
+    assert_eq!(session.catalog.to_snapshot(), before);
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+}
+
+/// Selecting a NAS share changes only this read's path policy; the local catalog is untouched.
+/// `relativePathFromCatalog` is empty, so this reader test performs no network filesystem calls.
+#[test]
+fn a_local_catalog_can_reference_an_explicitly_selected_network_share() {
+    let bytes = native_catalog(&photo_tables((r"\\192.0.2.1\photos\", "")));
+    let fixture = CatalogFixture::new(&bytes);
+    let source = fixture.0.clone();
+    let chosen = NetworkShares::new(vec![r"\\192.0.2.1\photos\chosen-folder".into()]).unwrap();
+    let catalog = read_with_network_shares(&source, &chosen).unwrap();
+    assert_eq!(catalog.photos.len(), 1);
+    #[cfg(windows)]
+    assert_eq!(catalog.photos[0].original, Original::Local);
+    #[cfg(not(windows))]
+    assert_eq!(catalog.photos[0].original, Original::NotHere);
+    assert!(!catalog.warnings.iter().any(|w| w.contains("not opened")), "{:?}", catalog.warnings);
+    let other = NetworkShares::new(vec![r"\\192.0.2.1\photos-private".into()]).unwrap();
+    assert!(matches!(read_with_network_shares(&source, &other).unwrap().photos[0].original, Original::Refused(_)));
+    assert!(matches!(read(&source).unwrap().photos[0].original, Original::Refused(_)), "permission must not persist in the catalog");
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+}
+
+#[test]
+/// Malformed grants fail before catalog reads or library changes.
+fn invalid_network_share_options_fail_before_reading_or_changing_the_library() {
+    let mut session = crate::Session::new();
+    let before = session.catalog.to_snapshot();
+    for command in ["library.inspectLightroom", "library.importLightroom"] {
+        let error = session.execute(command, &json!({"path":"missing.lrcat", "networkShares":true})).unwrap_err();
+        assert!(error.to_string().contains("networkShares"), "{error}");
+    }
+    assert_eq!(session.catalog.to_snapshot(), before);
+}
+
+#[test]
 fn originals_on_other_computers_are_never_looked_at_or_added() {
     let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-remote-roots-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -1726,9 +1811,165 @@ fn oversized_optional_table_warns_and_is_skipped() {
     page[8..10].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
     page[5..7].copy_from_slice(&u16::try_from(start).unwrap_or(0).to_be_bytes());
     let db = Database::open_with_wal(main, &[]).unwrap();
-    let reader = Reader { db, tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }] };
+    let reader = Reader {
+        db,
+        tables: vec![LiveTable { name: "optional_history".into(), rootpage: 2, column_names: Some(vec!["payload".into()]) }],
+        wal_path: PathBuf::new(),
+        wal_before: None,
+    };
     let mut warnings = Vec::new();
-    let rows = reader.optional_table("optional_history", &mut warnings).unwrap();
+    let rows = reader.optional_table("optional_history", &mut warnings, &AtomicBool::new(false)).unwrap();
     assert!(rows.is_empty());
     assert!(warnings.iter().any(|warning| warning.contains("optional_history")));
+}
+
+/// Discovery must offer every source even when the caller can select only 32 per import.
+#[test]
+fn discovery_lists_more_than_thirty_two_shares() {
+    use SqlValue::Text;
+    let roots: Vec<_> = (0..40).map(|i| vec![Text(format!(r"\\nas\s{i:02}"))]).collect();
+    let bytes = native_catalog_rows(&[("AgLibraryRootFolder", "absolutePath TEXT", roots)], None);
+    let fixture = CatalogFixture::new(&bytes);
+    let source = fixture.0.clone();
+    let shares = network_sources(&source).unwrap();
+    assert_eq!(shares.len(), 40);
+    assert!(NetworkShares::new(shares[..32].to_vec()).is_ok());
+    assert!(NetworkShares::new(Vec::new()).is_ok());
+}
+
+/// Explicitly unchecked roots stay refused even when a catalog-relative folder exists locally.
+#[test]
+fn unchecked_network_roots_cannot_use_a_catalog_relative_fallback() {
+    let fixture = CatalogFixture::new(&native_catalog(&photo_tables((r"\\nas\é\", "./"))));
+    let policy = NetworkShares::new(vec![r"\\nas\É".into()]).unwrap();
+    let catalog = read_with_network_shares(&fixture.0, &policy).unwrap();
+    assert!(matches!(catalog.photos[0].original, Original::Refused(_)));
+    assert!(!catalog.warnings.iter().any(|w| w.contains("using ")));
+    // The default document policy still supports relocating catalogs; only explicit refusals block it.
+    assert_eq!(read(&fixture.0).unwrap().photos[0].original, Original::Local);
+}
+
+/// Cancelling before discovery does not even try to open the catalog.
+#[test]
+fn cancelled_source_discovery_does_not_open_the_catalog() {
+    let error = network_sources_with_cancel(Path::new("missing-cancelled-catalog.lrcat"), &AtomicBool::new(true)).unwrap_err();
+    assert!(error.contains("cancelled"), "{error}");
+}
+
+/// Cancellation during a WAL read stops before the next chunk, not after the whole WAL.
+#[test]
+fn cancelling_a_wal_read_stops_before_the_next_chunk() {
+    struct Cancels<'a> {
+        cancel: &'a AtomicBool,
+        reads: usize,
+    }
+    impl std::io::Read for Cancels<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.reads += 1;
+            buffer.fill(0);
+            self.cancel.store(true, Ordering::Relaxed);
+            Ok(buffer.len())
+        }
+    }
+    let cancel = AtomicBool::new(false);
+    let mut input = Cancels { cancel: &cancel, reads: 0 };
+    let mut bytes = Vec::new();
+    let error = read_catalog_chunks(&mut input, &mut bytes, &cancel).unwrap_err();
+    assert!(error.contains("cancelled"));
+    assert_eq!(input.reads, 1);
+    assert_eq!(bytes.len(), 64 * 1024);
+}
+
+/// A canceled root-table read returns before visiting its B-tree pages.
+#[test]
+fn cancelled_root_table_read_stops_before_visiting_records() {
+    let bytes = native_catalog_rows(&[("AgLibraryRootFolder", "absolutePath TEXT", vec![vec![SqlValue::Text(r"\\nas\photos".into())]])], None);
+    let db = Database::open_with_wal(bytes, &[]).unwrap();
+    let cancel = AtomicBool::new(true);
+    let error = db.read_table_with_cancel(2, 1, &cancel).unwrap_err();
+    assert!(error.contains("cancelled"));
+    assert_eq!(db.read_table(2, 1).unwrap().len(), 1);
+}
+
+/// Backup discovery and inspection share the same consent policy and clean up every extraction.
+#[test]
+fn backup_network_sources_require_consent_and_leave_no_extraction() {
+    let bytes = native_catalog(&photo_tables((r"\\192.0.2.1\photos\", "")));
+    let fixture = CatalogFixture::new(&bytes);
+    let zip = fixture.0.with_extension("zip");
+    let temp = fixture.0.with_extension("extraction");
+    let packed = crate::lightroom_backup::tests::zip(&[("Cat.lrcat", &bytes)], true, false);
+    std::fs::write(&zip, &packed).unwrap();
+    let cancel = AtomicBool::new(false);
+    assert_eq!(network_sources_from_source(&zip, Some(&temp), &cancel).unwrap(), [r"\\192.0.2.1\photos"]);
+    assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    let mut session = crate::Session::new();
+    assert_eq!(session.execute("library.lightroomNetworkSources", &json!({"path":zip})).unwrap()["networkSources"], json!([r"\\192.0.2.1\photos"]));
+    let total = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    for selected in [false, true] {
+        let shares = NetworkShares::new(if selected { vec![r"\\192.0.2.1\photos".into()] } else { Vec::new() }).unwrap();
+        let data = read_source_with_network_shares(&zip, Some(&temp), &shares, &cancel, &total, &done).unwrap();
+        assert_eq!(data.source, zip.to_string_lossy());
+        assert_eq!(data.photos.len(), 1);
+        if selected {
+            assert_eq!(data.photos[0].original, if cfg!(windows) { Original::Local } else { Original::NotHere });
+        } else {
+            assert!(matches!(data.photos[0].original, Original::Refused(_)));
+        }
+        assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    }
+    assert!(network_sources_from_source(&zip, Some(&temp), &AtomicBool::new(true)).unwrap_err().contains("cancel"));
+    assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    assert_eq!(std::fs::read(&zip).unwrap(), packed, "source review and inspection never change the backup");
+    std::fs::write(&zip, crate::lightroom_backup::tests::zip(&[("Cat.lrcat", b"not SQLite")], false, false)).unwrap();
+    assert!(network_sources_from_source(&zip, Some(&temp), &cancel).is_err());
+    assert_eq!(std::fs::read_dir(&temp).unwrap().count(), 0);
+    std::fs::remove_file(zip).unwrap();
+    std::fs::remove_dir(temp).unwrap();
+}
+
+/// Extraction location must not hide the share of a catalog-relative root in a network backup.
+#[test]
+fn source_discovery_uses_the_original_document_location() {
+    let fixture = CatalogFixture::new(&native_catalog(&photo_tables(("./", "../Originals"))));
+    let document = Path::new(r"\\nas\photos\Catalog\Cat.lrcat");
+    assert_eq!(network_sources_from_file(&fixture.0, document, &AtomicBool::new(false)).unwrap(), [r"\\nas\photos"]);
+    assert!(network_sources(&fixture.0).unwrap().is_empty(), "the extracted file's local path grants no network source");
+}
+
+/// Even an empty XMP table must receive the flag at the SQLite read, before row decoding.
+#[test]
+fn cancelled_catalog_xmp_read_stops_before_reading_records() {
+    let bytes = native_catalog_rows(&[("Adobe_AdditionalMetadata", "image INTEGER, xmp BLOB", Vec::new())], None);
+    let fixture = CatalogFixture::new(&bytes);
+    let reader = open_reader(&fixture.0, &AtomicBool::new(false)).unwrap();
+    let cancel = AtomicBool::new(true);
+    assert!(reader.xmp_table(&cancel).unwrap_err().contains("cancelled"));
+    cancel.store(false, Ordering::Relaxed);
+    assert_eq!(reader.xmp_table(&cancel).unwrap(), (Vec::new(), Vec::new()));
+}
+
+/// Optional tables and backup identity reads must share the import's flag, not a new false flag.
+#[test]
+fn cancelled_catalog_optional_reads_do_not_hide_cancellation_as_a_warning() {
+    use SqlValue::Text as T;
+    let bytes = native_catalog_rows(
+        &[
+            ("Adobe_imageDevelopSettings", "image INTEGER, text TEXT", Vec::new()),
+            ("Adobe_variablesTable", "name TEXT, value TEXT", vec![vec![T("Adobe_storeProviderID".into()), T("EXAMPLE-1".into())]]),
+        ],
+        None,
+    );
+    let fixture = CatalogFixture::new(&bytes);
+    let reader = open_reader(&fixture.0, &AtomicBool::new(false)).unwrap();
+    let mut warnings = Vec::new();
+    let cancel = AtomicBool::new(true);
+    assert!(reader.optional_table("Adobe_imageDevelopSettings", &mut warnings, &cancel).unwrap_err().contains("cancelled"));
+    assert!(warnings.is_empty());
+    assert_eq!(reader.catalog_id(&cancel), None);
+    cancel.store(false, Ordering::Relaxed);
+    assert!(reader.optional_table("Adobe_imageDevelopSettings", &mut warnings, &cancel).unwrap().is_empty());
+    assert_eq!(reader.catalog_id(&cancel).as_deref(), Some("EXAMPLE-1"));
+    assert!(warnings.is_empty());
 }

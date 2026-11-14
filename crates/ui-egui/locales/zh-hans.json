@@ -2453,5 +2453,8 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "先以 --control 7980 (或 LIGHTCRAFT_CONTROL_PORT) 启动应用，lightcraft-cli mcp --connect 即可将一个智能体接入其中。",
   "Welcome": "欢迎",
   "Next": "下一步",
-  "Get Started": "开始使用"
+  "Get Started": "开始使用",
+  "Network sources in this catalog": "此目录中的网络来源",
+  "Select the shares LightCraft may read for this import. The catalog and your photos stay where they are. Unchecked sources will not be imported.": "选择允许 LightCraft 在此次导入中读取的共享文件夹。目录和照片将保留在原位置。未勾选的来源不会被导入。",
+  "Select up to 32 network sources for this import.": "此次导入最多可选择 32 个网络来源。"
 }

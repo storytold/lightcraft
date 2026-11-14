@@ -2,7 +2,7 @@
 //! merges into the open library or goes into a new library (named after the catalog, next to the
 //! open one), unless Settings (or the window's "Don't ask again") says to always merge.
 //!
-//! The catalogs here are fake (`.lrcat` files that aren't SQLite): what is checked is where the
+//! The catalogs here have only a synthetic SQLite root-folder table: what is checked is where the
 //! import is started, which library is open when it starts, and that the read then fails cleanly.
 
 use std::path::{Path, PathBuf};
@@ -15,6 +15,72 @@ use crate::state::{Dialog, LightroomImport};
 use crate::{LightcraftApp, Services, UiState};
 
 const T: Duration = Duration::from_secs(20);
+
+/// A synthetic SQLite catalog with only a root-folder table; discovery works and full import
+/// fails cleanly on the absent photo tables. No original is opened, no external SQLite needed.
+pub(super) fn root_catalog(roots: &[&str]) -> Vec<u8> {
+    /// Encode a positive SQLite varint for the synthetic root-folder table.
+    fn varint(mut n: usize) -> Vec<u8> {
+        let mut v = vec![(n & 127) as u8];
+        n >>= 7;
+        while n > 0 {
+            v.push((n & 127) as u8 | 128);
+            n >>= 7;
+        }
+        v.reverse();
+        v
+    }
+    /// Encode a SQLite record containing text columns only.
+    fn record(cells: &[&str]) -> Vec<u8> {
+        let types: Vec<_> = cells.iter().flat_map(|s| varint(13 + 2 * s.len())).collect();
+        let mut out = varint(types.len() + 1);
+        out.extend(types);
+        for s in cells {
+            out.extend(s.as_bytes());
+        }
+        out
+    }
+    /// Place bounded synthetic records in a SQLite leaf page.
+    fn leaf(page: &mut [u8], offset: usize, records: &[Vec<u8>]) {
+        page[offset] = 13;
+        page[offset + 3..offset + 5].copy_from_slice(&(records.len() as u16).to_be_bytes());
+        let mut end = page.len();
+        for (i, payload) in records.iter().enumerate() {
+            let mut cell = varint(payload.len());
+            cell.extend(varint(i + 1));
+            cell.extend(payload);
+            end -= cell.len();
+            page[end..end + cell.len()].copy_from_slice(&cell);
+            page[offset + 8 + 2 * i..offset + 10 + 2 * i].copy_from_slice(&(end as u16).to_be_bytes());
+        }
+        page[offset + 5..offset + 7].copy_from_slice(&(end as u16).to_be_bytes());
+    }
+    let mut bytes = vec![0u8; 8192];
+    bytes[..16].copy_from_slice(b"SQLite format 3\0");
+    bytes[16..18].copy_from_slice(&4096u16.to_be_bytes());
+    bytes[18..24].copy_from_slice(&[1, 1, 0, 64, 32, 32]);
+    bytes[28..32].copy_from_slice(&2u32.to_be_bytes());
+    bytes[44..48].copy_from_slice(&4u32.to_be_bytes());
+    bytes[56..60].copy_from_slice(&1u32.to_be_bytes());
+    // rootpage is a SQLite integer with serial type 1, value 2.
+    let mut schema = record(&["table", "AgLibraryRootFolder", "AgLibraryRootFolder", "x", "CREATE TABLE AgLibraryRootFolder (absolutePath TEXT)"]);
+    schema[4] = 1;
+    let rootpage = usize::from(schema[0]) + "tableAgLibraryRootFolderAgLibraryRootFolder".len();
+    schema[rootpage] = 2;
+    leaf(&mut bytes[..4096], 100, &[schema]);
+    leaf(&mut bytes[4096..], 0, &roots.iter().map(|s| record(&[s])).collect::<Vec<_>>());
+    bytes
+}
+
+/// Wait only for source discovery, leaving the actual import to the existing test helpers.
+fn begin(h: &mut Headless, params: Value) -> Value {
+    let result = h.app.run("file.importLightroom", params).unwrap();
+    if result["kind"] != "sources" {
+        return result;
+    }
+    assert!(h.step_until(T, |h| { h.app.lightroom_last.is_some() }));
+    h.app.lightroom_last.clone().unwrap_or(Value::Null)
+}
 
 /// A folder of its own per test: `Library` (a LightCraft library, demo photos in it unless
 /// `empty`) and `Lightroom/Travel.lrcat` (a fake catalog) side by side.
@@ -35,7 +101,7 @@ impl Fixture {
         let lr = root.join("Lightroom");
         std::fs::create_dir_all(&lr).unwrap();
         let lrcat = lr.join("Travel.lrcat");
-        std::fs::write(&lrcat, b"not really SQLite").unwrap();
+        std::fs::write(&lrcat, root_catalog(&[])).unwrap();
         Fixture { lib: root.join("Library"), root, lrcat }
     }
 
@@ -51,6 +117,7 @@ impl Fixture {
             pick_folder: Some(Box::new(|| None)),
             png: Some(Box::new(png)),
             write: Some(Box::new(|p: &str, b: &[u8]| std::fs::write(p, b).map_err(|e| e.to_string()))),
+            write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
             ..Default::default()
         };
         let mut h = Headless::new(LightcraftApp::new(session, services), [1200.0, 800.0], 1.0);
@@ -122,12 +189,13 @@ fn the_window_asks_and_merge_imports_into_the_open_library() {
     let photos = h.app.session.catalog.len();
     assert!(photos > 0);
 
-    let r = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    let r = begin(&mut h, json!({"path": f.lrcat()}));
     assert_eq!(r, json!({"asking": true, "path": f.lrcat(), "into": "new"}));
     h.step();
     h.step();
     // a library with photos: the window opens on a new library, named after the catalog, next to the open one
     assert_eq!(destination(&h), Some((true, "Travel".into(), f.root.to_string_lossy().into_owned(), false)));
+    assert!(!has(&h, "check:lightroomNetworkSource-0"), "local-only catalogs have no network controls");
     for id in [
         "radio:lightroomDestination-open",
         "radio:lightroomDestination-new",
@@ -140,7 +208,7 @@ fn the_window_asks_and_merge_imports_into_the_open_library() {
     ] {
         assert!(has(&h, id), "{id} is missing");
     }
-    assert!(h.app.lightroom.is_none() && h.app.lightroom_last.is_none(), "nothing starts before the answer");
+    assert!(h.app.lightroom.is_none() && h.app.lightroom_last.as_ref().is_some_and(|v| v["asking"] == true), "nothing starts before the answer");
     shot(&mut h, "lightroom-destination-2672.png");
 
     // Merge into the open library
@@ -156,13 +224,98 @@ fn the_window_asks_and_merge_imports_into_the_open_library() {
     assert_eq!(h.app.ui.settings.lightroom_import, LightroomImport::Ask, "it asks again next time");
 }
 
+#[test]
+/// Checkbox consent reaches the import job and is cleared for every subsequent import.
+fn network_sources_are_discovered_selectable_and_not_remembered() {
+    let f = Fixture::new("network-shares");
+    std::fs::write(&f.lrcat, root_catalog(&[r"\\nas\photos\Trip", "//NAS/PHOTOS/Family", r"\\other\archive\Old", "C:/Photos"])).unwrap();
+    let before = std::fs::read(&f.lrcat).unwrap();
+    let mut h = f.app(true);
+    // Network review still appears with Always merge, and requires no folder picker.
+    h.app.ui.settings.lightroom_import = LightroomImport::AlwaysMerge;
+    h.app.services.pick_folder = None;
+    begin(&mut h, json!({"path": f.lrcat()}));
+    h.step();
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_sources, network_shares, .. })
+        if network_sources == &[r"\\nas\photos", r"\\other\archive"] && network_shares.is_empty()));
+    assert!(!has(&h, "button:lightroomNetworkChoose"));
+    click(&mut h, "check:lightroomNetworkSource-0");
+    click(&mut h, "check:lightroomNetworkSource-1");
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. }) if network_shares.len() == 2));
+    click(&mut h, "check:lightroomNetworkSource-0");
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. }) if network_shares == &[r"\\other\archive"]));
+    assert!(h.app.lightroom.is_none(), "checking a source does not start import");
+    shot(&mut h, "lightroom-network-sources.png");
+    click(&mut h, "button:dialogCancel");
+    begin(&mut h, json!({"path": f.lrcat()}));
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. }) if network_shares.is_empty()));
+    click(&mut h, "check:lightroomNetworkSource-1");
+    let started = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(started["ok"], true, "{started}");
+    assert_eq!(started["result"]["networkShares"], json!([r"\\other\archive"]), "the import job received exactly the selected share");
+    import_ends(&mut h, &f.lrcat);
+    // Close the previous import's result before asking for another source review.
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::LightroomResult { .. })));
+    assert_eq!(h.request("ui.dialog.cancel", json!({}), T)["ok"], true);
+    begin(&mut h, json!({"path": f.lrcat()}));
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. }) if network_shares.is_empty()));
+    assert_eq!(std::fs::read(&f.lrcat).unwrap(), before);
+}
+
+#[test]
+/// Cancellation and session changes discard completed source reads before they can affect the UI.
+fn cancelled_or_stale_source_reviews_never_open_a_dialog_or_start_import() {
+    for stale in [false, true] {
+        let f = Fixture::new(if stale { "source-stale" } else { "source-cancel" });
+        std::fs::write(&f.lrcat, root_catalog(&[r"\\192.0.2.1\photos"])).unwrap();
+        let mut h = f.app(true);
+        let result = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+        assert_eq!(result["kind"], "sources");
+        if stale {
+            h.app.session.open_library(f.root.join("Other"), false).unwrap();
+        } else {
+            h.app.run("library.importLightroom", json!({"cancel": true})).unwrap();
+        }
+        assert!(h.step_until(T, |h| h.app.lightroom.is_none()));
+        assert_eq!(h.app.lightroom_last.as_ref().unwrap()["cancelled"], true);
+        assert!(destination(&h).is_none());
+        assert!(h.app.session.catalog.is_empty());
+    }
+}
+
+#[test]
+/// An invalid catalog fails discovery without changing the current library or creating another.
+fn an_invalid_catalog_fails_source_review_without_creating_a_library() {
+    let f = Fixture::new("source-invalid");
+    std::fs::write(&f.lrcat, b"not SQLite").unwrap();
+    let mut h = f.app(true);
+    let result = begin(&mut h, json!({"path": f.lrcat()}));
+    assert!(result["error"].is_string(), "{result}");
+    assert!(destination(&h).is_none());
+    assert!(!f.root.join("Travel").exists());
+    assert_eq!(open_dir(&h), Some(f.lib.clone()));
+}
+
+#[test]
+/// Explicit grants survive destination review and invalid grants fail before library creation.
+fn network_share_params_survive_the_dialog_and_are_checked_before_creating_a_library() {
+    let f = Fixture::new("network-share-params");
+    let mut h = f.app(true);
+    begin(&mut h, json!({"path": f.lrcat(), "networkShares": [r"\\nas\photos"]}));
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. }) if network_shares == &[r"\\nas\photos"]));
+    let error = h.app.run("file.importLightroom", json!({"path": f.lrcat(), "into": "new", "name": "Invalid", "networkShares": true})).unwrap_err();
+    assert!(error.contains("networkShares"), "{error}");
+    assert!(!f.root.join("Invalid").exists());
+    assert_eq!(open_dir(&h), Some(f.lib.clone()));
+}
+
 /// Create a new library: it is made next to the open one, named after the catalog, and opened
 /// before the import starts there.
 #[test]
 fn create_a_new_library_opens_it_before_the_import_starts() {
     let f = Fixture::new("new");
     let mut h = f.app(false);
-    h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    begin(&mut h, json!({"path": f.lrcat()}));
     h.step();
     h.step();
     assert_eq!(destination(&h).map(|d| d.0), Some(true));
@@ -189,13 +342,13 @@ fn create_a_new_library_opens_it_before_the_import_starts() {
 fn cancel_does_nothing() {
     let f = Fixture::new("cancel");
     let mut h = f.app(false);
-    h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    begin(&mut h, json!({"path": f.lrcat()}));
     h.step();
     h.step();
     assert!(destination(&h).is_some());
     click(&mut h, "button:dialogCancel");
     assert!(h.app.ui.dialog.is_none());
-    assert!(h.app.lightroom.is_none() && h.app.lightroom_last.is_none());
+    assert!(h.app.lightroom.is_none() && h.app.lightroom_last.as_ref().is_some_and(|v| v["asking"] == true));
     assert_eq!(open_dir(&h), Some(f.lib.clone()));
     assert!(!f.root.join("Travel").exists());
 }
@@ -205,10 +358,11 @@ fn cancel_does_nothing() {
 fn an_empty_library_opens_the_window_on_merge() {
     let f = Fixture::new("empty");
     let mut h = f.app(true);
-    let r = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    let r = begin(&mut h, json!({"path": f.lrcat()}));
     assert_eq!(r["into"], "open", "{r}");
     h.step();
     assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { new_library: false, photos: 0, .. })), "{:?}", h.app.ui.dialog);
+    shot(&mut h, "lightroom-local-sources.png");
     // (the window in French, which translates it: the language is this test thread's own)
     if std::env::var_os("LIGHTCRAFT_TEST_SHOTS").is_some() {
         h.app.run("app.language.french", json!({})).unwrap();
@@ -225,7 +379,7 @@ fn always_merge_skips_the_window() {
     let f = Fixture::new("always");
     let mut h = f.app(false);
     h.app.ui.settings.lightroom_import = LightroomImport::AlwaysMerge;
-    let r = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    let r = begin(&mut h, json!({"path": f.lrcat()}));
     assert_eq!(r["running"], true, "{r}");
     h.step();
     assert!(destination(&h).is_none());
@@ -238,7 +392,7 @@ fn always_merge_skips_the_window() {
 fn dont_ask_again_merges_from_then_on_and_is_saved() {
     let f = Fixture::new("dontask");
     let mut h = f.app(false);
-    h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    begin(&mut h, json!({"path": f.lrcat()}));
     h.step();
     h.step();
     // greyed out while a new library is chosen: it only speaks of merging
@@ -256,7 +410,7 @@ fn dont_ask_again_merges_from_then_on_and_is_saved() {
     let back: UiState = serde_json::from_str(&saved).unwrap();
     assert_eq!(back.settings.lightroom_import, LightroomImport::AlwaysMerge);
     // the next import doesn't ask
-    let r = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    let r = begin(&mut h, json!({"path": f.lrcat()}));
     assert_eq!(r["running"], true, "{r}");
     assert!(destination(&h).is_none());
     import_ends(&mut h, &f.lrcat);
@@ -295,7 +449,7 @@ fn a_folder_that_isnt_empty_is_refused_and_the_window_stays() {
     std::fs::create_dir_all(f.root.join("Travel")).unwrap();
     std::fs::write(f.root.join("Travel").join("notes.txt"), b"mine").unwrap();
     let mut h = f.app(false);
-    h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    begin(&mut h, json!({"path": f.lrcat()}));
     h.step();
     h.step();
     // the free name is offered…
@@ -309,7 +463,7 @@ fn a_folder_that_isnt_empty_is_refused_and_the_window_stays() {
     let toast = h.app.ui.toast.clone().map(|t| t.0).unwrap_or_default();
     assert!(toast.contains("isn't empty"), "{toast}");
     assert_eq!(open_dir(&h), Some(f.lib.clone()));
-    assert!(h.app.lightroom.is_none() && h.app.lightroom_last.is_none());
+    assert!(h.app.lightroom.is_none() && h.app.lightroom_last.as_ref().is_some_and(|v| v["asking"] == true));
     // the same through the control channel
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_eq!(r["ok"], false, "{r}");
@@ -362,7 +516,7 @@ fn a_library_in_memory_merges_without_asking() {
     let f = Fixture::new("memory");
     let mut h = Headless::new(LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default()), [1200.0, 800.0], 1.0);
     h.step();
-    let r = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    let r = begin(&mut h, json!({"path": f.lrcat()}));
     assert_eq!(r["running"], true, "{r}");
     assert!(destination(&h).is_none());
     import_ends(&mut h, &f.lrcat);
@@ -374,7 +528,7 @@ fn a_library_in_memory_merges_without_asking() {
 fn merge_is_refused_when_another_library_was_opened_meanwhile() {
     let f = Fixture::new("stale");
     let mut h = f.app(false);
-    h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    begin(&mut h, json!({"path": f.lrcat()}));
     h.step();
     click(&mut h, "radio:lightroomDestination-open");
     let other = f.root.join("Other");
@@ -400,7 +554,7 @@ fn merge_is_refused_when_another_library_was_opened_meanwhile() {
 fn a_new_library_is_refused_when_another_library_was_opened_meanwhile() {
     let f = Fixture::new("stale-new");
     let mut h = f.app(false);
-    h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    begin(&mut h, json!({"path": f.lrcat()}));
     h.step();
     click(&mut h, "radio:lightroomDestination-new");
     let other = f.root.join("Other");
@@ -423,4 +577,62 @@ fn a_new_library_is_refused_when_another_library_was_opened_meanwhile() {
     assert!(h.app.lightroom.is_none() && h.app.lightroom_last.is_none());
     assert_eq!(open_dir(&h), Some(other));
     assert!(!target.exists(), "no library was made at {}", target.display());
+}
+
+/// A dialog opened while discovery runs keeps its unconfirmed input.
+#[test]
+fn source_review_preserves_an_existing_dialog() {
+    let f = Fixture::new("source-dialog-busy");
+    std::fs::write(&f.lrcat, root_catalog(&[r"\\nas\photos"])).unwrap();
+    let mut h = f.app(true);
+    let start = h.app.run("file.importLightroom", json!({"path": f.lrcat()})).unwrap();
+    assert_eq!(start["kind"], "sources");
+    let dialog = Dialog::CreatePreset { name: "Unconfirmed name".into(), group: "User Presets".into(), groups: vec![] };
+    h.app.ui.dialog = Some(dialog.clone());
+    assert!(h.step_until(T, |h| h.app.lightroom.is_none()));
+    assert_eq!(h.app.ui.dialog.as_ref(), Some(&dialog));
+    assert!(h.app.lightroom_last.as_ref().unwrap()["error"].as_str().unwrap().contains("current dialog"));
+    assert!(h.app.session.catalog.is_empty());
+}
+
+/// A large source list still opens review and permits an empty selection (local sources only).
+#[test]
+fn more_than_thirty_two_sources_still_open_review() {
+    let f = Fixture::new("many-sources");
+    let roots: Vec<_> = (0..40).map(|i| format!(r"\\nas\s{i:02}")).collect();
+    std::fs::write(&f.lrcat, root_catalog(&roots.iter().map(String::as_str).collect::<Vec<_>>())).unwrap();
+    let mut h = f.app(true);
+    assert_eq!(begin(&mut h, json!({"path": f.lrcat()}))["asking"], true);
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_sources, network_shares, .. })
+        if network_sources.len() == 40 && network_shares.is_empty()));
+    shot(&mut h, "lightroom-many-network-sources.png");
+    let start = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(start["ok"], true, "{start}");
+    assert_eq!(start["result"]["networkShares"], json!([]));
+    import_ends(&mut h, &f.lrcat);
+}
+
+/// A large review draws only visible rows; scrolling keeps offscreen selections and Cancel usable.
+#[test]
+fn a_large_network_review_virtualizes_rows_without_losing_selection() {
+    let f = Fixture::new("virtual-network-review");
+    let mut h = f.app(true);
+    let sources: Vec<_> = (0..5000).map(|i| format!(r"\\nas\source-{i:04}")).collect();
+    crate::lightroom_destination::after_sources(&mut h.app, &f.lrcat(), &Default::default(), sources).unwrap();
+    h.step();
+    h.step();
+    assert!(has(&h, "check:lightroomNetworkSource-0"));
+    assert!(!has(&h, "check:lightroomNetworkSource-4999"));
+    assert!(h.app.widgets.iter().filter(|(id, _)| id.starts_with("check:lightroomNetworkSource-")).count() < 20);
+    click(&mut h, "check:lightroomNetworkSource-0");
+    h.request("ui.hoverWidget", json!({"id":"check:lightroomNetworkSource-0"}), T);
+    h.request("ui.scroll", json!({"dy":-1000000.0}), T);
+    assert!(h.step_until(T, |h| has(h, "check:lightroomNetworkSource-4999")));
+    click(&mut h, "check:lightroomNetworkSource-4999");
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::LightroomDestination { network_shares, .. })
+        if network_shares == &[r"\\nas\source-0000", r"\\nas\source-4999"]));
+    shot(&mut h, "lightroom-virtual-network-sources.png");
+    click(&mut h, "button:dialogCancel");
+    assert!(destination(&h).is_none());
+    assert!(h.app.lightroom.is_none());
 }

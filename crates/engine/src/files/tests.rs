@@ -251,6 +251,9 @@ fn preview_loading_reads_only_the_header_and_the_jpeg() {
     assert_eq!((quick.width, quick.height), (whole.width, whole.height), "same preview size");
     assert_eq!(quick.data, whole.data, "byte for byte");
 
+    let loaded = fs_preview_loader()(&path, max_edge).expect("the filesystem hook keeps its opened original");
+    assert_eq!((loaded.width, loaded.height, loaded.data), (whole.width, whole.height, whole.data));
+
     // A file with no locatable preview declines (the caller then reads it whole), a missing file errors.
     let plain = dir.join("plain.jpg");
     std::fs::write(&plain, &jpeg).unwrap();
@@ -418,6 +421,9 @@ fn preview_loading_declines_an_orientation_only_the_whole_file_shows() {
     assert!(lightcraft_meta::extract(&file[..PLAN_PREFIX as usize]).orientation.is_none(), "which the bounded header cannot see");
     assert!(lightcraft_meta::extract(&jpeg).orientation.is_none(), "and the preview JPEG carries none of its own");
     assert!(preview_window(&path, usize::MAX).expect("the file reads").is_none(), "the whole-file path keeps it");
+    let whole = embedded_preview_srgb(&file, usize::MAX).expect("the whole file has its rotated preview");
+    let loaded = fs_preview_loader()(&path, usize::MAX).expect("fallback rewinds the same open file");
+    assert_eq!((loaded.width, loaded.height, loaded.data), (whole.width, whole.height, whole.data));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1919,4 +1925,20 @@ fn v5_extends_a_dng_tone_curve_past_white_in_stops() {
     assert_eq!(at(Process::V4, 1.0), 255.0, "V4 is frozen");
     let (white, beyond) = (at(Process::V5, 0.0), at(Process::V5, 1.0));
     assert!(beyond < 254.0 && beyond - white >= 3.0, "{white} then {beyond} a stop past the sensor's white");
+}
+
+/// The UNC guard and upstream regular-file bounds apply together in every whole-file loader.
+#[cfg(unix)]
+#[test]
+fn guarded_file_hooks_reject_non_regular_inputs_before_decoding() {
+    let path = "/dev/null";
+    let (load, probe) = fs_hooks();
+    let with = crate::media::RawDecode::default();
+    let spec = crate::media::DenoiseSpec { product: Default::default(), key: String::new(), make: None };
+    for error in
+        [load(path, 64, with).err(), probe(path).err(), fs_reduced_loader()(path, 64, with).err(), fs_pair_loader()(path, 64, &spec, with).err()]
+    {
+        assert!(error.is_some_and(|e| e.contains("not a regular file")), "refuse the opened device before any decode");
+    }
+    assert!(fs_preview_loader()(path, 64).is_none());
 }

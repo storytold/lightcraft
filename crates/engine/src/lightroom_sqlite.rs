@@ -69,6 +69,11 @@ impl FileSource {
     }
 }
 
+/// Cancellation cannot interrupt an OS read already in flight, but stops before the next page.
+fn check_cancel(cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<(), String> {
+    if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) { Err("Lightroom import cancelled".into()) } else { Ok(()) }
+}
+
 fn same_metadata(a: &Metadata, b: &Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -133,7 +138,8 @@ enum TextEncoding {
     Utf16Be,
 }
 
-struct WalkState {
+struct WalkState<'a> {
+    cancel: Option<&'a std::sync::atomic::AtomicBool>,
     seen: HashSet<u32>,
     out: Vec<Record>,
     payload_total: usize,
@@ -243,7 +249,18 @@ impl Database {
     }
 
     /// Read a table B-tree, decoding up to `ncols` values per record.
+    #[cfg(test)]
     pub fn read_table(&self, rootpage: u32, ncols: usize) -> Result<Vec<Record>, String> {
+        self.read_table_active(rootpage, ncols, None)
+    }
+
+    /// Read a table with cooperative cancellation before B-tree and overflow page reads.
+    pub fn read_table_with_cancel(&self, rootpage: u32, ncols: usize, cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<Record>, String> {
+        self.read_table_active(rootpage, ncols, Some(cancel))
+    }
+
+    /// Walk a bounded table with the optional caller cancellation flag and its rowid alias.
+    fn read_table_active(&self, rootpage: u32, ncols: usize, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Vec<Record>, String> {
         if !(1..=MAX_PAGE_ID).contains(&rootpage) || rootpage > self.page_count {
             return Err("table root page is outside database".into());
         }
@@ -251,7 +268,7 @@ impl Database {
             return Err("table has too many columns".into());
         }
         let alias = self.rowid_aliases.get(&rootpage).copied();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
+        let mut state = WalkState { cancel, seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
         self.visit_table(rootpage, ncols, alias, 0, &mut state)?;
         Ok(state.out)
     }
@@ -272,7 +289,9 @@ impl Database {
         self.main.get(start..end).map(Cow::Borrowed).ok_or_else(|| format!("page {page_id} is truncated"))
     }
 
-    fn visit_table(&self, page_id: u32, ncols: usize, alias: Option<usize>, depth: usize, state: &mut WalkState) -> Result<(), String> {
+    /// Visit one B-tree page, enforcing depth, cycle and payload limits before descending.
+    fn visit_table(&self, page_id: u32, ncols: usize, alias: Option<usize>, depth: usize, state: &mut WalkState<'_>) -> Result<(), String> {
+        check_cancel(state.cancel)?;
         if depth > MAX_BTREE_DEPTH {
             return Err("SQLite B-tree is too deep".into());
         }
@@ -312,7 +331,7 @@ impl Database {
                     if state.payload_total > MAX_TABLE_PAYLOAD {
                         return Err("SQLite table payload exceeds bounded import size".into());
                     }
-                    let payload = self.payload(&page, at, payload_len)?;
+                    let payload = self.payload(&page, at, payload_len, state.cancel)?;
                     let mut values = decode_record(&payload, ncols, self.encoding)?;
                     if let Some(index) = alias {
                         if index >= values.len() {
@@ -361,7 +380,8 @@ impl Database {
         }
     }
 
-    fn payload(&self, page: &[u8], cell_at: usize, payload_len: usize) -> Result<Vec<u8>, String> {
+    /// Assemble a bounded cell payload, checking cancellation and cycles before each overflow page.
+    fn payload(&self, page: &[u8], cell_at: usize, payload_len: usize, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<Vec<u8>, String> {
         let usable = self.page_size.checked_sub(self.reserved).ok_or("invalid usable page size")?;
         if usable < 8 {
             return Err("SQLite usable page size is too small".into());
@@ -409,6 +429,7 @@ impl Database {
         let mut next = first;
         let mut seen = HashSet::new();
         while remaining > 0 {
+            check_cancel(cancel)?;
             if next == 0 || !seen.insert(next) || seen.len() > MAX_OVERFLOW_PAGES {
                 return Err("invalid or cyclic SQLite overflow chain".into());
             }
@@ -424,10 +445,11 @@ impl Database {
         Ok(out)
     }
 
+    /// Decode sqlite_schema and retain supported table definitions and integer-primary-key aliases.
     fn parse_schema(&self) -> Result<SchemaInfo, String> {
         let mut tables = Vec::new();
         let mut aliases = HashMap::new();
-        let mut state = WalkState { seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
+        let mut state = WalkState { cancel: None, seen: HashSet::new(), out: Vec::new(), payload_total: 0 };
         self.visit_table(1, 5, None, 0, &mut state)?;
         for record in state.out {
             if record.values.len() < 5 {
