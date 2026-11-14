@@ -13,6 +13,9 @@
 
 pub use craft_gainmap::{GainImage, GainMapMeta, GainMapOptions, ISO_URN, apply, compute};
 
+/// Legacy Apple gain-map reconstruction (separate from ISO / Ultra HDR).
+pub mod apple;
+
 use crate::encode::{EncodeImage, EncodeMeta, Samples, jpeg_app_segments, xmp_segment};
 use crate::{ChromaSubsampling, Error, Format, Result, jpeg, jpeg_par};
 
