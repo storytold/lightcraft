@@ -17,7 +17,7 @@ pub(super) struct Located {
     pub in_use: bool,
 }
 
-fn is_database_name(name: &str) -> bool {
+pub(super) fn is_database_name(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower.ends_with(".cocatalogdb") || lower.ends_with(".cocatalogdb.backup")
 }

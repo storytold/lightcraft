@@ -1,0 +1,239 @@
+//! A read Capture One catalog as the catalog import's model ([`CatalogImport`]).
+//!
+//! The Lightroom catalog import turns that model into library records: it reads the originals
+//! that are there, keeps the ones that are not as offline records, makes virtual copies and
+//! albums, recognises an earlier import of the same catalog and does all of it in one undo step.
+//! A Capture One catalog goes the same way, written in that model's terms: an image's first
+//! variant is the master and its further variants are virtual copies, a project or group is a
+//! collection set, and IPTC fields travel as an XMP packet.
+//!
+//! Not carried yet, and said so in the import's warnings: adjustments, smart albums, and the
+//! orange and pink colour tags (the library has no such labels). Each photo's row keeps what was
+//! read under `captureOne`, so the import's recovery archive has it.
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
+use std::sync::atomic::AtomicBool;
+
+use serde_json::{Value, json};
+
+use super::{CaptureOneCatalog, CatalogPhoto, Collection, CollectionKind, ColorTag, Original, OriginalKind};
+use crate::lightroom_catalog::{CatalogImport, CatalogPhoto as ImportPhoto};
+
+/// Most warnings that name a single photo or album; the rest are counted.
+const MAX_NAMED: usize = 50;
+/// What marks a catalog id and a photo's identity as Capture One's in the import's index.
+const PREFIX: &str = "captureone:";
+
+/// Read the Capture One catalog at `path` for the catalog import.
+pub(crate) fn read_for_import(path: &Path, cancel: &AtomicBool) -> Result<CatalogImport, String> {
+    let mut data = super::read_with_cancel(path, cancel).map(to_import).map_err(|e| e.to_string())?;
+    // before the import reads any original: a catalog must not name a program as a photo (#2135)
+    crate::lightroom_catalog::refuse_non_media(&mut data);
+    Ok(data)
+}
+
+/// Whether `data` was read from a Capture One catalog.
+pub(crate) fn is_capture_one(data: &CatalogImport) -> bool {
+    data.catalog_id.as_deref().is_some_and(|id| id.starts_with(PREFIX)) || super::locate::is_database_name(&data.source)
+}
+
+pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
+    let mut warnings = catalog.warnings;
+    if catalog.trashed > 0 {
+        warnings.push(format!("{} image(s) in Capture One's trash were left out", catalog.trashed));
+    }
+    let count = |test: fn(&CatalogPhoto) -> bool| catalog.photos.iter().filter(|p| test(p)).count();
+    let unlabelled = count(|p| matches!(p.color_tag, ColorTag::Orange | ColorTag::Pink));
+    if unlabelled > 0 {
+        warnings.push(format!(
+            "{unlabelled} photo(s) have Capture One's orange or pink colour tag, which has no label here yet; imported without a label"
+        ));
+    }
+    let adjusted = count(|p| p.adjusted);
+    if adjusted > 0 {
+        warnings.push(format!("{adjusted} photo(s) have Capture One adjustments; adjustments are not imported yet"));
+    }
+
+    // an image's first variant is the master of its further ones
+    let mut masters: HashMap<i64, i64> = HashMap::new();
+    let mut photos = Vec::with_capacity(catalog.photos.len());
+    let mut refused = 0usize;
+    for (at, photo) in catalog.photos.iter().enumerate() {
+        let source_id = source_id(at);
+        let master = if photo.variant_index == 0 {
+            masters.insert(photo.image_id, source_id);
+            0
+        } else {
+            masters.get(&photo.image_id).copied().unwrap_or(0)
+        };
+        if let Original::Refused(why) = &photo.original {
+            refused = refused.saturating_add(1);
+            if refused <= MAX_NAMED {
+                warnings.push(format!("image {source_id}: {} is not opened: {why}; listed as missing and not added", photo.path));
+            }
+        }
+        photos.push(import_photo(photo, source_id, master));
+    }
+    if refused > MAX_NAMED {
+        warnings.push(format!("{} more image(s) are not opened; listed as missing and not added", refused - MAX_NAMED));
+    }
+
+    let (collections, members) = collections(&catalog.collections, &mut warnings);
+    CatalogImport {
+        source: catalog.database,
+        catalog_id: catalog.document_uuid.map(|id| format!("{PREFIX}{id}")),
+        catalog_path: None,
+        photos,
+        collections,
+        members,
+        collection_content: Vec::new(),
+        warnings,
+        skipped: Vec::new(),
+    }
+}
+
+/// A photo's id in the import: its place in the catalog, from 1 (0 means "no master").
+fn source_id(at: usize) -> i64 {
+    i64::try_from(at).unwrap_or(i64::MAX - 1).saturating_add(1)
+}
+
+fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64) -> ImportPhoto {
+    let here = photo.original == Original::Local && Path::new(&photo.path).is_file();
+    let mut image: BTreeMap<String, Value> = BTreeMap::new();
+    let mut set = |key: &str, value: Value| {
+        image.insert(key.to_string(), value);
+    };
+    set("id_local", json!(source_id));
+    set("masterImage", json!(master));
+    if master != 0 {
+        set("copyName", json!(format!("Variant {}", photo.variant_index.saturating_add(1))));
+    }
+    set("fileFormat", json!(file_format(photo)));
+    set("fileWidth", json!(photo.width));
+    set("fileHeight", json!(photo.height));
+    set("rating", json!(photo.rating));
+    set("pick", json!(0));
+    set("colorLabels", json!(label(photo.color_tag)));
+    // Capture One keeps the camera's clock as the file gives it and has no command to change it,
+    // so a file that is there says it better (with its zone, when it has one)
+    if !here && let Some(captured) = &photo.captured {
+        set("captureTime", json!(captured));
+    }
+    set("captureOne", kept(photo));
+    ImportPhoto {
+        source_id,
+        uuid: identity(photo),
+        path: photo.path.clone(),
+        image,
+        settings: String::new(),
+        xmp: iptc_packet(photo),
+        keywords: photo.keywords.clone(),
+        history: Vec::new(),
+        snapshots: Vec::new(),
+        original: photo.original.clone(),
+    }
+}
+
+/// What tells an earlier import of the same variant apart from a new photo: the variant's UUID,
+/// else the image's. Empty when the catalog has neither (the import then goes by path and id).
+fn identity(photo: &CatalogPhoto) -> String {
+    match (photo.variant_uuid.is_empty(), photo.image_uuid.is_empty()) {
+        (false, _) => format!("{PREFIX}{}", photo.variant_uuid),
+        (true, false) => format!("{PREFIX}image:{}:{}", photo.image_uuid, photo.variant_index),
+        (true, true) => String::new(),
+    }
+}
+
+/// The format of a record whose file isn't read: `RAW` makes it a raw photo and `VIDEO` a video,
+/// as in a Lightroom catalog; anything else is the file's extension.
+fn file_format(photo: &CatalogPhoto) -> String {
+    match photo.kind {
+        OriginalKind::Raw => "RAW".into(),
+        OriginalKind::Movie => "VIDEO".into(),
+        OriginalKind::Raster | OriginalKind::Unknown => {
+            let extension = Path::new(&photo.file_name).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default();
+            if extension.len() <= 8 && extension.chars().all(|c| c.is_ascii_alphanumeric()) { extension } else { String::new() }
+        }
+    }
+}
+
+/// The library's label for a colour tag. Orange and pink have none.
+fn label(tag: ColorTag) -> &'static str {
+    match tag {
+        ColorTag::Red | ColorTag::Yellow | ColorTag::Green | ColorTag::Blue | ColorTag::Purple => tag.name().unwrap_or(""),
+        ColorTag::None | ColorTag::Orange | ColorTag::Pink => "",
+    }
+}
+
+/// What the import doesn't carry into the library yet, kept with the photo's row.
+fn kept(photo: &CatalogPhoto) -> Value {
+    json!({
+        "imageUuid": photo.image_uuid,
+        "variantUuid": photo.variant_uuid,
+        "variant": photo.variant_index,
+        "managed": photo.managed,
+        "adjusted": photo.adjusted,
+        "colorTag": photo.color_tag.name(),
+        "cameraMake": photo.camera_make,
+        "cameraModel": photo.camera_model,
+        "lens": photo.lens,
+        "imported": photo.imported,
+        "headline": photo.iptc.headline,
+        "countryCode": photo.iptc.country_code,
+        "iptc": photo.iptc.other,
+    })
+}
+
+/// The IPTC fields the library has a place for, as an XMP packet; empty when there are none.
+fn iptc_packet(photo: &CatalogPhoto) -> String {
+    let field = |value: &String| (!value.is_empty()).then(|| value.clone());
+    let iptc = &photo.iptc;
+    let meta = lightcraft_meta::Metadata {
+        title: field(&iptc.title),
+        caption: field(&iptc.description),
+        artist: field(&iptc.creator),
+        copyright: field(&iptc.copyright),
+        usage_terms: field(&iptc.usage_terms),
+        sublocation: field(&iptc.location),
+        city: field(&iptc.city),
+        state: field(&iptc.state),
+        country: field(&iptc.country),
+        ..Default::default()
+    };
+    if meta == lightcraft_meta::Metadata::default() { String::new() } else { lightcraft_meta::write_xmp(&meta, None) }
+}
+
+/// Albums, projects and groups as the import's collection rows and album memberships. A smart
+/// album's rule isn't read, so it is named in a warning instead of coming in empty.
+fn collections(all: &[Collection], warnings: &mut Vec<String>) -> (Vec<BTreeMap<String, Value>>, Vec<BTreeMap<String, Value>>) {
+    let row = |pairs: &[(&str, Value)]| pairs.iter().map(|(key, value)| ((*key).to_string(), value.clone())).collect::<BTreeMap<_, _>>();
+    let (mut rows, mut members) = (Vec::new(), Vec::new());
+    let mut smart = 0usize;
+    for collection in all {
+        let creation = match collection.kind {
+            CollectionKind::Album => "com.adobe.ag.library.collection",
+            CollectionKind::Project | CollectionKind::Group => "com.adobe.ag.library.group",
+            CollectionKind::SmartAlbum => {
+                smart = smart.saturating_add(1);
+                if smart <= MAX_NAMED {
+                    warnings.push(format!("smart album “{}”: not imported; smart album rules can't be converted yet", collection.name));
+                }
+                continue;
+            }
+        };
+        let name = if collection.name.is_empty() { "Untitled" } else { collection.name.as_str() };
+        rows.push(row(&[
+            ("id_local", json!(collection.id)),
+            ("name", json!(name)),
+            ("parent", json!(collection.parent.unwrap_or(0))),
+            ("creationId", json!(creation)),
+            ("systemOnly", json!(0)),
+        ]));
+        members.extend(collection.photos.iter().map(|at| row(&[("collection", json!(collection.id)), ("image", json!(source_id(*at)))])));
+    }
+    if smart > MAX_NAMED {
+        warnings.push(format!("{} more smart album(s) were not imported", smart - MAX_NAMED));
+    }
+    (rows, members)
+}

@@ -38,6 +38,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub use crate::lightroom_catalog::Original;
 
 mod collections;
+pub(crate) mod convert;
 mod keywords;
 mod locate;
 mod paths;
@@ -281,10 +282,12 @@ impl fmt::Display for ReadError {
 
 impl std::error::Error for ReadError {}
 
-/// Whether `path` names a Capture One catalog: a `.cocatalogdb` file (or its `.backup`), or a
-/// folder holding one. The database is not opened.
+/// Whether `path` is for this reader: a `.cocatalogdb` file (or its `.backup`), a folder holding
+/// one or more, or a folder named `.cocatalog`. The database is not opened, so [`read`] may still
+/// refuse it.
 pub fn is_catalog(path: &Path) -> bool {
-    locate::locate(path).is_ok()
+    let package = path.is_dir() && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("cocatalog"));
+    package || !matches!(locate::locate(path), Err(ReadError::NotFound(_)))
 }
 
 /// Read the catalog at `path`: a `.cocatalog` package or folder, a catalog backup folder, or the

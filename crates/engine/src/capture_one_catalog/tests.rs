@@ -488,7 +488,7 @@ fn photos_come_with_their_originals_variants_and_metadata() {
     // a folder recorded for the other system only is kept as written and never looked at
     let elsewhere = &catalog.photos[3];
     assert_eq!(elsewhere.original, Original::NotHere);
-    assert_eq!(elsewhere.path, if cfg!(windows) { "/Volumes/Disk  /Shoots/elsewhere.ARW" } else { "D:\\Shoots\\elsewhere.ARW" });
+    assert_eq!(elsewhere.path, if cfg!(windows) { "/Volumes/Disk  /Shoots/elsewhere.ARW" } else { "D:/Shoots/elsewhere.ARW" });
     assert_eq!((elsewhere.rating, elsewhere.color_tag), (5, ColorTag::Pink));
 }
 
@@ -559,10 +559,12 @@ fn a_package_a_backup_folder_and_the_database_itself_are_found() {
     let Err(ReadError::Ambiguous { databases, .. }) = read(&backup) else { panic!("two databases are ambiguous") };
     assert_eq!(databases, ["Capture One.cocatalogdb", "Other.cocatalogdb"]);
 
+    // an empty package is this reader's to refuse; a folder without a database is not a catalog
     let empty = scratch.0.join("Empty.cocatalog");
     std::fs::create_dir_all(&empty).unwrap();
-    assert!(!is_catalog(&empty));
+    assert!(is_catalog(&empty));
     assert!(matches!(read(&empty), Err(ReadError::NotFound(_))));
+    assert!(is_catalog(&backup) && !is_catalog(&scratch.0));
     assert!(matches!(read(&scratch.0.join("missing")), Err(ReadError::NotFound(_))));
     std::fs::write(scratch.0.join("notes.txt"), "x").unwrap();
     assert!(matches!(read(&scratch.0.join("notes.txt")), Err(ReadError::NotFound(_))));
@@ -834,6 +836,153 @@ fn an_unknown_colour_tag_and_capture_ones_no_date_read_as_none() {
     assert_eq!((first.captured.clone(), first.imported.clone(), first.exposure_bias, first.gps), (None, None, None, None));
     assert_eq!((first.color_tag, first.rating), (ColorTag::None, 5));
     assert_eq!(catalog.warnings, ["1 photo(s) have a colour tag this version doesn't know; imported without one"]);
+}
+
+// ---- into the library
+
+/// A small JPEG, so an original that is there is a photo the import can read.
+fn write_jpeg(path: &Path) {
+    use lightcraft_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+    let rgb: Vec<u8> = (0..24 * 16).flat_map(|i| [(i % 251) as u8, 90, 160]).collect();
+    let bytes = encode_jpeg(&EncodeImage::new(24, 16, 3, Samples::U8(&rgb)), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// The sample catalog with its referenced original on disk; the managed raw and the photo on
+/// another system's drive are not there.
+fn sample_on_disk(scratch: &Scratch) -> PathBuf {
+    write_jpeg(&scratch.0.join("Photos").join("2024").join("Trip").join("referenced.jpg"));
+    scratch.catalog(&sample(&scratch.0.join("Photos")))
+}
+
+fn by_name<'a>(s: &'a crate::Session, name: &str, copy: bool) -> &'a lightcraft_catalog::Photo {
+    s.catalog.photos().find(|p| p.file_name == name && p.copy_of.is_some() == copy).unwrap_or_else(|| panic!("no photo {name} (copy: {copy})"))
+}
+
+fn album<'a>(s: &'a crate::Session, name: &str) -> &'a lightcraft_catalog::Album {
+    s.catalog.albums().find(|a| a.name == name).unwrap_or_else(|| panic!("no album {name}"))
+}
+
+#[test]
+fn a_catalog_becomes_photos_virtual_copies_and_albums_in_one_undo_step() {
+    use lightcraft_catalog::{ColorLabel, MediaKind};
+    let scratch = Scratch::new("import");
+    let package = sample_on_disk(&scratch);
+    let mut s = crate::Session::new().with_fs();
+    let report = s.execute("library.importLightroom", &serde_json::json!({ "path": package })).unwrap();
+
+    assert_eq!((report["photos"].as_u64(), report["imported"].as_u64(), report["collections"].as_u64()), (Some(4), Some(4), Some(5)));
+    // the managed raw isn't in the test's catalog folder, and the other system's drive isn't here
+    assert_eq!(report["missing"].as_array().unwrap().len(), 2, "{report}");
+    assert_eq!(report["failed"].as_array().map(Vec::len), Some(0), "{report}");
+    let warnings: Vec<&str> = report["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str()).collect();
+    assert_eq!(
+        warnings,
+        [
+            "1 image(s) in Capture One's trash were left out",
+            "2 photo(s) have Capture One's orange or pink colour tag, which has no label here yet; imported without a label",
+            "4 photo(s) have Capture One adjustments; adjustments are not imported yet",
+            "smart album “Five stars”: not imported; smart album rules can't be converted yet",
+        ]
+    );
+
+    // an original that isn't there is kept with what the catalog knows about it
+    let master = by_name(&s, "managed.RAF", false);
+    assert_eq!((master.rating, master.label, master.kind), (4, Some(ColorLabel::Yellow), MediaKind::Raw));
+    assert_eq!(master.meta.keywords, ["Culture|Buildings"]);
+    assert_eq!(master.captured.as_deref(), Some("2020-09-27T18:16:57"));
+    let m = &master.meta;
+    assert_eq!(
+        (m.title.as_str(), m.caption.as_str(), m.creator.as_str(), m.copyright.as_str(), m.city.as_str()),
+        ("A title", "A description", "A creator", "A notice", "A city")
+    );
+    assert!(master.edited.is_none(), "no adjustments are imported");
+    // its second variant is a virtual copy with a rating and keywords of its own
+    let copy = by_name(&s, "managed.RAF", true);
+    assert_eq!((copy.copy_of, copy.copy_name.as_deref()), (Some(master.id), Some("Variant 2")));
+    assert_eq!((copy.rating, copy.label, copy.meta.keywords.clone()), (1, None, vec!["Nature|Animals".to_string()]));
+    // an original that is there is read like any imported file
+    let referenced = by_name(&s, "referenced.jpg", false);
+    assert_eq!((referenced.width, referenced.height, referenced.rating, referenced.label), (24, 16, 0, None));
+    let elsewhere = by_name(&s, "elsewhere.ARW", false);
+    assert_eq!((elsewhere.rating, elsewhere.label, elsewhere.kind), (5, None, MediaKind::Raw));
+    assert_eq!(s.catalog.len(), 4);
+
+    let group = album(&s, "A group");
+    assert!(group.folder && group.parent.is_none() && album(&s, "A project").folder);
+    let first = album(&s, "First album");
+    assert_eq!((first.parent, first.photos.clone()), (Some(group.id), vec![master.id, referenced.id, copy.id]));
+    assert_eq!(album(&s, "Second album").photos, [elsewhere.id]);
+    assert_eq!(album(&s, "In the project").parent, Some(album(&s, "A project").id));
+    assert!(s.catalog.albums().all(|a| a.name != "Five stars" && a.name != "An import"));
+
+    assert_eq!(s.undo.last().map(|step| step.label.as_str()), Some("Import Capture One Catalog"));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert!(s.catalog.is_empty() && s.catalog.albums().count() == 0);
+}
+
+#[test]
+fn importing_a_catalog_again_adds_nothing_twice() {
+    let scratch = Scratch::new("reimport");
+    let package = sample_on_disk(&scratch);
+    let library = scratch.0.join("Library");
+    let mut s = crate::Session::new().with_fs();
+    s.open_library(&library, false).unwrap();
+    let params = serde_json::json!({ "path": package });
+    let first = s.execute("library.importLightroom", &params).unwrap();
+    let rated = by_name(&s, "elsewhere.ARW", false).id;
+    s.commit("Rate", lightcraft_catalog::Op::SetRating { id: rated, rating: 2 }).unwrap();
+    s.close_library().unwrap();
+    s.open_library(&library, false).unwrap();
+
+    // the database itself, and its folder, are the same catalog
+    let second = s.execute("library.importLightroom", &serde_json::json!({ "path": package.join("Test.cocatalogdb") })).unwrap();
+    assert_eq!(first["mapping"], second["mapping"]);
+    assert_eq!((first["imported"].as_u64(), second["imported"].as_u64()), (Some(4), Some(0)));
+    assert_eq!((s.catalog.len(), s.catalog.albums().count()), (4, 5));
+    assert_eq!(album(&s, "First album").photos.len(), 3);
+    // the catalog's rating comes in again
+    assert_eq!(s.catalog.photo(rated).unwrap().rating, 5);
+    s.close_library().unwrap();
+}
+
+#[test]
+fn inspecting_a_catalog_adds_nothing() {
+    let scratch = Scratch::new("inspect");
+    let package = sample_on_disk(&scratch);
+    let mut s = crate::Session::new().with_fs();
+    let report = s.execute("library.inspectLightroom", &serde_json::json!({ "path": package })).unwrap();
+    assert_eq!((report["photos"].as_u64(), report["collections"].as_u64()), (Some(4), Some(5)));
+    assert_eq!(report["missing"].as_array().unwrap().len(), 3, "the raw, its second variant and the other system's photo: {report}");
+    assert!(s.catalog.is_empty());
+    // a catalog the reader refuses says why, in Capture One's terms
+    let error = s.execute("library.inspectLightroom", &serde_json::json!({ "path": scratch.0.join("Missing.cocatalogdb") })).unwrap_err();
+    assert!(
+        error.to_string().contains("not a readable") || error.to_string().contains("Lightroom") || error.to_string().contains("No such file"),
+        "{error}"
+    );
+    std::fs::create_dir_all(scratch.0.join("Empty.cocatalog")).unwrap();
+    let error = s.execute("library.importLightroom", &serde_json::json!({ "path": scratch.0.join("Empty.cocatalog") })).unwrap_err();
+    assert!(error.to_string().contains("no Capture One catalog database (.cocatalogdb) found"), "{error}");
+}
+
+#[test]
+fn an_original_that_is_not_a_photo_and_a_refused_path_never_become_records() {
+    let scratch = Scratch::new("refused");
+    let mut tables = sample(&scratch.0.join("Photos"));
+    table(&mut tables, "ZIMAGE").rows = vec![image(1, 1, "payload.exe"), image(2, 1, "/etc/passwd.jpg"), image(3, 1, "kept.jpg")];
+    let tables = with(tables, spec("ZVARIANT", VARIANT_COLUMNS, vec![variant(1, 1, 127, 10), variant(2, 2, 127, 30), variant(3, 3, 127, 40)]));
+    let package = scratch.catalog(&tables);
+    write_jpeg(&package.join("Originals").join("kept.jpg"));
+    std::fs::write(package.join("Originals").join("payload.exe"), b"MZ").unwrap();
+    let mut s = crate::Session::new().with_fs();
+    let report = s.execute("library.importLightroom", &serde_json::json!({ "path": package })).unwrap();
+    let names: Vec<_> = s.catalog.photos().map(|p| p.file_name.clone()).collect();
+    assert_eq!(names, ["kept.jpg"], "{report}");
+    let warnings = report["warnings"].to_string();
+    assert!(warnings.contains("payload.exe isn't one of the file types LightCraft reads"), "{warnings}");
+    assert!(warnings.contains("/etc/passwd.jpg is not opened"), "{warnings}");
 }
 
 /// Opt-in: read a real catalog named by `LIGHTCRAFT_C1_CATALOG` and check what any catalog has

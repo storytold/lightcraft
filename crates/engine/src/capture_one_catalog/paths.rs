@@ -57,8 +57,10 @@ pub(super) fn original(location: Option<Row<'_>>, name: &str, database: &Path) -
         return resolved(under_root(here, below, name, cfg!(windows)), database, false);
     }
     if !elsewhere.is_empty() {
-        // recorded on the other system only: kept as an offline record, never looked at
-        return Located { path: under_root(elsewhere, below, name, !cfg!(windows)), original: Original::NotHere, managed: false };
+        // recorded on the other system only: kept as an offline record, never looked at. Written
+        // with `/`, which both systems read, so the record's file name is the file's here too.
+        let path = under_root(&elsewhere.replace('\\', "/"), below, name, false);
+        return Located { path, original: Original::NotHere, managed: false };
     }
     refused(name.to_string(), "the catalog records no folder for it")
 }

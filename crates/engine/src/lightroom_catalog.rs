@@ -493,6 +493,14 @@ pub fn read_source(
     total.store(14, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     ensure_read_active(cancel)?;
+    // a Capture One catalog (its folder or its .cocatalogdb) comes in through the same import
+    if crate::capture_one_catalog::is_catalog(path) {
+        // the read plus the validation stage
+        total.store(2, Ordering::Relaxed);
+        let data = crate::capture_one_catalog::convert::read_for_import(path, cancel)?;
+        done.fetch_add(1, Ordering::Relaxed);
+        return Ok(data);
+    }
     if crate::lightroom_backup::is_backup(path) {
         let root = temp_root.map_or_else(std::env::temp_dir, Path::to_path_buf);
         let extracted = crate::lightroom_backup::extract(path, &root, cancel)?;
@@ -1456,10 +1464,11 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         by_path.entry(key(&src.path)).or_insert(photo_id);
     }
     let album_count = stage_collections(s, &data, index, &ids, &mut ops, &mut warnings)?;
+    let step = if crate::capture_one_catalog::convert::is_capture_one(&data) { "Import Capture One Catalog" } else { "Import Lightroom Catalog" };
     if !ops.is_empty() {
-        s.commit("Import Lightroom Catalog", Op::Batch { ops })?;
+        s.commit(step, Op::Batch { ops })?;
     }
-    s.merge_undo(s.undo.len().saturating_sub(undo0), "Import Lightroom Catalog");
+    s.merge_undo(s.undo.len().saturating_sub(undo0), step);
     Ok(AppliedImport {
         report: json!({"source":data.source,"photos":ids.len(),"imported":imported,"library":s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.to_string_lossy()),"collections":album_count,"preservedExistingEdits":preserved,"inRecentlyDeleted":in_trash.len(),"missing":missing,"failed":files.failed,"warnings":warnings,"skipped":data.skipped,"unmapped":unmapped,"archive":archive_path,"mapping":ids}),
         index: index.clone(),
