@@ -182,17 +182,14 @@ fn pool_priorities_dedupe_and_drop() {
         1000,
         Box::new(move || {
             let (m, cv) = &*g;
-            let mut open = m.lock().unwrap();
-            while !*open {
-                open = cv.wait(open).unwrap();
-            }
+            let limit = lightcraft_testkit::scaled(std::time::Duration::from_secs(60));
+            let (_open, waited) = cv.wait_timeout_while(m.lock().unwrap(), limit, |open| !*open).unwrap();
+            assert!(!waited.timed_out(), "the test never opened the gate");
             999
         }),
     );
     // wait until the worker took the gate job
-    while p.queued() > 0 {
-        std::thread::yield_now();
-    }
+    lightcraft_testkit::wait_until(std::time::Duration::from_secs(30), "the worker takes the gate job", || p.queued() == 0);
     p.submit(1, 1, 5, Box::new(|| 1)); // off-screen thumb
     p.submit(2, 1, 10, Box::new(|| 2)); // visible thumb
     p.submit(3, 1, 100, Box::new(|| 3)); // loupe
@@ -207,13 +204,10 @@ fn pool_priorities_dedupe_and_drop() {
         cv.notify_all();
     }
     let mut order = Vec::new();
-    while order.len() < 4 {
-        if let Some(d) = p.try_recv() {
-            order.push((d.slot, d.key, d.result));
-        } else {
-            std::thread::yield_now();
-        }
-    }
+    lightcraft_testkit::wait_until(std::time::Duration::from_secs(30), "four jobs done", || {
+        order.extend(std::iter::from_fn(|| p.try_recv()).map(|d| (d.slot, d.key, d.result)));
+        order.len() >= 4
+    });
     assert_eq!(order, vec![(999, 0, 999), (3, 1, 3), (2, 2, 22), (1, 1, 1)]);
 }
 
@@ -243,7 +237,7 @@ fn pool_with_a_running_job() -> (JobPool<u8, ()>, std::sync::mpsc::Sender<()>) {
             let _ = released.recv_timeout(std::time::Duration::from_secs(60));
         }),
     );
-    has_started.recv().unwrap();
+    lightcraft_testkit::recv_within(&has_started, std::time::Duration::from_secs(30), "the job starts");
     (p, release)
 }
 
@@ -265,7 +259,7 @@ fn pool_drop_waits_for_running_job() {
             f.store(true, Ordering::SeqCst);
         }),
     );
-    has_started.recv().unwrap();
+    lightcraft_testkit::recv_within(&has_started, std::time::Duration::from_secs(30), "the job starts");
     let q = queued_ran.clone();
     p.submit(2, 0, 1, Box::new(move || q.store(true, Ordering::SeqCst)));
     drop(p);
@@ -732,7 +726,7 @@ fn a_slot_runs_one_job_at_a_time() {
         })
     };
     p.submit(1, 1, 9, job(1, Some(released)));
-    assert_eq!(has_started.recv().unwrap(), 1);
+    assert_eq!(lightcraft_testkit::recv_within(&has_started, std::time::Duration::from_secs(30), "slot 1's first job starts"), 1);
     // two newer requests for the busy slot: the second replaces the first, neither starts
     p.submit(1, 2, 9, job(2, None));
     p.submit(1, 3, 9, job(3, None));
