@@ -158,13 +158,28 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
 }
 
 /// Changes when the profiles folder's contents change (per process): part of the render cache
-/// keys, so thumbnails rendered before a profile existed are not reused after.
+/// keys, so thumbnails rendered before a profile existed are not reused after. Includes the
+/// loaded lens database: its geometry determines which sensor/JPEG samples fit the camera look.
 pub fn cache_key() -> u64 {
-    static KEY: OnceLock<u64> = OnceLock::new();
-    *KEY.get_or_init(|| cache_key_for(dir().as_deref()))
+    static KEY: Mutex<Option<(u64, u64)>> = Mutex::new(None);
+    let lens_key = crate::lens_profiles::cache_key();
+    let mut key = KEY.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((previous_lens, value)) = *key
+        && previous_lens == lens_key
+    {
+        return value;
+    }
+    let value = cache_key_with_lens(dir().as_deref(), lens_key);
+    *key = Some((lens_key, value));
+    value
 }
 
+#[cfg(test)]
 fn cache_key_for(directory: Option<&Path>) -> u64 {
+    cache_key_with_lens(directory, 0)
+}
+
+fn cache_key_with_lens(directory: Option<&Path>, lens_key: u64) -> u64 {
     let entries = directory.and_then(|d| std::fs::read_dir(d).ok());
     let mut files: Vec<(String, u64, std::time::Duration)> = entries
         .into_iter()
@@ -179,6 +194,7 @@ fn cache_key_for(directory: Option<&Path>) -> u64 {
         .collect();
     files.sort();
     let mut h = lightcraft_preview::Hasher128::new();
+    h.str("camera-profiles-with-lens-v1").u64(lens_key);
     for (name, len, modified) in &files {
         h.str(name).u64(*len).u64(modified.as_secs()).u64(u64::from(modified.subsec_nanos()));
     }
@@ -204,10 +220,11 @@ impl Pool {
         let mut raw = lightcraft_raw::decode(bytes).map_err(|e| e.to_string())?;
         // colour only: geometric lens corrections would stop the sensor proxy from binning (the pairs still follow
         // the warp the camera applied to its JPEG)
+        let correction = crate::camera_preview::correspondence_correction(&raw, bytes);
         let lens = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         raw.opcodes.list3.retain(|op| !op.is_lens_correction());
         let Some(model) = raw.metadata.model.as_deref().map(str::trim).filter(|m| !m.is_empty()) else { return Ok(None) };
-        let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref()) else { return Ok(None) };
+        let Some(pairs) = crate::camera_preview::profile_pairs(&raw, bytes, lens.as_ref(), correction.as_ref()) else { return Ok(None) };
         let step = pairs.len().div_ceil(PAIRS_PER_FILE).max(1);
         let entry = self.models.entry(model.to_owned()).or_default();
         entry.0 += 1;
@@ -256,6 +273,60 @@ mod tests {
     }
 
     #[test]
+    fn public_cache_key_includes_the_configured_lens_database() {
+        const CHILD: &str = "LIGHTCRAFT_TEST_CAMERA_CACHE_KEY_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = std::env::temp_dir().join(format!("lc-camera-key-wiring-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("lens.xml"),
+                r#"<lensdatabase><lens><maker>Test</maker><model>18mm</model><mount>T</mount><cropfactor>1.5</cropfactor>
+                <calibration><distortion model="poly3" focal="18" k1="-0.03" /></calibration></lens></lensdatabase>"#,
+            )
+            .unwrap();
+            // The loaded snapshots and configured camera-profile folder belong to the child only.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "camera_profiles::tests::public_cache_key_includes_the_configured_lens_database", "--nocapture"])
+                .env(CHILD, "1")
+                .env(crate::lens_profiles::ENV, &dir)
+                .env("LIGHTCRAFT_CONFIG_DIR", &dir)
+                .env("LIGHTCRAFT_CAMERA_PROFILES", &dir)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&dir).unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            return;
+        }
+        assert!(crate::lens_profiles::database().is_some(), "fixture database was loaded by the public loader");
+        let lens_key = crate::lens_profiles::cache_key();
+        assert_ne!(lens_key, 0);
+        let directory = dir();
+        assert_eq!(cache_key(), cache_key_with_lens(directory.as_deref(), lens_key));
+        assert_ne!(cache_key(), cache_key_with_lens(directory.as_deref(), 0), "public camera key must forward the loaded lens key");
+        let first = cache_key();
+        // The culling path now reuses rendered views before decoding. Their identity
+        // must follow the same loaded lens snapshot as camera fitting and thumbnails.
+        let mut session = crate::Session::with_demo();
+        let id = session.active().unwrap();
+        let view = session.loupe_job(id, 64, 64, true).unwrap();
+        let (views, view_key) = view.view_cache.as_ref().unwrap();
+        views.put_memory(*view_key, std::sync::Arc::new(lightcraft_raster::Rgba8::from_fn(64, 64, |_, _| [7, 19, 31, 255])));
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_some());
+        let file = directory.unwrap().join("lens.xml");
+        let xml = std::fs::read_to_string(&file).unwrap();
+        std::fs::write(&file, xml.replace("-0.03", "-0.05")).unwrap();
+        assert_eq!(cache_key(), first, "unreloaded files do not change the loaded database");
+        crate::lens_profiles::replaced();
+        assert_ne!(cache_key(), first, "camera keys follow runtime lens replacements too");
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_none(), "a view from the old snapshot is not reused");
+        assert_eq!(cache_key(), cache_key_with_lens(dir().as_deref(), crate::lens_profiles::cache_key()));
+        std::fs::write(&file, xml).unwrap();
+        crate::lens_profiles::reload();
+        assert_eq!(cache_key(), first, "restored semantic data restores the camera key");
+        assert!(session.loupe_job(id, 64, 64, true).unwrap().cached_view().is_some(), "restoring the snapshot restores its view identity");
+    }
+
+    #[test]
     fn profiles_round_trip_and_reject_bad_files() {
         let dir = std::env::temp_dir().join(format!("lc-camera-profiles-{}", std::process::id()));
         let path = save(&profile(), &dir).unwrap();
@@ -299,6 +370,13 @@ mod tests {
         // a model name with spaces is stored under its safe file name
         assert!(bundled("Canon EOS D60").is_some_and(|p| p.files > 1000));
         assert_eq!(file_name("Canon EOS D60"), "Canon_EOS_D60.json");
+    }
+
+    #[test]
+    fn lens_database_identity_invalidates_camera_render_cache() {
+        assert_ne!(cache_key_with_lens(None, 0), cache_key_with_lens(None, 123));
+        assert_ne!(cache_key_with_lens(None, 123), cache_key_with_lens(None, 456));
+        assert_eq!(cache_key_with_lens(None, 123), cache_key_with_lens(None, 123));
     }
 
     #[test]
