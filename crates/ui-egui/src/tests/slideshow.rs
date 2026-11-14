@@ -48,7 +48,7 @@ fn fixture_grid(count: usize, open: Rc<Cell<bool>>) -> (RenderFixture, Headless)
     // consume the wall-clock budget before the slideshow scheduling assertions begin.
     assert!(open.get(), "the native grid setup gate starts open");
     h.app.renderer.set_offload(Box::new(RenderGate::new(open)));
-    assert!(h.settle(SETTLE), "the grid renders settle before controlling slide renders");
+    assert!(h.settle(super::ui_settle_timeout()), "the grid renders settle before controlling slide renders");
     assert_eq!(h.app.session.catalog.len(), count, "the slideshow fixture photos");
     let id = h.app.session.active().expect("a photo is open");
     let photo = h.app.session.catalog.photo(id).expect("it is in the catalog");

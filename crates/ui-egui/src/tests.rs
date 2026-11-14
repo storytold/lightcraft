@@ -1,3 +1,17 @@
+fn settle_timeout_for_instrumentation(instrumented: bool) -> std::time::Duration {
+    std::time::Duration::from_secs(if instrumented { 300 } else { 120 })
+}
+
+fn ui_settle_timeout() -> std::time::Duration {
+    settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn settle_budget_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(settle_timeout_for_instrumentation(false), std::time::Duration::from_secs(120));
+    assert_eq!(settle_timeout_for_instrumentation(true), std::time::Duration::from_secs(300));
+}
+
 mod activity;
 mod album_picker;
 mod album_remove;
