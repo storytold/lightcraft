@@ -564,3 +564,60 @@ fn job_tools_example_works_through_the_photos_and_stops_when_asked() {
     assert_eq!(run(&mut m, &row).unwrap(), json!({"message": "Stopped after 12 of 25 photos"}), "it stops cleanly and says how far it got");
     assert_eq!(row.items.get(), 12);
 }
+
+/// Builds the SDK's stamp tool (`sdk/stamp`) on its own, from its own lockfile, as an author's CI does.
+fn build_stamp_tool() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/stamp");
+    let target = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("plugin-stamp-tool");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let status = Command::new(cargo)
+        .current_dir(&root)
+        .args(["build", "--locked"])
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("RUSTFLAGS")
+        .env_remove("CARGO_ENCODED_RUSTFLAGS")
+        .status()
+        .unwrap();
+    assert!(status.success(), "building plugin-stamp on its own failed");
+    target.join("debug").join(format!("plugin-stamp{}", std::env::consts::EXE_SUFFIX))
+}
+
+#[test]
+fn stamped_example_installs_and_the_tool_checks_it() {
+    let Some(wasm) = build_example() else { return };
+    let tool = build_stamp_tool();
+    let lock = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/stamp/Cargo.lock")).unwrap();
+    for name in lock.lines().filter_map(|l| l.strip_prefix("name = \"")?.strip_suffix('"')) {
+        assert!(
+            !name.starts_with("lcc-") && !["rustls", "ureq", "reqwest", "hyper"].contains(&name),
+            "the tool needs no app or network crate: {name}"
+        );
+    }
+    let dir = temp("stamp-tool");
+    let (raw, stamped) = (dir.join("raw.wasm"), dir.join("stamped.wasm"));
+    std::fs::write(&raw, &wasm).unwrap();
+    let run = |args: &[&Path]| Command::new(&tool).args(args).output().unwrap();
+
+    let out = run(&[&raw, Path::new("-o"), &stamped]);
+    assert!(out.status.success(), "stamping the example: {}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(std::fs::read(&raw).unwrap(), wasm, "-o leaves the build alone");
+    let bytes = std::fs::read(&stamped).unwrap();
+
+    // `export_plugin!(package: …)` fills the version in at run time; the section has it
+    let section: Value = serde_json::from_slice(plugin_stamp::read_section(&bytes).unwrap().expect("a section")).unwrap();
+    let cargo = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../sdk/examples/catalog-tools/Cargo.toml")).unwrap();
+    let version = cargo.lines().find_map(|l| l.strip_prefix("version = \"")?.strip_suffix('"')).unwrap();
+    assert_eq!(section["version"], version, "the section holds the version the package form filled in");
+
+    let check = run(&[Path::new("--check"), &stamped]);
+    assert!(check.status.success(), "--check passes the stamped file: {}", String::from_utf8_lossy(&check.stderr));
+    let check = run(&[Path::new("--check"), &raw]);
+    assert_eq!(check.status.code(), Some(1), "--check fails an unstamped file");
+    assert!(String::from_utf8_lossy(&check.stderr).contains("wasn't stamped"), "and says why");
+    assert_eq!(run(&[Path::new("--bogus")]).status.code(), Some(2), "a usage error");
+
+    let mut m = Manager::in_memory();
+    let info = m.install_bytes_by_user(&bytes, Some(Permissions { catalog: true, ..Default::default() }), false).unwrap().info();
+    assert_eq!(info["id"], section["id"], "the stamped example installs as itself");
+    assert_eq!(info["version"], section["version"]);
+}

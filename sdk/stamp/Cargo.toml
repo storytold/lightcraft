@@ -1,0 +1,16 @@
+[package]
+name = "plugin-stamp"
+description = "Copies a WebAssembly plug-in's manifest (what lcc_manifest returns) into a photo-plugin.manifest custom section"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+# Not part of the app's workspace: a build tool for plug-in authors, installed on its own
+# (`cargo install --git … --rev <the SDK's rev> plugin-stamp`) and run in their CI.
+[workspace]
+
+[dependencies]
+serde_json = "1"
+# Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0), with the features the app's plug-in host uses.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "stable", "portable-dispatch"] }
