@@ -651,6 +651,55 @@ fn patch_shift(a: &[f32], b: &[f32], w: usize, (x, y): (usize, usize), p: usize,
     Some((best.1, best.0))
 }
 
+/// A low-contrast pipeline render retains measurable alignment in linear float output.
+#[test]
+fn distortion_metric_preserves_low_contrast_alignment() {
+    const W: usize = 160;
+    const H: usize = 160;
+    let source = Rgb32f::from_fn(W, H, |x, y| {
+        let v = 0.25 + 0.015 * ((x as f32 * 0.37).sin() * (y as f32 * 0.29).cos() + 0.5 * ((x + 2 * y) as f32 * 0.13).sin());
+        [v; 3]
+    });
+    let settings = lightcraft_develop::DevelopSettings::default();
+    let mut request = lightcraft_pipeline::RenderRequest::fit(W, H);
+    request.space = lightcraft_pipeline::OutputSpace::Rec2020;
+    request.depth = lightcraft_pipeline::OutputDepth::F32Linear;
+    let float_render = lightcraft_pipeline::render(&source, &SourceInfo::default(), &settings, &request);
+    let float = match float_render.deep.expect("float render has deep samples").samples {
+        lightcraft_pipeline::DeepSamples::F32(v) => v,
+        _ => panic!("F32Linear returns floating-point samples"),
+    };
+    let linear_luma = |r: f32, g: f32, b: f32| 0.3 * r + 0.6 * g + 0.1 * b;
+    let reference = detail(W, H, |x, y| linear_luma(source.data[y * W + x][0], source.data[y * W + x][1], source.data[y * W + x][2]));
+    let float_detail = detail(W, H, |x, y| {
+        let at = (y * W + x) * 3;
+        linear_luma(float[at], float[at + 1], float[at + 2])
+    });
+    let Some(((dx, dy), correlation)) = patch_shift(&float_detail, &reference, W, (48, 48), 64, 12) else {
+        panic!("low-contrast float patch must contain measurable detail");
+    };
+    assert!(dx.abs() <= 2 && dy.abs() <= 2 && correlation >= 0.5, "float output: ({dx}, {dy}), correlation {correlation}");
+}
+
+#[test]
+fn distortion_metric_detects_displacement() {
+    const W: usize = 160;
+    const H: usize = 160;
+    let texture = |x: usize, y: usize| (x as f32 * 0.37).sin() * (y as f32 * 0.29).cos() + 0.5 * ((x + 2 * y) as f32 * 0.13).sin();
+    let original = detail(W, H, texture);
+    let shifted = detail(W, H, |x, y| texture(x.saturating_sub(5), y));
+    let Some(((dx, dy), correlation)) = patch_shift(&original, &shifted, W, (48, 48), 64, 12) else {
+        panic!("textured patch must be measurable");
+    };
+    assert!(dx.abs() > 2 || dy.abs() > 2, "five-pixel displacement was missed: ({dx}, {dy}), correlation {correlation}");
+}
+
+#[test]
+fn distortion_metric_rejects_flat_patches() {
+    let flat = detail(160, 160, |_, _| 0.25);
+    assert!(patch_shift(&flat, &flat, 160, (48, 48), 64, 12).is_none(), "flat patches cannot establish alignment");
+}
+
 #[test]
 fn corpus_a7cr_warp_keeps_coordinates_after_orientation_and_resizing() {
     use lightcraft_geom::{Orientation, Point};
@@ -733,8 +782,11 @@ fn corpus_rw2_distortion_matches_the_camera_jpeg() {
         let dng = lightcraft_raw::write_dng(&lightcraft_raw::decode(&bytes).unwrap(), &Default::default()).unwrap();
         assert_eq!(probe_bytes("x.dng", &dng).unwrap().embedded_lens, probed.embedded_lens, "{name}: lost in the DNG");
         let mut s = lightcraft_develop::DevelopSettings::default();
+        let mut request = lightcraft_pipeline::RenderRequest::fit(EDGE, EDGE);
+        request.space = lightcraft_pipeline::OutputSpace::Rec2020;
+        request.depth = lightcraft_pipeline::OutputDepth::F32Linear;
         let render = |s: &lightcraft_develop::DevelopSettings| {
-            lightcraft_pipeline::render(&src, &info, s, &lightcraft_pipeline::RenderRequest::fit(EDGE, EDGE)).image
+            lightcraft_pipeline::render(&src, &info, s, &request).deep.expect("F32Linear render has deep samples")
         };
         let before = render(&s);
         s.optics.lens_profile = true;
@@ -747,16 +799,21 @@ fn corpus_rw2_distortion_matches_the_camera_jpeg() {
         let (sw, sh) = if cw / ch > w as f64 / h as f64 { (ch * w as f64 / h as f64, ch) } else { (cw, cw * h as f64 / w as f64) };
         let cam = cam.crop(((cw - sw) / 2.0).round() as usize, ((ch - sh) / 2.0).round() as usize, sw.round() as usize, sh.round() as usize);
         let cam = lightcraft_raster::resample::resize(&cam, w, h, Filter::Mitchell);
-        let lin = |v: u8| (v as f32 / 255.0).powf(2.2);
-        let lum8 = |im: &lightcraft_raster::Rgba8, x: usize, y: usize| {
-            let p = im.data[y * im.width + x];
-            0.3 * lin(p[0]) + 0.6 * lin(p[1]) + 0.1 * lin(p[2])
+        let rgb_luma = |p: [f32; 3]| 0.3 * p[0] + 0.6 * p[1] + 0.1 * p[2];
+        let reference = detail(w, h, |x, y| rgb_luma(cam.data[y * w + x]));
+        let before = match &before.samples {
+            lightcraft_pipeline::DeepSamples::F32(v) => v,
+            _ => panic!("F32Linear render returns floating-point samples"),
         };
-        let reference = detail(w, h, |x, y| {
-            let p = cam.data[y * w + x];
-            0.3 * p[0] + 0.6 * p[1] + 0.1 * p[2]
-        });
-        let (db, da) = (detail(w, h, |x, y| lum8(&before, x, y)), detail(w, h, |x, y| lum8(&after, x, y)));
+        let after = match &after.samples {
+            lightcraft_pipeline::DeepSamples::F32(v) => v,
+            _ => panic!("F32Linear render returns floating-point samples"),
+        };
+        let pixel_luma = |v: &[f32], x: usize, y: usize| {
+            let at = (y * w + x) * 3;
+            rgb_luma([v[at], v[at + 1], v[at + 2]])
+        };
+        let (db, da) = (detail(w, h, |x, y| pixel_luma(before, x, y)), detail(w, h, |x, y| pixel_luma(after, x, y)));
         let m = R as usize + 4;
         let corners = [(m, m), (w - m - P, m), (m, h - m - P), (w - m - P, h - m - P)];
         let mut measured = 0;
