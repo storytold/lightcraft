@@ -125,9 +125,32 @@ impl MergeState {
     }
 }
 
-fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: bool) -> Result<MergeTask, String> {
+/// The merge command for a merge menu item: `dialog.mergeHdr` and `merge.hdrLast` both give `merge.hdr`.
+pub fn merge_command_of(item: &str) -> Option<String> {
+    let name = item.strip_prefix("dialog.merge").or_else(|| item.strip_prefix("merge.")?.strip_suffix("Last"))?;
+    let mut chars = name.chars();
+    let first = chars.next()?.to_lowercase();
+    Some(format!("merge.{first}{}", chars.as_str()))
+}
+
+/// Whether the selection can be merged by `command`, decided by the engine's planner:
+/// the photos must form at least one merge group once collapsed stacks are expanded, with enough photos for the merge.
+/// The error is the planner's reason (for the dialog and the last-settings commands).
+pub fn check_selection(app: &LightcraftApp, command: &str) -> Result<(), String> {
+    let (kind, finish) = lightcraft_engine::merge::parse(command, &json!({})).map_err(|e| e.to_string())?;
+    let ids = app.session.selected();
+    // Use plan_merges (like the command layer) to allow multiple collapsed stacks.
+    // At least one group must be ready.
+    app.session
+        .plan_merges(kind, finish, &ids, false)
+        .map(|jobs| if jobs.is_empty() { Err("select at least 2 photos to merge".to_string()) } else { Ok(()) })?
+}
+
+fn spawn(app: &LightcraftApp, options: &MergeDialog, ids: &[PhotoId], preview: bool, explicit_group: bool) -> Result<MergeTask, String> {
     let (kind, finish) = lightcraft_engine::merge::parse(&options.command, &options.params()).map_err(|e| e.to_string())?;
-    let job = app.session.plan_merge(kind, finish, ids, preview).map_err(|e| e.to_string())?;
+    let job =
+        if explicit_group { app.session.plan_merge_group(kind, finish, ids, preview) } else { app.session.plan_merge(kind, finish, ids, preview) }
+            .map_err(|e| e.to_string())?;
     let progress = Arc::new(Mutex::new((0.0, "Starting".to_string())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
@@ -162,10 +185,8 @@ pub fn last_options(app: &LightcraftApp, command: &str) -> MergeDialog {
 
 /// Open the merge dialog for the selection, with the options of the last merge of this kind.
 pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
+    check_selection(app, command)?;
     let ids = app.session.selected();
-    if ids.len() < 2 {
-        return Err("select at least 2 photos to merge".into());
-    }
     app.merge.ids = ids;
     app.merge.error = None;
     // a preview that failed before is tried again, or the dialog would show neither a preview nor its error (#2708)
@@ -182,6 +203,12 @@ pub fn open(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
 
 /// Start the full-resolution merge (the dialog's Merge button / `ui.dialog.confirm`).
 pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value, String> {
+    start_final_planned(app, opts, false)
+}
+
+/// [`start_final`]; with `explicit_group` the merge is the group `app.merge.ids` as given, without re-expanding
+/// collapsed stacks (the batch's bracket sets).
+fn start_final_planned(app: &mut LightcraftApp, opts: &MergeDialog, explicit_group: bool) -> Result<Value, String> {
     if app.merge.final_task.is_some() {
         return Err("a merge is already running".into());
     }
@@ -189,7 +216,7 @@ pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value,
         t.cancel.store(true, Ordering::Relaxed);
     }
     let ids = app.merge.ids.clone();
-    let mut task = spawn(app, opts, &ids, false)?;
+    let mut task = spawn(app, opts, &ids, false, explicit_group)?;
     let guard = app.session.activity.start("merge", "Merging", Cancel::Flag(task.cancel.clone()));
     guard.set_unit(Unit::Percent);
     guard.progress(0, 1000);
@@ -205,11 +232,8 @@ pub fn start_final(app: &mut LightcraftApp, opts: &MergeDialog) -> Result<Value,
 /// Merge the selection without the dialog, with the options last used for `command` (the
 /// defaults the first time).
 pub fn start_last(app: &mut LightcraftApp, command: &str) -> Result<Value, String> {
-    let ids = app.session.selected();
-    if ids.len() < 2 {
-        return Err("select at least 2 photos to merge".into());
-    }
-    app.merge.ids = ids;
+    check_selection(app, command)?;
+    app.merge.ids = app.session.selected();
     let opts = last_options(app, command);
     start_final(app, &opts)
 }
@@ -236,7 +260,7 @@ fn next_in_batch(app: &mut LightcraftApp) -> Result<(), String> {
     let Some(ids) = app.merge.batch.pop_front() else { return Ok(()) };
     app.merge.ids = ids;
     let opts = last_options(app, "merge.hdr");
-    start_final(app, &opts).map(|_| ())
+    start_final_planned(app, &opts, true).map(|_| ())
 }
 
 /// Per frame: keep the preview in sync with the dialog's options, collect finished jobs.
@@ -255,7 +279,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
                     t.cancel.store(true, Ordering::Relaxed);
                 }
                 let ids = app.merge.ids.clone();
-                match spawn(app, opts, &ids, true) {
+                match spawn(app, opts, &ids, true, false) {
                     Ok(t) => {
                         app.merge.error = None;
                         app.merge.preview_task = Some(t);

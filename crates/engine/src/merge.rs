@@ -404,26 +404,209 @@ pub fn parse(id: &str, p: &Value) -> Result<(MergeKind, MergeFinish)> {
 }
 
 impl Session {
-    /// Plan a merge of `ids` (catalog order of the given ids is kept). A photo named more than once is merged once
-    /// (issue #1947): it adds nothing to the merge, and each copy would be decoded and held in memory.
-    pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
-        let mut sources = Vec::new();
+    /// How many photos a merge selection represents: a collapsed stack counts its members
+    /// (less earlier merge results, as [`Session::plan_merge`] merges them), any other photo
+    /// counts once, and a photo named more than once counts once. Frontends use this for
+    /// action enablement, so a single selected collapsed stack is counted by the photos it
+    /// holds rather than by the one selected id.
+    pub fn expanded_merge_count(&self, ids: &[PhotoId]) -> usize {
         let mut seen = std::collections::HashSet::new();
-        for id in ids.iter().filter(|id| seen.insert(**id)) {
+        self.merge_groups(ids).iter().flat_map(|g| g.iter()).filter(|id| seen.insert(**id)).count()
+    }
+
+    /// Whether a merge selection holds enough photos for `kind` in a single merge group once
+    /// collapsed stacks are expanded, matching [`Session::plan_merge`]: a selection holding more
+    /// than one group is not ready even if the total across groups reaches the minimum, because
+    /// `plan_merge` refuses multi-group selections and `plan_merges` would skip undersized groups.
+    pub fn merge_selection_ready(&self, kind: &MergeKind, ids: &[PhotoId]) -> bool {
+        let groups = self.merge_groups(ids);
+        groups.len() == 1 && Self::fresh_group_size(&groups[0], &std::collections::HashSet::new()) >= kind.min_photos()
+    }
+
+    /// Plan a merge of `ids`. Loose ids keep the order given; members of a collapsed stack are in capture order.
+    /// A photo named more than once is merged once (issue #1947): it adds nothing to the merge, and each copy would
+    /// be decoded and held in memory. Naming a photo in a collapsed stack names all its members (in capture order,
+    /// once per stack), since only its top photo is visible. A selection holding more than one merge group
+    /// (more than one collapsed stack, or a stack plus loose photos) is refused rather than silently dropping
+    /// groups; use [`Session::plan_merges`] for one job per group.
+    pub fn plan_merge(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
+        let groups = self.merge_groups(ids);
+        if groups.len() > 1 {
+            return Err(EngineError::Other("selection holds more than one merge group; plan one merge per stack with plan_merges".into()));
+        }
+        let read = self.merge_reader();
+        let mut seen = std::collections::HashSet::new();
+        let mut planned: Vec<Vec<(PhotoId, String)>> = Vec::new();
+        for group in groups {
+            if Self::fresh_group_size(&group, &seen) < kind.min_photos() {
+                for id in &group {
+                    seen.insert(*id);
+                }
+                continue;
+            }
+            let sources = self.merge_sources(&group, &mut seen)?;
+            if !sources.is_empty() {
+                planned.push(sources);
+            }
+        }
+        let Some(sources) = planned.pop() else {
+            return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+        };
+        if sources.len() < kind.min_photos() {
+            return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+        }
+        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
+    }
+
+    /// Plan one merge job per collapsed stack in `ids`, plus one job for the photos that are not in a collapsed
+    /// stack (kept together, as before). Each stack's members are in capture order, once per stack, and a photo
+    /// named more than once is merged once. A group with fewer than the merge needs is skipped (reported by
+    /// [`Session::merge_now`] as `skipped`) so one undersized loose photo does not stop a valid stack merging;
+    /// if every group is undersized the selection is refused.
+    pub fn plan_merges(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<Vec<MergeJob>> {
+        Ok(self.plan_merges_inner(kind, finish, ids, preview)?.0)
+    }
+
+    pub(crate) fn plan_merges_inner(
+        &self,
+        kind: MergeKind,
+        finish: MergeFinish,
+        ids: &[PhotoId],
+        preview: bool,
+    ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
+        let groups = self.merge_groups(ids);
+        self.plan_groups(kind, finish, groups, preview)
+    }
+
+    fn plan_groups(
+        &self,
+        kind: MergeKind,
+        finish: MergeFinish,
+        groups: Vec<Vec<PhotoId>>,
+        preview: bool,
+    ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
+        let read = self.merge_reader();
+        let mut jobs = Vec::new();
+        let mut skipped = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for group in groups {
+            if Self::fresh_group_size(&group, &seen) < kind.min_photos() {
+                for id in &group {
+                    seen.insert(*id);
+                }
+                skipped.push(group);
+                continue;
+            }
+            let sources = self.merge_sources(&group, &mut seen)?;
+            if sources.is_empty() {
+                continue;
+            }
+            if sources.len() < kind.min_photos() {
+                skipped.push(group);
+                continue;
+            }
+            jobs.push(MergeJob { kind: kind.clone(), finish: finish.clone(), sources, preview: preview.then_some(PREVIEW_EDGE), read: read.clone() });
+        }
+        if jobs.is_empty() {
+            return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+        }
+        Ok((jobs, skipped))
+    }
+
+    /// Plan one merge of `ids` as a single explicit group: the ids are merged as given (deduped, in order) and a
+    /// collapsed stack among them is not expanded, as [`Session::plan_merges_from_groups`] does. The desktop
+    /// batch (HDR for Each Bracket Set) plans each set this way, so its photos are not merged again.
+    pub fn plan_merge_group(&self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId], preview: bool) -> Result<MergeJob> {
+        let (mut jobs, _) = self.plan_merges_from_groups(kind, finish, vec![ids.to_vec()], preview)?;
+        jobs.pop().ok_or_else(|| EngineError::Other("nothing to merge".into()))
+    }
+
+    /// Plan one merge job per explicit group in `groups`, without re-expanding collapsed stacks.
+    /// Groups are the retained IDs from [`lightcraft_catalog::Catalog::bracket_sets`] (or similar
+    /// filtering): each group is merged as given (deduped, in order), so a bracket subset is not
+    /// reintroduced by stack expansion in [`Session::merge_groups`].
+    pub(crate) fn plan_merges_from_groups(
+        &self,
+        kind: MergeKind,
+        finish: MergeFinish,
+        groups: Vec<Vec<PhotoId>>,
+        preview: bool,
+    ) -> Result<(Vec<MergeJob>, Vec<Vec<PhotoId>>)> {
+        self.plan_groups(kind, finish, groups, preview)
+    }
+
+    fn merge_reader(&self) -> ByteReader {
+        match &self.media.file_bytes {
+            Some(r) => r.clone(),
+            None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
+        }
+    }
+
+    fn fresh_group_size(group: &[PhotoId], seen: &std::collections::HashSet<PhotoId>) -> usize {
+        let mut fresh = std::collections::HashSet::new();
+        group.iter().filter(|id| !seen.contains(id) && fresh.insert(**id)).count()
+    }
+
+    fn merge_sources(&self, group: &[PhotoId], seen: &mut std::collections::HashSet<PhotoId>) -> Result<Vec<(PhotoId, String)>> {
+        let mut sources = Vec::new();
+        for id in group.iter().filter(|id| seen.insert(**id)) {
             let p = self.catalog.photo(*id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(*id))?;
             match &p.source {
                 Source::File { path } => sources.push((*id, path.clone())),
                 Source::Demo { .. } => return Err(EngineError::Other(format!("{} is a demo photo; Photo Merge needs photo files", p.file_name))),
             }
         }
-        if sources.len() < kind.min_photos() {
-            return Err(EngineError::Other(format!("select at least {} photos to merge", kind.min_photos())));
+        Ok(sources)
+    }
+
+    /// Groups for a merge: one per collapsed stack (members in capture order), plus one loose group in given order.
+    fn merge_groups(&self, ids: &[PhotoId]) -> Vec<Vec<PhotoId>> {
+        let mut groups: Vec<Vec<PhotoId>> = Vec::new();
+        let mut loose: Option<usize> = None;
+        let mut expanded_stacks = std::collections::HashSet::new();
+        for id in ids {
+            // Check whether this stack was already expanded using only its id, before cloning its members:
+            // naming every member of a large stack must not clone the stack once per member.
+            let stack = self.catalog.stack_of(*id).filter(|st| st.collapsed);
+            match stack {
+                Some(st) => {
+                    if !expanded_stacks.insert(st.id) {
+                        continue;
+                    }
+                    let members: Vec<PhotoId> =
+                        st.photos.iter().copied().filter(|id| self.catalog.photo(*id).is_none_or(|p| !p.is_merge_result)).collect();
+                    // Capture order, not stack order (top first): an HDR panorama's bracket
+                    // detection expects the periodic exposure sequence from the earliest capture.
+                    // File names do not reflect capture sequence (renamed files, several cameras), so
+                    // ties on capture date fall back to explicit capture_order, then PhotoId (catalog order).
+                    // Keys are computed once per member, not once per comparison.
+                    let mut keyed: Vec<(String, u32, PhotoId)> = members
+                        .iter()
+                        .map(|id| {
+                            let p = self.catalog.photo(*id).unwrap();
+                            let date = p.date().to_string();
+                            let order = p.capture_order.unwrap_or(0);
+                            (date, order, *id)
+                        })
+                        .collect();
+                    keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)).then_with(|| a.2.cmp(&b.2)));
+                    groups.push(keyed.into_iter().map(|(_, _, id)| id).collect());
+                }
+                None => {
+                    let at = match loose {
+                        Some(at) => at,
+                        None => {
+                            groups.push(Vec::new());
+                            let at = groups.len() - 1;
+                            loose = Some(at);
+                            at
+                        }
+                    };
+                    groups[at].push(*id);
+                }
+            }
         }
-        let read: ByteReader = match &self.media.file_bytes {
-            Some(r) => r.clone(),
-            None => Arc::new(|path: &str| std::fs::read(path).map_err(|e| format!("{path}: {e}"))),
-        };
-        Ok(MergeJob { kind, finish, sources, preview: preview.then_some(PREVIEW_EDGE), read })
+        groups
     }
 
     /// Write a finished (non-preview) merge next to its first source, import it, select it and
@@ -466,10 +649,58 @@ impl Session {
         Ok(info)
     }
 
-    /// Plan, run and finish a merge synchronously (CLI, MCP, control channel).
+    /// Plan, run and finish a merge synchronously (CLI, MCP, control channel). One job per
+    /// collapsed stack in `ids` (see [`Session::plan_merges`]): each is run and finished in turn.
+    /// The result is the first job's result; when there is more than one job it also carries
+    /// `merged`, the authoritative list of every job's result in order (`merged[0]` duplicates the
+    /// top-level fields). Consumers should read `merged` when present rather than counting both.
     pub fn merge_now(&mut self, kind: MergeKind, finish: MergeFinish, ids: &[PhotoId]) -> Result<Value> {
-        let job = self.plan_merge(kind, finish, ids, false)?;
-        let out = job.run(&|_, _| true).map_err(EngineError::Other)?;
-        self.finish_merge(&job, out)
+        let (jobs, skipped) = self.plan_merges_inner(kind, finish, ids, false)?;
+        self.run_merge_jobs(jobs, skipped)
+    }
+
+    /// Plan, run and finish merges for explicit groups (see [`Session::plan_merges_from_groups`]),
+    /// without re-expanding collapsed stacks. Used by `merge.hdrBatch` to preserve the IDs
+    /// retained by `bracket_sets`.
+    pub fn merge_now_groups(&mut self, kind: MergeKind, finish: MergeFinish, groups: Vec<Vec<PhotoId>>) -> Result<Value> {
+        let (jobs, skipped) = self.plan_merges_from_groups(kind, finish, groups, false)?;
+        self.run_merge_jobs(jobs, skipped)
+    }
+
+    fn run_merge_jobs(&mut self, jobs: Vec<MergeJob>, skipped: Vec<Vec<PhotoId>>) -> Result<Value> {
+        let mut merged = Vec::new();
+        let mut failed = Vec::new();
+        for job in &jobs {
+            let photos: Vec<u64> = job.sources.iter().map(|(p, _)| p.0).collect();
+            let result = job.run(&|_, _| true).map_err(EngineError::Other).and_then(|out| self.finish_merge(job, out));
+            match result {
+                Ok(v) => merged.push(v),
+                Err(e) => failed.push(json!({"photos": photos, "error": e.to_string()})),
+            }
+        }
+        if merged.is_empty() {
+            let msg = failed.iter().map(|f| format!("{}: {}", f["photos"], f["error"])).collect::<Vec<_>>().join("; ");
+            return Err(EngineError::Other(format!("all merges failed: {msg}")));
+        }
+        let first_id = merged.first().and_then(|v| v.get("id")).and_then(Value::as_u64).map(PhotoId);
+        let mut first = merged.first().cloned().unwrap_or(Value::Null);
+        if !skipped.is_empty()
+            && let Some(obj) = first.as_object_mut()
+        {
+            obj.insert("skipped".into(), json!(skipped.iter().map(|g| g.iter().map(|p| p.0).collect::<Vec<_>>()).collect::<Vec<_>>()));
+        }
+        if merged.len() > 1 || !failed.is_empty() {
+            // finish_merge selected each result in turn; leave the selection on the returned (first) result.
+            if let Some(id) = first_id {
+                self.selection = crate::Selection::single(id);
+            }
+            if let Some(obj) = first.as_object_mut() {
+                obj.insert("merged".into(), Value::Array(merged));
+                if !failed.is_empty() {
+                    obj.insert("failed".into(), Value::Array(failed));
+                }
+            }
+        }
+        Ok(first)
     }
 }
