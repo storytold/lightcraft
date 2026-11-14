@@ -472,6 +472,8 @@ fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>,
         work();
     }
     state.finished.store(true, Ordering::Relaxed);
+    // the build's decode temporaries are gone: hand their pages back now, not at the next idle trim
+    crate::memory::release();
 }
 
 /// The long edge a standard preview is built at: [`STANDARD_EDGE`], or what the loupe asks for
