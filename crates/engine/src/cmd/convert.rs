@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{CommandSpec, bad, cmd, has_active, has_selection};
 use crate::{Result, Session};
 
-/// `<stem>.dng`, then `<stem>-2.dng`, `<stem>-3.dng`ΓÇª next to `path`.
+/// `<stem>.dng`, then `<stem>-2.dng`, `<stem>-3.dng`… next to `path`.
 fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
     let p = Path::new(path);
     let dir = p.parent().unwrap_or(Path::new("")).to_path_buf();
@@ -23,7 +23,7 @@ fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
 ///
 /// The DNG is checked before anyone relies on it (Convert to DNG relinks the photo to it, Copy as
 /// DNG deletes the raw copy): the encoded file must decode to the same raw data, and it is
-/// written to a temp file, synced, read back identical and only then given its name ΓÇö never
+/// written to a temp file, synced, read back identical and only then given its name — never
 /// replacing an existing file. On any failure no DNG is left behind and the raw stays in use.
 pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::result::Result<String, String> {
     write_dng_with(s.media.file_bytes.as_ref(), path, packet)
@@ -114,7 +114,7 @@ pub fn specs() -> Vec<CommandSpec> {
         "Convert to DNG",
         ["Photo"],
         None,
-        "{ids?} ΓÇö write each raw photo as a lossless DNG next to it (settings embedded) and relink the photo to it; originals are kept ΓåÆ {converted: [{id, path, original}], skipped}",
+        "{ids?} — write each raw photo as a lossless DNG next to it (settings embedded) and relink the photo to it; originals are kept → {converted: [{id, path, original}], skipped}",
         has_selection,
         convert
     )]
@@ -356,7 +356,7 @@ pub(crate) fn reload_ops(
 
 /// Re-read photos whose files changed on disk (an external editor saved them): new size,
 /// dimensions and content hash, cached sources dropped. The app runs the same steps
-/// ([`crate::cmd::reload`]) with the files read on a worker thread. ΓåÆ {reloaded: [ids]}
+/// ([`crate::cmd::reload`]) with the files read on a worker thread. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     use crate::cmd::reload as r;
     let items = r::plan(s, p)?;
@@ -367,7 +367,7 @@ fn reload(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Duplicate: copy the file next to itself (`<name>-copy`, never overwriting) and add it with the
-/// same settings, metadata, rating, flag, label and albums. ΓåÆ {ids}
+/// same settings, metadata, rating, flag, label and albums. → {ids}
 fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.duplicate";
     let mut made = Vec::new();
@@ -419,7 +419,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Duplicate",
             ["Photo"],
             None,
-            "{ids?} ΓÇö copy each photo's file next to it (`-copy`) and add it with the same settings, metadata and albums (a real file, unlike a virtual copy) ΓåÆ {ids}",
+            "{ids?} — copy each photo's file next to it (`-copy`) and add it with the same settings, metadata and albums (a real file, unlike a virtual copy) → {ids}",
             has_selection,
             duplicate
         ),
@@ -428,7 +428,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} ΓÇö re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` ΓåÆ {reloaded}",
+            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
             has_selection,
             reload
         ),
@@ -437,7 +437,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Edit Copy for External Editor",
             [],
             None,
-            "{ids?, colorSpace?: adobeRgb (default) | proPhoto | displayP3 | srgb, format?: tiff (default) | psd, bitDepth?: 16 (default) | 8, dir?} ΓÇö render each selected photo (or `ids`, at most 50) with its edits as `<name>-Edit.tif` (or `.psd`, flat, which PhotoCraft saves back to in place) next to it, add each stacked on its original and select the copies ΓåÆ {path, id, original (the first copy), copies: [{path, id, original}]} (the app then opens them in the external editor)",
+            "{ids?, colorSpace?: adobeRgb (default) | proPhoto | displayP3 | srgb, format?: tiff (default) | psd, bitDepth?: 16 (default) | 8, dir?} — render each selected photo (or `ids`, at most 50) with its edits as `<name>-Edit.tif` (or `.psd`, flat, which PhotoCraft saves back to in place) next to it, add each stacked on its original and select the copies → {path, id, original (the first copy), copies: [{path, id, original}]} (the app then opens them in the external editor)",
             has_active,
             edit_external
         ),
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!((meta.camera.as_str(), meta.lens.as_str(), meta.aperture), ("Canon EOS R6 Mark III", "RF24-105mm", Some(6.3)));
         assert_eq!((meta.title.as_str(), meta.iso), ("Mine", Some(800)), "set fields are kept");
         assert!(matches!(ops.get(1), Some(Op::SetCaptured { captured: Some(_), .. })));
-        // nothing missing ΓåÆ nothing to do
+        // nothing missing → nothing to do
         ph.meta = (**meta).clone();
         ph.captured = Some("2026-10-04T08:16:11".into());
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty());
@@ -489,7 +489,7 @@ mod tests {
             let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{t}: {ops:?}") };
             assert_eq!((meta.shutter.as_str(), meta.exposure_time), (shown, Some(t)), "{t}");
             assert_eq!(meta.shutter_seconds(), Some(t), "{t}");
-            // repaired ΓåÆ nothing more to do
+            // repaired → nothing more to do
             ph.meta = (**meta).clone();
             assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "{t}");
         }
