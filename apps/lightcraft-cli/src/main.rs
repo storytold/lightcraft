@@ -10,7 +10,7 @@
 //! lightcraft-cli denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
-//! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli calibrate [--max N] [--out DIR] [--pairs FILE] [--from-pairs FILE]… FOLDERS/FILES…
 //! lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
 //! ```
 #![forbid(unsafe_code)]
@@ -106,12 +106,18 @@ USAGE:
         --max-connections N   concurrent clients (default 8)
   lightcraft-cli commands [--json]   list every command id with its parameters
   lightcraft-cli controls [--json]   list every develop control id with its range
-  lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+  lightcraft-cli calibrate [--max N] [--out DIR] [--pairs FILE] [--from-pairs FILE]… [FOLDERS/FILES…]
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
       (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
       <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
       take their colour from the profile and only their tone from their own JPEG.
+        --pairs FILE        also write the sampled colour pairs to FILE, to share: per photo its camera model,
+                            an id (a hash of the raw's bytes, not its name), Sony's DRO flag and the colour pairs;
+                            no image, file name, GPS, serial number or date. Without --out, only FILE is written
+                            (no profile is fitted or installed).
+        --from-pairs FILE   pool the pairs of a file written by --pairs (repeat for several, mix with folders);
+                            the profile is the same as from the same raws. Photos listed twice count once.
   lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
       Time what culling a shoot costs on its own files: reading the folder (browse), the first
       screen of grid thumbnails, camera previews at loupe sizes and full size, a loupe render,
@@ -240,9 +246,13 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     let mut max = 300usize;
     let mut out: Option<std::path::PathBuf> = None;
     let mut inputs = Vec::new();
+    let mut pairs_out: Option<std::path::PathBuf> = None;
+    let mut pairs_in: Vec<std::path::PathBuf> = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--pairs" => pairs_out = Some(take_value(args, &mut i, "--pairs")?.into()),
+            "--from-pairs" => pairs_in.push(take_value(args, &mut i, "--from-pairs")?.into()),
             "--max" => max = take_value(args, &mut i, "--max")?.parse().map_err(|_| "--max needs a number".to_string())?,
             "--out" => out = Some(take_value(args, &mut i, "--out")?.into()),
             a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
@@ -250,8 +260,8 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    if inputs.is_empty() {
-        return Err("calibrate needs folders or raw files".into());
+    if inputs.is_empty() && pairs_in.is_empty() {
+        return Err("calibrate needs folders, raw files or --from-pairs FILE".into());
     }
     let mut files = Vec::new();
     for input in &inputs {
@@ -264,8 +274,23 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         // spread over all folders (dates, scenes) rather than the first N
         files = (0..max).filter_map(|k| files.get(k * found / max).cloned()).collect();
     }
-    eprintln!("calibrate: {} of {found} raw files", files.len());
-    let dir = out.or_else(lightcraft_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?;
+    if !inputs.is_empty() {
+        eprintln!("calibrate: {} of {found} raw files", files.len());
+    }
+    // `--pairs` alone only exports: no profile is fitted into the folder LightCraft reads
+    let fit = pairs_out.is_none() || out.is_some();
+    let dir = if fit { Some(out.or_else(lightcraft_engine::camera_profiles::dir).ok_or("no profiles folder: pass --out DIR")?) } else { None };
+    // pairs files first, so a bad one fails before any raw file is decoded (the pool's order doesn't matter)
+    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
+    for path in &pairs_in {
+        let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();
+        if size > lightcraft_engine::camera_pairs::MAX_FILE {
+            return Err(format!("{}: {size} bytes is too large for a pairs file", path.display()));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let n = pool.add_pairs_file(&bytes, &path.display().to_string())?;
+        eprintln!("calibrate: {}: {n} photo(s) from a pairs file", path.display());
+    }
     let workers = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 6);
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::atomic::AtomicUsize::new(0);
@@ -278,7 +303,12 @@ fn calibrate(args: &[String]) -> Result<(), String> {
                         let result = std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| pool.add(&bytes));
                         let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
                         match result {
-                            Ok(Some(model)) => eprintln!("[{n}/{}] {} ({model})", files.len(), path.display()),
+                            Ok(Some(model)) => {
+                                eprintln!("[{n}/{}] {} ({model})", files.len(), path.display());
+                                if pairs_out.is_some() && !lightcraft_engine::camera_pairs::shareable_model(&model) {
+                                    eprintln!("{}: left out of --pairs: a pairs file can't hold its camera model", path.display());
+                                }
+                            }
                             Ok(None) => eprintln!("[{n}/{}] {}: skipped (no usable camera JPEG or colour)", files.len(), path.display()),
                             Err(e) => eprintln!("[{n}/{}] {}: {e}", files.len(), path.display()),
                         }
@@ -289,10 +319,34 @@ fn calibrate(args: &[String]) -> Result<(), String> {
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok()).collect()
     });
-    let mut pool = lightcraft_engine::camera_profiles::Pool::default();
     for p in pools {
         pool.merge(p);
     }
+    calibrate_outputs(&pool, pairs_out.as_deref(), dir)
+}
+
+/// What `calibrate` writes from its pooled photos: the pairs file, if asked for, then the profiles, if a folder is set.
+fn calibrate_outputs(
+    pool: &lightcraft_engine::camera_profiles::Pool,
+    pairs_out: Option<&Path>,
+    dir: Option<std::path::PathBuf>,
+) -> Result<(), String> {
+    if let Some(path) = pairs_out {
+        let bytes = pool.pairs_file()?;
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        }
+        let tmp = path.with_extension("tmp");
+        std::fs::write(&tmp, &bytes).map_err(|e| format!("{}: {e}", tmp.display()))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let photos = pool.shareable_photos().len();
+        println!("{photos} photos, {} bytes of colour pairs → {}", bytes.len(), path.display());
+        // photos only a pairs file can't hold still fit, when there is a folder to fit into
+        if photos == 0 && (dir.is_none() || pool.photos().is_empty()) {
+            return Err("no photo contributed colour pairs".into());
+        }
+    }
+    let Some(dir) = dir else { return Ok(()) };
     let mut written = 0;
     for result in pool.fit(5) {
         match result {
@@ -1139,6 +1193,50 @@ mod raw_files_tests {
 
 #[cfg(test)]
 mod tests {
+    /// Photos no pairs file can hold (a camera model it refuses) leave the export empty but still fit; with nothing to
+    /// fit, or no folder to fit into, an empty export is the error it was.
+    #[test]
+    fn calibrate_fits_photos_a_pairs_file_cannot_hold() {
+        use lightcraft_engine::camera_profiles::{PhotoPairs, Pool};
+        let mut state = 12345u32;
+        let mut next = move || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            f64::from(state >> 8) / f64::from(1u32 << 24)
+        };
+        let photos: Vec<PhotoPairs> = (0..6)
+            .map(|k| PhotoPairs {
+                model: "M".repeat(65),
+                id: format!("{:032x}", k + 1),
+                dro: None,
+                pairs: (0..400)
+                    .map(|_| {
+                        let c = [next() * 0.8 + 0.02, next() * 0.8 + 0.02, next() * 0.8 + 0.02];
+                        let y = [c[0] * 1.4 - c[1] * 0.2, c[1] * 1.3 - c[2] * 0.1, c[2] * 1.2 + 0.05 * c[0]].map(|v: f64| v.clamp(0.001, 1.0));
+                        (c, y)
+                    })
+                    .collect(),
+            })
+            .collect();
+        let mut pool = Pool::default();
+        pool.add_photos(photos);
+        assert!(pool.shareable_photos().is_empty());
+        let base = std::env::temp_dir().join(format!("lc-calibrate-outputs-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let (pairs, profiles) = (base.join("out.pairs"), base.join("profiles"));
+        let refused = "no photo contributed colour pairs";
+
+        let both = super::calibrate_outputs(&pool, Some(&pairs), Some(profiles.clone()));
+        let written = std::fs::read_dir(&profiles).map_or(0, |d| d.count());
+        let pairs_only = super::calibrate_outputs(&pool, Some(&pairs), None);
+        let empty = super::calibrate_outputs(&Pool::default(), Some(&pairs), Some(profiles.clone()));
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert_eq!(both, Ok(()));
+        assert_eq!(written, 1, "the fit ran");
+        assert_eq!(pairs_only, Err(refused.to_string()));
+        assert_eq!(empty, Err(refused.to_string()));
+    }
+
     /// `render` and `merge` read the lens database the desktop app downloaded, as the desktop does (the same raw
     /// gets the same profile everywhere), but never fetch it.
     #[test]
