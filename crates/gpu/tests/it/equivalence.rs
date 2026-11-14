@@ -806,6 +806,50 @@ fn light_v3_operators_match() {
     }
 }
 
+/// Process V9's curve stage: Whites, the parametric curve, the point curves and Refine Saturation, on a camera curve
+/// and without one, in SDR and HDR.
+#[test]
+fn curve_stage_matches() {
+    if !gpu() {
+        return;
+    }
+    use lightcraft_geom::Point;
+    let src = scene(0, 960, 640);
+    let curve = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 0.004 * 1.18f32.powi(i as i32);
+        [x, 1.0 - (-2.0 * x).exp()]
+    }))
+    .unwrap();
+    let raw = SourceInfo { raw: true, camera_tone: Some(curve), ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let v9 = || DevelopSettings { process: Process::V9.version(), ..Default::default() };
+    for v in [-100.0, -30.0, 40.0, 100.0] {
+        let mut s = v9();
+        s.light.whites = v;
+        check(&format!("V9 Whites {v}"), &src, &raw, &s, &req);
+    }
+    let mut s = v9();
+    s.curve.highlights = -40.0;
+    s.curve.lights = 25.0;
+    s.curve.darks = -15.0;
+    s.curve.shadows = 30.0;
+    check("V9 parametric", &src, &raw, &s, &req);
+    s.curve.master = vec![Point { x: 0.0, y: 0.05 }, Point { x: 0.5, y: 0.55 }, Point { x: 1.0, y: 0.95 }];
+    s.curve.red = vec![Point { x: 0.0, y: 0.0 }, Point { x: 0.4, y: 0.5 }, Point { x: 1.0, y: 1.0 }];
+    s.curve.blue = vec![Point { x: 0.0, y: 0.1 }, Point { x: 1.0, y: 0.9 }];
+    s.light.whites = -25.0;
+    check("V9 curves", &src, &raw, &s, &req);
+    s.curve.refine_saturation = 30.0;
+    check("V9 Refine Saturation", &src, &raw, &s, &req);
+    check("V9 curves, no camera curve", &src, &SourceInfo::default(), &s, &req);
+    s.curve.split_mid = 40.0;
+    check("V9 other splits", &src, &raw, &s, &req);
+    s.curve.split_mid = 50.0;
+    s.hdr.enabled = true;
+    s.hdr.max_ev = 2.0;
+    check("V9 HDR preview", &src, &raw, &s, &req);
+}
+
 /// Issue #632: the Highlights / Shadows base of each process (V1: the edge-aware filter of log
 /// luminance; V2 to V7: of its fine median, V8 on: of its detail-free plane, a radius that grows with the render) matches the CPU's, and
 /// a warm cache never hands one process the other's base.
