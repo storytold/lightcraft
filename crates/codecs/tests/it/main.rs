@@ -11,3 +11,4 @@ mod heif;
 #[cfg(all(feature = "jxl", not(target_arch = "wasm32")))]
 mod jxl_streaming;
 mod roundtrip;
+mod tiff_zip;
