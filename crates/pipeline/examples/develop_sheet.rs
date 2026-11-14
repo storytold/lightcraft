@@ -8,7 +8,8 @@ fn main() {
     let lib = lightcraft_scenes::demo_library();
     let picks = [0usize, 2, 3, 6, 8, 5];
     let (cw, ch) = (420usize, 280usize);
-    let mut sheet = image::RgbImage::new((cw * 2) as u32, (ch * picks.len()) as u32);
+    let (sw, sh) = (cw * 2, ch * picks.len());
+    let mut sheet = vec![0u8; sw * sh * 3];
     for (row, &i) in picks.iter().enumerate() {
         let src = lib[i].render_fit(900);
         let mut edited = DevelopSettings::default();
@@ -27,11 +28,14 @@ fn main() {
             for y in 0..r.height {
                 for x in 0..r.width {
                     let p = r.get(x, y);
-                    sheet.put_pixel((ox + x) as u32, (oy + y) as u32, image::Rgb([p[0], p[1], p[2]]));
+                    let idx = ((oy + y) * sw + (ox + x)) * 3;
+                    sheet[idx..idx + 3].copy_from_slice(&[p[0], p[1], p[2]]);
                 }
             }
         }
     }
-    sheet.save(&out).unwrap();
+    let img = craft_image_codecs::Image::from_u8(sw as u32, sh as u32, craft_image_codecs::ChannelLayout::Rgb, sheet).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &Default::default()).unwrap();
+    std::fs::write(&out, png).unwrap();
     println!("{out}");
 }
