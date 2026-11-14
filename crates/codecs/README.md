@@ -46,7 +46,7 @@ CRW, MRW, X3F) are detected so the engine can route them to `lightcraft-raw`; `d
 
 | Format | Decode | Encode | Notes |
 |---|---|---|---|
-| JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (jpeg-encoder, baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2; only complete, consistently counted, uniquely numbered chunk sequences are assembled; malformed profiles use the existing unsupported-profile fallback), Adobe APP14, MPF previews |
+| JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (shared `craft-jpeg`, optimized baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2; only complete, consistently counted, uniquely numbered chunk sequences are assembled; malformed profiles use the existing unsupported-profile fallback), Adobe APP14, MPF previews |
 | PNG | yes, 1–16-bit, palette, tRNS, interlaced | 8/16-bit, gray/GA/RGB/RGBA | iCCP, eXIf, iTXt XMP; sRGB/cICP/cHRM/gAMA honoured when no ICC |
 | TIFF | 8/16-bit int (32/64-bit int kept to 16 bits), 16/32/64-bit float, gray/RGB/CMYK/palette, alpha (assoc./unassoc.), planar, LZW/Deflate/PackBits/JPEG | 8/16-bit, 32-bit float; none/LZW/Deflate/PackBits | ICC (34675), XMP (700), Orientation; first IFD only; EXIF not written (use `craft-tiff`) |
 | WebP | lossy + lossless, alpha, first frame of animations | lossless only | ICCP/EXIF/XMP chunks |
@@ -85,7 +85,8 @@ All pure Rust, verified with `cargo info` / `cargo tree`:
 |---|---|---|
 | zune-jpeg, zune-core | MIT OR Apache-2.0 OR Zlib | JPEG decode |
 | jpeg-decoder | MIT OR Apache-2.0 | scaled / CMYK JPEG decode |
-| jpeg-encoder | (MIT OR Apache-2.0) AND IJG | JPEG encode (IJG: permissive, attribution in docs) |
+| craft-jpeg | MIT OR Apache-2.0 | baseline JPEG encode (shared craft-libs) |
+| jpeg-encoder (dev only) | (MIT OR Apache-2.0) AND IJG | reference CMYK fixture and JPEG benchmark |
 | png | MIT OR Apache-2.0 | PNG |
 | tiff | MIT | TIFF |
 | image-webp | MIT OR Apache-2.0 | WebP |

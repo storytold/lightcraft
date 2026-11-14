@@ -1,4 +1,4 @@
-//! Encoders: JPEG (`jpeg-encoder`), PNG (`png`), TIFF (`tiff`), flat PSD (our own), lossless WebP (`image-webp`) and,
+//! Encoders: JPEG (`craft-jpeg`), PNG (`png`), TIFF (`tiff`), flat PSD (our own), lossless WebP (`image-webp`) and,
 //! on native targets with the `avif` feature, AVIF (`ravif`/`rav1e`); JPEG XL is in `jxl_encode`.
 //! Metadata (ICC/EXIF/XMP) is embedded where the format allows.
 
@@ -132,52 +132,20 @@ pub fn encode_jpeg(img: &EncodeImage, quality: u8, subsampling: ChromaSubsamplin
     if img.width > u16::MAX as u32 || img.height > u16::MAX as u32 {
         return Err(Error::Encode("JPEG dimensions are limited to 65535".into()));
     }
-    let n = img.width as usize * img.height as usize;
-    let (data, ct): (std::borrow::Cow<[u8]>, jpeg_encoder::ColorType) = match img.channels {
-        1 => (data[..n].into(), jpeg_encoder::ColorType::Luma),
-        2 => (data.as_chunks::<2>().0.iter().take(n).map(|c| c[0]).collect::<Vec<_>>().into(), jpeg_encoder::ColorType::Luma),
-        3 => (data[..n * 3].into(), jpeg_encoder::ColorType::Rgb),
-        _ => (data[..n * 4].into(), jpeg_encoder::ColorType::Rgba),
+    let pixels = img.width as usize * img.height as usize;
+    let (data, channels): (std::borrow::Cow<'_, [u8]>, usize) = match img.channels {
+        1 => (data[..pixels].into(), 1),
+        2 => (data.as_chunks::<2>().0.iter().take(pixels).map(|c| c[0]).collect::<Vec<_>>().into(), 1),
+        3 => (data[..pixels * 3].into(), 3),
+        _ => (data[..pixels * 4].into(), 4),
     };
-    if subsampling != ChromaSubsampling::S422 {
-        // Parallel encoder (restart-interval bands on all cores).
-        let segs = jpeg_app_segments(meta)?;
-        let ch = if img.channels == 2 { 1 } else { img.channels as usize };
-        // `data` is already gray for 2-channel input (see above)
-        return Ok(crate::jpeg_par::encode(&data, img.width as usize, img.height as usize, ch, quality, subsampling, &segs));
-    }
-    let mut out = Vec::new();
-    let mut enc = jpeg_encoder::Encoder::new(&mut out, quality.clamp(1, 100));
-    enc.set_sampling_factor(match subsampling {
-        ChromaSubsampling::S444 => jpeg_encoder::SamplingFactor::R_4_4_4,
-        ChromaSubsampling::S422 => jpeg_encoder::SamplingFactor::R_4_2_2,
-        ChromaSubsampling::S420 => jpeg_encoder::SamplingFactor::R_4_2_0,
-    });
-    // Standard tables: jpeg-encoder's optimized-table mode writes non-interleaved scans, which some
-    // decoders (incl. zune-jpeg 0.5) mishandle. Interleaved baseline is universally supported.
-    let e = |e: jpeg_encoder::EncodingError| Error::Encode(e.to_string());
-    if let Some(ppi) = meta.ppi.filter(|p| *p > 0) {
-        enc.set_density(jpeg_encoder::PixelDensity::dpi(ppi));
-    }
-    if let Some(exif) = meta.exif {
-        if exif.len() > 65_527 {
-            return Err(Error::Encode("EXIF larger than one APP1 segment (64 KiB)".into()));
-        }
-        enc.add_exif_metadata(exif).map_err(e)?;
-    }
-    if let Some(xmp) = meta.xmp {
-        let mut seg = XMP_NS.to_vec();
-        seg.extend_from_slice(xmp.as_bytes());
-        if seg.len() > 65_533 {
-            return Err(Error::Encode("XMP larger than one APP1 segment (extended XMP not supported)".into()));
-        }
-        enc.add_app_segment(1, seg).map_err(e)?;
-    }
-    if let Some(icc) = meta.icc {
-        enc.add_icc_profile(icc).map_err(e)?;
-    }
-    enc.encode(&data, img.width as u16, img.height as u16, ct).map_err(e)?;
-    Ok(out)
+    let subsampling = match subsampling {
+        ChromaSubsampling::S444 => craft_jpeg::ChromaSubsampling::S444,
+        ChromaSubsampling::S422 => craft_jpeg::ChromaSubsampling::S422,
+        ChromaSubsampling::S420 => craft_jpeg::ChromaSubsampling::S420,
+    };
+    craft_jpeg::encode_baseline(&data, img.width as usize, img.height as usize, channels, quality, subsampling, &jpeg_app_segments(meta)?)
+        .map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// Encode PNG (8- or 16-bit; float input is rejected — quantize first).
