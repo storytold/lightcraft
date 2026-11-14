@@ -60,6 +60,7 @@
   "Import photos with File → Import Photos…, or drop them here": "Importiere Fotos über Datei → Fotos importieren… oder lege sie hier ab",
   "This row covers more than one disk: drop on a folder inside it": "Diese Zeile umfasst mehr als ein Laufwerk: auf einem Ordner darin ablegen",
   "Local photos aren't in the library yet: Add to My Photos first, then move them": "Lokale Fotos sind noch nicht in der Bibliothek: erst zu „Meine Fotos“ hinzufügen, dann verschieben",
+  "Demo photos have no file on disk, so they can't be moved": "Demofotos haben keine Datei auf dem Datenträger und lassen sich deshalb nicht verschieben",
   "Add to Selected Photos": "Zu ausgewählten Fotos hinzufügen",
   "Add to Target Album": "Zu Zielalbum hinzufügen",
   "Add to this mask": "Zu dieser Maske hinzufügen",
@@ -3535,5 +3536,13 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Starten Sie die App mit --control 7980 (oder LIGHTCRAFT_CONTROL_PORT), dann verbindet lightcraft-cli mcp --connect einen Agenten mit ihr.",
   "Welcome": "Willkommen",
   "Next": "Weiter",
-  "Get Started": "Loslegen"
+  "Get Started": "Loslegen",
+  "Can't add to an album folder": "Nicht zu einem Albenordner hinzufügbar",
+  "An album folder holds albums, not photos: drop on an album inside it": "Ein Albenordner enthält Alben, keine Fotos: auf ein Album darin ablegen",
+  "Can't add to a smart album": "Nicht zu einem Smart-Album hinzufügbar",
+  "A smart album's rules choose its photos: change them with Edit Smart Album…": "Die Regeln eines Smart-Albums bestimmen seine Fotos: ändere sie mit Smart-Album bearbeiten…",
+  "Add keywords in the Keyword List": "Stichwörter in der Stichwortliste hinzufügen",
+  "Give photos a keyword in the Keyword List (Window → Keywords, K): drop them on it there": "Stichwörter vergibst du in der Stichwortliste (Fenster → Stichwörter, K): Fotos dort auf ein Stichwort ziehen",
+  "Already on these photos": "Bereits bei diesen Fotos",
+  "Can't go inside itself": "Kann nicht in sich selbst liegen"
 }

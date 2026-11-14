@@ -302,9 +302,9 @@
   "Color space: Rec. 2020 {curve} (HDR AVIF)": "Spazio colore: Rec. 2020 {curve} (AVIF HDR)",
   "{n} selected photo{} · {pages} page{}": "Foto selezionate: {n} · pagine: {pages}{:.0}{:.0}",
   "Already in “{}”": "Già in “{}”",
-  "Move {n} photo{} to “{}”": "Sposta foto in “{1}” ({n}){0:.0}",
-  "Move {n} photo{} to “{}”?": "Spostare le foto in “{1}” ({n})?{0:.0}",
-  "Moved {n} photo{} to “{}”. Edit → Undo moves them back.": "Foto spostate in “{1}”: {n}{0:.0}. Modifica → Annulla le riporta indietro.",
+  "Move {n} file{} to “{}”": "Sposta file in “{1}” ({n}){0:.0}",
+  "Move {n} file{} to “{}”?": "Spostare i file in “{1}” ({n})?{0:.0}",
+  "Moved {n} file{} to “{}”. Edit → Undo moves them back.": "File spostati in “{1}”: {n}{0:.0}. Modifica → Annulla li riporta indietro.",
   "Listing folders — folders: {folders}, files: {files}": "Elenco delle cartelle — cartelle: {folders}, file: {files}",
   "Drop to review {n} item{} for import": "Rilascia per rivedere prima dell'importazione (elementi: {n}){:.0}",
   "Drop to import {n} item{}": "Rilascia per importare (elementi: {n}){:.0}",
@@ -325,5 +325,8 @@
   "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}",
+  "Add {n} photo{} to “{}”": "Aggiungi {n} foto{0:.0} a “{1}”",
+  "{n} already there": "{n} già presenti",
+  "Add “{keyword}” to {n} photo{}": "Aggiungi “{keyword}” a {n} foto{:.0}"
 }
