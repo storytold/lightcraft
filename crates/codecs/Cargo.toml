@@ -13,6 +13,7 @@ lightcraft-geom = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
 craft-gainmap = { workspace = true }
+craft-image-codecs = { workspace = true }
 craft-gif = { workspace = true }
 craft-psd = { workspace = true }
 craft-heif = { workspace = true, optional = true }
