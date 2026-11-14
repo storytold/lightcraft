@@ -162,3 +162,20 @@ fn one_upright_mode_groups_into_one_counted_line() {
     assert!(!text.contains("img0.png") && !text.contains("img1.png"), "the counted line carries no paths: {text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A press over the toast dismisses it, and its rectangle is registered for automation (#3050).
+#[test]
+fn a_press_on_the_toast_dismisses_it() {
+    let (mut h, dir, text) = import("press", &["AutoToneDigest", "AutoToneDigest"]);
+    assert!(text.contains("Import warnings (2):"), "{text}");
+    assert!(h.app.ui.dialog.is_none(), "the review closed when the import ran");
+    let widgets = h.request("ui.widgets", json!({}), T);
+    let all = widgets["result"].as_array().expect("widgets");
+    let w = all.iter().find(|w| w["id"] == "toast").expect("the toast is registered by its rectangle");
+    let rect: Vec<f64> = [0usize, 1, 2, 3].map(|i| w["rect"][i].as_f64().expect("rect")).to_vec();
+    let r = h.request("ui.click", json!({"x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(toast(&h), "", "the press on the toast dismissed it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
