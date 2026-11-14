@@ -600,11 +600,15 @@ impl ExportOptions {
         let base = if self.naming.trim().is_empty() { "{name}" } else { self.naming.as_str() };
         let n = seq + self.start_number.max(1) as usize - 1;
         let name = crate::rename::expand_tokens(base, p, n, 3);
-        let mut name: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c }).collect();
+        // the catalog's own file name is cleaned the same way: a name from a supplied catalog may hold separators
+        let clean = |s: &str| -> String { s.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '\0') { '_' } else { c }).collect() };
+        let mut name = clean(&name);
         let (stem, ext) = p.file_name.rsplit_once('.').unwrap_or((&p.file_name, ""));
+        let ext = clean(ext);
+        let ext = ext.as_str();
         if name.trim().is_empty() {
             // every token came out empty (no title, no capture time…): keep the original name
-            name = stem.to_string();
+            name = clean(stem);
         }
         if self.format == ExportFormat::Original {
             let base = name.trim_end_matches('.');
