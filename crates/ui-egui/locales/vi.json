@@ -1,4 +1,5 @@
 {
+  "AI Denoise needs a model. Install one in Settings.": "Khử nhiễu AI cần một mô hình. Hãy cài trong Cài đặt.",
   "  (library default)": "  (mặc định thư viện)",
   " (inverted)": " (đã đảo)",
   " · best of its burst": " · đẹp nhất trong cụm",
@@ -2015,7 +2016,7 @@
   "Window": "Cửa sổ",
   "Winter Blue": "Xanh đông",
   "Without Saving and Quit (issue #100). It no longer quietly starts a demo session that looked like a reset library and": "Không lưu và Thoát (issue #100). Không còn im lặng bắt đầu phiên demo trông như thư viện bị đặt lại và",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Hoạt động trên raw từ máy cảm biến chuẩn (Bayer). Tệp khác giữ khử nhiễu thông thường.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Hoạt động với tệp RAW từ máy ảnh có cảm biến tiêu chuẩn (Bayer), và với JPEG, PNG, TIFF cùng các ảnh hoàn thiện khác khi có mô hình dành cho chúng. Các tệp RAW khác giữ cách giảm nhiễu thông thường.",
   "XMP Sidecar Preferences": "Tùy chọn tệp sidecar XMP",
   "XMP sidecars": "Sidecar XMP",
   "Year": "Năm",
@@ -2294,6 +2295,8 @@
   "Dropped Files": "Tệp đã thả",
   "Finish Lightroom catalog import before adding photos": "Hoàn tất nhập danh mục Lightroom trước khi thêm ảnh",
   "Import dropped files without review": "Nhập các tệp đã thả mà không xem lại",
+  "For raw photos": "Cho ảnh RAW",
+  "For JPEG and other finished pictures": "Cho JPEG và các ảnh hoàn thiện khác",
   "Lens Profiles": "Hồ sơ ống kính",
   "Download lens profiles?": "Tải hồ sơ ống kính?",
   "LightCraft can correct distortion and vignetting for many lenses using the open lens database (lensfun, about {size} MB).": "LightCraft có thể sửa méo hình và tối góc cho nhiều ống kính bằng cơ sở dữ liệu ống kính mở (lensfun, khoảng {size} MB).",

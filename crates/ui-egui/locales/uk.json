@@ -1,4 +1,5 @@
 {
+  "AI Denoise needs a model. Install one in Settings.": "Для усунення шуму ШІ потрібна модель. Установіть її в налаштуваннях.",
   "% of all commits": "% усіх комітів",
   "A pen's pressure sets the size and flow of the brush": "Натиск пера задає розмір і потік пензля",
   "150 dpi · sRGB · current edits · fit without cropping": "150 dpi · sRGB · поточні правки · вписано без обрізання",
@@ -1754,7 +1755,7 @@
   "Unknown licence": "Невідома ліцензія",
   "Use": "Використовувати",
   "Waiting to start…": "Очікування запуску…",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Працює з файлами RAW від камер зі стандартним сенсором (Баєра). Інші файли зберігають звичайне зменшення шуму.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Працює з RAW-файлами камер зі стандартною матрицею (Байєра), а з моделлю для них — і з JPEG, PNG, TIFF та іншими готовими зображеннями. Інші RAW-файли зберігають звичайне шумозаглушення.",
   "cached picture": "Кешовані зображення",
   "cached pictures": "Кешовані зображення",
   "commercial use allowed": "комерційне використання дозволено",
@@ -2395,6 +2396,8 @@
   "The photos are imported once it ends": "Фото буде імпортовано після цього",
   "An import is running. Drop photos when it has finished": "Імпорт уже виконується. Перетягніть фото, коли він завершиться",
   "Finish Lightroom catalog import before adding photos": "Завершіть імпорт каталогу Lightroom, перш ніж додавати фото",
+  "For raw photos": "Для фото RAW",
+  "For JPEG and other finished pictures": "Для JPEG та інших готових зображень",
   "Camera preview": "Прев'ю камери",
   "The camera's own JPEG, shown until LightCraft has rendered the raw. Judge colour and tone on the rendered photo.": "Власний JPEG камери, показаний, доки LightCraft не обробить RAW. Оцінюйте колір і тон за обробленим фото.",
   "Profile: from the file (the camera's own correction)": "Профіль: з файлу (корекція самої камери)",

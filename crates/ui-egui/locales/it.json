@@ -1,4 +1,5 @@
 {
+  "AI Denoise needs a model. Install one in Settings.": "La riduzione disturbo IA ha bisogno di un modello. Installane uno nelle Impostazioni.",
   "  (library default)": "  (predefinito della libreria)",
   " (inverted)": " (invertita)",
   " · best of its burst": " · la migliore della sua raffica",
@@ -1782,7 +1783,7 @@
   "Unknown licence": "Licenza sconosciuta",
   "Use": "Usa",
   "Waiting to start…": "In attesa di partire…",
-  "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.": "Funziona sui file raw delle fotocamere con sensore standard (Bayer). Gli altri file mantengono la loro normale riduzione del disturbo.",
+  "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.": "Funziona con i file raw delle fotocamere con sensore standard (Bayer) e, con un modello fatto per loro, con JPEG, PNG, TIFF e altre immagini finite. Gli altri file raw mantengono la normale riduzione del rumore.",
   "cached picture": "immagine in cache",
   "cached pictures": "immagini in cache",
   "commercial use allowed": "uso commerciale consentito",
@@ -2442,6 +2443,8 @@
   "The photos are imported once it ends": "Le foto verranno importate dopo",
   "An import is running. Drop photos when it has finished": "Un'importazione è in corso. Trascina le foto quando è finita",
   "Finish Lightroom catalog import before adding photos": "Termina l'importazione del catalogo Lightroom prima di aggiungere foto",
+  "For raw photos": "Per le foto raw",
+  "For JPEG and other finished pictures": "Per JPEG e altre immagini finite",
   "Profile: from the file (the camera's own correction)": "Profilo: dal file (correzione della fotocamera)",
   "Downloading the lens database…": "Download del database degli obiettivi…",
   "This file names no lens.": "Questo file non indica alcun obiettivo.",

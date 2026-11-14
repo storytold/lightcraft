@@ -30,8 +30,36 @@ fn invalid<T>(why: impl Into<String>) -> Result<T, NetError> {
 /// A tensor is named by its number: 0 is the network's input, and layer `i` makes tensor `i + 1`.
 pub type TensorId = usize;
 
+/// What a convolution applies to its result.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Activation {
+    /// Nothing.
+    None,
+    /// `x` when not negative, else `alpha · x` (`alpha` 0 is a plain ReLU).
+    Leaky(f32),
+    /// `1 / (1 + e^-x)`.
+    Sigmoid,
+}
+
+impl Activation {
+    /// The activation of `x`.
+    pub fn apply(self, x: f32) -> f32 {
+        match self {
+            Activation::None => x,
+            Activation::Leaky(a) => {
+                if x < 0.0 {
+                    x * a
+                } else {
+                    x
+                }
+            }
+            Activation::Sigmoid => 1.0 / (1.0 + (-x).exp()),
+        }
+    }
+}
+
 /// A convolution with stride 1 and "same" padding (`k` is 1 or 3), over one tensor or two joined along the channels
-/// (`src` first), then a bias and optionally a leaky ReLU.
+/// (`src` first), then a bias and an activation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Conv {
     pub src: TensorId,
@@ -43,8 +71,8 @@ pub struct Conv {
     /// `[cout][cin][k][k]`, as ONNX has it.
     pub weight: Vec<f32>,
     pub bias: Vec<f32>,
-    /// `Some(alpha)`: a leaky ReLU with this slope follows.
-    pub leaky: Option<f32>,
+    /// Applied to the result (after the bias).
+    pub activation: Activation,
 }
 
 /// A transposed convolution with a 2 × 2 kernel and stride 2: every input pixel becomes a 2 × 2 block.
@@ -56,7 +84,7 @@ pub struct ConvT2 {
     /// `[cin][cout][2][2]`, as ONNX has it.
     pub weight: Vec<f32>,
     pub bias: Vec<f32>,
-    pub leaky: Option<f32>,
+    pub activation: Activation,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -133,7 +161,7 @@ impl Net {
                         c.cout.checked_mul(cin).and_then(|n| n.checked_mul(c.k * c.k)),
                         &c.bias,
                         c.cout,
-                        c.leaky,
+                        c.activation,
                         &mut weights,
                     )?;
                     Shape { channels: c.cout, level }
@@ -143,7 +171,15 @@ impl Net {
                     if c.cin != a.channels || c.cout == 0 || c.cout > MAX_CHANNELS {
                         return invalid(format!("layer {i}: a transposed convolution of {} to {} channels does not fit", c.cin, c.cout));
                     }
-                    check_weights(i, &c.weight, c.cin.checked_mul(c.cout).and_then(|n| n.checked_mul(4)), &c.bias, c.cout, c.leaky, &mut weights)?;
+                    check_weights(
+                        i,
+                        &c.weight,
+                        c.cin.checked_mul(c.cout).and_then(|n| n.checked_mul(4)),
+                        &c.bias,
+                        c.cout,
+                        c.activation,
+                        &mut weights,
+                    )?;
                     Shape { channels: c.cout, level: a.level - 1 }
                 }
                 Op::MaxPool2 { src } => {
@@ -190,8 +226,20 @@ impl Net {
     /// Can the network run on a `tile × tile` input and give `[out_channels, 2·tile, 2·tile]`? (Pooling must divide
     /// the tile, and the output must be one level above the input.)
     pub fn fits_tile(&self, tile: usize) -> bool {
+        self.fits_tile_at(tile, -1)
+    }
+
+    /// Can the network run on a `tile × tile` input and give its output at resolution level `out_level` (-1 is twice
+    /// the input's size, as the Bayer contract, 0 is the same size, as the RGB-to-RGB one)?
+    pub fn fits_tile_at(&self, tile: usize, out_level: i32) -> bool {
         let Some(multiple) = 1usize.checked_shl(self.depth()) else { return false };
-        tile > 0 && tile.is_multiple_of(multiple) && self.shapes.last().is_some_and(|s| s.level == -1)
+        tile > 0 && tile.is_multiple_of(multiple) && self.shapes.last().is_some_and(|s| s.level == out_level)
+    }
+
+    /// The side of the output for a `tile × tile` input, from the final tensor's resolution level.
+    pub fn out_side(&self, tile: usize) -> Option<usize> {
+        let level = self.shapes.last()?.level;
+        if level >= 0 { tile.checked_shr(level as u32) } else { tile.checked_mul(1usize.checked_shl(level.unsigned_abs())?) }
     }
 
     /// Multiply-adds for one tile, for estimating time.
@@ -226,7 +274,7 @@ fn check_weights(
     want: Option<usize>,
     bias: &[f32],
     cout: usize,
-    leaky: Option<f32>,
+    activation: Activation,
     total: &mut usize,
 ) -> Result<(), NetError> {
     if want != Some(weight.len()) || bias.len() != cout {
@@ -236,7 +284,7 @@ fn check_weights(
     if *total > MAX_WEIGHTS {
         return invalid("the network has too many weights");
     }
-    if weight.iter().chain(bias).any(|v| !v.is_finite()) || leaky.is_some_and(|a| !a.is_finite()) {
+    if weight.iter().chain(bias).any(|v| !v.is_finite()) || matches!(activation, Activation::Leaky(a) if !a.is_finite()) {
         return invalid(format!("layer {layer}: a weight is not a finite number"));
     }
     Ok(())
@@ -247,11 +295,11 @@ mod tests {
     use super::*;
 
     fn conv(src: TensorId, src2: Option<TensorId>, cin: usize, cout: usize, k: usize) -> Op {
-        Op::Conv(Conv { src, src2, cin, cout, k, weight: vec![0.1; cout * cin * k * k], bias: vec![0.0; cout], leaky: Some(0.2) })
+        Op::Conv(Conv { src, src2, cin, cout, k, weight: vec![0.1; cout * cin * k * k], bias: vec![0.0; cout], activation: Activation::Leaky(0.2) })
     }
 
     fn convt(src: TensorId, cin: usize, cout: usize) -> Op {
-        Op::ConvT2(ConvT2 { src, cin, cout, weight: vec![0.1; cin * cout * 4], bias: vec![0.0; cout], leaky: None })
+        Op::ConvT2(ConvT2 { src, cin, cout, weight: vec![0.1; cin * cout * 4], bias: vec![0.0; cout], activation: Activation::None })
     }
 
     /// A two-level network of the shape the denoisers have: 4 → 8 channels, pool, 16 channels, up, join, 12, and the

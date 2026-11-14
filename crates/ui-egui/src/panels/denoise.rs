@@ -180,6 +180,9 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
     };
     match state {
         PhotoState::NotApplicable | PhotoState::Ready => {}
+        PhotoState::NoModel => {
+            egui::Frame::NONE.inner_margin(pad).show(ui, |ui| note(ui, "AI Denoise needs a model. Install one in Settings.", t.text_dim));
+        }
         PhotoState::Idle => {
             if amount > 0.0 && app.session.denoise_auto() {
                 // the pump has not met this photo yet: let it come round soon instead of waiting out its pause
@@ -246,7 +249,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     hint(
         ui,
         t,
-        "Cleans noise out of raw photos before the picture is built: the AI Denoise Amount slider under Detail sets how much of it you see. \
+        "Cleans noise out of raw photos and finished pictures (JPEG, PNG, TIFF …) before any other edit: the AI Denoise Amount slider under Detail sets how much of it you see. \
          Your files are never changed and no extra files are made in your library: the cleaned picture is cached data that is made again when needed.",
     );
     let runtime = list["runtime"].as_bool() == Some(true);
@@ -304,7 +307,11 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if all.iter().all(|m| m["selected"] != true) && all.iter().any(|m| m["installed"] == true) {
         hint(ui, t, "The built-in denoiser is in use: press Use on a model to use that instead.");
     }
-    hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
+    hint(
+        ui,
+        t,
+        "Works on raw files from cameras with a standard (Bayer) sensor, and on JPEG, PNG, TIFF and other finished pictures with a model made for them. Other raw files keep their normal noise reduction.",
+    );
     work_section(app, ui, t, &list);
 }
 
@@ -468,6 +475,8 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         ui.label(RichText::new(tr("installed")).color(t.text_dim));
                     }
                 });
+                let made_for = if m["domain"] == "rgbToRgb" { tr("For JPEG and other finished pictures") } else { tr("For raw photos") };
+                ui.label(RichText::new(made_for).font(t.font(11.5)).color(t.text_dim));
                 ui.label(RichText::new(licence_line(m)).font(t.font(11.5)).color(if m["licence"]["commercial"] == "yes" {
                     t.text_dim
                 } else {
@@ -521,7 +530,8 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
                         let r = ui.button(tr("Stop using"));
                         register(ui, format!("denoise:off:{id}"), r.rect);
                         if r.clicked() {
-                            let _ = app.run("denoise.models.select", json!({"id": null}));
+                            let kind = if m["domain"] == "rgbToRgb" { "rgb" } else { "raw" };
+                            let _ = app.run("denoise.models.select", json!({"id": null, "kind": kind}));
                             app.caches.denoise.epoch += 1;
                         }
                     } else {

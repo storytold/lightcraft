@@ -57,11 +57,51 @@ fn rawnind_bayer() -> Known {
     Known { manifest, download: Some(download), entry: Some("model_bayer.onnx") }
 }
 
+/// NIND's U-Net for finished pictures (JPEG, PNG, TIFF …), as published for darktable (`denoise-nind.dtmodel`). It takes
+/// and gives gamma-encoded sRGB, so it is the model for photos that have no sensor data left. Its weights are GPL-3.0;
+/// the training pictures are CC BY 4.0 and CC0.
+#[cfg(any(feature = "rawnind-model", test))]
+fn nind_rgb() -> Known {
+    let manifest = DenoiserManifest {
+        id: "nind-rgb".into(),
+        name: "NIND U-Net (finished pictures)".into(),
+        version: "1.0".into(),
+        licence: Licence {
+            name: "GPL-3.0".into(),
+            commercial: Commercial::Yes,
+            url: Some("https://www.gnu.org/licenses/gpl-3.0.html".into()),
+            notice: "The weights are published under the GNU General Public License v3. LightCraft does not include them: they \
+                     are downloaded to your computer at your request and used by it only. If you pass the model file on, the \
+                     GPL applies to that copy. Commercial use is subject to the GPL terms, including applicable source, licence and notice obligations on redistribution."
+                .into(),
+        },
+        source: Some("https://github.com/darktable-org/darktable-ai/tree/master/models/denoise-nind".into()),
+        sha256: Some("5d615c5026a3c579455b9082f72b91e109adb54f4125b5b5cde45983bd6776b2".into()),
+        size_bytes: Some(59_138_823),
+        provenance: "Trained on NIND, real photographs of the same scenes taken noisy and clean (images CC BY 4.0 and CC0, \
+                     published on Wikimedia Commons). Paper: arXiv 1906.00270."
+            .into(),
+        domain: Domain::RgbToRgb,
+        tile: 768,
+        overlap: 64,
+        // its pictures come out a little brighter and cooler than they went in: the means are matched again
+        gain: Gain::MatchMean { nominal: 1.0, max_deviation: 0.1 },
+    };
+    let download = Download {
+        id: manifest.id.clone(),
+        url: "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/denoise-nind.dtmodel".into(),
+        file_name: "denoise-nind.dtmodel".into(),
+        size_bytes: 55_008_210,
+        sha256: "825b3657cbb5193a67432a2f0b44ab86531cc7337f89e8e6c17d93db9665708a".into(),
+    };
+    Known { manifest, download: Some(download), entry: Some("model.onnx") }
+}
+
 /// Every model LightCraft knows.
 pub fn all() -> Vec<Known> {
     #[cfg(feature = "rawnind-model")]
     {
-        vec![rawnind_bayer()]
+        vec![rawnind_bayer(), nind_rgb()]
     }
     #[cfg(not(feature = "rawnind-model"))]
     {
@@ -89,6 +129,8 @@ mod tests {
         let all = all();
         assert_eq!(all.is_empty(), !cfg!(feature = "rawnind-model"));
         validate(&rawnind_bayer().manifest).unwrap();
+        validate(&nind_rgb().manifest).unwrap();
+        assert_eq!(nind_rgb().manifest.domain, Domain::RgbToRgb);
         for (i, k) in all.iter().enumerate() {
             validate(&k.manifest).unwrap();
             assert!(all.iter().skip(i + 1).all(|o| o.manifest.id != k.manifest.id), "unique ids");

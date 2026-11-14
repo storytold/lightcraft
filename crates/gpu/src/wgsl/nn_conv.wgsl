@@ -6,7 +6,7 @@
 // Tensors are NHWC, channels innermost, read four at a time (every channel count is a multiple of 4). A workgroup of
 // 256 threads makes a BM x BN block of the output, 4 x 4 values per thread, and walks K in steps of BK through
 // workgroup memory. The source can be two tensors whose channels follow each other (a skip connection's join, so it
-// is never made), and a leaky ReLU is applied on the way out. Specialised by the host: BM, BN, BK (BM * BN = 4096).
+// is never made), and an activation (leaky ReLU or sigmoid) is applied on the way out. Specialised by the host: BM, BN, BK (BM * BN = 4096).
 //
 // Output modes:
 //   0  NHWC at the input's size.
@@ -14,6 +14,8 @@
 //      (2y + dy, 2x + dx) of an output twice the size.
 //   2  the last 1x1 convolution followed by depth-to-space (CRD): columns 4c + 2dy + dx land in plane c at
 //      (2y + dy, 2x + dx) of a planar (CHW) output twice the size.
+//   3  the last convolution of an RGB-to-RGB network: planar (CHW) at the input's size, only the first `cout` of the
+//      (padded to a multiple of 4) columns are stored.
 
 struct P {
     h: u32,
@@ -25,7 +27,8 @@ struct P {
     k: u32,
     mode: u32,
     cout: u32,
-    leaky: u32,
+    // 0 none, 1 leaky ReLU (slope alpha), 2 sigmoid
+    act: u32,
     alpha: f32,
     // always 0: the output stores step by 1u + zero, see the end of main
     zero: u32,
@@ -135,8 +138,10 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
         }
         var v = bv;
         if (i == 0u) { v += acc0; } else if (i == 1u) { v += acc1; } else if (i == 2u) { v += acc2; } else { v += acc3; }
-        if (p.leaky != 0u) {
+        if (p.act == 1u) {
             v = select(v * p.alpha, v, v >= vec4<f32>(0.0));
+        } else if (p.act == 2u) {
+            v = vec4<f32>(1.0) / (vec4<f32>(1.0) + exp(-v));
         }
         if (p.mode == 0u) {
             let o = m * p.n + n;
@@ -155,6 +160,14 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) t
             dst[o + one] = v.y;
             dst[o + 2u * one] = v.z;
             dst[o + 3u * one] = v.w;
+        } else if (p.mode == 3u) {
+            // the last convolution of an RGB-to-RGB net: planar (CHW) at the input's size, the padding channels past
+            // cout are not stored
+            let o = n * hw + m;
+            dst[o] = v.x;
+            if (n + 1u < p.cout) { dst[o + hw] = v.y; }
+            if (n + 2u < p.cout) { dst[o + 2u * hw] = v.z; }
+            if (n + 3u < p.cout) { dst[o + 3u * hw] = v.w; }
         } else {
             let c = n / 4u;
             let y = m / p.w;
