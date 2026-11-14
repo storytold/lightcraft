@@ -140,6 +140,7 @@
   "New Folder in “{name}”": "Thư mục mới trong «{name}»",
   "Created folder “{name}” in “{parent}”": "Đã tạo thư mục «{name}» trong «{parent}»",
   "On {have} of {of} selected photos": "Trên {have} / {of} ảnh đã chọn",
+  "A keyword name can't end with an asterisk: “{name}”": "Tên từ khóa không thể kết thúc bằng dấu sao: «{name}»",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Gán «{k}»: nhấp ảnh để thêm hoặc gỡ · Esc dừng",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Dán vào {n} ảnh{:.0} — chỉ dán các thiết lập đã sao chép",
   "Preset: {name}": "Thiết lập sẵn: {name}",

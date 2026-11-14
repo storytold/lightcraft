@@ -203,6 +203,9 @@ pub struct LightcraftApp {
     /// The language already sent to `Context::set_language`, so a logic pass does not allocate a
     /// `String` just to compare it.
     accesskit_language: Option<String>,
+    /// The selection last seen ([`LightcraftApp::selection_changes`]) and how many times it was
+    /// seen to differ from the one before.
+    selection_seen: (u64, u64),
     /// When playback was auto-paused because the window became hidden (`None`: it is running, or
     /// the user paused it). On unhide the pause is lifted and the slide keeps its remaining time.
     slideshow_hidden_at: Option<f64>,

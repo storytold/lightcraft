@@ -114,6 +114,7 @@
   "New Folder in “{name}”": "Nová složka v „{name}“",
   "Created folder “{name}” in “{parent}”": "Vytvořena složka „{name}“ v „{parent}“",
   "On {have} of {of} selected photos": "Na {have} z {of} vybraných fotografií",
+  "A keyword name can't end with an asterisk: “{name}”": "Název klíčového slova nemůže končit hvězdičkou: „{name}“",
   "Painting “{k}”: click photos to add or remove it · Esc stops": "Nanášení „{k}“: kliknutím na fotografie přidáte nebo odeberete slovo · Esc ukončí režim",
   "Paste into {n} photo{} — only settings that were copied are pasted": "Vložit do fotografií: {n}{:.0} — vloží se pouze zkopírovaná nastavení",
   "Preset: {name}": "Přednastavení: {name}",
