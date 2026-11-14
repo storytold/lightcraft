@@ -667,6 +667,28 @@ fn set_embedded_lens_is_undoable_and_journaled() {
     assert_eq!(c.photo(a).unwrap().embedded_lens, None);
 }
 
+/// A lens lookup remembers the database it found nothing in (#3767); the inverse (through the journal's JSON) takes
+/// it back, a photo that isn't there is refused, and the stamp leaves a Local record's fingerprint alone.
+#[test]
+fn set_lens_checked_is_journaled_and_not_a_user_change() {
+    let mut c = Catalog::default();
+    let a = c.alloc_photo_id();
+    let mut p = Photo::new(a, Source::File { path: "/x.nef".into() }, "x.nef", "NEF", 4000, 3000, "2026-10-06T00:00:00");
+    let before = p.fingerprint();
+    p.lens_checked = "1:00000000000000ff".into();
+    assert_eq!(p.fingerprint(), before, "bookkeeping, not something the user changed");
+    p.lens_checked.clear();
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let op = Op::SetLensChecked { id: a, checked: "1:00000000000000ff".into() };
+    let op: Op = serde_json::from_str(&serde_json::to_string(&op).unwrap()).unwrap();
+    let inv = c.apply(op).unwrap();
+    assert_eq!(c.photo(a).unwrap().lens_checked, "1:00000000000000ff");
+    let inv: Op = serde_json::from_str(&serde_json::to_string(&inv).unwrap()).unwrap();
+    c.apply(inv).unwrap();
+    assert!(c.photo(a).unwrap().lens_checked.is_empty());
+    assert!(c.apply(Op::SetLensChecked { id: PhotoId(999), checked: String::new() }).is_err());
+}
+
 /// A decode or Reload stores the as-shot white a raw reads through its camera's matrices; the inverse (through the
 /// journal's JSON) takes it back, and a value that is not a number is refused.
 #[test]

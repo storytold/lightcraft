@@ -306,19 +306,47 @@ pub(crate) fn reload_ops(
     // camera fields the catalog lacks (e.g. a raw imported before its format was read) are filled in;
     // nothing already set is overwritten
     let meta_ops = fill_missing_meta(id, ph, info);
-    let mut mine: Vec<Op> =
-        content_op(id, ph, info.clone()).into_iter().chain(meta_ops).chain(lens_ops(id, ph, info)).chain(as_shot_wb_op(id, ph, info)).collect();
+    let content = content_op(id, ph, info.clone());
+    let lens = lens_ops(id, ph, info);
+    // A lens lookup remembered against the file as the catalog knew it then
+    // ([`lightcraft_catalog::Photo::lens_checked`]) says nothing once what it keyed on changes:
+    // the file's content, the embedded lens data this read brought, or the camera/lens/focal
+    // fields it filled in — the last two can arrive with the content unchanged (a catalog that
+    // predates the fields being read). The stamp goes in those cases and a later sweep reads
+    // the file again (this read may itself have run while no lens database was there to look
+    // the file up in).
+    let lookup_meta_changed =
+        meta_ops.iter().any(|op| matches!(op, Op::SetMeta { meta, .. } if meta.camera != ph.meta.camera || meta.lens != ph.meta.lens || meta.focal_mm != ph.meta.focal_mm));
+    let lookup_changed = content.is_some() || !lens.is_empty() || lookup_meta_changed;
+    let stamp = (lookup_changed && !ph.lens_checked.is_empty()).then(|| Op::SetLensChecked { id, checked: String::new() });
+    let mut mine: Vec<Op> = content.into_iter().chain(meta_ops).chain(lens).chain(as_shot_wb_op(id, ph, info)).chain(stamp).collect();
     if !mine.is_empty() {
         ops.append(&mut mine);
         changed.push(id);
     }
     // virtual copies share the file
+    let mut copy_changed_lookup = false;
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        let content = content_op(c.id, c, info.clone());
+        let lens = lens_ops(c.id, c, info);
+        copy_changed_lookup |= content.is_some() || !lens.is_empty();
+        // the metadata fill above changed what a lookup keys on for the shared file, so it
+        // stales a copy's stamp too, even when the copy's own content and lens ops are empty
+        let stamp = ((lookup_meta_changed || content.is_some() || !lens.is_empty()) && !c.lens_checked.is_empty())
+            .then(|| Op::SetLensChecked { id: c.id, checked: String::new() });
+        let theirs: Vec<Op> = content.into_iter().chain(lens).chain(as_shot_wb_op(c.id, c, info)).chain(stamp).collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
+        }
+    }
+    // A copy's read that changed the shared file's lookup inputs stales the original's
+    // remembered miss the same way — the lookup keys on the file, not on the record — so
+    // the original's stamp goes too when its own ops above did not already clear it.
+    if copy_changed_lookup && !lookup_changed && !ph.lens_checked.is_empty() {
+        ops.push(Op::SetLensChecked { id, checked: String::new() });
+        if !changed.contains(&id) {
+            changed.push(id);
         }
     }
 }

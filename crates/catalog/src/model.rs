@@ -295,6 +295,12 @@ pub struct Photo {
     /// "Enable Profile Corrections" is on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedded_lens: Option<lightcraft_develop::EmbeddedLens>,
+    /// The lens database (its fingerprint, the engine's `lens_profiles::stamp`) a library-wide lens-profile lookup
+    /// last read this raw's file against and found no profile in; empty when it never did. The lookup that runs when
+    /// a library opens skips the photo while the database is the same (issue #3767: a lens the database knows by
+    /// name may still give no profile for this file, which was read again at every start).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub lens_checked: String,
     /// A virtual copy: the photo it was copied from (it shares that photo's file but has its own
     /// settings, metadata and history).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,6 +424,7 @@ impl Photo {
             as_shot_wb: None,
             content_hash: None,
             embedded_lens: None,
+            lens_checked: String::new(),
             copy_of: None,
             copy_name: None,
             import_look: None,

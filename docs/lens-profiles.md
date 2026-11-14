@@ -36,8 +36,13 @@ background and gets its profile; a photo still as imported gets the correction s
 edited one keeps its settings. When a download replaced the database's files, the raws whose profile came from the
 old database are read again too (they get the new profile, or lose one it no longer gives), and so are raws whose
 file named no lens at import. Ticking **Enable Lens Corrections** on a photo without a profile looks it up again
-too. `library.refreshLensProfiles` (`all: true` for the wider pass), `lens.downloadDatabase` (which also selects the
-downloaded folder) and `lens.databaseStatus` do the same for agents.
+too. A raw whose file was read against a database and gave no profile (a lens the database knows by name may still
+have no profile for that file: a Nikon DSLR names only its lens's range, which needs a profile named exactly by it)
+is remembered with that database's fingerprint, and isn't read again when a library opens until the database
+changes (issue #3767). When the database changes, those raws are read again, and the app's notice says why.
+`library.refreshLensProfiles` (`all: true` for the wider pass), `lens.downloadDatabase` (which also selects the
+downloaded folder) and `lens.databaseStatus` do the same for agents; the lookup's result counts the raws skipped for
+an earlier read against this database (`skipped`) and those read again because the database changed (`recheck`).
 
 A database profile is pinned to the photo: every render (fresh decode, cached preview, thumbnail, export) uses the
 profile the catalog holds, never one a decode looked up in a newer database, and the profile is part of the render

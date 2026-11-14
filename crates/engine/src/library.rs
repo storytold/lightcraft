@@ -149,8 +149,9 @@ pub struct Library {
     /// What presets.json holds (see [`PresetsSaved`]).
     presets_saved: PresetsSaved,
     view_written: Vec<u8>,
-    /// Settings files that were unreadable or damaged when the library opened (`library.info` →
-    /// `settingsWarnings`; shown by the UI once, see [`Session::take_library_warnings`]).
+    /// Settings files that were unreadable or damaged when the library opened, a lock that couldn't be taken, and an
+    /// upgrade from an older catalog format (`library.info` → `settingsWarnings`; shown by the UI once, see
+    /// [`Session::take_library_warnings`]).
     pub settings_warnings: Vec<String>,
     warnings_reported: usize,
     /// Settings files that couldn't be read or set aside: never overwritten this session.
@@ -712,6 +713,7 @@ impl Session {
             self.tidy_thumbnail_cache();
         }
         let view_written = self.view_json();
+        let upgraded = upgraded_warning(&report);
         self.library = Some(Library {
             dir,
             on_disk,
@@ -726,7 +728,7 @@ impl Session {
             forgot_local: None,
             presets_saved,
             view_written,
-            settings_warnings: unlocked_warning(lock.as_ref()).into_iter().chain(settings.warnings).collect(),
+            settings_warnings: upgraded.into_iter().chain(unlocked_warning(lock.as_ref())).chain(settings.warnings).collect(),
             warnings_reported: 0,
             blocked: settings.blocked,
             folder,
@@ -984,8 +986,9 @@ impl Session {
         lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
     }
 
-    /// Warnings about the open library not handed out yet: its settings files, and a lock that
-    /// couldn't be taken (the UI shows each once; the CLI and MCP print them on stderr).
+    /// Warnings about the open library not handed out yet: its settings files, a lock that
+    /// couldn't be taken, and an upgrade from an older catalog format that older builds can't
+    /// open (the UI shows each once; the CLI and MCP print them on stderr).
     pub fn take_library_warnings(&mut self) -> Vec<String> {
         let Some(lib) = self.library.as_mut() else { return vec![] };
         let new = lib.settings_warnings[lib.warnings_reported..].to_vec();
@@ -1064,6 +1067,20 @@ fn unlocked_warning(lock: Option<&LibraryLock>) -> Option<String> {
          shares), so it is open without protection against a second program: use it in one LightCraft app or command at \
          a time, or changes made in one of them can be lost."
             .to_string()
+    })
+}
+
+/// The notice for a library written in an older catalog format, which opening it has just rewritten in this build's
+/// ([`LoadReport::upgraded_from`]): older LightCraft builds refuse it from now on, so the user must learn that once,
+/// when it happens. A library already in this format (or a new one) gets none.
+fn upgraded_warning(report: &LoadReport) -> Option<String> {
+    report.upgraded_from.map(|from| {
+        let from = if from == 0 { "an early catalog format".to_string() } else { format!("catalog format v{from}") };
+        format!(
+            "This library was upgraded from {from} to v{} so this version of LightCraft can save to it. Older versions of \
+             LightCraft can no longer open it.",
+            lightcraft_catalog::journal::VERSION
+        )
     })
 }
 

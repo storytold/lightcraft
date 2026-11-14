@@ -23,32 +23,76 @@ use crate::{Result, Session};
 pub struct Missing {
     pub id: PhotoId,
     pub path: String,
+    /// The database it is looked up in ([`crate::lens_profiles::stamp`]): what the photo is stamped with when its
+    /// file gives no profile ([`Photo::lens_checked`]); empty = not stamped.
+    pub checked: String,
 }
 
 /// Library raws with a file, no lens profile and a lens the database `db` knows by name (`ids`: only these; virtual
 /// copies follow the photo they were copied from). With `again` (the database's files were replaced, or an agent
 /// asked for every photo), also the raws whose profile came from the database (the new data may give another one, or
 /// none) and the raws whose file named no lens when they were imported (a newer LightCraft may read their lens).
-/// No file-system calls.
+///
+/// A library-wide listing (`ids` `None`, not `again`) leaves out the photos whose file was already read against
+/// this database and gave no profile ([`Photo::lens_checked`], issue #3767): knowing a lens by name here doesn't
+/// mean the file's lookup finds a profile (a Nikon DSLR's lens specification needs a profile named exactly by it,
+/// a shot needs a focal length, a profile a usable calibration, ...), and such a file would otherwise be read again
+/// every time a library opens. Photos asked for by id (Enable Lens Corrections ticked) are read regardless.
+/// No file-system calls. [`listing`] also counts what was left out and what is read again.
 pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[PhotoId]>, again: bool) -> Vec<Missing> {
-    // a photo and its virtual copies list the photo once, in library order
+    listing(cat, db, ids, again).list
+}
+
+/// [`missing`]'s list, with what it says about it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Listing {
+    pub list: Vec<Missing>,
+    /// Photos a library-wide listing left out because their file was already read against this database and gave
+    /// no profile (their stamp is current). A list of none with some skipped means "already looked up", not "nothing
+    /// to look up".
+    pub skipped: usize,
+    /// Listed photos stamped by another database (or older lookup rules): read again because the database changed.
+    pub recheck: usize,
+}
+
+/// [`missing`], counting the photos skipped for a current stamp and the listed ones read again because their stamp
+/// is from another database. No file-system calls.
+pub fn listing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[PhotoId]>, again: bool) -> Listing {
+    // a photo and its virtual copies list (or skip) the photo once, in library order
     let mut seen = std::collections::HashSet::new();
+    let mut skipped = std::collections::HashSet::new();
+    let mut out = Listing::default();
     let from_database = |p: &Photo| p.embedded_lens.is_some_and(|l| l.source == LensSource::Database);
-    cat.photos()
+    let checked = crate::lens_profiles::stamp(db);
+    let sweep = ids.is_none() && !again;
+    let photos = cat
+        .photos()
         .filter(|p| ids.is_none_or(|ids| ids.contains(&p.id) || p.copy_of.is_some_and(|c| ids.contains(&c))))
         .map(|p| p.copy_of.and_then(|c| cat.photo(c)).map_or(&**p, |orig| &**orig))
-        .filter(|p| p.develops_raw())
-        .filter(|p| {
-            let lens = p.meta.lens.trim();
-            match &p.embedded_lens {
-                None if lens.is_empty() => again,
-                None => crate::lens_profiles::profile_name(db, &p.meta.camera, lens).is_some(),
-                Some(_) => again && from_database(p),
+        .filter(|p| p.develops_raw());
+    for p in photos {
+        let lens = p.meta.lens.trim();
+        let wanted = match &p.embedded_lens {
+            None if lens.is_empty() => again,
+            None if sweep && p.lens_checked == checked => {
+                if crate::cmd::missing::checked_path(p).is_some() && skipped.insert(p.id) {
+                    out.skipped += 1;
+                }
+                false
             }
-        })
-        .filter_map(|p| crate::cmd::missing::checked_path(p).map(|path| Missing { id: p.id, path: path.to_string() }))
-        .filter(|m| seen.insert(m.id))
-        .collect()
+            None => crate::lens_profiles::profile_name(db, &p.meta.camera, lens).is_some(),
+            Some(_) => again && from_database(p),
+        };
+        let Some(path) = crate::cmd::missing::checked_path(p).filter(|_| wanted) else { continue };
+        if !seen.insert(p.id) {
+            continue;
+        }
+        if !p.lens_checked.is_empty() && p.lens_checked != checked {
+            out.recheck += 1;
+        }
+        out.list.push(Missing { id: p.id, path: path.to_string(), checked: checked.clone() });
+    }
+    out
 }
 
 /// Probe each listed photo's file as Reload would. Doesn't touch the session.
@@ -59,8 +103,10 @@ pub fn probe(probe: &FileProbe, list: Vec<Missing>) -> Vec<(Missing, std::result
 
 /// Apply [`probe`]'s results: each photo and its virtual copies get the lens data their file gives now, in one batch
 /// that is journaled but isn't an undo step: a profile found (or a different one from a replaced database), a
-/// database profile the database no longer gives removed, and the lens's name where the catalog had none. Returns
-/// the photos that gained or changed a profile.
+/// database profile the database no longer gives removed, and the lens's name where the catalog had none. A file read
+/// whole that gave no profile stamps its photos with the database it was read against ([`Missing::checked`]); a
+/// result that couldn't be read stamps nothing (it is tried again next time). Returns the photos that gained or
+/// changed a profile.
 pub fn apply(s: &mut Session, results: Vec<(Missing, std::result::Result<ProbeInfo, String>)>) -> Result<Vec<PhotoId>> {
     let mut ops = Vec::new();
     let mut found = Vec::new();
@@ -99,6 +145,13 @@ pub fn apply(s: &mut Session, results: Vec<(Missing, std::result::Result<ProbeIn
                 meta.lens = named.to_string();
                 ops.push(Op::SetMeta { id, meta: Box::new(meta) });
             }
+            // read against this database: remembered when it gave nothing, so the next start doesn't read it again.
+            // A preview-only read ran no lookup (the raw couldn't be decoded, so nothing was looked up in the
+            // database): it stamps nothing, so the file is read again once it can be decoded.
+            let checked = if info.embedded_lens.is_none() && info.preview_only.is_none() { item.checked.as_str() } else { "" };
+            if p.lens_checked != checked {
+                ops.push(Op::SetLensChecked { id, checked: checked.to_string() });
+            }
         }
     }
     if !ops.is_empty() {
@@ -133,12 +186,18 @@ fn refresh(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(C, "all is true or false")),
     };
     let Some(db) = crate::lens_profiles::database() else {
-        return Ok(json!({"checked": 0, "found": [], "database": false}));
+        return Ok(json!({"checked": 0, "skipped": 0, "recheck": 0, "found": [], "database": false}));
     };
-    let listed = missing(&s.catalog, &db, ids.as_deref(), again);
-    let n = listed.len();
-    let found = apply(s, probe(&fp, listed))?;
-    Ok(json!({"checked": n, "found": found.iter().map(|i| i.0).collect::<Vec<_>>(), "database": true}))
+    let Listing { list, skipped, recheck } = listing(&s.catalog, &db, ids.as_deref(), again);
+    let n = list.len();
+    let found = apply(s, probe(&fp, list))?;
+    Ok(json!({
+        "checked": n,
+        "skipped": skipped,
+        "recheck": recheck,
+        "found": found.iter().map(|i| i.0).collect::<Vec<_>>(),
+        "database": true
+    }))
 }
 
 fn download(s: &mut Session, _: &Value) -> Result<Value> {
@@ -186,7 +245,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Look Up Lens Profiles Again",
             [],
             None,
-            "{ids?: [photo ids], all?: bool} — library raws without a lens profile whose lens the lens database knows are read again and get their profile (the correction is switched on where the photo's settings are still as imported); with all, also raws whose profile came from the database (it may give another, or none) and raws whose file named no lens at import; the app does this by itself when the database arrives (all: when its files were replaced) and when Enable Lens Corrections is ticked; not an undo step → {checked, found: [ids], database: bool}",
+            "{ids?: [photo ids], all?: bool} — Reads again the files of library raws that have no lens profile but whose lens the lens database knows. Each gets the profile its file gives; the correction is switched on where the photo's settings are still as imported. Without ids or all, photos whose file was already read against this database and gave no profile are skipped (counted in skipped). With all, also reads raws whose profile came from the database (it may give another, or none) and raws whose file named no lens at import. The app runs this by itself when the database arrives (with all when its files were replaced) and when Enable Lens Corrections is ticked. Not an undo step. → {checked (files read), skipped, recheck (of checked, read again because the database changed), found: [ids], database: bool}",
             always,
             refresh
         ),

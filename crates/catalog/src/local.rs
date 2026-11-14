@@ -81,12 +81,14 @@ pub fn folder_of(p: &Photo) -> Option<String> {
 }
 
 impl Photo {
-    /// A hash of everything about the photo except [`Photo::local_baseline`] itself.
+    /// A hash of everything about the photo except [`Photo::local_baseline`] itself and the lens lookup's
+    /// bookkeeping ([`Photo::lens_checked`]: a lookup that found nothing changed nothing the user did).
     pub fn fingerprint(&self) -> u64 {
         let mut h = Fnv(0xcbf2_9ce4_8422_2325);
-        let r = if self.local_baseline.is_some() {
+        let r = if self.local_baseline.is_some() || !self.lens_checked.is_empty() {
             let mut p = self.clone();
             p.local_baseline = None;
+            p.lens_checked.clear();
             serde_json::to_writer(&mut h, &p)
         } else {
             serde_json::to_writer(&mut h, self)
@@ -340,6 +342,7 @@ impl Op {
             | Op::Relink { id, .. }
             | Op::SetContent { id, .. }
             | Op::SetEmbeddedLens { id, .. }
+            | Op::SetLensChecked { id, .. }
             | Op::SetAsShotWb { id, .. } => out(*id),
             Op::AddAlbum { album } => {
                 album.photos.iter().for_each(|p| out(*p));

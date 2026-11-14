@@ -233,6 +233,13 @@ pub enum Op {
         id: PhotoId,
         lens: Option<Box<lightcraft_develop::EmbeddedLens>>,
     },
+    /// The lens database a lens-profile lookup read a photo's file against and found no profile in (see
+    /// [`Photo::lens_checked`]; empty = none). Bookkeeping: nothing a tally or a render depends on.
+    SetLensChecked {
+        id: PhotoId,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        checked: String,
+    },
     /// A raw's as-shot white balance (Kelvin, tint) as its file reads now: what a decode or Reload finds when the
     /// camera's colour matrices give the file a Kelvin scale it was imported without (issue #730). Bookkeeping,
     /// not an edit: the look does not change, only the As Shot readout.
@@ -827,6 +834,7 @@ impl Catalog {
             Op::SetCaptured { .. } => self.changes.now = Aspects::CAPTURED,
             Op::SetFile { .. } | Op::Relink { .. } => self.changes.now = Aspects::FILE,
             Op::SetAnalysis { .. } => self.changes.now = Aspects::ANALYSIS,
+            Op::SetLensChecked { .. } => self.changes.now = Aspects::NONE,
             Op::SetDevelop { .. } | Op::SetVersions { .. } | Op::SetHistory { .. } | Op::PushHistory { .. } | Op::SetHistoryCursor { .. } => {
                 self.changes.now = Aspects::DEVELOP
             }
@@ -1090,6 +1098,10 @@ impl Catalog {
             Op::SetEmbeddedLens { id, lens } => {
                 let p = self.photo_mut(id)?;
                 Op::SetEmbeddedLens { id, lens: std::mem::replace(&mut p.embedded_lens, lens.map(|l| *l)).map(Box::new) }
+            }
+            Op::SetLensChecked { id, checked } => {
+                let p = self.photo_mut(id)?;
+                Op::SetLensChecked { id, checked: std::mem::replace(&mut p.lens_checked, checked) }
             }
             Op::SetAsShotWb { id, wb } => {
                 if wb.is_some_and(|(t, tint)| !(t.is_finite() && tint.is_finite())) {
@@ -1378,6 +1390,7 @@ fn changes_what_albums_test(op: &Op) -> bool {
         | Op::SetLocal { .. }
         | Op::SetContent { .. }
         | Op::SetEmbeddedLens { .. }
+        | Op::SetLensChecked { .. }
         | Op::SetAsShotWb { .. }
         | Op::SetRating { .. }
         | Op::SetFlag { .. }

@@ -164,6 +164,125 @@ impl LensDb {
         self.cameras.is_empty() && self.lenses.is_empty()
     }
 
+    /// A hash of everything the database holds: the same for databases with the same cameras and
+    /// profiles in the same order, whichever run read them, and different once any name, mount or
+    /// calibrated value changes. A build that reads more of the XML (a new field) gives a new one
+    /// too. Not a security hash: it tells databases apart, it doesn't defend against forged ones.
+    ///
+    /// The hash is 64-bit FNV-1a over a versioned encoding of the fields themselves — strings
+    /// length-prefixed, floats by their bits, every list preceded by its length — never over
+    /// `Debug` text, whose formatting Rust does not promise to keep: an unchanged database keeps
+    /// its fingerprint across Rust upgrades, so a lookup remembered against it (the engine's
+    /// `lens_profiles::stamp`) stays remembered. Changing the encoding means changing
+    /// `FINGERPRINT_VERSION`, and every remembered lookup is then read once more, as it is when a
+    /// database changes.
+    pub fn fingerprint(&self) -> u64 {
+        struct Fnv(u64);
+        impl Fnv {
+            fn bytes(&mut self, bs: &[u8]) {
+                for b in bs {
+                    self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+                }
+            }
+            fn text(&mut self, s: &str) {
+                self.count(s.len());
+                self.bytes(s.as_bytes());
+            }
+            fn count(&mut self, n: usize) {
+                self.bytes(&(n as u64).to_le_bytes());
+            }
+            fn float(&mut self, v: f64) {
+                self.bytes(&v.to_bits().to_le_bytes());
+            }
+            fn opt_float(&mut self, v: Option<f64>) {
+                match v {
+                    None => self.bytes(&[0]),
+                    Some(v) => {
+                        self.bytes(&[1]);
+                        self.float(v);
+                    }
+                }
+            }
+        }
+        /// The encoding below, named so a change to it is a deliberate version bump, not an accident.
+        const FINGERPRINT_VERSION: &str = "lensdb-fingerprint-1";
+        let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+        h.text(FINGERPRINT_VERSION);
+        h.count(self.cameras.len());
+        for c in &self.cameras {
+            h.text(&c.maker);
+            h.text(&c.model);
+            h.text(&c.mount);
+            h.opt_float(c.crop_factor);
+        }
+        h.count(self.lenses.len());
+        for p in &self.lenses {
+            h.text(&p.maker);
+            h.count(p.models.len());
+            for m in &p.models {
+                h.text(m);
+            }
+            h.count(p.mounts.len());
+            for m in &p.mounts {
+                h.text(m);
+            }
+            h.opt_float(p.crop_factor);
+            h.float(p.aspect_ratio);
+            h.bytes(&[u8::from(p.rectilinear)]);
+            h.count(p.distortion.len());
+            for (focal, d) in &p.distortion {
+                h.float(*focal);
+                match d {
+                    Distortion::Poly3 { k1 } => {
+                        h.bytes(&[0]);
+                        h.float(*k1);
+                    }
+                    Distortion::Poly5 { k1, k2 } => {
+                        h.bytes(&[1]);
+                        h.float(*k1);
+                        h.float(*k2);
+                    }
+                    Distortion::PtLens { a, b, c } => {
+                        h.bytes(&[2]);
+                        h.float(*a);
+                        h.float(*b);
+                        h.float(*c);
+                    }
+                }
+            }
+            h.count(p.tca.len());
+            for (focal, t) in &p.tca {
+                h.float(*focal);
+                match t {
+                    Tca::Linear { kr, kb } => {
+                        h.bytes(&[0]);
+                        h.float(*kr);
+                        h.float(*kb);
+                    }
+                    Tca::Poly3 { vr, vb, cr, cb, br, bb } => {
+                        h.bytes(&[1]);
+                        h.float(*vr);
+                        h.float(*vb);
+                        h.float(*cr);
+                        h.float(*cb);
+                        h.float(*br);
+                        h.float(*bb);
+                    }
+                }
+            }
+            h.count(p.vignetting.len());
+            for v in &p.vignetting {
+                h.float(v.focal);
+                h.float(v.aperture);
+                h.float(v.distance);
+                h.float(v.model.k1);
+                h.float(v.model.k2);
+                h.float(v.model.k3);
+            }
+        }
+        h.0
+    }
+
     /// The camera with this EXIF make and model.
     pub fn find_camera(&self, make: &str, model: &str) -> Option<&Camera> {
         let mk = tokens(make);

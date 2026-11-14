@@ -1427,6 +1427,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     "replayed": lib.report.replayed,
                     "tornBytes": lib.report.torn_bytes,
                     "damaged": lib.report.damaged,
+                    // the catalog format it was in when opened, when opening rewrote it in this build's
+                    "upgradedFrom": lib.report.upgraded_from,
                 },
             }))
         }),
