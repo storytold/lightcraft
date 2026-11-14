@@ -2454,5 +2454,6 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "先以 --control 7980 (或 LIGHTCRAFT_CONTROL_PORT) 啟動應用程式，lightcraft-cli mcp --connect 即可將一個代理程式連接到其中。",
   "Welcome": "歡迎",
   "Next": "下一步",
-  "Get Started": "開始使用"
+  "Get Started": "開始使用",
+  "Waiting to write XMP sidecars": "等待寫入 XMP 附屬檔案"
 }

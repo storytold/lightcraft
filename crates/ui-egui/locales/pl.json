@@ -2377,5 +2377,6 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Waiting to write XMP sidecars": "Oczekiwanie na zapis plików pomocniczych XMP"
 }

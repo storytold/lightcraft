@@ -20,6 +20,19 @@ pub const MAX_ROWS: usize = 3;
 /// The stack's width (points).
 pub const WIDTH: f32 = 280.0;
 
+/// Whether the stack must look again within a tenth of a second: a young task becomes due, bars move. Not when every
+/// row is one that only waits on something outside the app (`xmpWaiting`) and is old enough to show: nothing on it
+/// changes until the cause is gone, and the app looks again by itself then (a redraw every 10 s re-checks it).
+pub fn needs_poll(tasks: &[TaskInfo]) -> bool {
+    tasks.iter().any(|t| !only_waits(t) || t.age_ms < SHOW_AFTER_MS)
+}
+
+/// A row that only waits on something outside the app: it has a count but no progress to draw, so no bar (its `total`
+/// is how many wait and `done` stays 0, so a bar would sit at 0 %).
+fn only_waits(t: &TaskInfo) -> bool {
+    t.kind == "xmpWaiting"
+}
+
 const MARGIN: i8 = 8;
 const CROSS: f32 = 16.0;
 
@@ -41,9 +54,13 @@ fn megabytes(bytes: u64) -> String {
 }
 
 /// The row's second line: "Stopping…" once cancelled, else the count and what is being worked on.
-fn detail_line(t: &TaskInfo) -> String {
+pub(crate) fn detail_line(t: &TaskInfo) -> String {
     if t.cancelling {
         return tr("Stopping…").to_string();
+    }
+    if only_waits(t) {
+        // the count is the row's `total` (for `activity.list`), said as a line: "0 of 2" would read as a stalled job
+        return tr_format!("Photos waiting: {n}", n = t.total);
     }
     let count = count_text(t);
     match (count.is_empty(), t.detail.is_empty()) {
@@ -61,7 +78,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     // look again soon: a young task becomes due, bars move
-    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    if needs_poll(&all) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    }
     let tasks: Vec<&TaskInfo> = all.iter().filter(|t| t.age_ms >= SHOW_AFTER_MS).collect();
     if tasks.is_empty() {
         return;
@@ -136,7 +155,9 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32) -> bool {
                 clicked = resp.on_hover_text(tr("Cancel")).clicked();
             }
         });
-        bar(ui, task, width);
+        if !only_waits(task) {
+            bar(ui, task, width);
+        }
         let line = detail_line(task);
         if !line.is_empty() {
             ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());

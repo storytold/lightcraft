@@ -99,6 +99,7 @@ mod unsaved;
 mod view_cost;
 mod wb_selector;
 mod welcome;
+mod xmp_waiting;
 mod zoom;
 mod zoom_keys;
 

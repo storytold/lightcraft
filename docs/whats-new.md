@@ -261,6 +261,12 @@
   selected Object mask, and a click on the selected mask's own pin adds nothing. Subject, Sky, Background and the
   range masks still have no pin.
 
+### Waiting XMP writes show in the activity stack
+- When automatic XMP sidecar writes can't reach their folder (a network share that dropped out, a read-only or full
+  folder), the activity stack now has a row, "Waiting to write XMP sidecars", with "Photos waiting: N" under it (no
+  progress bar, as nothing counts up). The row
+  stays until they are written, and then goes. The one-time message and the retry every 10 seconds are unchanged.
+
 ## 2026-10-28
 
 ### The empty photo grid names Import Photos' shortcut as it is bound
