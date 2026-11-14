@@ -70,6 +70,7 @@ impl LightcraftApp {
             missing_count_test_delay: None,
             shadow: None,
             synthetic: vec![],
+            nav_buttons: vec![],
             pointer_cleanup: false,
             drop_hover: vec![],
             drop_pending: vec![],
