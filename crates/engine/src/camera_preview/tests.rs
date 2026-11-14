@@ -1,5 +1,6 @@
 use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
+use lightcraft_raw::profile::{HsvTableApply, ProfileLookHueSat};
 
 fn steep_toe_scene() -> (Rgb32f, Rgb32f) {
     let mut sensor = Rgb32f::new(96, 64);

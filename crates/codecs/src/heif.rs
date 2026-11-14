@@ -57,7 +57,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     if (info.width as u64).saturating_mul(info.height as u64) > opts.max_pixels {
         return Err(Error::TooLarge(info.width as u64, info.height as u64));
     }
-    let options = craft_heif::Options { max_pixels: opts.max_pixels, apply_transforms: true, ..craft_heif::Options::default() };
+    let options = craft_heif::Options { max_pixels: opts.max_pixels, apply_transforms: true };
     // A small decode (a thumbnail or a cataloguing probe) uses the file's own thumbnail image when
     // it is at least as large as asked: iPhones store one of 320 × 240, and decoding it is a
     // hundredth of the work of the 12 MP photo.
