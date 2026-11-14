@@ -638,6 +638,45 @@ fn a_cancelled_synchronize_does_nothing_more() {
     assert_eq!((r.imported, s.undo.len()), (0, steps_before));
 }
 
+/// Do the work of synchronizing a new file that grew after the scan, so the work reads it again
+/// instead of reusing the scan's probe; `during` runs as the file is read. How many steps it
+/// handed over; `progress` says how far it got.
+fn sync_work_rereading_a_file(tag: &str, progress: &crate::sync::SyncProgress, during: impl Fn() + Send + Sync + 'static) -> usize {
+    let dir = Scratch::new(tag);
+    let mut s = library(&dir);
+    write_png(&dir.path("trip/c.png"), 3);
+    let changes = crate::sync::scan(&mut s, &dir.path("trip"), false).unwrap();
+    let mut file = std::fs::OpenOptions::new().append(true).open(dir.path("trip/c.png")).unwrap();
+    std::io::Write::write_all(&mut file, b"\0").unwrap();
+    s.media.file_probe = Some(std::sync::Arc::new(move |_: &str| {
+        during();
+        Ok(crate::media::ProbeInfo { format: "PNG".into(), ..Default::default() })
+    }));
+    let (work, _commit) = crate::sync::SyncJob::start(&mut s, changes, crate::sync::SyncChoice::default()).unwrap();
+    let mut sent = 0;
+    work.run(progress, |_| {
+        sent += 1;
+        true
+    });
+    sent
+}
+
+#[test]
+fn a_batch_that_cancel_cut_short_is_not_counted_as_done() {
+    let progress = crate::sync::SyncProgress::default();
+    let cancel = progress.files.cancel.clone();
+    // Cancel while the work reads the batch's file
+    sync_work_rereading_a_file("cut-short", &progress, move || cancel.store(true, std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(progress.counts(), (0, 1), "the file was left undone: done must be less than total");
+}
+
+#[test]
+fn a_batch_that_ran_to_its_end_is_counted_as_done() {
+    let progress = crate::sync::SyncProgress::default();
+    let sent = sync_work_rereading_a_file("whole-batch", &progress, || {});
+    assert_eq!((progress.counts(), sent), ((1, 1), 1));
+}
+
 /// Ready a synchronize of the trip folder and do its work, keeping the steps for the test to
 /// commit when it likes.
 fn readied(s: &mut Session, dir: &Scratch, choice: crate::sync::SyncChoice) -> (Vec<crate::sync::SyncStep>, crate::sync::SyncCommit) {
