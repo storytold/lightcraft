@@ -317,8 +317,13 @@ pub(crate) fn after_input(app: &mut LccApp, raw: &mut egui::RawInput) {
     // modal rule below would otherwise hand a sideways swipe to the title button under it, and
     // the bar (and the dock) could not be scrolled at all until the menu was closed
     let strip_over_modal = app.ui.modern.menu.is_some() && app.ui.dialog.is_none();
+    // the grid's fast-scroll handle takes a drag of its own (the swipe scroller lets it be)
+    let handle = rect_of("modern:scrollHandle");
     let region = |p: Pos2| {
         use crate::modern_input::Region;
+        if handle.is_some_and(|r| r.contains(p)) {
+            return None;
+        }
         if strip_over_modal && strips.iter().flatten().any(|r| r.contains(p)) {
             return Some(Region::Strip);
         }
