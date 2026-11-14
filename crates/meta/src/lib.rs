@@ -16,29 +16,44 @@
 
 mod container;
 pub mod cr3;
-mod datetime;
 mod exif;
 pub mod focus;
 mod focus_read;
-mod gpx;
 pub mod heif;
 mod iptc;
 pub mod mrw;
 mod psd;
 pub mod tags;
 mod xmp;
-mod xmp_merge;
 
 pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
-pub use datetime::DateTime;
+pub use craft_metadata::DateTime;
+pub use craft_metadata::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
-pub use gpx::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
 pub use tags::{TagRow, file_tag_rows, tag_rows};
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
-pub use xmp_merge::{MergeRules, merge_xmp};
+
+/// Which properties [`merge_xmp`] takes from the fresh packet.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MergeRules<'a> {
+    /// Always replaced: removed from the existing packet, written from the fresh one if stated.
+    pub owned: &'a [&'a str],
+    /// Replaced only when the fresh packet states them; otherwise the existing value stays.
+    pub owned_if_present: &'a [&'a str],
+}
+
+/// Merge `fresh` into `existing` following `rules`.
+pub fn merge_xmp(existing: &str, fresh: &str, rules: MergeRules) -> Result<String, XmpError> {
+    let namespaces = [craft_metadata::XmpNamespace { prefix: "lc", uri: LC_NS }];
+    craft_metadata::merge_xmp(
+        existing,
+        fresh,
+        craft_metadata::MergeRules { owned: rules.owned, owned_if_present: rules.owned_if_present, namespaces: &namespaces },
+    )
+}
 
 use serde::{Deserialize, Serialize};
 
@@ -163,6 +178,29 @@ macro_rules! overlay {
     ($self:ident, $o:ident, $($f:ident),*) => { $( if $o.$f.is_some() { $self.$f = $o.$f.clone(); } )* };
 }
 
+/// How far (relative) a duration may be from an exact `1/n` second and still be shown as `1/n`:
+/// absorbs decimal EXIF rationals such as `3333/10000` for 1/3 s without turning 0.3 s or
+/// 1/2.8 s into a reciprocal they aren't.
+pub const RECIPROCAL_TOLERANCE: f64 = 1e-3;
+
+/// The one shutter-speed formatter for display (catalog `shutter`, Info panel, All Metadata):
+/// a near-exact `1/n` second as `1/n` (`1/3`, `1/250`), anything else rounded to four
+/// significant digits with trailing zeros dropped (`0.3`, `0.3571`, `2.5`, `30`). Display only:
+/// export writes the exact duration. `None` for a time that isn't positive and finite.
+pub fn format_exposure_time(t: f64) -> Option<String> {
+    if !t.is_finite() || t <= 0.0 {
+        return None;
+    }
+    let n = (1.0 / t).round();
+    if n >= 2.0 && n.is_finite() && (1.0 / (n * t) - 1.0).abs() <= RECIPROCAL_TOLERANCE {
+        return Some(format!("1/{n}"));
+    }
+    // four significant digits; whole seconds never lose digits
+    let decimals = (3 - t.log10().floor() as i32).max(0) as usize;
+    let text = format!("{t:.decimals$}");
+    Some(if text.contains('.') { text.trim_end_matches('0').trim_end_matches('.').to_string() } else { text })
+}
+
 impl Metadata {
     /// Fill every empty field of `self` from `other`.
     pub fn fill_missing(&mut self, other: &Metadata) {
@@ -246,19 +284,10 @@ impl Metadata {
         }
     }
 
-    /// Exposure time formatted like cameras show it: `1/250`, `0.5`, `2″`.
+    /// Exposure time formatted like cameras show it: `1/250`, `0.3571`, `2.5″` (see [`format_exposure_time`]).
     pub fn exposure_display(&self) -> Option<String> {
         let t = self.exposure_time?;
-        if t.is_nan() || t <= 0.0 {
-            return None;
-        }
-        Some(if t < 0.3 {
-            format!("1/{}", (1.0 / t).round())
-        } else if t < 1.0 {
-            format!("{}", (t * 10.0).round() / 10.0)
-        } else {
-            format!("{}″", (t * 10.0).round() / 10.0)
-        })
+        format_exposure_time(t).map(|text| if t >= 1.0 { format!("{text}″") } else { text })
     }
 
     /// Human name of the metering mode.
@@ -421,11 +450,57 @@ mod tests {
     }
 
     #[test]
+    fn exposure_time_formats_reciprocals_and_significant_digits() {
+        for (t, want) in [
+            (1.0 / 3.0, "1/3"),
+            (1.0 / 250.0, "1/250"),
+            (1.0 / 8000.0, "1/8000"),
+            (0.5, "1/2"),
+            (0.3, "0.3"),
+            (0.4, "0.4"),
+            (1.0 / 2.8, "0.3571"),
+            (0.625, "0.625"),
+            (0.003, "0.003"),
+            (1.0, "1"),
+            (1.3, "1.3"),
+            (2.5, "2.5"),
+            (30.0, "30"),
+            (9.99996, "10"),
+            (1800.0, "1800"),
+        ] {
+            assert_eq!(format_exposure_time(t).as_deref(), Some(want), "{t}");
+        }
+        for t in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(format_exposure_time(t), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn exposure_time_reciprocal_tolerance() {
+        // a camera's decimal rational for 1/3 s, and times just inside the tolerance either side
+        assert_eq!(format_exposure_time(3333.0 / 10000.0).as_deref(), Some("1/3"));
+        // a microsecond-level rational error still reads as 1/8000; above ~1/1000 s every time is
+        // within the tolerance of some 1/n, which is how cameras show those speeds anyway
+        assert_eq!(format_exposure_time(1.0 / 8000.0 * (1.0 + 1e-5)).as_deref(), Some("1/8000"));
+        for n in [3.0, 10.0, 250.0] {
+            let inside = 0.9 * RECIPROCAL_TOLERANCE;
+            let outside = 1.1 * RECIPROCAL_TOLERANCE;
+            let want = format!("1/{n}");
+            assert_eq!(format_exposure_time(1.0 / n * (1.0 + inside)).as_deref(), Some(want.as_str()), "{n} +inside");
+            assert_eq!(format_exposure_time(1.0 / n * (1.0 - inside)).as_deref(), Some(want.as_str()), "{n} -inside");
+            assert_ne!(format_exposure_time(1.0 / n * (1.0 + outside)).as_deref(), Some(want.as_str()), "{n} +outside");
+            assert_ne!(format_exposure_time(1.0 / n * (1.0 - outside)).as_deref(), Some(want.as_str()), "{n} -outside");
+        }
+    }
+
+    #[test]
     fn exposure_display() {
         let mut m = Metadata { exposure_time: Some(1.0 / 250.0), ..Default::default() };
         assert_eq!(m.exposure_display().as_deref(), Some("1/250"));
         m.exposure_time = Some(0.5);
-        assert_eq!(m.exposure_display().as_deref(), Some("0.5"));
+        assert_eq!(m.exposure_display().as_deref(), Some("1/2"));
+        m.exposure_time = Some(0.3);
+        assert_eq!(m.exposure_display().as_deref(), Some("0.3"));
         m.exposure_time = Some(2.0);
         assert_eq!(m.exposure_display().as_deref(), Some("2″"));
         m.exposure_time = Some(0.0);
@@ -555,7 +630,7 @@ mod tests {
                 j.extend(payload);
             };
             // orientation 6, 6000 × 4000 as stored
-            seg([b"Exif\0\0".as_slice(), &crate::exif::tests::sample_exif(lightcraft_tiff::ByteOrder::Little)].concat());
+            seg([b"Exif\0\0".as_slice(), &crate::exif::tests::sample_exif(craft_tiff::ByteOrder::Little)].concat());
             seg([b"http://ns.adobe.com/xap/1.0/\0".as_slice(), packet.as_bytes()].concat());
             j.extend([0xff, 0xd9]);
             j
@@ -600,10 +675,10 @@ mod tests {
         assert!(near(m.regions[0].rect, DRAWN), "{:?}", m.regions[0].rect);
         assert_eq!(try_extract(&j).unwrap().regions, m.regions);
         // a TIFF-based file: the whole file is the Exif block, with the XMP in its first IFD
-        let mut ifd0 = lightcraft_tiff::IfdBuilder::new();
-        ifd0.set(lightcraft_tiff::tags::ORIENTATION, lightcraft_tiff::Value::Short(vec![6]));
-        ifd0.set(lightcraft_tiff::tags::XMP, lightcraft_tiff::Value::Byte(packet.into_bytes()));
-        let m = extract(&lightcraft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
+        let mut ifd0 = craft_tiff::IfdBuilder::new();
+        ifd0.set(craft_tiff::tags::ORIENTATION, craft_tiff::Value::Short(vec![6]));
+        ifd0.set(craft_tiff::tags::XMP, craft_tiff::Value::Byte(packet.into_bytes()));
+        let m = extract(&craft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
         assert_eq!((m.orientation, m.width, m.height), (Some(Orientation::Rotate90), Some(4000), Some(6000)));
         assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
     }
@@ -615,14 +690,14 @@ mod tests {
     fn an_orientation_only_the_xmp_states_turns_no_regions() {
         // 6000 × 4000 in the Exif, and no orientation
         let size_ifd = || {
-            let mut sub = lightcraft_tiff::IfdBuilder::new();
-            sub.set(lightcraft_tiff::tags::PIXEL_X_DIMENSION, lightcraft_tiff::Value::Long(vec![6000]));
-            sub.set(lightcraft_tiff::tags::PIXEL_Y_DIMENSION, lightcraft_tiff::Value::Long(vec![4000]));
+            let mut sub = craft_tiff::IfdBuilder::new();
+            sub.set(craft_tiff::tags::PIXEL_X_DIMENSION, craft_tiff::Value::Long(vec![6000]));
+            sub.set(craft_tiff::tags::PIXEL_Y_DIMENSION, craft_tiff::Value::Long(vec![4000]));
             sub
         };
-        let mut exif_ifd0 = lightcraft_tiff::IfdBuilder::new();
-        exif_ifd0.set_child(lightcraft_tiff::tags::EXIF_IFD, size_ifd());
-        let exif = lightcraft_tiff::TiffWriter::new(lightcraft_tiff::ByteOrder::Little, false).write(&[exif_ifd0]).unwrap();
+        let mut exif_ifd0 = craft_tiff::IfdBuilder::new();
+        exif_ifd0.set_child(craft_tiff::tags::EXIF_IFD, size_ifd());
+        let exif = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[exif_ifd0]).unwrap();
         let packet = regions_packet(6000, 4000, "")
             .replace(r#"rdf:about="""#, r#"rdf:about="" xmlns:tiff="http://ns.adobe.com/tiff/1.0/" tiff:Orientation="6""#);
         let mut j = vec![0xff, 0xd8];
@@ -641,10 +716,10 @@ mod tests {
         assert!(near(m.regions[0].rect, DRAWN), "turned by an orientation the Exif doesn't state: {:?}", m.regions[0].rect);
         assert_eq!(try_extract(&j).unwrap().regions, m.regions);
         // a TIFF-based file: the first IFD has no orientation, its XMP (tag 700) has
-        let mut ifd0 = lightcraft_tiff::IfdBuilder::new();
-        ifd0.set(lightcraft_tiff::tags::XMP, lightcraft_tiff::Value::Byte(packet.into_bytes()));
-        ifd0.set_child(lightcraft_tiff::tags::EXIF_IFD, size_ifd());
-        let m = extract(&lightcraft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
+        let mut ifd0 = craft_tiff::IfdBuilder::new();
+        ifd0.set(craft_tiff::tags::XMP, craft_tiff::Value::Byte(packet.into_bytes()));
+        ifd0.set_child(craft_tiff::tags::EXIF_IFD, size_ifd());
+        let m = extract(&craft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
         assert_eq!(m.orientation, Some(Orientation::Rotate90));
         assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
     }

@@ -66,7 +66,7 @@ pub fn fs_pair_loader() -> PairLoader {
         let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = crate::read_file::read_regular(path, crate::read_file::MAX_MEDIA_BYTES).map_err(|e| format!("{path}: {e}"))?;
         let r = load_vec_pair(bytes, max_edge, spec, with);
         crate::memory::release();
         r
@@ -88,15 +88,13 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// Probe a whole file (its bytes are read once, and hashed).
 pub(super) fn probe_file(path: &str) -> Result<ProbeInfo, String> {
-    use std::io::Read;
     // one open, then everything from the open file: its size and modification time are not
     // round trips of their own (on a network share each of them is one)
-    let mut file = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let file = crate::read_file::open_for_read(path).map_err(|e| format!("{path}: {e}"))?;
     let meta = file.metadata().ok();
     let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
     let _permit = crate::memory::work_gate().acquire(len);
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes).map_err(|e| format!("{path}: {e}"))?;
+    let bytes = crate::read_file::read_open(file, crate::read_file::MAX_MEDIA_BYTES).map_err(|e| format!("{path}: {e}"))?;
     let mut info = probe_bytes(path, &bytes)?;
     info.file_modified = meta.as_ref().and_then(modified_iso);
     Ok(info)
@@ -134,11 +132,12 @@ pub fn fs_header_probe() -> FileProbe {
 /// [`fs_header_probe`]'s partial read: `None` when the file has to be probed whole.
 pub(super) fn probe_partial(path: &str) -> std::io::Result<Option<ProbeInfo>> {
     use lightcraft_raw::sparse::{Ranges, header_plan, preview_plan};
-    let mut file = std::fs::File::open(path)?;
+    let mut file = crate::read_file::open_for_read(path)?;
     // (its size and modification time from the open file: no round trips of their own)
     let meta = file.metadata()?;
     let len = meta.len();
-    if !(PARTIAL_MIN..=PARTIAL_MAX).contains(&len) {
+    // (anything but a regular file is left to the whole probe, which refuses it)
+    if !meta.is_file() || !(PARTIAL_MIN..=PARTIAL_MAX).contains(&len) {
         return Ok(None);
     }
     let Ok(size) = usize::try_from(len) else { return Ok(None) };
@@ -222,7 +221,7 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
     let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 });
     let gate = crate::memory::work_gate();
     let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let bytes = crate::read_file::read_regular(path, crate::read_file::MAX_MEDIA_BYTES).map_err(|e| format!("{path}: {e}"))?;
     let r = load(bytes);
     // the file, the samples and the intermediate images are gone: give their pages back
     crate::memory::release();

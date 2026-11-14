@@ -4,7 +4,7 @@
 //! binary blobs are summarised by size; of a maker note only the lens name is listed (the
 //! Panasonic one, as Panasonic writes no Exif LensModel).
 
-use lightcraft_tiff::{Ifd, Tiff, Value};
+use craft_tiff::{Ifd, Tiff, Value};
 
 /// One metadata row.
 #[derive(Clone, Debug, PartialEq)]
@@ -250,7 +250,10 @@ fn value_text(group: &str, tag: u16, v: &Value) -> String {
             // exposure time as a fraction of a second
             let (n, d) = a[0];
             let s = n as f64 / d as f64;
-            if s >= 1.0 || n == 0 { format!("{} s", rational(n as f64, d as f64)) } else { format!("1/{} s", (1.0 / s).round()) }
+            match crate::format_exposure_time(s) {
+                Some(text) => format!("{text} s"),
+                None => format!("{} s", rational(n as f64, d as f64)),
+            }
         }
         Value::Rational(a) if tag == 0x829d && group != "GPS" && a.len() == 1 => format!("f/{}", rational(a[0].0 as f64, a[0].1 as f64)),
         Value::Rational(a) if tag == 0x920a && group != "GPS" && a.len() == 1 => format!("{} mm", rational(a[0].0 as f64, a[0].1 as f64)),
@@ -318,7 +321,7 @@ fn nikon_nef_compression(tiff: &Tiff, bytes: &[u8]) -> Option<&'static str> {
         return None;
     }
     let e = ifd0.exif.as_ref()?.get(0x927c)?;
-    let mn = lightcraft_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
+    let mn = craft_tiff::makernote::parse_makernote(bytes, e.offset, e.count() as u64, tiff.order, &make)?;
     nef_compression(mn.ifd.u32(0x0093)?)
 }
 
@@ -380,6 +383,28 @@ pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn exposure_rows_do_not_round_third_stop_times() {
+        for (n, d, expected) in [
+            (3, 10, "0.3 s"),
+            (4, 10, "0.4 s"),
+            (6, 10, "0.6 s"),
+            (8, 10, "0.8 s"),
+            (13, 10, "1.3 s"),
+            (16, 10, "1.6 s"),
+            (25, 10, "2.5 s"),
+            (32, 10, "3.2 s"),
+            (5, 8, "0.625 s"),
+            (1, 3, "1/3 s"),
+            (10, 28, "0.3571 s"),
+            (1, 250, "1/250 s"),
+            (1, 8000, "1/8000 s"),
+            (30, 1, "30 s"),
+        ] {
+            assert_eq!(value_text("EXIF", 0x829a, &Value::Rational(vec![(n, d)])), expected);
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -516,7 +541,7 @@ mod tests {
         let rw2 = crate::exif::tests::panasonic_rw2("LUMIX S 85/F1.8");
         assert_eq!(lens(&file_tag_rows(&rw2)), ["LUMIX S 85/F1.8"]);
         // a JPEG: the note is in its own Exif
-        let exif = crate::exif::tests::panasonic_exif(lightcraft_tiff::ByteOrder::Big, Some("LUMIX G 25/F1.7"), None);
+        let exif = crate::exif::tests::panasonic_exif(craft_tiff::ByteOrder::Big, Some("LUMIX G 25/F1.7"), None);
         let mut jpg = vec![0xff, 0xd8, 0xff, 0xe1];
         jpg.extend_from_slice(&((exif.len() + 8) as u16).to_be_bytes());
         jpg.extend(b"Exif\0\0");

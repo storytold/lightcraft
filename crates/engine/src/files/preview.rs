@@ -21,7 +21,7 @@ fn stand_in_image(bytes: &[u8], covering: Option<usize>) -> Option<std::borrow::
     if let Some(jpeg) = jpeg {
         return Some(std::borrow::Cow::Owned(jpeg));
     }
-    let undecodable = lightcraft_raw::probe(bytes).is_some_and(|f| !f.is_supported());
+    let undecodable = lightcraft_raw::probe(bytes).is_some_and(|f| !lightcraft_raw::is_supported(f));
     (undecodable && lightcraft_codecs::sniff(bytes).is_some_and(|f| f == lightcraft_codecs::Format::Tiff))
         .then_some(std::borrow::Cow::Borrowed(bytes))
 }

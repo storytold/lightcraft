@@ -745,6 +745,30 @@ mod prepared_tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    /// A FIFO put in an original's place gets no hash on demand, and isn't waited on for a writer.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn a_fifo_gets_no_hash_on_demand_without_waiting() {
+        let dir = std::env::temp_dir().join(format!("lc-import-hash-fifo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fifo = dir.join("pipe.raw");
+        // (no unsafe code in this crate: the coreutils tool makes the FIFO)
+        if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+            let _ = std::fs::remove_dir_all(&dir);
+            lightcraft_testkit::skip!(System, "no mkfifo");
+            return;
+        }
+        let path = fifo.to_string_lossy().to_string();
+        // (on a thread: a hash that waits for a writer fails the test instead of hanging it)
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(hash_file(&path, 0, &std::sync::atomic::AtomicBool::new(false)));
+        });
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the hash waited for a writer"), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// A hash computed on demand while a batch is prepared is taken of the photo's file then: a
     /// photo relinked to another file before the batch is committed doesn't get it (review of #2051).
     #[test]

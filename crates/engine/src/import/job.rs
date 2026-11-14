@@ -630,8 +630,10 @@ fn list_names(dir: &Path) -> Option<std::collections::HashSet<String>> {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn hash_file(path: &str, size: u64, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
     use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
-    if file.metadata().ok()?.len() != size {
+    // (a FIFO put in the file's place is not waited on, and is not hashed)
+    let mut file = crate::read_file::open_for_read(path).ok()?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() != size {
         return None;
     }
     let mut hasher = lightcraft_preview::Hasher128::new();
