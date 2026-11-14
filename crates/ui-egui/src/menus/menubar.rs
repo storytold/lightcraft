@@ -52,7 +52,7 @@ pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a s
     {
         label
     } else {
-        crate::i18n::tr(label)
+        crate::i18n::command_label(id, label)
     }
 }
 
