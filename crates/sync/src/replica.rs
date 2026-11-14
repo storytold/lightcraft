@@ -645,6 +645,22 @@ impl Replica {
         taken
     }
 
+    /// A photo that was only told of is in the catalogue now: its fields keep when they were
+    /// written, with the fingerprints of the values as the catalogue holds them.
+    pub fn adopt(&mut self, key: &str, digests: &[(&str, u64)], have: Depth) {
+        let Some(e) = self.photos.get_mut(key) else { return };
+        e.ghost = None;
+        e.have = have;
+        for (name, d) in digests {
+            e.fields.entry(name.to_string()).or_default().d = *d;
+        }
+    }
+
+    /// The photos told of that the catalogue doesn't hold.
+    pub fn ghosts(&self) -> impl Iterator<Item = &String> {
+        self.photos.iter().filter(|(_, e)| e.ghost.is_some()).map(|(k, _)| k)
+    }
+
     /// The photo is in the catalogue now, holding `have` of it.
     pub fn set_have(&mut self, key: &str, have: Depth) {
         if let Some(e) = self.photos.get_mut(key) {
@@ -734,6 +750,14 @@ impl Replica {
     /// Whether anything waits to be sent to `peer`.
     pub fn has_outgoing(&self, peer: &str) -> bool {
         !self.outgoing(peer, 1).refs.is_empty()
+    }
+
+    /// Whether photo `key` holds a change that `peer` hasn't confirmed and didn't send itself.
+    pub fn owes(&self, peer: &str, key: &str) -> bool {
+        let r = Ref::Photo(key.to_string());
+        let Some((seq, via)) = self.seq_of(&r) else { return false };
+        let c = self.cursors.get(peer);
+        c.is_some_and(|c| c.resend.contains(&r)) || (seq > c.map_or(0, |c| c.acked) && via != Some(peer))
     }
 
     /// Whether photo `key` has changes here that a device which should have them, and which this

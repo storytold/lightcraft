@@ -2,7 +2,7 @@
 //!
 //! A session: both send [`Msg::Hello`]; then rounds in which each sends a [`Msg::Batch`] (what
 //! changed, and how far it has taken in what the other sent); then the device that started the
-//! session asks for files with [`Msg::Get`], each answered by [`Msg::Blob`] and the bytes, or
+//! session asks for files with [`Msg::Gets`], each answered by [`Msg::Blob`] and the bytes, or
 //! [`Msg::NotHere`]; then roles swap; [`Msg::Bye`] ends it.
 
 use serde::{Deserialize, Serialize};
@@ -59,13 +59,25 @@ pub struct Batch {
     pub ack: Option<u64>,
 }
 
+/// One file asked for.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Get {
+    pub key: String,
+    pub depth: Depth,
+    #[serde(default)]
+    pub offset: u64,
+}
+
+/// The most files asked for in one message.
+pub const MAX_GETS: usize = 64;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "t")]
 pub enum Msg {
     Hello(Hello),
     Batch(Batch),
-    /// Send me this photo's file from `offset` on.
-    Get { key: String, depth: Depth, offset: u64 },
+    /// Send me these photos' files, each from its offset on; they are answered in order.
+    Gets { wants: Vec<Get> },
     /// The file follows, `size` bytes in all, from `offset`, in raw frames.
     Blob { key: String, depth: Depth, size: u64, offset: u64 },
     /// Not sent: it isn't here (`later`: it is being made, ask again), or it isn't allowed.
@@ -119,7 +131,7 @@ mod tests {
 
     #[test]
     fn hostile_messages_are_errors_not_panics() {
-        for bad in ["", "{}", "[]", r#"{"t":"get"}"#, r#"{"t":"blob","key":1}"#, r#"{"t":"batch","items":[{"photo":{}}]}"#, r#"{"t":"hello","proto":"x"}"#] {
+        for bad in ["", "{}", "[]", r#"{"t":"gets"}"#, r#"{"t":"blob","key":1}"#, r#"{"t":"batch","items":[{"photo":{}}]}"#, r#"{"t":"hello","proto":"x"}"#] {
             assert!(serde_json::from_str::<Msg>(bad).is_err(), "{bad}");
         }
         // unknown extra items in a batch fail the whole message (the session ends with an error)

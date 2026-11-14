@@ -59,7 +59,7 @@ pub mod missing;
 mod ml;
 pub(crate) mod organize;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod peers;
+pub mod device_sync;
 mod people_recognize;
 mod people_roles;
 pub mod profile_manager;
@@ -288,7 +288,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(catalog::specs());
         #[cfg(not(target_arch = "wasm32"))]
-        v.extend(peers::specs());
+        v.extend(device_sync::specs());
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(slideshow::specs());
@@ -302,7 +302,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(missing::specs());
         v.extend(duplicates::specs());
         v.extend(recheck::specs());
-        v.extend(sync::specs());
+        v.extend(device_sync::specs());
         v.extend(store::specs());
         v.extend(metadata::specs());
         v.extend(metadata_files::specs());

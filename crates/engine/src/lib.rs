@@ -105,9 +105,7 @@ pub mod open_path;
 pub mod originals;
 mod pdf;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod peer_exchange;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod peers;
+pub mod device_sync;
 mod people_smart;
 pub mod people_store;
 pub mod phash;
@@ -455,9 +453,9 @@ pub struct Session {
     /// Remote services: SHA-1 back-fill and Immich jobs ([`remote`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub remote: remote::State,
-    /// Peer sync: the paired devices and the service that finds them ([`peers`]).
+    /// Sync with the app on other devices ([`device_sync`]).
     #[cfg(not(target_arch = "wasm32"))]
-    pub peers: peers::State,
+    pub device_sync: device_sync::State,
     /// Auto updates: the last check, the download in flight, and the settings ([`update`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub updater: update::Updater,
@@ -861,7 +859,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             remote: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            peers: Default::default(),
+            device_sync: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             updater: Default::default(),
             desktop: desktop::default_desktop(),

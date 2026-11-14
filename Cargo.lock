@@ -4861,6 +4861,7 @@ dependencies = [
  "lcc-scenes",
  "lcc-segment",
  "lcc-slideshow",
+ "lcc-sync",
  "lcc-sysmem",
  "lcc-testkit",
  "lcc-tether",

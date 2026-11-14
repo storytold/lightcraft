@@ -156,18 +156,12 @@ fn the_control_channel_reads_and_writes_the_portable_form() {
 }
 
 #[test]
-fn peer_records_carry_the_map_and_stay_out_with_an_older_build() {
+fn synced_records_carry_the_map() {
     let (a, _, photo_a, id) = catalog_a();
-    let r = crate::peer_exchange::Record::of(a.catalog.photo(photo_a).unwrap(), &a.catalog);
-    assert_eq!(r.vignetting_maps.len(), 1);
-    let v: Value = serde_json::to_value(&r).unwrap();
-    assert!(v.get("vignettingMaps").is_some() && !v.to_string().contains("\"photo\""), "{v}");
-    // with a device that doesn't say it carries flat-field maps, photos that use one stay out
-    let mut records = crate::peer_exchange::Records::new();
-    records.insert("with".into(), (photo_a, r));
-    let plain = crate::peer_exchange::Record::of(a.catalog.photo(PhotoId(1)).unwrap(), &a.catalog);
-    records.insert("without".into(), (PhotoId(1), plain));
-    assert_eq!(crate::peer_exchange::held_back(&records, &[]), vec!["with".to_string()]);
-    assert!(crate::peer_exchange::held_back(&records, &["vignettingCalibration".into()]).is_empty());
+    let (v, _) = crate::device_sync::record::value(a.catalog.photo(photo_a).unwrap(), &a.catalog, "develop").unwrap();
+    assert_eq!(v["maps"].as_array().map(Vec::len), Some(1));
+    assert!(!v.to_string().contains("\"photo\""), "{v}");
+    let (plain, _) = crate::device_sync::record::value(a.catalog.photo(PhotoId(1)).unwrap(), &a.catalog, "develop").unwrap();
+    assert!(plain.get("maps").is_none());
     assert!(a.catalog.vignetting_map(&id).is_some());
 }
