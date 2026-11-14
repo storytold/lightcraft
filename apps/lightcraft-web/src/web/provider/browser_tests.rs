@@ -226,8 +226,10 @@ async fn tiny_library(backend: &Backend, dir: &str, filename: &str, width: usize
 fn real_web_app(library: TinyLibrary, backend: Backend, host: Host, ctx: &Context) -> WebApp {
     let TinyLibrary { session, files, originals, .. } = library;
     let frozen = Rc::new(Cell::new(false));
-    let mut app =
-        LightcraftApp::new(session, super::super::services(originals.clone(), Some(backend.clone()), files.clone(), frozen.clone(), ctx.clone()));
+    let mut app = LightcraftApp::new(
+        session,
+        super::super::services(originals.clone(), Some(backend.clone()), files.clone(), frozen.clone(), ctx.clone(), None),
+    );
     app.file_provider = Some(host.clone());
     app.file_provider_document = 1;
     // Every field belongs to the actual private production type; no mocked WebApp/method or eframe context.
@@ -247,6 +249,7 @@ fn real_web_app(library: TinyLibrary, backend: Backend, host: Host, ctx: &Contex
         title: String::new(),
         last_save: 0.0,
         ui_written: Vec::new(),
+        bridge: None,
     }
 }
 
@@ -329,6 +332,7 @@ async fn admit_valid_zip(app: &mut WebApp, ctx: &Context, host: &Host, events: &
     let since = events.len();
     host.open(request.clone(), "Incoming.zip".into(), zip).map_err(error)?;
     let old_document = app.app.file_provider_document;
+    let old_activity = app.app.session.activity.clone();
     for _ in 0..2000 {
         app.provider_tick(ctx);
         let failures = events.matching(since, "openFailed", Some(&request));
@@ -344,6 +348,8 @@ async fn admit_valid_zip(app: &mut WebApp, ctx: &Context, host: &Host, events: &
             assert_eq!(app.app.file_provider_document, old_document + 1);
             assert!(host.bound(app.app.file_provider_document));
             assert!(!host.busy());
+            assert!(old_activity.list().is_empty(), "the replaced session must not retain its open row");
+            assert!(app.app.session.activity.list().is_empty());
             return Ok(());
         }
         next_turn().await?;
@@ -500,6 +506,134 @@ fn capture_for_dispatch(app: &WebApp, host: &Host, ctx: &Context, events: &Publi
     Ok((request, capture))
 }
 
+fn start_tracked_save(app: &mut WebApp, host: &Host, ctx: &Context, events: &PublishedEvents, name: &str) -> Result<String, JsValue> {
+    let since = events.len();
+    host.choose(app.app.file_provider_document, app.files.generation().map_err(error)?, "Tracked.zip".into(), false).map_err(error)?;
+    crate::file_providers::publish(host, ctx);
+    let dialogs = events.matching(since, "saveDialog", None);
+    assert_eq!(dialogs.len(), 1);
+    let request = text(&dialogs[0], "requestId").ok_or_else(|| error("tracked save request missing"))?;
+    host.resolve_dialog(&request, "provider", name).map_err(error)?;
+    app.provider_tick(ctx);
+    Ok(request)
+}
+
+async fn wait_provider_completion(app: &mut WebApp, ctx: &Context) -> Result<(), JsValue> {
+    for _ in 0..2000 {
+        if !app.provider.as_ref().unwrap().completed.borrow().is_empty() {
+            return Ok(());
+        }
+        app.provider_tick(ctx);
+        next_turn().await?;
+    }
+    Err(error("bounded provider worker did not finish"))
+}
+
+fn embedding_command(canvas: &web_sys::HtmlCanvasElement) -> Result<(), JsValue> {
+    let detail = Object::new();
+    Reflect::set(&detail, &"id".into(), &"library.info".into())?;
+    Reflect::set(&detail, &"params".into(), &"{}".into())?;
+    let init = web_sys::CustomEventInit::new();
+    init.set_detail(&detail);
+    let event: web_sys::Event = web_sys::CustomEvent::new_with_event_init_dict("lightcraft:cmd", &init)?.into();
+    canvas.dispatch_event(&event)?;
+    Ok(())
+}
+
+async fn provider_activity_lifetimes(app: &mut WebApp, ctx: &Context, host: &Host, events: &PublishedEvents) -> Result<(), JsValue> {
+    let activity = app.app.session.activity.clone();
+    assert!(activity.list().is_empty());
+    let saved_before = app.provider.as_ref().unwrap().saved.clone();
+    let since = events.len();
+    let refused = start_tracked_save(app, host, ctx, events, "Not-a-backup.txt")?;
+    assert!(activity.list().is_empty(), "synchronous capture refusal must remove its row");
+    assert_eq!(events.matching(since, "saveFailed", Some(&refused)).len(), 1);
+    assert_eq!(crate::safety::take_notices(), vec!["Library backups require a .zip filename".to_owned()]);
+    assert!(!host.busy());
+
+    let request = start_tracked_save(app, host, ctx, events, "Tracked.zip")?;
+    let rows = activity.list();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].detail.as_str(), rows[0].total), ("providerSave", "Exporting", "Tracked.zip", 0));
+    assert!(!rows[0].cancellable && activity.cancel(rows[0].id).is_err());
+    wait_provider_completion(app, ctx).await?;
+    assert_eq!(activity.list().len(), 1, "completion retains the guard until the application consumes it");
+    app.provider_tick(ctx);
+    assert!(activity.list().is_empty());
+    assert!(host.pending_for(app.app.file_provider_document), "local task completion is not a remote-save acknowledgement");
+    host.result(request, "cancel".into(), String::new()).map_err(error)?;
+    app.provider_tick(ctx);
+    assert!(!host.busy() && activity.list().is_empty());
+    assert_eq!(app.provider.as_ref().unwrap().saved, saved_before);
+
+    settle_writes(app).await?;
+    let canvas = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or_else(|| error("fixture document missing"))?
+        .create_element("canvas")?
+        .dyn_into::<web_sys::HtmlCanvasElement>()?;
+    let embedding = crate::host::Bridge::for_page(&canvas);
+    embedding.listen(ctx.clone());
+    let rejected = Rc::new(Cell::new(0u32));
+    let count = rejected.clone();
+    let response = Closure::<dyn Fn(web_sys::Event)>::new(move |event: web_sys::Event| {
+        let custom = event.dyn_ref::<web_sys::CustomEvent>().unwrap();
+        if Reflect::get(&custom.detail(), &"ok".into()).unwrap().as_bool() == Some(false) {
+            count.set(count.get() + 1);
+        }
+    });
+    canvas.add_event_listener_with_callback("lightcraft:response", response.as_ref().unchecked_ref())?;
+    app.bridge = Some(embedding.clone());
+    embedding_command(&canvas)?;
+    assert!(embedding.has_incoming());
+    let request = host.request_open("incoming").map_err(error)?;
+    host.open(request, "Queued-embedding.zip".into(), vec![0; 32]).map_err(error)?;
+    app.provider_tick(ctx);
+    assert!(activity.list().is_empty() && !host.busy(), "queued embedding work must keep provider admission closed");
+    assert_eq!(crate::safety::take_notices(), vec!["Finish the current import/save before opening a provider library".to_owned()]);
+    app.run_host(ctx);
+    assert!(!embedding.has_incoming());
+
+    let request = host.request_open("incoming").map_err(error)?;
+    host.open(request, "Waiting.zip".into(), vec![0; 32]).map_err(error)?;
+    app.flushing.set(true);
+    app.provider_tick(ctx);
+    let rows = activity.list();
+    assert_eq!(rows.len(), 1);
+    assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].detail.as_str()), ("providerOpen", "Importing", "Waiting.zip"));
+    assert!(!rows[0].cancellable && activity.cancel(rows[0].id).is_err());
+    assert!(app.provider.as_ref().unwrap().waiting.is_some());
+    embedding_command(&canvas)?;
+    assert_eq!(rejected.get(), 1, "embedding commands must be refused while the provider is switching libraries");
+    assert!(!embedding.has_incoming(), "the refused embedding command must not reach the replacement library");
+    app.files.set_error(Some("injected local flush failure".into()));
+    app.flushing.set(false);
+    app.provider_tick(ctx);
+    assert!(activity.list().is_empty(), "a failed flush must release the waiting open's guard");
+    assert!(!host.busy() && !app.provider.as_ref().unwrap().loading);
+    assert!(!super::super::LIBRARY_SWITCHING.with(Cell::get));
+    app.files.set_error(None);
+    settle_writes(app).await?;
+
+    let since = events.len();
+    let request = host.request_open("incoming").map_err(error)?;
+    host.open(request.clone(), "Invalid.zip".into(), vec![0; 32]).map_err(error)?;
+    app.provider_tick(ctx);
+    assert_eq!(activity.list().len(), 1);
+    wait_provider_completion(app, ctx).await?;
+    assert_eq!(activity.list().len(), 1);
+    app.provider_tick(ctx);
+    assert!(activity.list().is_empty(), "an asynchronous ZIP error must remove its row");
+    assert_eq!(events.matching(since, "openFailed", Some(&request)).len(), 1);
+    assert!(!host.busy() && !app.provider.as_ref().unwrap().loading);
+    assert!(!super::super::LIBRARY_SWITCHING.with(Cell::get));
+    assert_eq!(crate::safety::take_notices().len(), 1);
+    assert_eq!(app.provider.as_ref().unwrap().saved, saved_before);
+    canvas.remove_event_listener_with_callback("lightcraft:response", response.as_ref().unchecked_ref())?;
+    app.bridge = None;
+    Ok(())
+}
+
 #[wasm_bindgen_test]
 pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_failed_dispatch() -> Result<(), JsValue> {
     let window = web_sys::window().ok_or_else(|| error("real browser window required"))?;
@@ -548,6 +682,7 @@ pub async fn page_local_provider_boundary_preserves_live_draft_and_recovers_fail
         .await
         .map_err(error)?;
     assert!(zip.len() < 64 * 1024);
+    provider_activity_lifetimes(&mut app, &ctx, &host, &events).await?;
     let dropped_original = deferred_drop_lifetimes(&mut app, &ctx, &host, &events, &zip).await?;
     assert_eq!(backend.read_capped(ACTIVE_LIBRARY, 128).await.map_err(error)?, Some(CURRENT_DIR.as_bytes().to_vec()));
     let backing_count = key_count(&backend).await?;

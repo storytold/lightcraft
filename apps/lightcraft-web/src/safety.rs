@@ -14,8 +14,8 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::backend::{Backend, CappedRead};
 use crate::backup::{
-    ACTIVE_LIBRARY, ProviderZip, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_key, tail_len, valid_hash,
-    verify, verify_original, verify_original_bytes,
+    ACTIVE_LIBRARY, ProviderZip, README, ZipWriter, data_offset, find_central, original_entry, parse_central, restore_key, restore_plan, tail_len,
+    valid_hash, verify, verify_original, verify_original_bytes,
 };
 use crate::files::{Files, LIBRARY_FILES, Snapshot};
 use crate::store::storage_key;
@@ -151,10 +151,14 @@ pub fn download_blob(name: &str, blob: &web_sys::Blob) -> Result<(), String> {
     Ok(())
 }
 
+/// Where a finished backup goes: the browser's downloads ([`download_blob`]), or the page framing
+/// LightCraft (`?host=parent`). Awaited, so the backup counts as done only once it is handed over.
+pub type Deliver = Box<dyn FnOnce(String, web_sys::Blob) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>>;
+
 /// File ▸ Back Up Library…: a zip of the library files (as the app has them, saved or not) and
 /// every original in storage, built entry by entry into the browser's memory (outside the wasm
-/// heap) and downloaded. `names`: content hash → the photo's file name.
-pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>) -> Result<(usize, f64), String> {
+/// heap) and handed to `deliver`. `names`: content hash → the photo's file name.
+pub async fn backup(files: Files, backend: Backend, names: HashMap<String, String>, deliver: Deliver) -> Result<(usize, f64), String> {
     let parts = js_sys::Array::new();
     let mut zip = ZipWriter::default();
     let mut bytes = 0f64;
@@ -192,7 +196,7 @@ pub async fn backup(files: Files, backend: Backend, names: HashMap<String, Strin
     opts.set_type("application/zip");
     let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts).map_err(|e| format!("{e:?}"))?;
     let day: String = String::from(js_sys::Date::new_0().to_iso_string()).chars().take(10).collect();
-    download_blob(&format!("lightcraft-library-backup-{day}.zip"), &blob)?;
+    deliver(format!("lightcraft-library-backup-{day}.zip"), blob).await?;
     Ok((originals, bytes + tail.len() as f64))
 }
 
@@ -258,16 +262,11 @@ pub async fn restore_staged(file: web_sys::File, backend: Backend) -> Result<Str
         return Err("this isn't a LightCraft library backup (no library/catalog files)".into());
     }
     let dir = new_restore_dir(&backend).await?;
-    let mut targets = HashSet::new();
-    for entry in &entries {
-        if let Some(key) = restore_key(&entry.name, &dir)
-            && !targets.insert(key)
-        {
-            return Err("backup contains duplicate restored files".into());
-        }
-    }
+    // Preserve main's complete-directory duplicate/size checks before writing anything,
+    // alongside staged catalog validation and verified-original repair.
+    let plan = restore_plan(&entries, &dir, len)?;
     let mut written = 0usize;
-    for entry in &entries {
+    for (_, entry) in plan {
         match restore_entry(&file, &backend, &dir, entry, cd_offset).await {
             Ok(true) => written += 1,
             Ok(false) => {}
@@ -577,6 +576,12 @@ mod tests {
         let corrupt = vec![b'x'; bytes.len()];
         backend.write(&key, &corrupt).await.map_err(error)?;
         let keys = owned.keys().await?;
+        // The merged consumer must retain main's whole-directory preflight before writes,
+        // rather than merely keeping restore_plan's native unit test.
+        let (file, _, _) = archive(&[("library/catalog.log", b"first journal"), ("library/catalog.log", b"second journal")], false)?;
+        let duplicate = restore_staged(file, backend.clone()).await.unwrap_err();
+        assert!(duplicate.contains("listed twice"), "{duplicate}");
+        assert_eq!(owned.keys().await?, keys, "duplicate destinations must fail before writing any staged metadata");
         // First fail the real CRC path; then use a valid CRC with the wrong original hash.
         let (file, entries, directory) = archive(&[(name.as_str(), bytes)], true)?;
         assert!(restore_entry(&file, &backend, "library-restored-test", &entries[0], directory).await.is_err());

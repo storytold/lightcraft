@@ -45,7 +45,6 @@ struct Shared<S, R> {
 }
 
 /// How long dropping a pool waits for the jobs still running (see [`JobPool::shutdown`]).
-#[cfg(not(target_arch = "wasm32"))]
 const DROP_WAIT: Duration = Duration::from_secs(2);
 
 /// A finished job.

@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use lightcraft_engine::Session;
+use lightcraft_engine::activity::{Cancel, TaskGuard};
 use lightcraft_engine::catalog::Source;
 use lightcraft_engine::library::LibraryStores;
 use lightcraft_ui_egui::file_providers::{Capture, Command, Host};
@@ -25,8 +26,8 @@ struct Loaded {
 }
 
 enum Completion {
-    Save { request: String, capture: Capture, destination: String, result: Result<Vec<u8>, String> },
-    Open { request: String, name: String, document: u64, result: Result<Box<Loaded>, String> },
+    Save { request: String, capture: Capture, destination: String, result: Result<Vec<u8>, String>, task: TaskGuard },
+    Open { request: String, name: String, document: u64, result: Result<Box<Loaded>, String>, task: TaskGuard },
 }
 
 pub(super) struct Bridge {
@@ -183,6 +184,7 @@ struct PendingOpen {
     name: String,
     bytes: Vec<u8>,
     document: u64,
+    task: TaskGuard,
 }
 
 struct OpenedLibrary {
@@ -233,7 +235,7 @@ impl WebApp {
 
     fn complete_provider_operation(&mut self, bridge: &mut Bridge, completion: Completion, ctx: &egui::Context) {
         match completion {
-            Completion::Save { request, capture, destination, result } => {
+            Completion::Save { request, capture, destination, result, task: _task } => {
                 let result = result.and_then(|bytes| {
                     if destination == "device" {
                         super::download(&capture.name, &bytes)?;
@@ -248,7 +250,7 @@ impl WebApp {
                     crate::safety::notice(error);
                 }
             }
-            Completion::Open { request, name, document, result } => {
+            Completion::Open { request, name, document, result, task: _task } => {
                 bridge.stop_loading();
                 match result {
                     Ok(loaded) => self.admit_provider_library(bridge, OpenedLibrary { request, name, document, loaded }, ctx),
@@ -274,7 +276,8 @@ impl WebApp {
         self.flush_failed_at = Rc::new(Cell::new(0.0));
         self.ui_written.clear();
         self.last_save = 0.0;
-        self.app.services = super::services(self.originals.clone(), self.backend.clone(), self.files.clone(), self.frozen.clone(), ctx.clone());
+        self.app.services =
+            super::services(self.originals.clone(), self.backend.clone(), self.files.clone(), self.frozen.clone(), ctx.clone(), self.bridge.clone());
         self.app.file_provider_document = document;
         bridge.note_saved(source_generation);
         let revision = self.files.generation().unwrap_or(u64::MAX);
@@ -323,6 +326,10 @@ impl WebApp {
     }
 
     fn start_provider_save(&mut self, bridge: &mut Bridge, choice: SaveChoice, ctx: &egui::Context) {
+        // Capture/encoding has no safe interruption point; do not offer a cancellation that
+        // could be acknowledged while the immutable backup is still being delivered.
+        let task = self.app.session.activity.start("providerSave", "Exporting", Cancel::No);
+        task.detail(&choice.name);
         let work = match self.capture_provider_library(bridge, &choice) {
             Ok(work) => work,
             Err(error) => {
@@ -337,7 +344,7 @@ impl WebApp {
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let result = crate::safety::provider_backup(snapshot, backend, originals).await;
-            done.borrow_mut().push(Completion::Save { request, capture, destination, result });
+            done.borrow_mut().push(Completion::Save { request, capture, destination, result, task });
             ctx.request_repaint();
         });
     }
@@ -347,6 +354,7 @@ impl WebApp {
         if bridge.loading
             || bridge.host.pending_for(self.app.file_provider_document)
             || self.frozen.get()
+            || self.bridge.as_ref().is_some_and(crate::host::Bridge::has_incoming)
             || super::IMPORT_READS.with(|n| n.get() != 0)
             || self.originals.imports_waiting()
         {
@@ -356,10 +364,14 @@ impl WebApp {
             return Err("Select a native library ZIP backup in a browser with persistent storage".into());
         }
         let document = self.app.file_provider_document.checked_add(1).ok_or("Library instance counter exhausted")?;
+        // Own the row while old-library writes settle as well as while the ZIP is staged.
+        // Activation/repair cannot safely be interrupted, so the existing operation stays noncancellable.
+        let task = self.app.session.activity.start("providerOpen", "Importing", Cancel::No);
+        task.detail(&name);
         self.capture_provider_ui()?;
         self.save();
         reject_queued_commands();
-        bridge.waiting = Some(PendingOpen { request: request.into(), name, bytes, document });
+        bridge.waiting = Some(PendingOpen { request: request.into(), name, bytes, document, task });
         bridge.loading = true;
         Ok(())
     }
@@ -386,7 +398,13 @@ impl WebApp {
         let ctx = ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
             let result = load(&pending.name, pending.bytes, backend, originals).await.map(Box::new);
-            done.borrow_mut().push(Completion::Open { request: pending.request, name: pending.name, document: pending.document, result });
+            done.borrow_mut().push(Completion::Open {
+                request: pending.request,
+                name: pending.name,
+                document: pending.document,
+                result,
+                task: pending.task,
+            });
             ctx.request_repaint();
         });
     }

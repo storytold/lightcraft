@@ -1,6 +1,6 @@
 # Optional web library providers
 
-This integration is disabled by default. The web app publishes window.lightcraftFileProviders and lightcraft-file-provider events (protocolVersion 1), but no provider is registered. Desktop and CLI do not install the browser API. The original catalog autosave, local library paths, native backup/restore and image exports keep their existing behavior.
+This integration is disabled by default. The web app publishes window.lightcraftFileProviders and lightcraft-file-provider events (protocolVersion 1), but no provider is registered. Desktop and CLI do not install the browser API. Catalog autosave and desktop/CLI backup, restore and export routes remain available. The browser-local Restore safety corrections below also apply without a provider.
 
 LightCraft edits a library rather than individual project documents. Its provider resource is a complete native library ZIP backup: catalog snapshot/journal, presets, view state, preferences and the original photographs referenced by that captured catalog. It is the same archive layout as File > Back Up Library, not a new private document format.
 
@@ -65,6 +65,13 @@ An open waits for the current library's local writes. Imports, unsaved storage f
 
 Library replacement clears the previous People page and its navigation history before restoring saved UI state. A missing or unusable ui.json cannot retain the former library's person navigation.
 
+Local capture and ZIP encoding use the existing activity stack (`providerSave`, translated
+"Exporting"); opening uses `providerOpen` (translated "Importing"), including the wait for the
+old library's local writes. The ZIP filename is the detail. The guard remains owned until the
+application consumes success or failure and is dropped on early refusal or abandoned waiting
+work. These operations have no safe interruption point and show no Cancel button. The save row
+ends after capture/delivery; it does not claim that the host's later remote write has completed.
+
 ## Browser-local Restore and reload
 
 File > Restore Library from Backup stages and verifies the ZIP before selecting its new browser
@@ -83,6 +90,16 @@ Archive bytes must pass both ZIP integrity and original-content hash verificatio
 can repair a corrupted or oversized stored original. A verified same-hash stored copy is kept.
 Existing originals are read with a size cap; unrelated backend I/O errors abort restore rather
 than being treated as missing or corrupt data. Invalid archive bytes never replace an original.
+The complete directory is checked for duplicate destinations and payload totals larger than the
+archive before any files are written, preserving the current browser Restore checks.
+
+The natural review boundary is browser-local recovery versus optional provider transport.
+`backup::restore_for_reload` and `safety::restore_staged` / `restore_entry` implement the pause,
+staging and verified-original repair policy independently of provider registration. The provider
+adapter reuses staging, validates the catalog and admits it without reloading. Separating those
+recovery fixes into an earlier change would need both the native backup-policy fixtures and the
+browser storage fixtures; removing them from the provider path would weaken its failure behavior.
+This document describes that boundary without requiring a new storage framework or a second API.
 
 ## Save and acknowledgement
 
@@ -117,6 +134,20 @@ unregisterProvider rejects while choices, encoding, reads or acknowledgements ar
 Each transfer, retained snapshot and bounded queue is limited to 80 MiB, 16 pending operations, 64 events and 100 Recent resources. Original files are size-checked before copying from browser storage into WASM. ZIP headers and the final central directory count toward the limit. Filename limits apply separately to host-visible resource names and embedded ZIP paths.
 
 The host owns authentication, per-user authorization, durable writes, conflicts, transport, retries and destination UI. No backend, service URL, cloud widget, token storage or cross-origin messaging is installed here. Browser-local libraries remain local data; the host must define its own shared-device/logout policy. Large libraries and catalogs referring to external desktop paths cannot be uploaded through this bounded browser adapter; import the originals or use the native backup workflow.
+
+The existing embedding bridge documented in [web.md](web.md) still handles individual-photo
+Open messages and forwards ordinary download exports/backups to its opted-in page or parent.
+It is separate from these complete-library resources and cannot acknowledge a provider save.
+Queued embedding work blocks provider admission. During a provider replacement the embedding
+bridge refuses new photo/command messages before queueing them, so they cannot land in the
+replacement library; accepted photo storage owns its import guard before scheduling.
+Related [#3046](https://github.com/storytold/lightcraft/issues/3046) concerns individual-photo
+storage; closed, unmerged [#3047](https://github.com/storytold/lightcraft/pull/3047) proposed a
+different shared storage integration. Closed [#2060](https://github.com/storytold/lightcraft/pull/2060)
+concerned CollabCraft, and the suite direction is discussed in
+[craft-libs#123](https://github.com/storytold/craft-libs/issues/123). None is approval of this API.
+Maintainer agreement is still needed on the complete-library page-script trust boundary and
+how this optional capability relates to the shared storage direction; this PR closes none of them.
 
 Generation checkpoints cover only the six files included in a library snapshot; auxiliary
 recovery copies do not make an unchanged backup dirty. A failed restore or post-stage validation
@@ -168,6 +199,13 @@ of the correlated failure. A subsequent save must deliver its exact bytes normal
 pending until the test host explicitly reports saved. This is an injected JavaScript exception,
 not a true out-of-memory experiment or proof of backend durability.
 
+The fixture also declares activity-row ownership checks for synchronous save refusal, successful
+capture, a host cancellation after delivery, failed local flush, invalid ZIP and successful library
+replacement. It exercises real page-mode embedding events queued before and received during an
+open, requiring refusal instead of applying commands to a different library. The task rows remain
+noncancellable and disappear after the application consumes their completion; these source
+assertions require a fresh real-browser run on the merged candidate.
+
 Validate this fixture with a reviewed lock, WASM compilation, a real browser run and causal
 guard-deletion/restoration checks before attributing runtime coverage. Its presence alone does
 not establish an execution result.
@@ -185,7 +223,8 @@ This proves listener cancellation, not the browser's user-activation-dependent n
 Two separate WASM-only `safety::tests` storage regressions declare actual File/ZIP and isolated
 IndexedDB restore coverage: keeping a verified original, repairing hash-invalid or oversized
 copies, propagating a closed-database read error, and rejecting CRC/hash-invalid archive data
-while preserving shared originals, the active pointer and failed-stage cleanup. They do not
+while preserving shared originals, the active pointer and failed-stage cleanup. The invalid-archive
+fixture also asserts the merged complete-directory duplicate check before any staged write. They do not
 exercise OPFS or page navigation. These declarations require real browser execution before
 any runtime result can be claimed.
 

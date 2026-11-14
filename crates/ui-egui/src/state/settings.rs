@@ -153,6 +153,9 @@ pub struct AppSettings {
     pub photocraft_file: EditFile,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
+    /// Remove Hot Pixels leaves a raw alone when more than this share of its photosites, in percent, would be
+    /// replaced (`app.hotPixelLimit`).
+    pub hot_pixel_limit: f32,
     /// The Info panel's metadata fields with several photos selected: true (the default) shows the
     /// values the selected photos share and marks each field where they differ (Selected Photos),
     /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
@@ -166,6 +169,11 @@ pub struct AppSettings {
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
+    /// Settings ▸ Performance ▸ Prepare photos in the background, app-wide (a library may keep its
+    /// own in its `prefs.json`): handed to the session at launch and kept in step with it. Read
+    /// leniently: a value this build doesn't know is the defaults, never the other settings lost.
+    #[serde(deserialize_with = "lenient")]
+    pub background_prep: lightcraft_engine::prep::PrepSettings,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -195,6 +203,10 @@ pub struct AppSettings {
     /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
     #[serde(deserialize_with = "lenient")]
     pub lightroom_import: LightroomImport,
+    /// The answer to the first-launch offer of the lens database (Download / Not Now; Settings ▸ General ▸ Lens
+    /// profiles changes it). A value this version doesn't read asks again.
+    #[serde(deserialize_with = "lenient")]
+    pub lens_database: lightcraft_engine::lensfun_download::Offer,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -229,11 +241,13 @@ impl Default for AppSettings {
             photocraft_path: String::new(),
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
+            hot_pixel_limit: HOT_PIXEL_LIMIT_DEFAULT,
             info_selected_photos: true,
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
             loupe_messages: true,
+            background_prep: Default::default(),
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
@@ -245,6 +259,7 @@ impl Default for AppSettings {
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
+            lens_database: Default::default(),
         }
     }
 }
@@ -309,6 +324,10 @@ impl EditFile {
 
 /// Preview size limits offered in Settings → Performance (0 = Automatic).
 pub const PREVIEW_LIMITS: [u32; 5] = [0, 1600, 2560, 3840, 5120];
+
+/// Hot pixel limits offered in Settings → Performance (percent of a raw's photosites), and the default.
+pub const HOT_PIXEL_LIMITS: [f32; 5] = [0.05, 0.1, 0.2, 0.5, 1.0];
+pub const HOT_PIXEL_LIMIT_DEFAULT: f32 = 0.2;
 
 /// The most the loupe ever renders in one go (memory and GPU texture size), whatever the setting.
 pub const LOUPE_EDGE_CEILING: u32 = 8192;
@@ -424,6 +443,16 @@ fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result
 #[cfg(test)]
 mod loupe_info_tests {
     use super::*;
+
+    /// A background preparation value this build doesn't know (a newer build's scope) reads as the
+    /// defaults and keeps the rest of the settings.
+    #[test]
+    fn an_unknown_background_preparation_value_costs_nothing_else() {
+        let v = serde_json::json!({"filmNames": false, "backgroundPrep": {"culling": {"scope": "someday"}}});
+        let read: AppSettings = serde_json::from_value(v).unwrap();
+        assert_eq!(read.background_prep, lightcraft_engine::prep::PrepSettings::default());
+        assert!(!read.film_names);
+    }
 
     /// The lines chosen in View Options are saved with the app's settings; a settings file from
     /// before they existed, or with a line this build doesn't know, gets the default lines and

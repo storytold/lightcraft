@@ -14,7 +14,7 @@
 //! - HEIF/HEIC/AVIF (ISO base media file, see [`crate::heif`]): the `Exif` item's TIFF stream and the XMP
 //!   `mime` item.
 
-use lightcraft_tiff::{Tiff, tags};
+use craft_tiff::{Tiff, tags};
 
 /// Metadata blocks found in a file.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -71,8 +71,8 @@ pub fn embedded(bytes: &[u8]) -> Embedded {
             xmp_extended: None,
             icc: ifd0.bytes(tags::ICC_PROFILE).map(|b| b.to_vec()),
             iptc: ifd0.value(tags::IPTC_NAA).map(|v| match v {
-                lightcraft_tiff::Value::Byte(b) | lightcraft_tiff::Value::Undefined(b) => b.clone(),
-                other => lightcraft_tiff::writer::encode(t.order, other),
+                craft_tiff::Value::Byte(b) | craft_tiff::Value::Undefined(b) => b.clone(),
+                other => craft_tiff::writer::encode(t.order, other),
             }),
         }
     } else {
@@ -275,7 +275,7 @@ pub fn webp_chunks(b: &[u8]) -> Embedded {
 mod tests {
     use super::*;
     use crate::exif::tests::sample_exif;
-    use lightcraft_tiff::ByteOrder;
+    use craft_tiff::ByteOrder;
 
     fn seg(marker: u8, payload: &[u8]) -> Vec<u8> {
         let mut v = vec![0xff, marker];
