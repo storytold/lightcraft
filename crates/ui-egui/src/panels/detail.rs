@@ -54,6 +54,7 @@ use look_ahead::BEHIND;
 pub use look_ahead::LookAhead;
 pub(crate) use look_ahead::{Prepare, look_ahead};
 use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};
+pub(crate) use retouch::spot_brush;
 use retouch::{eye_overlay, remove_overlay};
 pub(crate) use window::overlay_supports_window;
 use window::{WindowCtx, WindowView, draw_window, request_window};

@@ -68,6 +68,9 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.data_mut(|d| d.insert_temp(key, (w, h)));
 }
 
+/// The Crop and Geometry panels for photo `id`: the aspect ratio and its lock, the angle, the
+/// Overlay dropdown (with Flip Overlay for Triangle and Spiral) and the Upright dropdown, where
+/// Guided starts drawing guides on the photo and any other mode stops it.
 pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Crop");
@@ -184,51 +187,41 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
     });
     padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Overlay"));
+        use crate::state::CropOverlay as O;
+        let overlays = [
+            (O::Thirds, "Thirds", "thirds"),
+            (O::Grid, "Grid", "grid"),
+            (O::Golden, "Golden Ratio", "golden"),
+            (O::Diagonal, "Diagonal", "diagonal"),
+            (O::Triangle, "Triangle", "triangle"),
+            (O::Spiral, "Spiral", "spiral"),
+            (O::None, "None", "none"),
+        ];
+        if let Some(o) = crate::widgets::labeled_dropdown(ui, "cropOverlay", "Overlay", "", &overlays, app.ui.crop_overlay) {
+            app.ui.crop_overlay = o;
+        }
+        if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
+            && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
         {
-            use crate::state::CropOverlay as O;
-            let opts = [
-                (O::Thirds, "Thirds", "thirds"),
-                (O::Grid, "Grid", "grid"),
-                (O::Golden, "Golden", "golden"),
-                (O::Diagonal, "Diagonal", "diagonal"),
-                (O::Triangle, "Triangle", "triangle"),
-                (O::Spiral, "Spiral", "spiral"),
-                (O::None, "None", "none"),
-            ];
-            let items: Vec<(&str, &str)> = opts.iter().map(|(_, l, k)| (*l, *k)).collect();
-            let active = opts.iter().position(|(o, _, _)| *o == app.ui.crop_overlay);
-            if let Some(i) = crate::widgets::segmented(ui, "cropOverlay", &items, active, 4) {
-                app.ui.crop_overlay = opts[i].0;
-            }
-            if matches!(app.ui.crop_overlay, O::Triangle | O::Spiral)
-                && text_button(ui, "cropOverlayOrient", crate::i18n::tr("Flip Overlay (⇧O)"), false).clicked()
-            {
-                let _ = app.run("view.cropOverlayOrientation", json!({}));
-            }
+            let _ = app.run("view.cropOverlayOrientation", json!({}));
         }
     });
     divider(ui);
     header(ui, "Geometry");
     padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Upright"));
-        {
-            use lightcraft_develop::Upright;
-            let modes = [
-                ("Off", Upright::Off, "off"),
-                ("Auto", Upright::Auto, "auto"),
-                ("Guided", Upright::Guided, "guided"),
-                ("Level", Upright::Level, "level"),
-                ("Vertical", Upright::Vertical, "vertical"),
-                ("Full", Upright::Full, "full"),
-            ];
-            let items: Vec<(&str, &str)> = modes.iter().map(|(l, _, k)| (*l, *k)).collect();
-            let active = modes.iter().position(|(_, m, _)| *m == d.geometry.upright);
-            if let Some(i) = crate::widgets::segmented(ui, "upright", &items, active, 3) {
-                let (_, mode, key) = modes[i];
-                let _ = app.run("geometry.upright", json!({"mode": key}));
-                app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
-            }
+        use lightcraft_develop::Upright;
+        let modes = [
+            (Upright::Off, "Off", "off"),
+            (Upright::Auto, "Auto", "auto"),
+            (Upright::Guided, "Guided", "guided"),
+            (Upright::Level, "Level", "level"),
+            (Upright::Vertical, "Vertical", "vertical"),
+            (Upright::Full, "Full", "full"),
+        ];
+        if let Some(mode) = crate::widgets::labeled_dropdown(ui, "upright", "Upright", "", &modes, d.geometry.upright) {
+            let _ = app.run("geometry.upright", json!({"mode": mode}));
+            // Guided starts drawing guides on the photo; any other mode stops it
+            app.ui.tool = if mode == Upright::Guided { "guidedUpright".into() } else { String::new() };
         }
         let guided = d.geometry.upright == lightcraft_develop::Upright::Guided;
         ui.horizontal_wrapped(|ui| {
@@ -272,17 +265,26 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
 }
 
+/// The Remove panel for photo `id`: the Mode dropdown, where None (shown while no brush is chosen)
+/// lets spots be selected and moved without painting new ones, Find Dust Spots, the brush settings
+/// (which edit the selected spot too) and the Tool Overlay choice.
 pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Remove");
     padded(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (label, tool) in [("Remove", "remove"), ("Content-Aware", "fill"), ("Heal", "heal"), ("Clone", "clone")] {
-                if text_button(ui, &format!("removeMode-{tool}"), label, app.ui.tool == tool).clicked() {
-                    app.ui.tool = tool.into();
-                }
-            }
-        });
+        // None, the first item, is what shows while no brush is chosen: the photo then takes no new
+        // spots (`retouch.rs`), and existing ones can still be selected and moved
+        let modes = [
+            ("", "None", "none"),
+            ("remove", "Remove", "remove"),
+            ("fill", "Content-Aware", "fill"),
+            ("heal", "Heal", "heal"),
+            ("clone", "Clone", "clone"),
+        ];
+        let current = modes.iter().find(|(tool, _, _)| app.ui.tool == *tool).map_or("", |m| m.0);
+        if let Some(tool) = crate::widgets::labeled_dropdown(ui, "removeMode", "Mode", "", &modes, current) {
+            app.ui.tool = tool.into();
+        }
         ui.add_space(8.0);
         ui.label(crate::i18n::tr_format!("{} spot(s) on this photo", d.spots.len()));
         ui.add_space(4.0);
@@ -400,22 +402,11 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 /// Shift+H steps through them). Remove and Masking panels.
 pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use crate::state::ToolOverlay;
-    let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(crate::i18n::tr("Tool Overlay")).color(t.text_dim));
-        let current = app.ui.tool_overlay;
-        let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
-            .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
-        egui::Popup::menu(&r).show(|ui| {
-            for m in ToolOverlay::ALL {
-                let item = ui.selectable_label(m == current, crate::i18n::tr(m.label()));
-                register(ui, format!("toolOverlay:{}", m.name()), item.rect);
-                if item.clicked() {
-                    let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
-                }
-            }
-        });
-    });
+    let modes = ToolOverlay::ALL.map(|m| (m, m.label(), m.name()));
+    let hint = "When pins show on the photo (Shift+H cycles)";
+    if let Some(m) = crate::widgets::labeled_dropdown(ui, "toolOverlay", "Tool Overlay", hint, &modes, app.ui.tool_overlay) {
+        let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
+    }
 }
 
 pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {

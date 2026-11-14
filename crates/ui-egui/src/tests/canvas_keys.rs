@@ -114,6 +114,20 @@ fn spots_are_added_and_moved_by_keyboard() {
     }
 }
 
+/// With no brush chosen (Remove ▸ Mode ▸ None) the keyboard placement point for a new spot is
+/// not offered, and Return adds no spot, as a click on the photo adds none.
+#[test]
+fn return_adds_no_spot_without_a_brush() {
+    let mut h = detail("panel.remove");
+    h.app.ui.tool.clear();
+    h.step();
+    assert!(!h.app.widgets.iter().any(|(id, _)| id == "canvasHandle:spot:new"), "no New spot stop to announce");
+    h.view.ctx.memory_mut(|m| m.request_focus(canvas_keys::id("spot:new")));
+    h.step();
+    key(&mut h, "enter", false);
+    assert!(develop(&h).spots.is_empty(), "None paints nothing");
+}
+
 #[test]
 fn gradient_handles_and_pins_move_by_keyboard() {
     let mut h = detail("panel.masking");
