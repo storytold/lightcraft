@@ -27,10 +27,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         )
         .show(ui, |ui| {
             crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
+            // Nine tools above and three below, with two one-point separators.
+            let button_height = BUTTON_H.min((ui.available_height() - 13.0 * GAP - 2.0) / 12.0).max(1.0);
             let has_photo = app.session.active().is_some();
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
-                let sz = vec2(t.strip_w, BUTTON_H);
+                let sz = vec2(t.strip_w, button_height);
                 if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
                     let _ = app.run("panel.presets", json!({}));
                 }
@@ -60,19 +62,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     app.ui.dialog = Some(crate::state::Dialog::About);
                 }
             });
-            // bottom icons: two buttons and one gap tall, so Info ends at the bottom margin as
+            // bottom icons: three buttons and two gaps tall, so Info ends at the bottom margin as
             // Presets starts at the top one
             let bottom = ui.max_rect().bottom();
-            let mut child =
-                ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
-                    egui::pos2(ui.max_rect().left(), bottom - (2.0 * BUTTON_H + GAP)),
-                    ui.max_rect().right_bottom(),
-                )));
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
+                egui::pos2(ui.max_rect().left(), bottom - (3.0 * button_height + 2.0 * GAP)),
+                ui.max_rect().right_bottom(),
+            )));
             child.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
-                let sz = vec2(t.strip_w, BUTTON_H);
+                let sz = vec2(t.strip_w, button_height);
                 if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
                     let _ = app.run("panel.keywords", json!({}));
+                }
+                if icon_button(ui, "metadata", Icon::Album, sz, app.ui.right == RightPanel::Metadata, has_photo, "Metadata").clicked() {
+                    let _ = app.run("panel.metadata", json!({}));
                 }
                 if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
                     let _ = app.run("panel.info", json!({}));
@@ -98,14 +102,16 @@ mod tests {
         let mut view = HeadlessView::new();
         let mut widgets = vec![];
         for frame in 0..3 {
-            let raw = HeadlessView::raw_input(vec2(300.0, 700.0), 1.0, frame as f64 / 60.0, vec![]);
+            let raw = HeadlessView::raw_input(vec2(300.0, crate::window_place::MIN_SIZE[1]), 1.0, frame as f64 / 60.0, vec![]);
             view.run(raw, |ui| show(&mut app, ui));
             widgets = crate::widgets::take_registry(&view.ctx);
         }
         let rect = |id: &str| widgets.iter().find(|(w, _)| w == id).unwrap_or_else(|| panic!("{id} not registered")).1;
-        let (presets, keywords, info) = (rect("icon:presets"), rect("icon:keywords"), rect("icon:info"));
-        let (top, bottom) = (presets.top(), 700.0 - info.bottom());
+        let (presets, keywords, metadata, info) = (rect("icon:presets"), rect("icon:keywords"), rect("icon:metadata"), rect("icon:info"));
+        let (top, bottom) = (presets.top(), crate::window_place::MIN_SIZE[1] - info.bottom());
         assert!((top - bottom).abs() < 0.5, "Presets starts {top} below the top, Info ends {bottom} above the bottom");
-        assert_eq!(info.top() - keywords.bottom(), GAP, "the bottom buttons are spaced like the top ones");
+        assert!(rect("icon:more").bottom() <= keywords.top());
+        assert_eq!(metadata.top() - keywords.bottom(), GAP);
+        assert_eq!(info.top() - metadata.bottom(), GAP, "the bottom buttons are spaced like the top ones");
     }
 }

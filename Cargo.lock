@@ -4206,6 +4206,7 @@ version = "0.21.1"
 name = "lightcraft-ui-egui"
 version = "0.21.1"
 dependencies = [
+ "chrono",
  "craft-ui",
  "craft-update",
  "craft-window",
@@ -4231,6 +4232,7 @@ dependencies = [
  "pollster 1.0.1",
  "serde",
  "serde_json",
+ "sys-locale",
  "toml",
  "web-time",
 ]

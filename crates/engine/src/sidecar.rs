@@ -80,7 +80,7 @@ pub fn find_sidecar(original: &str, naming: SidecarNaming) -> Option<PathBuf> {
 /// may read the shared stem sidecar (`IMG_0001.xmp`) of its stem. A photo that shares its stem
 /// with a file that owns that sidecar (see [`Session::sidecar_naming`]) reads its own `<file>.xmp`
 /// and never the packet of the sibling that owns the stem one (issue #1523).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidecarLookup {
     pub naming: SidecarNaming,
     /// False when another file with the same stem owns the stem sidecar.

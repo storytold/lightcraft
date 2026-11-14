@@ -47,6 +47,8 @@ pub struct UiState {
     pub view: ViewMode,
     pub left_panel: bool,
     pub right: RightPanel,
+    /// Transient multi-album view: ordered album ids and its set operation.
+    pub album_combination: Option<(Vec<u64>, String)>,
     /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
     #[serde(skip)]
     pub right_hidden: RightPanel,
@@ -404,6 +406,7 @@ impl Default for UiState {
             left_width: LEFT_WIDTH.default,
             right_width: RIGHT_WIDTH.default,
             right: RightPanel::Edit,
+            album_combination: None,
             right_hidden: RightPanel::None,
             presets: false,
             preset_thumbs: false,
