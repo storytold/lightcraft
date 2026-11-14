@@ -1726,8 +1726,9 @@ pub struct UiState {
     /// Remove tool: Visualize Spots (high-pass black/white view) and its threshold 0..100.
     pub visualize_spots: bool,
     pub spots_threshold: f32,
-    /// Remove tool: tint the marks of the photo's infrared pass (what Remove Film Dust fills in).
-    pub film_dust_show_mask: bool,
+    /// Remove panel, Infrared Dust Removal: what the photo shows: 0 the photo, 1 the infrared pass
+    /// (with the marks in red), 2 the marks alone (white on black: what is filled in).
+    pub film_dust_view: u8,
     /// The library filter bar above the grid.
     pub filter_bar: bool,
     /// The filter bar's Metadata columns (issue #218): the field each column lists; empty = hidden.
@@ -2713,7 +2714,7 @@ impl Default for UiState {
             eye_pet: false,
             visualize_spots: false,
             spots_threshold: 50.0,
-            film_dust_show_mask: false,
+            film_dust_view: 0,
             auto_advance: false,
             caps_lock: false,
             alternatives_same_edit: true,

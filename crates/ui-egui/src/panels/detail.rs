@@ -3163,6 +3163,15 @@ pub(crate) fn view_overlay(app: &LccApp, d: &DevelopSettings, alt_held: bool) ->
     if app.ui.fullscreen {
         return Overlay::None;
     }
+    // Infrared Dust Removal's view (the pass, or what it fills): chosen in the Remove panel, and kept
+    // while its sliders are dragged, since what they change is what it shows
+    if app.ui.right == RightPanel::Remove {
+        match app.ui.film_dust_view {
+            1 => return Overlay::Infrared,
+            2 => return Overlay::FilmDust,
+            _ => {}
+        }
+    }
     // A mask gesture (a brush stroke, a handle drag, …) on a mask with settings is adjusting too:
     // nothing covers the photo, not even O or All, so the effect can be judged while painting. A
     // mask without settings keeps showing what it selects (there is no effect to see yet).
@@ -3212,9 +3221,6 @@ pub(crate) fn view_overlay(app: &LccApp, d: &DevelopSettings, alt_held: bool) ->
             color: app.ui.mask_overlay_color,
             opacity: app.ui.mask_overlay_opacity.clamp(0.0, 100.0).round() as u8,
         };
-    }
-    if shown && app.ui.right == RightPanel::Remove && app.ui.film_dust_show_mask {
-        return Overlay::FilmDust;
     }
     if shown && app.ui.right == RightPanel::Remove && app.ui.visualize_spots {
         return Overlay::Spots(app.ui.spots_threshold.clamp(0.0, 100.0).round() as u8);

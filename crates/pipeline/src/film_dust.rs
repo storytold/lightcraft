@@ -49,38 +49,70 @@ const MAX_DEFECTS_INFRARED: usize = 400;
 const MAX_PATH_POINTS: usize = 48;
 
 /// Separable running minimum (`max == false`) or maximum over a square of side `2r + 1`, edges
-/// repeated.
+/// repeated: van Herk / Gil-Werman, a few comparisons a pixel whatever `r`.
 fn rank(src: &Plane, r: usize, max: bool) -> Plane {
     let (w, h) = (src.width, src.height);
-    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
-    let start = if max { f32::NEG_INFINITY } else { f32::INFINITY };
+    if r == 0 || w == 0 || h == 0 || src.data.len() < w * h {
+        return src.clone();
+    }
     let mut rows = Plane::new(w, h);
+    let mut buf = RankBuf::default();
     for y in 0..h {
-        for x in 0..w {
-            let (lo, hi) = (x.saturating_sub(r), (x + r).min(w - 1));
-            let mut v = start;
-            for xi in lo..=hi {
-                v = pick(v, src.data.get(y * w + xi).copied().unwrap_or(start));
-            }
-            if let Some(o) = rows.data.get_mut(y * w + x) {
-                *o = v;
-            }
+        let (a, b) = (y * w, y * w + w);
+        if let (Some(line), Some(out)) = (src.data.get(a..b), rows.data.get_mut(a..b)) {
+            rank_line(line, out, r, max, &mut buf);
         }
     }
     let mut out = Plane::new(w, h);
-    for y in 0..h {
-        let (lo, hi) = (y.saturating_sub(r), (y + r).min(h - 1));
-        for x in 0..w {
-            let mut v = start;
-            for yi in lo..=hi {
-                v = pick(v, rows.data.get(yi * w + x).copied().unwrap_or(start));
-            }
+    let (mut col, mut res) = (vec![0.0f32; h], vec![0.0f32; h]);
+    for x in 0..w {
+        for (y, c) in col.iter_mut().enumerate() {
+            *c = rows.data.get(y * w + x).copied().unwrap_or(0.0);
+        }
+        rank_line(&col, &mut res, r, max, &mut buf);
+        for (y, v) in res.iter().enumerate() {
             if let Some(o) = out.data.get_mut(y * w + x) {
-                *o = v;
+                *o = *v;
             }
         }
     }
     out
+}
+
+/// Scratch space of [`rank_line`], reused from line to line.
+#[derive(Default)]
+struct RankBuf {
+    pad: Vec<f32>,
+    g: Vec<f32>,
+    hh: Vec<f32>,
+}
+
+/// One line of [`rank`]: `out[i]` is the extreme of `line[i - r ..= i + r]`, edges repeated.
+fn rank_line(line: &[f32], out: &mut [f32], r: usize, max: bool, b: &mut RankBuf) {
+    let n = line.len();
+    let (Some(&first), Some(&last)) = (line.first(), line.last()) else { return };
+    let pick = |a: f32, c: f32| if max { a.max(c) } else { a.min(c) };
+    let k = 2 * r + 1;
+    b.pad.clear();
+    b.pad.extend(std::iter::repeat_n(first, r));
+    b.pad.extend_from_slice(line);
+    b.pad.extend(std::iter::repeat_n(last, r));
+    let m = b.pad.len();
+    b.g.clear();
+    b.g.resize(m, 0.0);
+    b.hh.clear();
+    b.hh.resize(m, 0.0);
+    for j in 0..m {
+        let v = b.pad[j];
+        b.g[j] = if j % k == 0 { v } else { pick(b.g[j - 1], v) };
+    }
+    for j in (0..m).rev() {
+        let v = b.pad[j];
+        b.hh[j] = if j + 1 == m || (j + 1) % k == 0 { v } else { pick(b.hh[j + 1], v) };
+    }
+    for (i, o) in out.iter_mut().enumerate().take(n) {
+        *o = pick(b.hh[i], b.g[i + 2 * r]);
+    }
 }
 
 /// Film dust, hair and scratches in a rendered positive; `sensitivity` 0..100 (higher finds
@@ -195,58 +227,341 @@ pub fn detect_infrared(ir: &Plane, luma: &Plane, sensitivity: f32) -> Vec<FilmDe
     out
 }
 
-/// The window the infrared pass's local level is taken over: about 0.6 % of the long edge each
-/// way (16 px at 2600), the closing twice that, so a patch up to 2.5 % across is a dip through and through.
+/// The window the spot search ([`detect_infrared`]) leaves along the frame's edge.
 fn closing_radius(long: f32) -> usize {
     ((0.006 * long).round() as usize).max(3)
 }
 
 /// The defect map of a scanner's infrared pass `ir` (0..1, bright where the film is clear) at
-/// `sensitivity` 0..100: per pixel, how far the pass falls below its local level (0 where it
-/// doesn't fall below the threshold, or outside the film), grown by `expand` pixels (shrunk when
-/// negative) so a heal or fill takes in a mark's soft edge. `None` for a pass too small to read.
-/// What [`detect_infrared`] groups into defects, and what a mask of the marks is made of.
+/// `sensitivity` 0..100: 1 on dust, hairs and scratches, 0 on clean film and outside it, grown
+/// by `expand` pixels (shrunk when negative). `None` for a pass too small to read.
+///
+/// The pass is grainy (a few percent from pixel to pixel), so the clean film's level is the
+/// pass's own smoothed level with the dips left out (a normalised convolution), and a pixel
+/// counts by how many grain widths it falls below it: a speck's core well past the grain, and
+/// the soft edge around it joined to that core (hysteresis). A faint scratch a few pixels wide
+/// barely leaves the grain at any one pixel, but along its length it does: the pass is averaged
+/// along short strokes in a dozen directions (at half size), and a stroke that falls well below
+/// the strips beside it is a line. What [`detect_infrared`] groups into defects, the mask the
+/// develop step fills and the overlay shows.
 pub fn infrared_map(ir: &Plane, sensitivity: f32, expand: i32) -> Option<Plane> {
     let (w, h) = (ir.width, ir.height);
     if w < 64 || h < 64 || ir.data.len() < w * h {
         return None;
     }
-    let long = w.max(h) as f32;
-    // the local level: a grey closing (a maximum, then a minimum, over a window) fills every dip
-    // narrower than the window, so a patch that wide is a dip through and through, not only at its rim
-    let r = closing_radius(long);
-    let level = rank(&rank(ir, 2 * r, true), 2 * r, false);
-    // the film itself: where that level is at least a fifth of its typical value, less a band the
-    // window's width along its edge (the scanner's gate around a frame, and anything past the
-    // film's edge, is dark over a far wider area; next to it the closing reaches onto the film)
-    let mut sorted: Vec<f32> = level.data.iter().copied().filter(|v| v.is_finite()).collect();
-    sorted.sort_by(f32::total_cmp);
-    let typical = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
-    let film = (0.2 * typical).max(1e-3);
-    let lit = Plane::from_fn(w, h, |x, y| if level.get(x, y) >= film { 1.0 } else { 0.0 });
-    let inside = rank(&lit, 2 * r + 1, false);
     let s = (sensitivity / 100.0).clamp(0.0, 1.0);
     if !s.is_finite() {
         return None;
     }
-    // how far below its level the pass must fall: a third at the default; dust blocks it almost
-    // entirely, a hair or a faint scratch less
-    let min_drop = 0.5 - 0.35 * s;
-    let mut map = Plane::from_fn(w, h, |x, y| {
-        let i = y * w + x;
-        let (v, l) = (ir.data.get(i).copied().unwrap_or(1.0), level.data.get(i).copied().unwrap_or(0.0));
-        if inside.data.get(i).copied().unwrap_or(0.0) < 0.5 || l <= 0.0 {
-            return 0.0;
-        }
-        let drop = (1.0 - v / l).clamp(0.0, 1.0);
-        if drop > min_drop { drop } else { 0.0 }
+    let long = w.max(h) as f32;
+    let clean = |v: f32| if v.is_finite() { v.clamp(0.0, 4.0) } else { 0.0 };
+    let ir = Plane { width: w, height: h, data: ir.data.iter().take(w * h).copied().map(clean).collect() };
+    // the grain, softened a little: a pixel's noise is a third lower and a speck keeps its shape
+    let sm = lcc_raster::blur::gaussian(&ir, 1.0);
+    // a first guess of the clean level, on a reduced copy: a closing fills every dip narrower than
+    // its window; the film is where that level is at least a fifth of its typical value
+    let f = ((long / 650.0).round() as usize).clamp(1, 8);
+    let small = shrink(&sm, f);
+    let r = (((0.004 * long) / f as f32).round() as usize).max(2);
+    let lvl_small = rank(&rank(&small, r, true), r, false);
+    let mut sorted: Vec<f32> = lvl_small.data.iter().copied().filter(|v| v.is_finite()).collect();
+    sorted.sort_by(f32::total_cmp);
+    let typical = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
+    if typical <= 1e-4 {
+        return Some(Plane::new(w, h));
+    }
+    let lit = Plane::from_fn(lvl_small.width, lvl_small.height, |x, y| if lvl_small.get(x, y) >= 0.2 * typical { 1.0 } else { 0.0 });
+    // (a band the window's width along the film's edge is left out: there the closing reaches the gate)
+    let inside_small = rank(&lit, r + 1, false);
+    let lvl0 = grow(&lvl_small, f, w, h);
+    let inside = grow(&inside_small, f, w, h);
+    // the clean level: the smoothed pass where it isn't a dip, spread over the dips
+    let keep = Plane::from_fn(w, h, |x, y| {
+        let (v, l) = (sm.get(x, y), lvl0.get(x, y));
+        if l > 0.0 && v / l > 0.96 { 1.0 } else { 0.0 }
     });
+    let kept = Plane { width: w, height: h, data: sm.data.iter().zip(&keep.data).map(|(v, k)| v * k).collect() };
+    let sigma = (0.003 * long).max(3.0);
+    let (num, den) = (lcc_raster::blur::gaussian(&kept, sigma), lcc_raster::blur::gaussian(&keep, sigma));
+    let film = |i: usize| inside.data.get(i).copied().unwrap_or(0.0) >= 0.5;
+    let drop = Plane::from_fn(w, h, |x, y| {
+        let i = y * w + x;
+        let (n, dn, v) = (num.data.get(i).copied().unwrap_or(0.0), den.data.get(i).copied().unwrap_or(0.0), sm.get(x, y));
+        let level = if dn > 1e-3 { n / dn } else { lvl0.get(x, y) };
+        if !film(i) || level <= 1e-4 { 0.0 } else { 1.0 - v / level }
+    });
+    // the grain's width in drop: a robust spread over the film (a dusty frame's specks don't widen it)
+    let sigma_d = robust_spread(&drop, film).max(0.004);
+    // how many grain widths: a speck's core and the edge joined to it, both wider at low sensitivity
+    let k_core = 10.0 - 5.0 * s;
+    let k_edge = k_core * 0.5;
+    let mut marks =
+        hysteresis(w, h, |i| drop.data.get(i).is_some_and(|d| *d > k_core * sigma_d), |i| drop.data.get(i).is_some_and(|d| *d > k_edge * sigma_d));
+    // faint lines, at half size
+    let lines = line_marks(&drop, &marks, &film, s, long);
+    for (m, l) in marks.iter_mut().zip(&lines) {
+        *m |= *l;
+    }
+    let mut map = Plane { width: w, height: h, data: marks.iter().map(|m| if *m { 1.0 } else { 0.0 }).collect() };
     // grown (a maximum over the distance) or shrunk (a minimum), at most a twentieth of the long edge
     let reach = expand.clamp(-(long as i32 / 20), long as i32 / 20);
     if reach != 0 {
-        map = rank(&map, reach.unsigned_abs() as usize, reach > 0);
+        map = round_rank(&map, reach.unsigned_abs() as usize, reach > 0);
     }
     Some(map)
+}
+
+/// [`rank`] over an octagon about `r` pixels across each way, not a square: a grown speck stays
+/// round. A square of half the distance, then a diamond (one 4-neighbour step at a time) of the rest.
+fn round_rank(src: &Plane, r: usize, max: bool) -> Plane {
+    let square = r * 2 / 5;
+    let mut out = rank(src, square, max);
+    let (w, h) = (out.width, out.height);
+    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
+    for _ in 0..r.saturating_sub(square) {
+        let prev = out.clone();
+        let at = |x: usize, y: usize| prev.data.get(y * w + x).copied().unwrap_or(0.0);
+        for y in 0..h {
+            for x in 0..w {
+                let mut v = at(x, y);
+                if x > 0 {
+                    v = pick(v, at(x - 1, y));
+                }
+                if x + 1 < w {
+                    v = pick(v, at(x + 1, y));
+                }
+                if y > 0 {
+                    v = pick(v, at(x, y - 1));
+                }
+                if y + 1 < h {
+                    v = pick(v, at(x, y + 1));
+                }
+                if let Some(o) = out.data.get_mut(y * w + x) {
+                    *o = v;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `p` reduced by a whole factor `f` (the mean of each `f`×`f` cell; a partial cell at the edge too).
+fn shrink(p: &Plane, f: usize) -> Plane {
+    if f <= 1 {
+        return p.clone();
+    }
+    let (sw, sh) = (p.width.div_ceil(f), p.height.div_ceil(f));
+    Plane::from_fn(sw, sh, |x, y| {
+        let (mut sum, mut n) = (0.0f32, 0u32);
+        for yy in y * f..((y + 1) * f).min(p.height) {
+            for xx in x * f..((x + 1) * f).min(p.width) {
+                sum += p.get(xx, yy);
+                n += 1;
+            }
+        }
+        if n == 0 { 0.0 } else { sum / n as f32 }
+    })
+}
+
+/// `p` (a [`shrink`] by `f`) back at `w`×`h`, bilinear between cell centres.
+fn grow(p: &Plane, f: usize, w: usize, h: usize) -> Plane {
+    if f <= 1 && (p.width, p.height) == (w, h) {
+        return p.clone();
+    }
+    let (pw, ph) = (p.width.max(1), p.height.max(1));
+    let at = |x: isize, y: isize| p.get(x.clamp(0, pw as isize - 1) as usize, y.clamp(0, ph as isize - 1) as usize);
+    Plane::from_fn(w, h, |x, y| {
+        let (fx, fy) = ((x as f32 + 0.5) / f as f32 - 0.5, (y as f32 + 0.5) / f as f32 - 0.5);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let (x0, y0) = (x0 as isize, y0 as isize);
+        let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
+        let bottom = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
+        top * (1.0 - ty) + bottom * ty
+    })
+}
+
+/// 1.4826 × the median absolute deviation of `p` over the pixels `take` keeps (a sample of at most
+/// a few hundred thousand): the noise's standard deviation, which a minority of outliers doesn't move.
+fn robust_spread(p: &Plane, take: impl Fn(usize) -> bool) -> f32 {
+    let step = (p.data.len() / 300_000).max(1);
+    let mut v: Vec<f32> =
+        (0..p.data.len()).step_by(step).filter(|i| take(*i)).filter_map(|i| p.data.get(i).copied()).filter(|x| x.is_finite()).collect();
+    if v.len() < 16 {
+        return 0.0;
+    }
+    v.sort_by(f32::total_cmp);
+    let med = v.get(v.len() / 2).copied().unwrap_or(0.0);
+    let mut dev: Vec<f32> = v.iter().map(|x| (x - med).abs()).collect();
+    dev.sort_by(f32::total_cmp);
+    1.4826 * dev.get(dev.len() / 2).copied().unwrap_or(0.0)
+}
+
+/// The pixels of a `w`×`h` image that are `weak` and 8-connected to one that is `strong` (a
+/// strong one itself is weak too, as callers make it).
+fn hysteresis(w: usize, h: usize, strong: impl Fn(usize) -> bool, weak: impl Fn(usize) -> bool) -> Vec<bool> {
+    let mut out = vec![false; w * h];
+    let mut stack: Vec<usize> = (0..w * h).filter(|i| strong(*i)).collect();
+    for &i in &stack {
+        if let Some(o) = out.get_mut(i) {
+            *o = true;
+        }
+    }
+    while let Some(i) = stack.pop() {
+        let (x, y) = (i % w, i / w);
+        for (dx, dy) in [(-1i64, -1i64), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+            let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+            if nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64 {
+                continue;
+            }
+            let j = ny as usize * w + nx as usize;
+            if out.get(j).copied() == Some(false) && weak(j) {
+                if let Some(o) = out.get_mut(j) {
+                    *o = true;
+                }
+                stack.push(j);
+            }
+        }
+    }
+    out
+}
+
+/// Directions a line is looked for in.
+const LINE_ANGLES: usize = 12;
+
+/// Faint scratches and hairs: on `drop` at half size (specks already in `marks` left out, so they
+/// don't feed it), the mean along a stroke about 1.2 % of the long edge in each of
+/// [`LINE_ANGLES`] directions, less the mean of the strips a couple of pixels to either side; a
+/// stroke far past that response's own spread is a line, extended along what stays well past it,
+/// and kept when it is long. Back at full size, a line marks the pixels of it that fall below the
+/// level at all, and their neighbours.
+fn line_marks(drop: &Plane, marks: &[bool], film: &impl Fn(usize) -> bool, s: f32, long: f32) -> Vec<bool> {
+    let (w, h) = (drop.width, drop.height);
+    let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
+    let half = Plane::from_fn(hw, hh, |x, y| {
+        let (mut sum, mut n, mut speck) = (0.0f32, 0u32, false);
+        for yy in 2 * y..(2 * y + 2).min(h) {
+            for xx in 2 * x..(2 * x + 2).min(w) {
+                sum += drop.get(xx, yy);
+                n += 1;
+                speck |= marks.get(yy * w + xx).copied().unwrap_or(false);
+            }
+        }
+        if speck || n == 0 { 0.0 } else { sum / n as f32 }
+    });
+    let len = ((0.006 * long).round() as i64).clamp(6, 40);
+    let mut best = vec![f32::NEG_INFINITY; hw * hh];
+    let mut on = vec![0.0f32; hw * hh];
+    for k in 0..LINE_ANGLES {
+        let a = std::f32::consts::PI * k as f32 / LINE_ANGLES as f32;
+        let (dx, dy) = (a.cos(), a.sin());
+        let mut taps: Vec<(i64, i64)> = (-len..=len).map(|t| ((t as f32 * dx * 0.5).round() as i64, (t as f32 * dy * 0.5).round() as i64)).collect();
+        taps.dedup();
+        let nt = taps.len().max(1) as f32;
+        {
+            use rayon::prelude::*;
+            on.par_chunks_mut(hw).enumerate().for_each(|(y, row)| {
+                for (x, o) in row.iter_mut().enumerate() {
+                    let mut sum = 0.0;
+                    for (ox, oy) in &taps {
+                        let (sx, sy) = ((x as i64 + ox).clamp(0, hw as i64 - 1) as usize, (y as i64 + oy).clamp(0, hh as i64 - 1) as usize);
+                        sum += half.data.get(sy * hw + sx).copied().unwrap_or(0.0);
+                    }
+                    *o = sum / nt;
+                }
+            });
+        }
+        let (nx, ny) = ((-dy * 2.0).round() as i64, (dx * 2.0).round() as i64);
+        let at = |x: i64, y: i64| on.get(y.clamp(0, hh as i64 - 1) as usize * hw + x.clamp(0, hw as i64 - 1) as usize).copied().unwrap_or(0.0);
+        for y in 0..hh {
+            for x in 0..hw {
+                let (xi, yi) = (x as i64, y as i64);
+                let r = at(xi, yi) - 0.5 * (at(xi + nx, yi + ny) + at(xi - nx, yi - ny));
+                if let Some(b) = best.get_mut(y * hw + x)
+                    && r > *b
+                {
+                    *b = r;
+                }
+            }
+        }
+    }
+    let resp = Plane { width: hw, height: hh, data: best };
+    let film_half = |i: usize| {
+        let (x, y) = (i % hw, i / hw);
+        film((2 * y).min(h - 1) * w + (2 * x).min(w - 1))
+    };
+    let mut sample: Vec<f32> = (0..resp.data.len())
+        .step_by((resp.data.len() / 200_000).max(1))
+        .filter(|i| film_half(*i))
+        .filter_map(|i| resp.data.get(i).copied())
+        .collect();
+    sample.sort_by(f32::total_cmp);
+    let med = sample.get(sample.len() / 2).copied().unwrap_or(0.0);
+    let spread = robust_spread(&resp, film_half).max(1e-4);
+    let (k_core, k_edge) = (12.0 - 5.0 * s, 6.0 - 2.5 * s);
+    let z = |i: usize| (resp.data.get(i).copied().unwrap_or(0.0) - med) / spread;
+    let line = hysteresis(hw, hh, |i| film_half(i) && z(i) > k_core, |i| film_half(i) && z(i) > k_edge);
+    // keep the long ones: a component at least a stroke long
+    let min_extent = (len as usize).max(6);
+    let mut keep = vec![false; hw * hh];
+    let mut seen = vec![false; hw * hh];
+    let mut stack = Vec::new();
+    for start in 0..hw * hh {
+        if !line.get(start).copied().unwrap_or(false) || seen.get(start).copied().unwrap_or(true) {
+            continue;
+        }
+        let mut comp = Vec::new();
+        stack.clear();
+        stack.push(start);
+        if let Some(v) = seen.get_mut(start) {
+            *v = true;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0, 0);
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i % hw, i / hw);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            comp.push(i);
+            for (dx, dy) in [(-1i64, -1i64), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)] {
+                let (nx, ny) = (x as i64 + dx, y as i64 + dy);
+                if nx < 0 || ny < 0 || nx >= hw as i64 || ny >= hh as i64 {
+                    continue;
+                }
+                let j = ny as usize * hw + nx as usize;
+                if line.get(j).copied().unwrap_or(false) && !seen.get(j).copied().unwrap_or(true) {
+                    if let Some(v) = seen.get_mut(j) {
+                        *v = true;
+                    }
+                    stack.push(j);
+                }
+            }
+        }
+        if (x1 - x0).max(y1 - y0) + 1 >= min_extent {
+            for i in comp {
+                if let Some(k) = keep.get_mut(i) {
+                    *k = true;
+                }
+            }
+        }
+    }
+    // back at full size: the line's own pixels that dip at all, and one pixel around them
+    let core: Vec<bool> = (0..w * h)
+        .map(|i| keep.get(((i / w) / 2) * hw + (i % w) / 2).copied().unwrap_or(false) && drop.data.get(i).is_some_and(|d| *d > 0.0))
+        .collect();
+    let mut out = core.clone();
+    for (i, c) in core.iter().enumerate() {
+        if !*c {
+            continue;
+        }
+        let (x, y) = (i % w, i / w);
+        for yy in y.saturating_sub(1)..(y + 2).min(h) {
+            for xx in x.saturating_sub(1)..(x + 2).min(w) {
+                if let Some(o) = out.get_mut(yy * w + xx) {
+                    *o = true;
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The 8-connected blobs of `candidate` pixels of a `w`×`h` image, each as its pixels with
@@ -333,7 +648,8 @@ fn classify(px: &[(usize, usize, f32)], luma: &Plane, long: f32, how: Certainty)
     let long = f64::from(long);
     let to_norm = |x: f64, y: f64| ((x + 0.5) / w as f64, (y + 0.5) / h as f64);
     let elongation = (l1 / l2.max(0.05)).sqrt();
-    let (max_speck, max_width) = if certain { (0.014 * long, 0.005 * long) } else { (0.008 * long, 0.003 * long) };
+    // (the infrared map keeps a mark's soft edge, a few pixels whatever the photo's size)
+    let (max_speck, max_width) = if certain { ((0.014 * long).max(10.0), (0.005 * long).max(6.0)) } else { (0.008 * long, 0.003 * long) };
     if elongation < 2.5 && length <= max_speck {
         // a speck: heal a circle a little larger than it
         return Some(FilmDefect { points: vec![to_norm(mx, my)], radius: (length / 2.0 * 1.6 + 1.0) / long, strength, source: None });
@@ -602,7 +918,71 @@ pub fn inpaint(img: &mut Rgb32f, mask: &Plane) -> bool {
             }
         }
     }
+    // the film's grain, which a smooth fill lacks: each filled pixel takes the fine detail (the
+    // image less its slight blur) of a clean pixel a short way off, so a filled speck is as grainy
+    // as the film around it
+    let fine = lcc_raster::blur::gaussian(img, 1.2);
+    let offsets: [(i64, i64); 8] = [(11, 5), (-9, 8), (7, -12), (-12, -6), (15, -2), (-3, 14), (4, 16), (-15, 3)];
+    let marked = |i: usize| mask.data.get(i).is_some_and(|m| *m >= MASKED);
+    let mut grain: Vec<(usize, [f32; 3])> = Vec::with_capacity(filled_all.len());
+    for &i in &filled_all {
+        let (x, y) = ((i % w) as i64, (i / w) as i64);
+        // (a different start per pixel row and column, so the borrowed grain doesn't repeat as a pattern)
+        let start = ((x * 7 + y * 13) as usize) % offsets.len();
+        for k in 0..offsets.len() {
+            let (ox, oy) = offsets[(start + k) % offsets.len()];
+            let (sx, sy) = (x + ox, y + oy);
+            if sx < 0 || sy < 0 || sx >= w as i64 || sy >= h as i64 {
+                continue;
+            }
+            let j = sy as usize * w + sx as usize;
+            if marked(j) {
+                continue;
+            }
+            if let (Some(p), Some(b)) = (img.data.get(j), fine.data.get(j)) {
+                grain.push((i, [p[0] - b[0], p[1] - b[1], p[2] - b[2]]));
+            }
+            break;
+        }
+    }
+    for (i, g) in grain {
+        if let Some(p) = img.data.get_mut(i) {
+            *p = [(p[0] + g[0]).max(0.0), (p[1] + g[1]).max(0.0), (p[2] + g[2]).max(0.0)];
+        }
+    }
     true
+}
+
+/// Whether a render of `s` must take the CPU pipeline for film dust: the develop step is on for a
+/// photo with an infrared pass, or `overlay` shows the pass or its marks (the GPU renderer does neither).
+pub fn needs_cpu(info: &crate::SourceInfo, s: &lcc_develop::DevelopSettings, overlay: crate::Overlay) -> bool {
+    info.infrared.is_some() && (s.film_dust.on() || matches!(overlay, crate::Overlay::FilmDust | crate::Overlay::Infrared))
+}
+
+/// The infrared pass as the render `frame` of `w`×`h` sees it, for the Infrared view.
+pub fn infrared_for(info: &crate::SourceInfo, frame: &crate::geometry::Frame, w: usize, h: usize) -> Option<Plane> {
+    let ir = info.infrared.as_ref()?;
+    Some(frame.sample_alpha(ir, w, h))
+}
+
+/// The Infrared view: `ir` (the pass at the image's size) in grey, stretched from its darkest to
+/// its brightest film, with `marks` (what the develop step fills) tinted red over it.
+pub fn paint_infrared(img: &mut Rgba8, ir: &Plane, marks: Option<&Plane>) {
+    if (ir.width, ir.height) != (img.width, img.height) {
+        return;
+    }
+    let step = (ir.data.len() / 100_000).max(1);
+    let mut v: Vec<f32> = ir.data.iter().step_by(step).copied().filter(|x| x.is_finite() && *x > 0.01).collect();
+    v.sort_by(f32::total_cmp);
+    let lo = v.get(v.len() / 200).copied().unwrap_or(0.0);
+    let hi = v.get(v.len().saturating_sub(1).saturating_sub(v.len() / 200)).copied().unwrap_or(1.0);
+    let span = (hi - lo).max(1e-4);
+    for (i, p) in img.data.iter_mut().enumerate() {
+        let g = ((ir.data.get(i).copied().unwrap_or(0.0) - lo) / span).clamp(0.0, 1.0) * 255.0;
+        let m = marks.and_then(|m| m.data.get(i)).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        let tint = |c: f32, t: f32| (c + (t - c) * m * 0.8).round().clamp(0.0, 255.0) as u8;
+        *p = [tint(g, 255.0), tint(g, 40.0), tint(g, 30.0), p[3]];
+    }
 }
 
 #[cfg(test)]
@@ -744,10 +1124,18 @@ mod tests {
                 ir.data[(150 + dy) as usize * w + (200 + dx) as usize] = 0.05;
             }
         }
-        let area = |e: i32| infrared_map(&ir, 50.0, e).unwrap().data.iter().filter(|v| **v > 0.0).count();
-        let (plain, grown, shrunk) = (area(0), area(3), area(-1));
-        assert!(plain >= 9 && grown > plain * 3 && shrunk < plain, "{plain} {grown} {shrunk}");
-        assert!(grown <= 9 * 9, "grown only around the mark: {grown}");
+        // the marked pixels' count and bounding box (x0, y0, x1, y1)
+        let marked = |e: i32| {
+            let m = infrared_map(&ir, 50.0, e).unwrap();
+            let pts: Vec<(usize, usize)> = (0..w * h).filter(|i| m.data[*i] > 0.0).map(|i| (i % w, i / w)).collect();
+            let bbox = pts.iter().fold((usize::MAX, usize::MAX, 0, 0), |b, p| (b.0.min(p.0), b.1.min(p.1), b.2.max(p.0), b.3.max(p.1)));
+            (pts.len(), bbox)
+        };
+        let ((plain, pb), (grown, gb), (shrunk, _)) = (marked(0), marked(3), marked(-1));
+        assert!(plain >= 9 && grown > plain && shrunk < plain, "{plain} {grown} {shrunk}");
+        // the speck's own soft edge counts, and growing adds at most the distance on each side
+        assert!(pb.0 <= 199 && pb.2 >= 201 && pb.1 <= 149 && pb.3 >= 151, "the speck itself: {pb:?}");
+        assert!(gb.0 + 3 >= pb.0 && gb.2 <= pb.2 + 3 && gb.1 + 3 >= pb.1 && gb.3 <= pb.3 + 3, "grown only around the mark: {gb:?} vs {pb:?}");
         assert_eq!(infrared_map(&Plane::from_fn(w, h, |_, _| 0.6), 50.0, 5).unwrap().data.iter().filter(|v| **v > 0.0).count(), 0);
     }
 

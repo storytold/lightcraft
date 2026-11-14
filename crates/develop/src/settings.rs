@@ -497,7 +497,7 @@ pub struct FilmDust {
 
 impl Default for FilmDust {
     fn default() -> Self {
-        Self { remove: 0.0, sensitivity: 50.0, expand: 2.0 }
+        Self { remove: 0.0, sensitivity: 50.0, expand: 1.0 }
     }
 }
 

@@ -1171,9 +1171,18 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     };
     lap("histogram", &mut t);
     let mut image = image;
-    let mask = if req.overlay == Overlay::FilmDust { film_dust::mask_for(info, s, frame, w, h) } else { overlay_alpha(req.overlay, &plan, &prep) };
+    let mask = if matches!(req.overlay, Overlay::FilmDust | Overlay::Infrared) {
+        film_dust::mask_for(info, s, frame, w, h)
+    } else {
+        overlay_alpha(req.overlay, &plan, &prep)
+    };
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
+    if req.overlay == Overlay::Infrared
+        && let Some(ir) = film_dust::infrared_for(info, frame, w, h)
+    {
+        film_dust::paint_infrared(&mut image, &ir, mask.as_ref());
+    }
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes

@@ -65,7 +65,9 @@ fn expand_px(expand: i32, long: usize) -> i32 {
 
 fn read(s: &mut Session, c: &str, id: crate::PhotoId, source: Source) -> Result<Read> {
     // the uncropped photo, so positions are the spots' own coordinates
-    let job = s.render_job(id, SEARCH_EDGE, SEARCH_EDGE, false, false).ok_or_else(|| bad(c, "no photo"))?;
+    // (never larger than the photo: a small photo blown up would make every hair a wide patch)
+    let edge = s.catalog.photo(id).map_or(SEARCH_EDGE, |p| (p.width.max(p.height) as usize).clamp(64, SEARCH_EDGE));
+    let job = s.render_job(id, edge, edge, false, false).ok_or_else(|| bad(c, "no photo"))?;
     let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
     let settings = (*s.develop_of(id).unwrap_or_default()).clone();
     // the infrared pass through the same geometry as the picture (orientation, lens, perspective;
@@ -82,7 +84,7 @@ fn read(s: &mut Session, c: &str, id: crate::PhotoId, source: Source) -> Result<
         info.infrared.as_deref().and_then(|ir| {
             let mut uncropped = settings.clone();
             uncropped.crop.geometry = lcc_geom::CropGeometry::default();
-            let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(SEARCH_EDGE, SEARCH_EDGE) };
+            let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(edge, edge) };
             let plane = lcc_pipeline::render_plane(&src, ir, &info, &uncropped, &req)?;
             Some(if (plane.width, plane.height) == (img.width, img.height) {
                 plane

@@ -377,7 +377,7 @@ controls! {
     "sensor.pixelFix" => sensor.pixel_fix, "Fix Hot and Dead Pixels", Sensor, 0, 1, 1, 1, 0, Plain;
     "filmDust.remove" => film_dust.remove, "Remove Film Dust", Sensor, 0, 1, 0, 1, 0, Plain;
     "filmDust.sensitivity" => film_dust.sensitivity, "Film Dust Sensitivity", Sensor, 0, 100, 50, 1, 0, Plain;
-    "filmDust.expand" => film_dust.expand, "Film Dust Expand", Sensor, -8, 40, 2, 1, 0, Centered;
+    "filmDust.expand" => film_dust.expand, "Film Dust Expand", Sensor, -8, 40, 1, 1, 0, Centered;
 }
 
 /// Template specs of the indexed controls (`<family>.<field>`; addressed as `<family>.<i>.<field>`).
