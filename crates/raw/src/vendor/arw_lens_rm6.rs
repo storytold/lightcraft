@@ -48,6 +48,7 @@ use super::fit_radial_warp;
 use crate::opcodes::max_radius;
 use crate::{Opcode, Rect};
 use craft_tiff::Ifd;
+use lightcraft_geom::fill_zoom;
 use std::ops::RangeInclusive;
 
 pub(crate) const DISTORTION_PARAMS: u16 = 0x7037;
@@ -97,8 +98,6 @@ const CA_UNIT: f64 = 3.36e6;
 /// corner; the largest value in the 54 measured photos' tables is 1724 (FE 24–70 mm), 1724 / 3.36·10⁶ ≈ 5.1·10⁻⁴.
 /// A table beyond it is refused.
 const CA_MAX_RELATIVE: f64 = 2e-3;
-/// Crop border radii scanned by the frame-filling zoom.
-const ZOOM_SCAN: usize = 4096;
 /// Largest polynomial fit error accepted at the fit samples the crop shows, px at a 1440 px long edge.
 const FIT_ERROR_PX_AT_1440: f64 = 0.25;
 /// The fit gate of [`APSC_BODIES`]: their 11 knots over a smaller crop bend more sharply than the polynomial follows
@@ -166,35 +165,6 @@ fn interpolate(knots: &[f64], spacing: f64, r: f64) -> f64 {
         (Some(a), Some(b)) => a + (b - a) * (t - i as f64),
         _ => f64::NAN,
     }
-}
-
-/// The camera's frame-filling zoom `z` for the source radius map `source` and a crop of half size `x × y`: the
-/// largest `source(ρ/z)/ρ` over the border radii `ρ` in [min(x, y), hypot(x, y)] is 1, so the output crop reads
-/// only inside the source crop and touches it (at the corner for pincushion, the short-edge midpoint for barrel).
-/// Bisection over [0.5, 2]; `None` when that range holds no solution or a ratio is not finite.
-fn fill_zoom(source: &dyn Fn(f64) -> f64, x: f64, y: f64) -> Option<f64> {
-    let (near, far) = (x.min(y), x.hypot(y));
-    let overshoots = |z: f64| -> Option<bool> {
-        let mut worst = f64::NEG_INFINITY;
-        for k in 0..=ZOOM_SCAN {
-            let rb = near + k as f64 * (far - near) / ZOOM_SCAN as f64;
-            let ratio = source(rb / z) / rb;
-            if !ratio.is_finite() {
-                return None;
-            }
-            worst = worst.max(ratio);
-        }
-        Some(worst > 1.0)
-    };
-    let (mut lo, mut hi) = (0.5, 2.0);
-    if !overshoots(lo)? || overshoots(hi)? {
-        return None;
-    }
-    for _ in 0..100 {
-        let z = 0.5 * (lo + hi);
-        if overshoots(z)? { lo = z } else { hi = z }
-    }
-    Some(0.5 * (lo + hi))
 }
 
 /// The distortion and CA tables as a `WarpRectilinear` relative to the active area `active` (centred on the default
