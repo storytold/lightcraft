@@ -30,6 +30,22 @@ pub(super) struct FaceSettings {
     /// Keep every face model on the CPU, even when the GPU would be faster.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(super) cpu_only: bool,
+    /// How many of a person's best matching faces a match is based on (`None`: [`lightcraft_faces::matching::TOP_FACES`]).
+    #[serde(deserialize_with = "lenient_count", skip_serializing_if = "Option::is_none")]
+    pub(super) top_faces: Option<usize>,
+}
+
+/// A saved count that is not a whole number (a hand-edited `-1`, `"3"`) is read as no choice: the file is not taken for a
+/// damaged one, which would drop every other face setting with it (recognition switched off, the model forgotten).
+fn lenient_count<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<usize>, D::Error> {
+    Ok(Value::deserialize(d)?.as_u64().and_then(|n| usize::try_from(n).ok()))
+}
+
+impl FaceSettings {
+    /// How many of a person's best matching faces a match is based on, within what matching accepts.
+    pub(super) fn top_faces(&self) -> usize {
+        self.top_faces.unwrap_or(lightcraft_faces::matching::TOP_FACES).clamp(1, lightcraft_faces::matching::MAX_TOP_FACES)
+    }
 }
 
 fn fail(what: &str, e: impl std::fmt::Display) -> EngineError {
@@ -65,6 +81,42 @@ pub(super) fn set_cpu_only(dir: &Path, on: bool) -> Result<()> {
     let mut st = read_settings(dir);
     st.cpu_only = on;
     write_settings(dir, &st)
+}
+
+/// `faces.matching`: how many of a person's best matching faces a match is based on (Settings ▸ Faces).
+fn matching(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.matching";
+    let dir = models_dir(s, C)?;
+    let mut st = read_settings(&dir);
+    if let Some(v) = p.get("topFaces") {
+        st.top_faces = top_faces_value(C, v, "the default")?;
+        write_settings(&dir, &st)?;
+        // suggestions and a person's "More" faces follow at once, not within the second the last look is trusted
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            s.faces.top_seen = None;
+        }
+    }
+    Ok(json!({
+        "topFaces": st.top_faces(),
+        "topFacesDefault": lightcraft_faces::matching::TOP_FACES,
+        "topFacesMax": lightcraft_faces::matching::MAX_TOP_FACES,
+    }))
+}
+
+/// `topFaces` as a command is given it: a whole number from 1 to [`lightcraft_faces::matching::MAX_TOP_FACES`], or
+/// null (`None`, which stands for `null_is`); anything else is refused, the same way by every command that takes it.
+pub(super) fn top_faces_value(cmd: &str, v: &Value, null_is: &str) -> Result<Option<usize>> {
+    let max = lightcraft_faces::matching::MAX_TOP_FACES;
+    match v {
+        Value::Null => Ok(None),
+        v => v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| (1..=max).contains(n))
+            .map(Some)
+            .ok_or_else(|| bad(cmd, format!("`topFaces` is a whole number from 1 to {max}, or null for {null_is}"))),
+    }
 }
 
 fn write_settings(dir: &Path, st: &FaceSettings) -> Result<()> {
@@ -205,6 +257,10 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
         "dir": dir.as_ref().map(|d| d.display().to_string()),
         "enabled": settings.enabled,
         "embedder": settings.embedder,
+        // how many of a person's best matching faces a match is based on (`faces.matching`)
+        "topFaces": settings.top_faces(),
+        "topFacesDefault": lightcraft_faces::matching::TOP_FACES,
+        "topFacesMax": lightcraft_faces::matching::MAX_TOP_FACES,
         // where the models run: {cpuOnly, detection, recognition} as `faces.gpu` gives it
         "gpu": super::face_detect::gpu_json(s),
         // Native builds always have the pure-Rust runner; model files/background scanning remain native-only.
@@ -525,7 +581,7 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, enabled, embedder, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, installed, selected}]}", always, list),
+        cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, enabled, embedder, topFaces, topFacesDefault, topFacesMax, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, installed, selected}]}", always, list),
         cmd!(query "faces.models.inspect", "Inspect Face Model File", [], None, "{path} → what a .onnx file is: {kind: known | draft | unsupported, model, assumptions, reason, alreadyInstalled}; installs nothing", always, inspect),
         cmd!(query "faces.models.install", "Install Face Model", [], None, "{path, acknowledged: true, activate?: true} → {installed, active: {embedder, enabled}} — copy a .onnx face recognition model into the models folder. `acknowledged` must be true: the user has been shown its licence (see inspect) and accepted it. Unless `activate` is false the model becomes the one in use and recognition is switched on; an earlier model stays installed", always, install),
         cmd!(query "faces.models.download", "Download Face Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a recognition model LightCraft has a pinned address for (see `downloadHost` in the list), in the background over pure-Rust https (lightcraft-fetch). `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, then installed, chosen and switched on by itself; `faces.models.downloads` shows how far it is", always, download),
@@ -535,5 +591,6 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "faces.models.remove", "Remove Face Model", [], None, "{id} — delete an installed model", always, remove),
         cmd!(query "faces.models.select", "Choose Face Recognition Model", [], None, "{id: installed recogniser | null}", always, select),
         cmd!(query "faces.enable", "Face Recognition On/Off", [], None, "{enabled?: bool} (toggles when omitted)", always, enable),
+        cmd!(query "faces.matching", "Face Matching", [], None, "{topFaces?: 1..8 | null} → {topFaces, topFacesDefault, topFacesMax} — how many of a person's best matching faces a suggestion's score is the mean of (Settings ▸ Faces; null goes back to the default). More faces make two odd photos of someone (blurred, in profile) less able to carry a stranger. Only the scores of people with more faces than the count before can fall: a person with fewer faces is scored on the ones they have", always, matching),
     ]
 }
