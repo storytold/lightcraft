@@ -413,6 +413,8 @@ impl Headless {
         let t0 = Instant::now();
         let mut quiet = 0;
         loop {
+            #[cfg(test)]
+            let step_started = Instant::now();
             self.step();
             if self.busy() {
                 quiet = 0;
@@ -425,6 +427,27 @@ impl Headless {
                 return true;
             }
             if t0.elapsed() > timeout {
+                // Keep failure evidence without advancing another frame or extending the deadline.
+                #[cfg(test)]
+                eprintln!(
+                    "headless settle timeout: {}",
+                    json!({
+                        "elapsed_ms": t0.elapsed().as_millis(),
+                        "last_step_ms": step_started.elapsed().as_millis(),
+                        "quiet_frames": quiet,
+                        "render_pending": self.app.renderer.pending_slots(),
+                        "render_queued": self.app.renderer.queued(),
+                        "render_workers": self.app.renderer.live_workers(),
+                        "filesystem_checks": crate::panels::left::fs_cached_running(&self.view.ctx),
+                        "merge": self.app.merge.busy(), "scan": self.app.scan.is_some(),
+                        "sync": self.app.sync.is_some(), "sync_run": self.app.sync_run.is_some(),
+                        "import": self.app.import.is_some(), "export": self.app.export.is_some(),
+                        "denoise": self.app.session.denoise_busy(),
+                        "survey_motion": self.app.survey_motion.moving(self.time),
+                        "tasks_pending": !self.app.tasks.is_empty(), "synthetic": self.app.synthetic.len(),
+                        "gestures": self.app.pending_gestures.len(), "events": self.events.len(),
+                    })
+                );
                 return false;
             }
         }
@@ -539,7 +562,12 @@ impl crate::render::RenderOffload for RenderGate {
         self.jobs
             .drain(..)
             .map(|(slot, job)| {
+                let started = Instant::now();
                 let mut r = job.run();
+                let elapsed = started.elapsed();
+                if elapsed > Duration::from_secs(1) {
+                    eprintln!("headless render gate: {slot:?} took {elapsed:?}");
+                }
                 if fails(slot) {
                     r.rendered = Err("no decoder for this raw".into());
                 }

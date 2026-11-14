@@ -14,6 +14,14 @@
 //! of the session and the job's outcome says so; when it fails too, the GPU wasn't the cause and
 //! the next job uses it again. `LIGHTCRAFT_GPU=0` or `LIGHTCRAFT_GPU_BACKEND=off` keep the model on
 //! the CPU from the start.
+//!
+//! Where the model runs is one pure decision ([`Placement::from_policy`]) behind one loader seam
+//! ([`Placement::load_with`]), and an [`Executor`] seam lets tests drive this loop's queue, skip and
+//! retry rules with a fake instead of a model. Nothing here picks the CPU for the user: #2533's
+//! *Run on: CPU* setting supplies [`configured_run_on`], the third input of [`Placement::from_policy`];
+//! that value is inert until the setting is routed here, and an explicit CPU
+//! choice stays sticky (the GPU to CPU retry only ever follows a GPU attempt, and an idle unload never
+//! sees the placement).
 
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
@@ -93,6 +101,31 @@ pub struct Outcome {
 pub const GPU_FAILED: &str =
     "The GPU couldn't run the AI mask model, so it runs on the CPU until LightCraft restarts (slower). Details are in the log.";
 
+/// Where the user asked the model to run: PR #2533's *Run on* setting (`Automatic` or `CPU`).
+///
+/// This is the adapter between that setting and this worker. The setting's storage, its Settings
+/// entry and the reason shown to the user are #2533's; this module only needs the value.
+/// Nothing here selects the CPU for anyone: [`configured_run_on`] answers
+/// [`RunOn::Automatic`] until #2533 routes the setting in, so behaviour is exactly as before and no
+/// user-facing mitigation is claimed.
+#[allow(dead_code)] // `Cpu` is constructed by the tests here and, at integration, by #2533's setting
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RunOn {
+    /// The GPU when the build and the environment allow it, the CPU otherwise.
+    Automatic,
+    /// The CPU always: slower, but it keeps the model off the GPU (the point of the setting).
+    Cpu,
+}
+
+/// The user's preference, as this worker sees it: the single point where it enters.
+///
+/// Replaced by #2533's settings value when it lands, at the one line below. Read once per worker
+/// start, so the decision stays in one place. A preference changed while the worker is alive
+/// applies at the next start, since the worker is respawned on demand.
+fn configured_run_on() -> RunOn {
+    RunOn::Automatic
+}
+
 /// Where the model is loaded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Placement {
@@ -104,15 +137,42 @@ enum Placement {
 }
 
 impl Placement {
-    fn initial() -> Self {
+    fn initial(run_on: RunOn) -> Self {
         if !lightcraft_segment::GPU_BUILD {
-            return Placement::Cpu;
+            return Self::from_policy(false, false, run_on);
         }
-        if let Some(why) = lightcraft_gpu::env_off_reason() {
+        let disabled = lightcraft_gpu::env_off_reason();
+        if let Some(why) = disabled {
             log::info!("SAM 3 runs on the CPU ({why})");
-            return Placement::Cpu;
         }
-        Placement::Gpu
+        Self::from_policy(true, disabled.is_some(), run_on)
+    }
+
+    /// The one placement decision, as a pure function of the build's GPU path and the environment
+    /// switch, so every combination is testable without a device or an environment change
+    /// (`std::env::set_var` is process-wide and unsafe to mutate while other tests run).
+    ///
+    /// [`RunOn::Cpu`] wins over both the build and the environment switch, and it is sticky: no path
+    /// in this worker moves a CPU placement to the GPU. The retry in [`run`] only ever goes GPU to
+    /// CPU, [`unload`] never sees the placement, and a restart asks [`configured_run_on`] again, so an
+    /// explicit CPU choice survives a model load, an encode-cache invalidation, an idle unload and a
+    /// respawn. The user-facing setting that supplies this value is tracked in #2533.
+    fn from_policy(gpu_build: bool, gpu_disabled: bool, run_on: RunOn) -> Self {
+        match run_on {
+            RunOn::Cpu => Self::Cpu,
+            RunOn::Automatic if gpu_build && !gpu_disabled => Self::Gpu,
+            RunOn::Automatic => Self::Cpu,
+        }
+    }
+
+    /// Call `gpu` or `cpu` for this placement and nothing else: the loader seam. Tests pass fake
+    /// closures, so "the CPU route never touches the GPU loader" is provable with no candle device,
+    /// no model files and no download.
+    fn load_with<T>(self, gpu: impl FnOnce() -> T, cpu: impl FnOnce() -> T) -> T {
+        match self {
+            Self::Gpu => gpu(),
+            Self::Cpu => cpu(),
+        }
     }
 }
 
@@ -243,7 +303,10 @@ impl Worker {
         // (re)start the thread
         let (tx, rx) = mpsc::channel();
         let shared = self.shared.clone();
-        match std::thread::Builder::new().name("sam3".into()).spawn(move || run(&rx, &shared, IDLE_UNLOAD, Placement::initial())) {
+        match std::thread::Builder::new()
+            .name("sam3".into())
+            .spawn(move || run(&rx, &shared, IDLE_UNLOAD, Placement::initial(configured_run_on()), &Model))
+        {
             Ok(t) => {
                 self.thread = Some(t);
                 self.tx = Some(tx.clone());
@@ -265,17 +328,60 @@ struct State {
     remote: Option<remote::Client>,
 }
 
-/// Whether `later` makes `job` pointless (it asks for the same selection again).
-fn supersedes(later: &Job, job: &Job) -> bool {
+/// Why a queued request can be skipped: the session drops its result anyway, so running it would
+/// only queue more GPU work for the same visible outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Redundant {
+    /// A later [`Kind::Prepare`] for the same photo. Its outcome is `Ok(None)` either way, and the
+    /// later request encodes the photo again.
+    Prepare,
+    /// A later [`Tag::Clicks`] for the same selection. The session keeps only the newest clicks
+    /// (`Session::segmenter.pending`) and returns early on a result whose clicks are not those
+    /// (`crates/engine/src/segment.rs`, `apply_outcome`), and the newest request's hint is a superset
+    /// because the session rebuilds it from the pending clicks.
+    Clicks,
+    /// A later [`Tag::Detail`] pass for the same selection. `apply_outcome` skips a patch whose
+    /// recorded shape is no longer the component's shape, and two passes from one shape write the
+    /// same `detail`. (Reachable only if `Session::segment_detail`'s `detail_busy` gate that refuses
+    /// a second queued pass is loosened; if it ever is, this rule must compare shapes too, because an
+    /// undo back to an older shape makes the *older* pass the applicable one.)
+    Detail,
+}
+
+/// Why `job` is pointless now that `later` is queued, or `None` when it still has to run.
+///
+/// Only requests whose **result the session discards** are redundant. A [`Tag::NewPrompt`] never is:
+/// `mask.add` creates one mask per request and `mask.addComponent` adds one component per request
+/// (the same text and op twice included), so two identical Describe requests are two intentional
+/// selections and no tag comparison can prove one of them pointless. Dropping one here would also be
+/// silent: a skipped job's outcome is `superseded`, which `apply_outcome` returns on before it would
+/// tell the user anything, whereas a Describe result for a photo the user has left is reported ("The
+/// photo changed before … was found"). A queued Describe is not droppable for an inactive photo
+/// either: the session checks the active photo when the result *arrives*, not when the request was
+/// queued, so a request can still be applied if the user comes back to that photo. Bounding how many
+/// Describe requests are queued is an admission decision in `Session::segment_text_later` (a visible
+/// error to the caller), not a silent drop here; see DESIGN.md.
+fn redundant_with(later: &Job, job: &Job) -> Option<Redundant> {
     match (&later.tag, &job.tag) {
-        (Tag::Prepare, Tag::Prepare) => later.key == job.key,
-        (Tag::Clicks { photo: a, mask: am, comp: ac, .. }, Tag::Clicks { photo: b, mask: bm, comp: bc, .. }) => (a, am, ac) == (b, bm, bc),
-        (Tag::Detail { photo: a, mask: am, comp: ac, .. }, Tag::Detail { photo: b, mask: bm, comp: bc, .. }) => (a, am, ac) == (b, bm, bc),
-        _ => false,
+        (Tag::Prepare, Tag::Prepare) => (later.key == job.key).then_some(Redundant::Prepare),
+        (Tag::Clicks { photo: a, mask: am, comp: ac, .. }, Tag::Clicks { photo: b, mask: bm, comp: bc, .. }) => {
+            ((a, am, ac) == (b, bm, bc)).then_some(Redundant::Clicks)
+        }
+        (Tag::Detail { photo: a, mask: am, comp: ac, .. }, Tag::Detail { photo: b, mask: bm, comp: bc, .. }) => {
+            ((a, am, ac) == (b, bm, bc)).then_some(Redundant::Detail)
+        }
+        _ => None,
     }
 }
 
-fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement: Placement) {
+/// Whether a failed attempt on `placement` may be retried on the CPU. Only a GPU attempt is retried
+/// (an attempt on the CPU has nothing left to try), and never while a remote worker is configured:
+/// the remote does the work whatever this machine's placement says.
+fn may_retry_on_cpu(placement: Placement, remote: bool) -> bool {
+    placement == Placement::Gpu && !remote
+}
+
+fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement: Placement, exec: &dyn Executor) {
     let mut state = State::default();
     let mut queue: VecDeque<Job> = VecDeque::new();
     loop {
@@ -283,11 +389,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             match rx.recv_timeout(idle) {
                 Ok(j) => queue.push_back(j),
                 Err(RecvTimeoutError::Timeout) => {
-                    if state.model.is_some() || state.remote.is_some() {
-                        state = State::default();
-                        shared.loaded.store(false, Ordering::SeqCst);
-                        log::info!("SAM 3 unloaded after {} minutes without use", idle.as_secs() / 60);
-                    }
+                    unload(&mut state, shared, idle);
                     continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -301,14 +403,15 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         // counts the job as pending until just before its reply goes out: a caller woken by the
         // reply must not still see the worker busy with it
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
-        if queue.iter().any(|later| supersedes(later, &job)) {
+        if let Some(why) = queue.iter().find_map(|later| redundant_with(later, &job)) {
+            log::debug!("SAM 3 skipping a queued request ({why:?})");
             drop(done);
             let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true, notice: None });
             continue;
         }
         // what a retry on the CPU needs (running the job takes them)
-        let retry = (placement == Placement::Gpu && remote::configured().is_none()).then(|| (job.kind.clone(), job.render.clone()));
-        let mut result = attempt(&mut state, shared, &mut job, placement);
+        let retry = may_retry_on_cpu(placement, exec.remote_configured()).then(|| (job.kind.clone(), job.render.clone()));
+        let mut result = exec.attempt(&mut state, shared, &mut job, placement);
         let mut notice = None;
         let gpu_failed = match &result {
             Err(Failure::Model(why)) => Some(why.clone()),
@@ -320,7 +423,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             log::warn!("SAM 3 failed on the GPU ({why}); trying the CPU");
             state = State::default();
             (job.kind, job.render) = (kind, render);
-            match attempt(&mut state, shared, &mut job, Placement::Cpu) {
+            match exec.attempt(&mut state, shared, &mut job, Placement::Cpu) {
                 Ok(r) => {
                     log::warn!("SAM 3 runs on the CPU from now on: it failed on the GPU and works on the CPU");
                     placement = Placement::Cpu;
@@ -341,6 +444,43 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
         drop(done);
         let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false, notice });
+    }
+}
+
+/// Runs one job on a placement: [`attempt`] for real work, or a fake in tests (no model, no candle
+/// device, no GPU work, no download).
+trait Executor {
+    fn attempt(&self, state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure>;
+
+    /// Whether a remote SAM worker is configured, in which case a retry on this machine's CPU is
+    /// pointless: the remote does the work. The real executor asks the environment (as before, once
+    /// per job); a test fake answers for itself, so the placement and retry tests cannot be bypassed
+    /// by this process's environment and no test has to mutate it.
+    fn remote_configured(&self) -> bool;
+}
+
+/// The real executor: [`attempt`], which loads the model and runs the job on it.
+struct Model;
+
+impl Executor for Model {
+    fn attempt(&self, state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
+        attempt(state, shared, job, placement)
+    }
+
+    fn remote_configured(&self) -> bool {
+        remote::configured().is_some()
+    }
+}
+
+/// Drop what the model holds after `idle` without requests. `placement` is deliberately **not** a
+/// parameter: an idle unload cannot change where the model runs, which is what keeps an explicit CPU
+/// choice (or a placement the GPU already failed on) across the unload. The next load asks
+/// [`Placement::load_with`] again, on the same placement.
+fn unload(state: &mut State, shared: &Shared, idle: Duration) {
+    if state.model.is_some() || state.remote.is_some() {
+        *state = State::default();
+        shared.loaded.store(false, Ordering::SeqCst);
+        log::info!("SAM 3 unloaded after {} minutes without use", idle.as_secs() / 60);
     }
 }
 
@@ -366,10 +506,7 @@ fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path, place
         state.cache = None;
         let _busy = Flag::raise(&shared.encoding);
         let t = web_time::Instant::now();
-        let m = match placement {
-            Placement::Gpu => Sam3::load(dir)?,
-            Placement::Cpu => Sam3::load_cpu(dir)?,
-        };
+        let m = placement.load_with(|| Sam3::load(dir), || Sam3::load_cpu(dir))?;
         log::info!("SAM 3 loaded in {:?} ({})", t.elapsed(), if m.device().is_cpu() { "CPU" } else { "GPU" });
         state.model = Some((dir.to_path_buf(), m));
         shared.loaded.store(true, Ordering::SeqCst);
@@ -535,6 +672,65 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    #[test]
+    fn disabled_gpu_policy_always_chooses_cpu_without_creating_a_device() {
+        assert_eq!(Placement::from_policy(true, true, RunOn::Automatic), Placement::Cpu);
+        assert_eq!(Placement::from_policy(false, true, RunOn::Automatic), Placement::Cpu);
+        assert_eq!(Placement::from_policy(false, false, RunOn::Automatic), Placement::Cpu);
+    }
+
+    #[test]
+    fn automatic_gpu_policy_is_preserved_when_allowed() {
+        assert_eq!(Placement::from_policy(true, false, RunOn::Automatic), Placement::Gpu);
+    }
+
+    #[test]
+    fn cpu_placement_calls_only_the_cpu_factory() {
+        let gpu_calls = std::cell::Cell::new(0);
+        let cpu_calls = std::cell::Cell::new(0);
+        let result = Placement::from_policy(true, true, RunOn::Automatic).load_with(
+            || {
+                gpu_calls.set(gpu_calls.get() + 1);
+                "GPU"
+            },
+            || {
+                cpu_calls.set(cpu_calls.get() + 1);
+                "CPU"
+            },
+        );
+        assert_eq!(result, "CPU");
+        assert_eq!((gpu_calls.get(), cpu_calls.get()), (0, 1));
+    }
+
+    #[test]
+    fn cpu_factory_failure_does_not_initialize_gpu() {
+        let gpu_calls = std::cell::Cell::new(0);
+        let result: Result<(), &str> = Placement::Cpu.load_with(
+            || {
+                gpu_calls.set(gpu_calls.get() + 1);
+                Ok(())
+            },
+            || Err("CPU-only failure"),
+        );
+        assert_eq!(result, Err("CPU-only failure"));
+        assert_eq!(gpu_calls.get(), 0);
+    }
+
+    #[test]
+    fn gpu_placement_calls_only_the_gpu_factory_before_worker_retry_policy() {
+        let cpu_calls = std::cell::Cell::new(0);
+        let result: Result<(), &str> = Placement::Gpu.load_with(
+            || Err("GPU failure"),
+            || {
+                cpu_calls.set(cpu_calls.get() + 1);
+                Ok(())
+            },
+        );
+        assert_eq!(result, Err("GPU failure"));
+        assert_eq!(cpu_calls.get(), 0);
+    }
 
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
@@ -572,7 +768,7 @@ mod tests {
         jtx.send(job(Tag::Wait, &tx)).unwrap();
         shared.pending.store(2, Ordering::SeqCst);
         drop(jtx);
-        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu);
+        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu, &Model);
         let first = rx.recv().unwrap();
         assert!(first.result.unwrap_err().contains("failed unexpectedly"));
         let second = rx.recv().unwrap();
@@ -583,20 +779,90 @@ mod tests {
 
     /// Run `kinds` in turn on a worker that starts on `placement`; their outcomes.
     fn run_kinds(placement: Placement, kinds: Vec<Kind>) -> Vec<Outcome> {
+        // Tag::Wait: these requests are independent of each other, so only the placement can matter
+        run_tagged(placement, kinds.into_iter().map(|kind| (kind, Tag::Wait)).collect(), &Model)
+    }
+
+    /// Run `jobs` (kind and tag) through the real worker loop with `exec`: the outcomes in order.
+    fn run_tagged(placement: Placement, jobs: Vec<(Kind, Tag)>, exec: &dyn Executor) -> Vec<Outcome> {
         let (tx, rx) = mpsc::channel();
         let (jtx, jrx) = mpsc::channel();
         let shared = Shared::default();
-        shared.pending.store(kinds.len(), Ordering::SeqCst);
-        for kind in kinds {
-            let mut j = job(Tag::Wait, &tx);
+        let details = jobs.iter().filter(|(kind, _)| matches!(kind, Kind::Detail { .. })).count();
+        shared.detail.store(details, Ordering::SeqCst);
+        shared.pending.store(jobs.len() - details, Ordering::SeqCst);
+        for (kind, tag) in jobs {
+            let mut j = job(tag, &tx);
             j.kind = kind;
             jtx.send(j).unwrap();
         }
         drop(jtx);
-        run(&jrx, &shared, Duration::from_secs(60), placement);
-        assert_eq!(shared.pending.load(Ordering::SeqCst), 0, "counters reset");
+        run(&jrx, &shared, Duration::from_secs(60), placement, exec);
+        assert_eq!((shared.pending.load(Ordering::SeqCst), shared.detail.load(Ordering::SeqCst)), (0, 0), "counters reset");
         assert!(!shared.encoding.load(Ordering::SeqCst));
         rx.try_iter().collect()
+    }
+
+    /// A stand-in for the model: records the placement of every attempt and answers from `answers`
+    /// (then `Ok(None)`), so the loop's queue, skip, retry and placement decisions are testable with
+    /// no candle, no Metal device, no model files and no download.
+    #[derive(Default)]
+    struct Fake {
+        calls: RefCell<Vec<Placement>>,
+        answers: RefCell<VecDeque<Result<Option<SegMask>, Failure>>>,
+        /// What the fake answers [`Executor::remote_configured`]; never read from the environment.
+        remote: bool,
+    }
+
+    impl Fake {
+        fn new(answers: Vec<Result<Option<SegMask>, Failure>>) -> Self {
+            Self { calls: RefCell::new(Vec::new()), answers: RefCell::new(answers.into()), remote: false }
+        }
+
+        /// A fake for a machine with a remote SAM worker configured (so no CPU retry may happen).
+        fn remote(answers: Vec<Result<Option<SegMask>, Failure>>) -> Self {
+            Self { remote: true, ..Self::new(answers) }
+        }
+
+        /// The placement of every attempt, in order.
+        fn calls(&self) -> Vec<Placement> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl Executor for Fake {
+        fn attempt(&self, _state: &mut State, _shared: &Shared, _job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
+            self.calls.borrow_mut().push(placement);
+            self.answers.borrow_mut().pop_front().unwrap_or(Ok(None))
+        }
+
+        fn remote_configured(&self) -> bool {
+            self.remote
+        }
+    }
+
+    /// A tiny segmentation for the fake (no model involved).
+    ///
+    /// Quantizes `side * side` logits, so a small side needs no model, device or file.
+    fn seg() -> SegMask {
+        SegMask::from_logits(8, &[0.0_f32; 64])
+    }
+
+    /// The component shape the session records on a detail pass's tag.
+    fn object_shape() -> lightcraft_develop::MaskShape {
+        lightcraft_develop::MaskShape::Object { hint: Vec::new(), exclude: Vec::new(), seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
+    fn clicks_tag(photo: lightcraft_catalog::PhotoId, mask: u32, comp: usize) -> Tag {
+        Tag::Clicks { photo, mask, comp, hint: vec![], exclude: vec![] }
+    }
+
+    fn detail_tag(photo: lightcraft_catalog::PhotoId, mask: u32, comp: usize) -> Tag {
+        Tag::Detail { photo, mask, comp, shape: object_shape() }
+    }
+
+    fn detail_kind() -> Kind {
+        Kind::Detail { prompt: Prompt::Text("hair".into()), region: [0.1, 0.2, 0.6, 0.7] }
     }
 
     #[test]
@@ -634,7 +900,7 @@ mod tests {
         assert!(matches!(out[0].result, Ok(None)));
         assert_eq!(out[0].notice, None);
         if !lightcraft_segment::GPU_BUILD {
-            assert_eq!(Placement::initial(), Placement::Cpu);
+            assert_eq!(Placement::initial(RunOn::Automatic), Placement::Cpu);
         }
     }
 
@@ -664,10 +930,277 @@ mod tests {
         drop(jtx);
         let shared = Shared::default();
         shared.pending.store(3, Ordering::SeqCst);
-        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu);
+        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu, &Model);
         let out: Vec<Outcome> = rx.try_iter().collect();
         assert_eq!(out.len(), 3);
         assert!(out[0].superseded && out[1].superseded && !out[2].superseded);
         assert_eq!(shared.pending.load(Ordering::SeqCst), 0);
+    }
+
+    // ---- placement, loader and queue-policy invariants through the real worker loop ----
+
+    #[test]
+    fn only_a_gpu_attempt_without_a_remote_worker_may_be_retried_on_the_cpu() {
+        assert!(may_retry_on_cpu(Placement::Gpu, false));
+        assert!(!may_retry_on_cpu(Placement::Gpu, true), "a remote worker does the work");
+        assert!(!may_retry_on_cpu(Placement::Cpu, false), "an attempt on the CPU has nothing left to try");
+        assert!(!may_retry_on_cpu(Placement::Cpu, true));
+    }
+
+    #[test]
+    fn a_cpu_preference_wins_over_the_build_and_the_environment_switch() {
+        // #2533's Run on: CPU. The preference is an input to the one placement decision, so it wins on
+        // a GPU-capable build with no environment switch, and it does not depend on the environment.
+        assert_eq!(Placement::from_policy(true, false, RunOn::Cpu), Placement::Cpu, "a GPU-capable build");
+        assert_eq!(Placement::from_policy(true, true, RunOn::Cpu), Placement::Cpu, "the switch is irrelevant");
+        assert_eq!(Placement::from_policy(false, false, RunOn::Cpu), Placement::Cpu, "no GPU path");
+        assert_eq!(Placement::from_policy(false, true, RunOn::Cpu), Placement::Cpu);
+    }
+
+    #[test]
+    fn a_cpu_preference_never_consults_the_gpu_loader_on_a_gpu_build() {
+        // positive control: the CPU loader is the one that runs; negative control: the GPU loader is
+        // never called, so no Metal device and no model initialisation can happen on this path
+        let gpu_calls = std::cell::Cell::new(0);
+        let cpu_calls = std::cell::Cell::new(0);
+        let result = Placement::from_policy(true, false, RunOn::Cpu).load_with(
+            || {
+                gpu_calls.set(gpu_calls.get() + 1);
+                "GPU"
+            },
+            || {
+                cpu_calls.set(cpu_calls.get() + 1);
+                "CPU"
+            },
+        );
+        assert_eq!(result, "CPU");
+        assert_eq!((gpu_calls.get(), cpu_calls.get()), (0, 1), "the GPU factory is never entered");
+    }
+
+    #[test]
+    fn a_cpu_preference_survives_a_cache_invalidating_error_and_stays_on_the_cpu() {
+        // a non-detail error clears the encode cache (`state.cache`) and the model state; both resets
+        // leave the placement alone, so the next request is still attempted on the CPU only
+        let placement = Placement::from_policy(true, false, RunOn::Cpu);
+        assert_eq!(placement, Placement::Cpu, "derived from the preference, not from the build");
+        let fake = Fake::new(vec![Err(Failure::Other("the CPU failed this one".into())), Ok(None)]);
+        let out = run_tagged(placement, vec![(Kind::Prepare, Tag::Wait), (Kind::Prepare, Tag::Wait)], &fake);
+        assert_eq!(fake.calls(), vec![Placement::Cpu, Placement::Cpu], "the GPU is never tried");
+        assert!(out[0].result.as_ref().unwrap_err().contains("the CPU failed this one"));
+        assert_eq!(out[0].notice, None, "no fallback happened, so nothing is announced");
+        assert!(out[1].result.is_ok(), "the next request runs");
+    }
+
+    #[test]
+    fn an_idle_unload_cannot_move_the_placement() {
+        // structural invariant: `unload` takes no placement and returns none, so the idle branch in
+        // `run` cannot change where the model runs. An explicit CPU choice, or a placement the GPU
+        // already failed on, therefore survives an idle unload; a restart asks `configured_run_on()`
+        // again and derives the same answer (see the preference tests above).
+        //
+        // What this cannot show: the branch's own effect, because a `State` that holds a model cannot
+        // be built without a model. Verifying the idle branch's effect requires a model-backed
+        // integration test, not a no-model unit test.
+        let shared = Shared::default();
+        let mut state = State::default();
+        unload(&mut state, &shared, IDLE_UNLOAD);
+        assert!(!shared.loaded.load(Ordering::SeqCst), "nothing is loaded, so nothing is claimed");
+        assert!(!shared.encoding.load(Ordering::SeqCst));
+        let before = Placement::from_policy(true, false, RunOn::Cpu);
+        assert_eq!(before, Placement::Cpu, "the preference decides, not the build");
+        unload(&mut state, &shared, IDLE_UNLOAD);
+        assert_eq!(Placement::from_policy(true, false, RunOn::Cpu), before, "the same preference still decides");
+    }
+
+    #[test]
+    fn the_adapter_defaults_to_automatic_so_no_mitigation_is_claimed_yet() {
+        // the negative control for the whole delta: until #2533 routes its setting here, the worker
+        // asks for `Automatic`, which is exactly the pre-existing behaviour
+        assert_eq!(configured_run_on(), RunOn::Automatic);
+        assert_eq!(Placement::from_policy(true, false, configured_run_on()), Placement::Gpu, "unchanged default");
+        assert_eq!(Placement::from_policy(false, false, configured_run_on()), Placement::Cpu);
+    }
+
+    #[test]
+    fn a_cpu_placement_is_never_retried_on_the_gpu() {
+        // an explicit CPU placement (no GPU path in this build, the environment switch, or #2533's
+        // Run on: CPU) has no GPU fallback anywhere in the worker
+        let fake = Fake::new(vec![Err(Failure::Model("a Metal kernel failed".into()))]);
+        let out = run_tagged(Placement::Cpu, vec![(Kind::Prepare, Tag::Wait)], &fake);
+        assert_eq!(fake.calls(), vec![Placement::Cpu], "one attempt, and it is the CPU");
+        assert!(out[0].result.as_ref().unwrap_err().contains("a Metal kernel failed"));
+        assert_eq!(out[0].notice, None, "no CPU to GPU fallback");
+    }
+
+    #[test]
+    fn a_model_failure_on_the_gpu_is_retried_once_on_the_cpu_and_its_result_is_kept() {
+        let fake = Fake::new(vec![Err(Failure::Model("a Metal kernel failed".into())), Ok(Some(seg()))]);
+        let out = run_tagged(Placement::Gpu, vec![(Kind::Prepare, Tag::Wait)], &fake);
+        assert_eq!(fake.calls(), vec![Placement::Gpu, Placement::Cpu], "one attempt on each");
+        assert!(matches!(&out[0].result, Ok(Some(_))), "the CPU attempt's result is the job's: {:?}", out[0].result);
+        assert_eq!(out[0].notice.as_deref(), Some(GPU_FAILED));
+        assert!(!out[0].superseded);
+    }
+
+    #[test]
+    fn the_cpu_stays_the_placement_for_the_next_job_after_a_successful_retry() {
+        let fake =
+            Fake::new(vec![Err(Failure::Model("a Metal kernel failed".into())), Ok(None), Err(Failure::Other("the model is not ready".into()))]);
+        let out = run_tagged(Placement::Gpu, vec![(Kind::Prepare, Tag::Wait), (Kind::Prepare, Tag::Wait)], &fake);
+        assert_eq!(fake.calls(), vec![Placement::Gpu, Placement::Cpu, Placement::Cpu], "the next job starts on the CPU");
+        assert_eq!(out[0].notice.as_deref(), Some(GPU_FAILED), "said once");
+        assert_eq!(out[1].notice, None, "and not again");
+        assert!(out[1].result.as_ref().unwrap_err().contains("not ready"), "a later error is still reported");
+    }
+
+    #[test]
+    fn a_cpu_failure_after_the_gpu_failure_keeps_the_original_gpu_error_and_the_next_job() {
+        let fake = Fake::new(vec![Err(Failure::Model("a Metal kernel failed".into())), Err(Failure::Other("the CPU failed too".into())), Ok(None)]);
+        let out = run_tagged(Placement::Gpu, vec![(Kind::Prepare, Tag::Wait), (Kind::Prepare, Tag::Wait)], &fake);
+        assert_eq!(fake.calls(), vec![Placement::Gpu, Placement::Cpu, Placement::Gpu], "the GPU is tried again");
+        assert_eq!(out[0].notice, None, "the GPU was not the cause, so nothing is said");
+        // current behaviour, pinned as it is: the CPU attempt's error is only logged
+        // (`log::warn!("SAM 3 failed on the CPU too: …")`); the job reports the ORIGINAL GPU error
+        assert!(
+            out[0].result.as_ref().unwrap_err().contains("a Metal kernel failed"),
+            "the original GPU error is reported, not the CPU's: {:?}",
+            out[0].result
+        );
+    }
+
+    #[test]
+    fn a_gpu_model_failure_with_a_remote_worker_configured_is_not_retried() {
+        // the remote does the work, so this machine's placement is irrelevant and nothing is retried;
+        // the fake answers for itself, so this process's environment cannot bypass the test
+        let fake = Fake::remote(vec![Err(Failure::Model("the remote call failed".into()))]);
+        let out = run_tagged(Placement::Gpu, vec![(Kind::Prepare, Tag::Wait)], &fake);
+        assert_eq!(fake.calls(), vec![Placement::Gpu], "no CPU attempt");
+        assert!(out[0].result.as_ref().unwrap_err().contains("the remote call failed"));
+        assert_eq!(out[0].notice, None, "no CPU fallback notice");
+    }
+
+    #[test]
+    fn a_failure_no_other_device_can_fix_is_not_retried_on_the_cpu() {
+        let fake = Fake::new(vec![Err(Failure::Other("The SAM 3 model is not installed in /models".into()))]);
+        let out = run_tagged(Placement::Gpu, vec![(Kind::Prepare, Tag::Wait)], &fake);
+        assert_eq!(fake.calls(), vec![Placement::Gpu], "no second attempt");
+        assert!(out[0].result.as_ref().unwrap_err().contains("not installed"));
+        assert_eq!(out[0].notice, None);
+    }
+
+    #[test]
+    fn a_later_click_request_skips_a_queued_one_before_any_work_starts() {
+        // the session keeps only the newest clicks and its hint is a superset (it rebuilds it from
+        // the pending clicks), and it returns early on a result whose clicks are not the newest
+        let photo = lightcraft_catalog::PhotoId(1);
+        let fake = Fake::new(vec![]);
+        let jobs = vec![(Kind::Clicks(vec![]), clicks_tag(photo, 1, 0)), (Kind::Clicks(vec![]), clicks_tag(photo, 1, 0))];
+        let out = run_tagged(Placement::Cpu, jobs, &fake);
+        assert_eq!(fake.calls(), vec![Placement::Cpu], "only the newest click request reaches the model");
+        assert_eq!(out.len(), 2, "both requests are answered");
+        assert!(out[0].superseded && matches!(out[0].result, Ok(None)), "the queued one is skipped");
+        assert!(!out[1].superseded);
+    }
+
+    #[test]
+    fn a_click_request_for_another_selection_is_not_skipped() {
+        // another component is another selection: its result is applied to that component
+        let photo = lightcraft_catalog::PhotoId(1);
+        let fake = Fake::new(vec![]);
+        let jobs = vec![(Kind::Clicks(vec![]), clicks_tag(photo, 1, 0)), (Kind::Clicks(vec![]), clicks_tag(photo, 1, 1))];
+        let out = run_tagged(Placement::Cpu, jobs, &fake);
+        assert_eq!(fake.calls().len(), 2);
+        assert!(out.iter().all(|o| !o.superseded));
+    }
+
+    #[test]
+    fn a_later_detail_pass_skips_a_queued_pass_for_the_same_selection() {
+        let photo = lightcraft_catalog::PhotoId(1);
+        let fake = Fake::new(vec![]);
+        let jobs = vec![(detail_kind(), detail_tag(photo, 2, 0)), (detail_kind(), detail_tag(photo, 2, 0))];
+        let out = run_tagged(Placement::Cpu, jobs, &fake);
+        assert_eq!(fake.calls().len(), 1, "the queued pass is skipped");
+        assert!(out[0].superseded && !out[1].superseded);
+    }
+
+    #[test]
+    fn a_detail_pass_for_another_component_is_not_skipped() {
+        let photo = lightcraft_catalog::PhotoId(1);
+        let fake = Fake::new(vec![]);
+        let jobs = vec![(detail_kind(), detail_tag(photo, 2, 0)), (detail_kind(), detail_tag(photo, 2, 1))];
+        let out = run_tagged(Placement::Cpu, jobs, &fake);
+        assert_eq!(fake.calls().len(), 2);
+        assert!(out.iter().all(|o| !o.superseded));
+    }
+
+    #[test]
+    fn a_queued_prepare_for_the_same_photo_is_skipped_and_one_for_another_photo_is_not() {
+        let (tx, rx) = mpsc::channel();
+        let (jtx, jrx) = mpsc::channel();
+        let shared = Shared::default();
+        shared.pending.store(3, Ordering::SeqCst);
+        for key in [1, 1, 2] {
+            let mut j = job(Tag::Prepare, &tx);
+            j.key = key;
+            jtx.send(j).unwrap();
+        }
+        drop(jtx);
+        let fake = Fake::default();
+        run(&jrx, &shared, Duration::from_secs(60), Placement::Cpu, &fake);
+        let out: Vec<Outcome> = rx.try_iter().collect();
+        assert_eq!(out.len(), 3);
+        assert!(out[0].superseded, "a later Prepare for the same photo covers it");
+        assert!(!out[1].superseded && !out[2].superseded, "another photo is another request");
+        assert_eq!(fake.calls().len(), 2);
+        assert_eq!(shared.pending.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn two_identical_describe_requests_both_reach_the_model() {
+        // mask.add creates one mask per request and mask.addComponent adds one component per
+        // request (the same text and op twice included): two identical Describe requests are two
+        // intentional selections, so neither may be skipped
+        let prompt = || Tag::NewPrompt { photo: lightcraft_catalog::PhotoId(7), mask: Some(3), op: "add".into(), name: None, text: "hair".into() };
+        let fake = Fake::new(vec![Ok(None), Ok(None)]);
+        let jobs = vec![(Kind::Text("hair".into()), prompt()), (Kind::Text("hair".into()), prompt())];
+        let out = run_tagged(Placement::Cpu, jobs, &fake);
+        assert_eq!(fake.calls().len(), 2, "both requests run");
+        assert!(out.iter().all(|o| !o.superseded));
+    }
+
+    #[test]
+    fn a_queued_describe_request_is_not_skipped_by_a_later_click_or_detail_request() {
+        // an inactive photo is not a reason to drop a queued request either: the session checks the
+        // active photo when the result arrives, not when the request was queued
+        let photo = lightcraft_catalog::PhotoId(7);
+        let prompt = Tag::NewPrompt { photo, mask: None, op: "add".into(), name: None, text: "dog".into() };
+        let fake = Fake::new(vec![Ok(None), Ok(None), Ok(None)]);
+        let jobs =
+            vec![(Kind::Text("dog".into()), prompt), (Kind::Clicks(vec![]), clicks_tag(photo, 1, 0)), (detail_kind(), detail_tag(photo, 1, 0))];
+        let out = run_tagged(Placement::Cpu, jobs, &fake);
+        assert_eq!(fake.calls().len(), 3, "a Describe is never redundant with a click or detail request");
+        assert!(out.iter().all(|o| !o.superseded));
+    }
+
+    #[test]
+    fn redundant_with_classifies_only_results_the_session_discards() {
+        let (tx, _rx) = mpsc::channel();
+        let mut first = job(Tag::Prepare, &tx);
+        let same = job(Tag::Prepare, &tx);
+        let mut other = job(Tag::Prepare, &tx);
+        other.key = 2;
+        assert_eq!(redundant_with(&same, &first), Some(Redundant::Prepare), "same photo");
+        assert_eq!(redundant_with(&other, &first), None, "another photo");
+        let photo = lightcraft_catalog::PhotoId(1);
+        // a clicks request for that photo, mask 1, component 0: the tag is what the rule compares
+        first.kind = Kind::Clicks(vec![]);
+        first.tag = clicks_tag(photo, 1, 0);
+        let mut later = job(clicks_tag(photo, 1, 0), &tx);
+        assert_eq!(redundant_with(&later, &first), Some(Redundant::Clicks), "the same selection");
+        later.tag = detail_tag(photo, 1, 0);
+        assert_eq!(redundant_with(&later, &first), None, "a detail pass does not supersede a click request");
+        let prompt = job(Tag::NewPrompt { photo, mask: None, op: "add".into(), name: None, text: "dog".into() }, &tx);
+        assert_eq!(redundant_with(&prompt, &first), None, "a Describe is never superseded");
+        assert_eq!(redundant_with(&prompt, &prompt), None, "not even by an identical one");
     }
 }
