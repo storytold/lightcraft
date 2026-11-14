@@ -398,6 +398,7 @@ impl Headless {
             || self.app.sync.is_some()
             || self.app.sync_run.is_some()
             || self.app.import.is_some()
+            || self.app.lightroom.is_some()
             || self.app.export.is_some()
             || self.app.session.denoise_busy()
             || self.app.survey_motion.moving(self.time)

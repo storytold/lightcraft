@@ -576,6 +576,79 @@ fn coarse_binning_keeps_specular_points_neutral() {
     assert!(worst < 1.12, "green speckles: green {worst:.2}× the other channels");
 }
 
+/// An import that adds files where they are describes a raw from its headers: the same as
+/// reading all of it, but without a content hash; a file too small to gain is read whole.
+#[test]
+fn header_probe_describes_a_raw_as_reading_all_of_it_does() {
+    let dir = crate::tests_xmp::temp_dir("header-probe");
+    let (w, h) = (2000usize, 1500usize);
+    let mut x = 0x9e37_79b9u32;
+    let data: Vec<u16> = (0..w * h)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            256 + (x % 15000) as u16
+        })
+        .collect();
+    let meta = lightcraft_meta::Metadata {
+        make: Some("Example".into()),
+        model: Some("Camera".into()),
+        keywords: vec!["Travel".into()],
+        ..Default::default()
+    };
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#;
+    let bytes = crate::tests_xmp::synthetic_dng_of(w, h, "RGGB", data, Some(xmp), meta);
+    assert!(bytes.len() as u64 > PARTIAL_MIN, "{} bytes", bytes.len());
+    let big = dir.join("big.dng");
+    std::fs::write(&big, &bytes).unwrap();
+    let big = big.to_string_lossy();
+    assert!(probe_partial(&big).unwrap().is_some(), "described from its headers");
+    let partial = fs_header_probe()(&big).unwrap();
+    let whole = probe_file(&big).unwrap();
+    assert!(whole.content_hash.is_some() && partial.content_hash.is_none());
+    assert!(partial.file_modified.is_some(), "the file's date, as a whole read gives it");
+    assert_eq!(format!("{partial:?}"), format!("{:?}", ProbeInfo { content_hash: None, ..whole }));
+    assert_eq!(partial.meta.camera, "Example Camera");
+    assert!(partial.xmp.is_some_and(|x| x.contains("Rating")));
+    let small = dir.join("small.dng");
+    std::fs::write(&small, crate::tests_xmp::synthetic_dng_with(None, Default::default())).unwrap();
+    let small = small.to_string_lossy();
+    assert!(probe_partial(&small).unwrap().is_none());
+    assert!(fs_header_probe()(&small).unwrap().content_hash.is_some(), "read whole, hashed");
+    assert!(fs_header_probe()(&dir.join("gone.dng").to_string_lossy()).is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The header probe opens a photo as the whole probe does (#3703): a FIFO in a photo's place is
+/// refused, not waited on for a writer that never comes, and so is a folder.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn the_header_probe_refuses_a_fifo_or_a_folder_without_waiting() {
+    let dir = std::env::temp_dir().join(format!("lc-header-probe-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("pipe.dng");
+    // (no unsafe code in this crate: the coreutils tool makes the FIFO)
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        lightcraft_testkit::skip!(System, "no mkfifo");
+        return;
+    }
+    let paths = [fifo.to_string_lossy().to_string(), dir.to_string_lossy().to_string()];
+    // (on a thread: a probe that waits for a writer fails the test instead of hanging it)
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(paths.map(|p| (probe_partial(&p).ok().flatten().is_some(), fs_header_probe()(&p))));
+    });
+    let results = rx.recv_timeout(std::time::Duration::from_secs(20)).expect("the probe waited for a writer");
+    for (described, probed) in results {
+        assert!(!described, "not described from its headers");
+        assert!(probed.is_err_and(|e| e.contains("not a regular file")), "refused");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_raw() {
     use lightcraft_denoise::product;
