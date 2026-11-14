@@ -72,10 +72,10 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             p[key.as_str()] = json!(value.trim());
             app.run(command, p)
         }
-        Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => app.run(
+        Dialog::CaptureTime { mode, time, days, hours, minutes, zone, each } => app.run(
             "photo.setCaptureTime",
             match mode.as_str() {
-                "set" => json!({"time": time}),
+                "set" => json!({"time": time, "each": each}),
                 "shift" => json!({"shift": *days as i64 * 86_400 + *hours as i64 * 3600 + *minutes as i64 * 60}),
                 _ => json!({"hours": zone}),
             },
