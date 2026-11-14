@@ -84,7 +84,7 @@ pub(super) fn lens_blur_shape_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui
 /// Lens Blur Brush Refinement on the photo: the brush circle (size and feather), the stroke being
 /// painted (green: Focus, red: Blur), committed as `lensBlur.brushStroke` when the drag ends.
 /// ⌥ (Alt) erases what the brush painted.
-pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap) {
+pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let clip = app.canvas_rect.unwrap_or(map.rect);
     let p = &ui.painter_at(clip);
@@ -122,6 +122,8 @@ pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui
             hard: r * (1.0 - (app.ui.brush_feather / 100.0).clamp(0.0, 1.0)),
             flow: (app.ui.brush_flow / 100.0).clamp(0.0, 1.0),
             density: (app.ui.lens_blur_brush_amount / 100.0).clamp(0.0, 1.0),
+            // (its strokes render as a mask brush does, Flow per radius travelled from V9)
+            per_radius: lightcraft_pipeline::masks::flow_per_radius(d),
             color: if focus { [70, 200, 120] } else { [230, 70, 70] },
             opacity: 0.45,
         };

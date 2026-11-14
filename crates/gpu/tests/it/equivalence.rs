@@ -434,6 +434,34 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 },
             ];
         }),
+        ("masks (brush, process V9: flow per radius travelled)", |s| {
+            s.process = lightcraft_develop::Process::V9.version();
+            let stroke = BrushStroke {
+                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],
+                size: 0.04,
+                flow: 25.0,
+                ..Default::default()
+            };
+            s.masks = vec![Mask {
+                components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke] } }],
+                adjust: lightcraft_develop::LocalAdjustments { exposure: -1.0, ..Default::default() },
+                ..Default::default()
+            }];
+        }),
+        ("masks (brush, process V8: flow per dab)", |s| {
+            s.process = lightcraft_develop::Process::V8.version();
+            let stroke = BrushStroke {
+                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],
+                size: 0.04,
+                flow: 25.0,
+                ..Default::default()
+            };
+            s.masks = vec![Mask {
+                components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke] } }],
+                adjust: lightcraft_develop::LocalAdjustments { exposure: -1.0, ..Default::default() },
+                ..Default::default()
+            }];
+        }),
         ("masks (brush + ranges)", |s| {
             let stroke = BrushStroke {
                 points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],

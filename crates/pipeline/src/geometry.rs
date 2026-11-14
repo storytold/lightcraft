@@ -37,6 +37,9 @@ pub struct Frame {
     /// `lightcraft_develop::Mask::on_photo`); otherwise they are normalized coordinates of this
     /// frame's transformed image, like spots and the crop.
     pub masks_on_photo: bool,
+    /// Brush Flow is coverage per brush radius travelled (process V9, [`crate::masks::flow_per_radius`]),
+    /// not per dab.
+    pub brush_flow_per_radius: bool,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -82,6 +85,7 @@ impl Frame {
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
             masks_on_photo: false,
+            brush_flow_per_radius: crate::masks::flow_per_radius(s),
         };
         if apply_crop {
             f.constrain_to_image(s.geometry.constrain_crop);

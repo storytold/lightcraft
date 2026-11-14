@@ -2021,6 +2021,33 @@ fn a_fast_brush_stroke_shows_without_gaps_before_the_button_is_released() {
     }
 }
 
+/// Process V9: a Flow 25 stroke shows while the button is held as it will once committed, both
+/// adding Flow per brush radius travelled (#4045): partly covered along its centre, not almost fully.
+#[test]
+fn a_low_flow_stroke_shows_as_it_will_be_committed() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let r = h.request("ui.set", json!({"brushSize": 0.03, "brushFeather": 0.0, "brushFlow": 25.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let y = 0.4;
+    let (photo, held) = hold_fast_stroke(&mut h, y);
+    let col = h.app.ui.mask_overlay_color.map(|v| v as f32);
+    let op = h.app.ui.mask_overlay_opacity / 100.0;
+    // the tint along the centreline: about 1 − 0.75² of full coverage, not the 90 % of a flow per dab
+    let cover: Vec<f32> = photo.iter().zip(&held).map(|(p, l)| (l[0] - p[0]) / ((col[0] - p[0]) * op)).collect();
+    let mid = cover[cover.len() / 2];
+    assert!((mid - 0.4375).abs() < 0.08, "live coverage {mid}");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": y}]));
+    // (the committed mask's pin sits on the stroke)
+    h.app.ui.mask_pins = false;
+    h.settle(SETTLE);
+    let done = stroke_centreline(&h, y);
+    for (l, k) in held.iter().zip(&done) {
+        assert!((0..3).all(|i| (l[i] - k[i]).abs() < 24.0), "live {l:?} vs committed {k:?}");
+    }
+}
+
 /// What the photo shows along the centreline of [`hold_fast_stroke`]'s stroke at height `y`, away
 /// from the cursor ring at its end.
 fn stroke_centreline(h: &Headless, y: f32) -> Vec<[f32; 3]> {

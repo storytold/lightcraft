@@ -1486,7 +1486,8 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
 const MAX_DABS: usize = 4096;
 
 /// The `shape` kernel's brush data for `dabs`: stroke records (12 words: dab offset, dab count,
-/// r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto) then the dab centres.
+/// r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto) then each dab's centre and the flow it
+/// adds (3 words; the stroke's flow before process V9, [`lightcraft_pipeline::masks::BrushDabs::dab`]).
 fn brush_aux(dabs: &[&lightcraft_pipeline::masks::BrushDabs], erase: bool) -> Vec<f32> {
     let mut aux = Vec::new();
     let mut off = 12 * dabs.len();
@@ -1498,10 +1499,10 @@ fn brush_aux(dabs: &[&lightcraft_pipeline::masks::BrushDabs], erase: bool) -> Ve
         aux.extend([off as f32, d.dabs.len() as f32, d.r as f32, d.hard as f32, d.flow, d.density, (erase && d.erase) as u8 as f32]);
         aux.extend([x0, y0, x1, y1].map(|v| v as f32));
         aux.push(d.auto as u8 as f32);
-        off += 2 * d.dabs.len();
+        off += 3 * d.dabs.len();
     }
     for d in dabs {
-        aux.extend(d.dabs.iter().flat_map(|q| [q.x as f32, q.y as f32]));
+        aux.extend(d.dabs.iter().enumerate().flat_map(|(i, q)| [q.x as f32, q.y as f32, d.dab(i).2]));
     }
     aux
 }
