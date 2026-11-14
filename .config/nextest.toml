@@ -1,0 +1,5 @@
+# Plain `cargo nextest run` runs at most 4 tests at once, as plain `cargo test` does
+# (`.cargo/config.toml`, #3059). NEXTEST_TEST_THREADS or `--test-threads` wins; `cargo xtask ci`
+# and `cargo xtask test` set it from available RAM.
+[profile.default]
+test-threads = 4
