@@ -156,6 +156,52 @@ fn indexing_embeds_each_face_once_and_reports_progress() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// A photo with a face region, and the same photo mirrored left to right with the region mirrored too: one face
+/// seen both ways round.
+#[test]
+fn a_face_seen_in_a_mirrored_photo_is_stored_as_the_same_face() {
+    let d = temp("mirror");
+    let lib = d.join("lib");
+    let mut s = Session::new().with_fs();
+    s.face_models_dir = Some(d.join("models"));
+    keep_on_cpu(&mut s);
+    s.open_library(&lib, false).unwrap();
+    // a network that, like real ones, gives a face and its mirror image different vectors
+    let model = d.join("positional.onnx");
+    std::fs::write(&model, lightcraft_faces::synthetic::positional_embedder_model(8)).unwrap();
+    let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+    s.execute("faces.models.select", &json!({"id": r["installed"]["id"]})).unwrap();
+    let (w, h) = (1024usize, 768usize);
+    // brighter towards the left, with a stripe pattern that differs across the picture
+    let px = |x: usize, y: usize| [(255 - x * 255 / w) as u8, ((x * 7 + y * 3) % 256) as u8, ((x / 16 + y / 32) % 2 * 200) as u8, 255];
+    let mut paths = Vec::new();
+    for (name, flip) in [("face.png", false), ("mirrored.png", true)] {
+        let data: Vec<[u8; 4]> = (0..w * h).map(|i| px(if flip { w - 1 - i % w } else { i % w }, i / w)).collect();
+        let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
+        let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+        let path = d.join("photos").join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        paths.push(path.to_string_lossy().into_owned());
+    }
+    let r = s.execute("library.import", &json!({"paths": paths})).unwrap();
+    let ids: Vec<PhotoId> = r["imported"].as_array().unwrap().iter().map(|v| PhotoId(v.as_u64().unwrap())).collect();
+    let (a, b) = (ids[0], ids[1]);
+    let (left, right) = (region(0.15, None), region(0.6, None)); // 0.15–0.40 and its mirror, 0.60–0.85
+    set_regions(&mut s, a, vec![left.clone()]);
+    set_regions(&mut s, b, vec![right.clone()]);
+    for _ in 0..2 {
+        if s.execute("faces.index", &json!({"budgetMs": 60_000})).unwrap()["pendingPhotos"] == 0 {
+            break;
+        }
+    }
+    let (ea, eb) = (s.faces.index.get(a.0, &left.rect).unwrap().clone(), s.faces.index.get(b.0, &right.rect).unwrap().clone());
+    let cos: f32 = ea.iter().zip(eb.iter()).map(|(x, y)| x * y).sum();
+    assert!(cos > 0.9999, "one face, whichever way round the photo shows it: {cos}");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn suggestions_come_from_the_named_faces_and_are_never_applied() {
     let d = temp("suggest");
