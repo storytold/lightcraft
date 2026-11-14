@@ -206,7 +206,7 @@ fn ordinary_tiffs_are_not_shells() {
     let mut pef = rgb_ifd(400, 300);
     pef.set(t::MAKE, Value::Ascii("PENTAX Corporation".into()));
     let mut exif = exif_size(400, 300);
-    exif.set(vendor::EXIF_CFA_PATTERN, Value::Undefined(vec![0, 2, 0, 2, 0, 1, 1, 2]));
+    exif.set(0xa302, Value::Undefined(vec![0, 2, 0, 2, 0, 1, 1, 2]));
     pef.set_child(t::EXIF_IFD, exif);
     assert_eq!(probe(&padded(&[pef])), Some(RawFormat::Pef));
     let mut srw = rgb_ifd(400, 300);
