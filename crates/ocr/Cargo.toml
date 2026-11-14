@@ -1,0 +1,29 @@
+[package]
+name = "lightcraft-ocr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft OCR (L1): text in photos with PaddleOCR's PP-OCRv6 (detection, line orientation, recognition) on candle (pure Rust)"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# the models run natively only (the web build reads no text)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+lightcraft-fetch = { workspace = true }
+
+[[example]]
+name = "hiertext"
+# its unit tests (word cutting, matching, the seeded subset) run with the crate's
+test = true
+
+[dev-dependencies]
+# the HierText benchmark example (examples/hiertext.rs) decodes the photos and the annotations' gzip
+image = { workspace = true }
+flate2 = "1"
