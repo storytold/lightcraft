@@ -12,6 +12,7 @@ mod color;
 mod constrain_crop;
 mod crop_angle;
 mod crop_aspect;
+mod crop_aspects;
 mod dcp;
 mod dcp_corpus;
 mod denoise;
