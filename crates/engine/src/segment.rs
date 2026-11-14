@@ -657,15 +657,25 @@ impl Session {
         let mut polled = Polled { messages: std::mem::take(&mut self.segmenter.messages), ..Default::default() };
         #[cfg(feature = "sam")]
         {
-            // (before draining: a worker that is idle now has sent everything)
-            let idle = !self.segmenter.busy();
-            let done: Vec<worker::Outcome> = self.segmenter.results.1.try_iter().collect();
+            // Observe idleness and drain replies together: a finishing worker cannot be between
+            // decrementing its counter and sending its outcome while this runs.
+            let Some((idle, done)) = self.segmenter.worker.completed(&self.segmenter.results.1) else { return polled };
+            // A lost click (for example after a worker restart) should not stay pending forever.
+            // Clear it before applying outcomes: an outcome may queue a new click itself.
+            let lost = idle
+                && self.segmenter.pending.as_ref().is_some_and(|pending| {
+                    !done.iter().any(|outcome| {
+                        !outcome.superseded
+                            && matches!(&outcome.tag, Tag::Clicks { photo, mask, comp, hint, exclude }
+                            if *photo == pending.photo && *mask == pending.mask && *comp == pending.comp
+                                && *hint == pending.hint && *exclude == pending.exclude)
+                    })
+                });
+            if lost {
+                self.segmenter.pending = None;
+            }
             for o in done {
                 self.apply_outcome(o, &mut polled);
-            }
-            // clicks whose request was lost (the worker restarted) aren't pending forever
-            if idle {
-                self.segmenter.pending = None;
             }
         }
         polled
@@ -815,6 +825,68 @@ impl Session {
 mod tests {
     use super::*;
 
+    // A reply racing the session poll must not be mistaken for a lost click.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn idle_before_click_reply_must_not_discard_the_outcome() {
+        use std::{sync::mpsc, time::Duration};
+        let (setup_tx, setup_rx) = mpsc::channel();
+        let (go_tx, go_rx) = mpsc::channel();
+        let (first_tx, first_rx) = mpsc::channel();
+        let (resume_tx, resume_rx) = mpsc::channel();
+        let session = std::thread::spawn(move || {
+            let mut s = Session::with_demo();
+            let photo = s.active().unwrap();
+            let latest = PendingClicks { photo, mask: 1, comp: 0, hint: vec![], exclude: vec![] };
+            s.segmenter.pending = Some(latest.clone());
+            let tag = Tag::Clicks { photo, mask: 1, comp: 0, hint: latest.hint, exclude: latest.exclude };
+            setup_tx.send((s.segmenter.worker.shared.clone(), s.segmenter.results.0.clone(), tag)).unwrap();
+            go_rx.recv().unwrap();
+            let first = s.segment_poll();
+            first_tx.send((first.messages.is_empty(), s.segmenter.pending.is_some())).unwrap();
+            resume_rx.recv().unwrap();
+            let second = s.segment_poll();
+            (second.messages, s.segmenter.pending.is_none())
+        });
+        let (shared, replies, tag) = setup_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // Hold the delivery point while polling. A blocking implementation must fail this
+        // test within the timeout rather than hanging the test process forever.
+        let delivery = shared.delivery.lock().unwrap();
+        go_tx.send(()).unwrap();
+        let first = first_rx.recv_timeout(Duration::from_secs(5));
+        replies.send(worker::Outcome { tag, result: Err("reply arrived".into()), superseded: false, notice: None }).unwrap();
+        drop(delivery);
+        resume_tx.send(()).unwrap();
+        let (messages, cleared) = session.join().unwrap();
+        assert_eq!(first.expect("poll blocked while a reply was being delivered"), (true, true));
+        assert_eq!(messages, vec!["reply arrived"]);
+        assert!(cleared);
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn an_idle_worker_with_no_reply_clears_lost_clicks() {
+        let mut s = Session::with_demo();
+        s.segmenter.pending = Some(PendingClicks { photo: s.active().unwrap(), mask: 1, comp: 0, hint: vec![], exclude: vec![] });
+        assert!(!s.segmenter.busy());
+        s.segment_poll();
+        assert!(s.segmenter.pending.is_none());
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn a_superseded_reply_does_not_hide_the_latest_click_reply() {
+        let mut s = Session::with_demo();
+        let photo = s.active().unwrap();
+        s.segmenter.pending = Some(PendingClicks { photo, mask: 1, comp: 0, hint: vec![], exclude: vec![] });
+        for (superseded, message) in [(true, "old reply"), (false, "latest reply")] {
+            let tag = Tag::Clicks { photo, mask: 1, comp: 0, hint: vec![], exclude: vec![] };
+            s.segmenter.results.0.send(worker::Outcome { tag, result: Err(message.into()), superseded, notice: None }).unwrap();
+        }
+        assert_eq!(s.segment_poll().messages, vec!["latest reply"]);
+        assert!(s.segmenter.pending.is_none());
+    }
+
     #[cfg(feature = "sam")]
     #[test]
     fn a_worker_notice_reaches_the_user_with_the_result() {
@@ -866,6 +938,50 @@ mod tests {
         assert_eq!(shape(&s), before);
         // an error reaches the user
         assert_eq!(send(&mut s, Err("boom".into())).messages, vec!["boom".to_string()]);
+    }
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn subject_reply_keeps_a_click_queued_while_polling() {
+        use lightcraft_develop::{Mask, MaskComponent, MaskOp};
+        let dir = (0..1000)
+            .find_map(|n| {
+                let dir = std::env::temp_dir().join(format!("lc-subject-click-race-{}-{n}", std::process::id()));
+                match std::fs::create_dir(&dir) {
+                    Ok(()) => Some(dir),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                    Err(e) => panic!("could not create test model directory: {e}"),
+                }
+            })
+            .expect("could not find a unique test model directory");
+        let files = [lightcraft_segment::WEIGHTS_FILE, "vocab.json", "merges.txt"];
+        for file in files {
+            std::fs::write(dir.join(file), []).unwrap();
+        }
+        let mut s = Session::with_demo();
+        s.segmenter.dir = Some(dir.clone());
+        s.segmenter.background = true;
+        let (worker, jobs) = worker::Worker::test_sink();
+        s.segmenter.worker = worker;
+        let photo = s.active().unwrap();
+        let mut d = (*s.develop_of(photo).unwrap()).clone();
+        let shape = MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 };
+        d.masks.push(Mask { id: 3, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], ..Default::default() });
+        s.set_develop(photo, d, "test").unwrap();
+        let point = Point::new(0.4, 0.5);
+        let tag = Tag::Subject { photo, mask: 3, comp: 0, point };
+        s.segmenter.results.0.send(worker::Outcome { tag, result: Ok(None), superseded: false, notice: None }).unwrap();
+        let polled = s.segment_poll();
+        assert!(polled.messages.is_empty(), "{:?}", polled.messages);
+        assert_eq!(s.segmenter.pending.as_ref().map(|p| p.hint.as_slice()), Some([point].as_slice()));
+        let queued = jobs.try_recv().unwrap();
+        assert!(matches!(queued.tag, Tag::Clicks { photo: id, mask: 3, comp: 0, ref hint, ref exclude }
+            if id == photo && hint.as_slice() == [point] && exclude.is_empty()));
+        drop(s);
+        for file in files {
+            std::fs::remove_file(dir.join(file)).unwrap();
+        }
+        std::fs::remove_dir(dir).unwrap();
     }
 
     fn seg_box(side: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> SegMask {

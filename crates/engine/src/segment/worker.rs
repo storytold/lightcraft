@@ -18,9 +18,9 @@
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 use std::time::Duration;
 
 use lightcraft_develop::SegMask;
@@ -151,7 +151,7 @@ impl From<lightcraft_segment::Error> for Failure {
     }
 }
 
-/// Counters the session reads without locking.
+/// Counters and completed outcomes shared with the session.
 #[derive(Default)]
 pub struct Shared {
     /// Requests other than detail passes, queued or running.
@@ -162,6 +162,8 @@ pub struct Shared {
     pub loaded: AtomicBool,
     /// Loading the model or encoding a photo right now (the slow parts).
     pub encoding: AtomicBool,
+    /// Makes decrementing the busy counter and sending the reply indivisible to the session poll.
+    pub(super) delivery: Mutex<()>,
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -199,6 +201,12 @@ pub struct Worker {
 }
 
 impl Worker {
+    #[cfg(test)]
+    pub(super) fn test_sink() -> (Self, mpsc::Receiver<Job>) {
+        let (tx, rx) = mpsc::channel();
+        (Self { tx: Some(tx), ..Self::default() }, rx)
+    }
+
     fn counter(&self, job: &Job) -> &AtomicUsize {
         if matches!(job.kind, Kind::Detail { .. }) { &self.shared.detail } else { &self.shared.pending }
     }
@@ -210,6 +218,16 @@ impl Worker {
 
     pub fn pending(&self) -> usize {
         if self.dead() { 0 } else { self.shared.pending.load(Ordering::SeqCst) }
+    }
+
+    /// Observe idleness and collect replies without racing a reply being delivered or blocking the UI.
+    pub(super) fn completed(&self, replies: &mpsc::Receiver<Outcome>) -> Option<(bool, Vec<Outcome>)> {
+        let _delivery = match self.shared.delivery.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => return None,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        };
+        Some((self.pending() == 0, replies.try_iter().collect()))
     }
 
     pub fn detail(&self) -> usize {
@@ -302,6 +320,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         // reply must not still see the worker busy with it
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
         if queue.iter().any(|later| supersedes(later, &job)) {
+            let _delivery = shared.delivery.lock().unwrap_or_else(PoisonError::into_inner);
             drop(done);
             let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true, notice: None });
             continue;
@@ -339,6 +358,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             state.cache = None;
         }
         shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
+        let _delivery = shared.delivery.lock().unwrap_or_else(PoisonError::into_inner);
         drop(done);
         let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false, notice });
     }
