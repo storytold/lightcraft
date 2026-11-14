@@ -60,6 +60,15 @@ impl CanvasMap {
         };
         Some(self.place(n))
     }
+    /// Screen points per unit of the oriented photo's long edge: the unit of brush and spot
+    /// sizes (`BrushStroke::size`, `Spot::size`). The render measures them on the uncropped
+    /// photo ([`Frame::px_per_long`]), so a cursor sized from the cropped frame on screen would
+    /// draw smaller than the stroke it paints.
+    pub(crate) fn per_long(&self) -> f32 {
+        let o = self.place(Point::new(0.0, 0.0));
+        let (sx, sy) = (self.place(Point::new(1.0, 0.0)).distance(o), self.place(Point::new(0.0, 1.0)).distance(o));
+        sx.max(sy)
+    }
     /// A point on the displayed frame (normalized) on screen.
     fn place(&self, n: Point) -> Pos2 {
         let q = self.from_norm.apply(n);
@@ -431,6 +440,27 @@ mod mask_map_tests {
 
     fn close(a: Point, b: Point) -> bool {
         (a.x - b.x).abs() < 1e-4 && (a.y - b.y).abs() < 1e-4
+    }
+
+    /// Brush and spot sizes are measured on the uncropped photo's long edge: on a photo cropped
+    /// to half its width, the cursor is as large as the stroke the render paints, not three
+    /// quarters of it (the cropped frame's long edge).
+    #[test]
+    fn a_brush_cursor_on_a_cropped_photo_is_the_size_the_render_paints() {
+        let size = 0.05f32;
+        // the frame shown at 2 screen points per output pixel
+        let painted = |frame: &Frame, out_w: usize| size * frame.px_per_long(out_w) as f32 * 2.0;
+        let mut d = DevelopSettings::default();
+        d.crop.geometry.rect = lightcraft_geom::Rect::new(0.25, 0.0, 0.75, 1.0);
+        let cropped = Frame::new(400, 300, &d, true);
+        let m = CanvasMap::new(&cropped, Rect::from_min_size(pos2(10.0, 20.0), vec2(400.0, 600.0)));
+        let want = painted(&cropped, 200);
+        assert!((want - 40.0).abs() < 1e-3, "the render's radius: {want}");
+        assert!((size * m.per_long() - want).abs() < 1e-3, "cursor {} vs painted {want}", size * m.per_long());
+        // uncropped, the long edge on screen is the photo's
+        let full = Frame::new(400, 300, &DevelopSettings::default(), true);
+        let m = CanvasMap::new(&full, Rect::from_min_size(pos2(10.0, 20.0), vec2(800.0, 600.0)));
+        assert!((size * m.per_long() - painted(&full, 400)).abs() < 1e-3);
     }
 
     /// Under a perspective warp, a mask's on-screen place goes into its coordinates on the photo
