@@ -107,6 +107,27 @@ fn dehaze_does_not_crush_dark_regions_next_to_bright_ones() {
     }
 }
 
+/// An export's sharp downscale (#2970) keeps more of the fine detail a smaller output can hold
+/// than a preview's smooth one, and changes nothing when the output is the source's own size.
+#[test]
+fn sharp_downscale_keeps_detail() {
+    use crate::Downscale;
+    // fine stripes: a period of 5 source pixels, 3 output pixels at 600 → 360
+    let src = Rgb32f::from_fn(600, 400, |x, _| [0.18 * (1.0 + 0.8 * (x as f32 * std::f32::consts::TAU / 5.0).sin()); 3]);
+    let swing = |down: Downscale, edge: usize| {
+        let r =
+            render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest { downscale: down, ..RenderRequest::fit(edge, edge) });
+        let row: Vec<f32> = (40..r.image.width - 40).map(|x| r.image.data[(r.image.height / 2) * r.image.width + x][1] as f32).collect();
+        let m = row.iter().sum::<f32>() / row.len() as f32;
+        (row.iter().map(|v| (v - m).abs()).sum::<f32>() / row.len() as f32, r.image)
+    };
+    let ((smooth, _), (sharp, _)) = (swing(Downscale::Smooth, 360), swing(Downscale::Sharp, 360));
+    assert!(sharp > smooth * 1.25, "sharp {sharp} vs smooth {smooth}");
+    let ((_, a), (_, b)) = (swing(Downscale::Smooth, 600), swing(Downscale::Sharp, 600));
+    assert_eq!((b.width, b.height), (600, 400));
+    assert_eq!(a.data, b.data, "no resize, no difference");
+}
+
 #[test]
 fn resolution_independence_of_local_contrast() {
     // Clarity at two preview sizes should give similar results after downscaling.

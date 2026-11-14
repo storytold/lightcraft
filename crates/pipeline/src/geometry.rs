@@ -37,6 +37,9 @@ pub struct Frame {
     /// `lightcraft_develop::Mask::on_photo`); otherwise they are normalized coordinates of this
     /// frame's transformed image, like spots and the crop.
     pub masks_on_photo: bool,
+    /// Filter of the area downscale ahead of the bilinear resample ([`Frame::sample`]); see
+    /// [`crate::Downscale`].
+    pub downscale: Filter,
 }
 
 /// Where a windowed [`Frame`]'s pixels sit in the full output: its offset and the full output's
@@ -82,6 +85,7 @@ impl Frame {
             warp: (!warp.is_identity()).then_some(warp),
             view: None,
             masks_on_photo: false,
+            downscale: Filter::Mitchell,
         };
         if apply_crop {
             f.constrain_to_image(s.geometry.constrain_crop);
@@ -312,8 +316,12 @@ impl Frame {
     pub fn sample_plan(&self, src_w: usize, src_h: usize, w: usize, h: usize) -> SamplePlan {
         let (ow, oh) = if self.orient.swaps_axes() { (src_h, src_w) } else { (src_w, src_h) };
         let crop_px = self.crop.rect_px(self.ow, self.oh);
-        let k = crop_px.width() / w as f64;
-        let prefilter = (k > 1.25).then(|| (((ow as f64 / k).round() as usize).max(1), ((oh as f64 / k).round() as usize).max(1)));
+        // the larger of the two axes' reductions: the prefilter then takes every axis at least as small
+        // as its output needs, so the bilinear pass after it never minifies (and aliases) either one
+        let k = (crop_px.width() / w as f64).max(crop_px.height() / h as f64);
+        // Sharp exports use their selected filter for every downscale; keep smooth previews' threshold.
+        let threshold = if self.downscale == Filter::Lanczos3 { 1.0 } else { 1.25 };
+        let prefilter = (k > threshold).then(|| (((ow as f64 / k).round() as usize).max(1), ((oh as f64 / k).round() as usize).max(1)));
         let (bw, bh) = prefilter.unwrap_or((ow, oh));
         let (sx, sy) = (bw as f64 / ow as f64, bh as f64 / oh as f64);
         let mode = if self.warp.is_some() {
@@ -333,7 +341,7 @@ impl Frame {
         let o = oriented.as_ref().unwrap_or(src);
         let plan = self.sample_plan(src.width, src.height, w, h);
         let base = match plan.prefilter {
-            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
+            Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, self.downscale)),
             None => std::borrow::Cow::Borrowed(o),
         };
         self.sample_base(base, plan, w, h)
@@ -355,7 +363,7 @@ impl Frame {
         let mut bases: Vec<((usize, usize), Rgb32f)> = Vec::new();
         for dims in plans.iter().filter_map(|p| p.1.prefilter) {
             if !bases.iter().any(|b| b.0 == dims) {
-                bases.push((dims, resize(o, dims.0, dims.1, Filter::Mitchell)));
+                bases.push((dims, resize(o, dims.0, dims.1, self.downscale)));
             }
         }
         plans
@@ -443,7 +451,7 @@ pub struct SamplePlan {
     /// Oriented source size.
     pub ow: usize,
     pub oh: usize,
-    /// Size of the Mitchell prefilter (area downscale before the bilinear resample), if any.
+    /// Size of the prefilter ([`Frame::downscale`]: area downscale before the bilinear resample), if any.
     pub prefilter: Option<(usize, usize)>,
     /// Oriented-source px → prefiltered px.
     pub sx: f64,
@@ -527,6 +535,24 @@ mod tests {
         let p = m.apply(Point::new(150.0, 100.0));
         assert!((p.x - 0.5).abs() < 1e-9 && (p.y - 0.5).abs() < 1e-9);
         assert!((f.px_per_long(300) - 300.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sharp_downscale_filters_mild_reductions_and_native_size_stays_identical() {
+        let src = Rgb32f::from_fn(100, 100, |x, y| [((x + y) % 2) as f32; 3]);
+        for filter in [Filter::Mitchell, Filter::Lanczos3] {
+            let mut f = Frame::new(100, 100, &DevelopSettings::default(), true);
+            f.downscale = filter;
+            let edge = if filter == Filter::Lanczos3 { 90 } else { 70 };
+            assert_eq!(f.sample_plan(100, 100, edge, edge).prefilter, Some((edge, edge)));
+            assert_eq!(f.sample(&src, edge, edge).data, resize(&src, edge, edge, filter).data);
+            if filter == Filter::Mitchell {
+                assert_eq!(f.sample_plan(100, 100, 90, 90).prefilter, None);
+            }
+            assert_eq!(f.sample_plan(100, 100, 100, 100).prefilter, None);
+            assert_eq!(f.sample(&src, 100, 100).data, src.data);
+            assert_eq!(f.sample_plan(100, 100, 110, 110).prefilter, None);
+        }
     }
 
     #[test]
