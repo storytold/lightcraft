@@ -38,5 +38,9 @@ mod clear_label_tests;
 mod enable_filters_tests;
 
 #[cfg(test)]
+#[path = "library/tests_hide_rejected.rs"]
+mod hide_rejected_tests;
+
+#[cfg(test)]
 #[path = "library/tests_source_album_filter.rs"]
 mod source_album_filter_tests;

@@ -228,6 +228,30 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"enabled": s.shelved_filter.is_none(), "count": s.visible().len()}))
             }
         ),
+        // issue #3513: one key for the filter bar's Picked + Unflagged
+        cmd!(
+            "library.hideRejected",
+            "Hide Rejected Photos",
+            ["View"],
+            Some("Cmd+Alt+X"),
+            "{hide?: bool (default: the opposite of now)} — the flag filter shows picks and unflagged photos, or, from there, no longer filters by flag; the rest of the filter stays. `hide` asks for the menu row's state: when the row is already in it, nothing changes (so `hide: false` leaves Picked only or Rejected only as it is). Like any filter change, it forgets a filter put aside by Enable Filters → {hidden, count}",
+            always,
+            |s, p| {
+                let hide = match p.get("hide") {
+                    None | Some(Value::Null) => !s.rejects_hidden(),
+                    Some(v) => v.as_bool().ok_or_else(|| bad("library.hideRejected", "hide must be true or false"))?,
+                };
+                // already in the state asked for: another flag filter (Picked only…) or a filter put
+                // aside by Enable Filters stays as it is
+                if hide == s.rejects_hidden() {
+                    return Ok(json!({"hidden": hide, "count": s.visible().len()}));
+                }
+                s.filter.flag = None;
+                s.filter.flags = if hide { vec![Flag::Pick, Flag::None] } else { Vec::new() };
+                s.shelved_filter = None;
+                Ok(json!({"hidden": hide, "count": s.visible().len()}))
+            }
+        ),
         cmd!(
             "library.sort",
             "Sort",

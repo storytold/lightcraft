@@ -843,5 +843,9 @@ mod flag_cycle_tests;
 mod enable_filters_tests;
 
 #[cfg(test)]
+#[path = "shortcuts/tests_hide_rejected.rs"]
+mod hide_rejected_tests;
+
+#[cfg(test)]
 #[path = "shortcuts/tests_filter_bar_key.rs"]
 mod filter_bar_key_tests;
