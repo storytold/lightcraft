@@ -1,5 +1,5 @@
 use super::commit::{How, Plan, Slot, Transfer, commit_prepared, name_family, run_transfers, system_clock};
-use super::files::{Seen, expand, probe_all, reusable_probes, sidecars_of};
+use super::files::{expand, probe_all, reusable_probes, sidecars_of};
 use super::types::{FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, Kept, OnDeleted};
 use super::{HashMap, MediaKind, Path, PathBuf, Photo, PhotoId, ProbeInfo, Session, Source};
 
@@ -278,7 +278,7 @@ impl ImportJob {
         // as long as they are still there, as they were: a file gone or changed since is probed again
         let cached = reusable_probes(&todo, &mut self.cache, cancel, |seen, info| {
             // (the web's files are not std::fs files: kept as probed)
-            cfg!(target_arch = "wasm32") || matches!(seen, Seen::At { is_file: true, len } if len == info.file_size)
+            cfg!(target_arch = "wasm32") || seen.unchanged_since(info)
         });
         let missing: Vec<String> = todo.iter().zip(&cached).filter(|(_, c)| c.is_none()).map(|(f, _)| f.clone()).collect();
         // Reading the files is the slow part of adding them where they are: it is counted on its
@@ -341,13 +341,16 @@ impl ImportJob {
             // same bytes as a library photo: skipped below, once its capture time is known
             let duplicate_of =
                 info.content_hash.as_ref().filter(|_| !opts.local).and_then(|h| self.by_hash.get(h).map(|existing| (h.clone(), *existing)));
-            // the XMP sidecar (or a raw's embedded XMP), read before copying: its capture time files
-            // and names the copy when the file itself has none (a duplicate needs only that time)
-            let raw = info.kind == MediaKind::Raw;
+            // the XMP sidecar (or the XMP embedded in a raw or a JPEG, as the probe found it), read
+            // before copying: its capture time files and names the copy when the file itself has none
+            // (a duplicate needs only that time). A sidecar found keeps precedence even when it can't
+            // be read, as on a manual reread (`sidecar::read_packet`): the embedded values don't apply.
             let packet = if duplicate_of.is_some() && info.captured.is_some() {
                 None
+            } else if let Some(f) = found_sidecar {
+                crate::sidecar::read_sidecar_text(&f).inspect_err(|e| log::warn!("import {path}: sidecar {}: {e}", f.display())).ok()
             } else {
-                found_sidecar.and_then(|f| std::fs::read_to_string(f).ok()).or_else(|| info.xmp.clone().filter(|_| raw))
+                info.xmp.clone()
             };
             let target = crate::crs::Target::for_file(info.kind, &info.format, info.preview_only.is_some(), &info.meta.camera);
             let sidecar = packet.and_then(|x| match crate::sidecar::parse_sidecar(&x, target) {
@@ -421,7 +424,7 @@ impl ImportJob {
                         How::Copy { name }
                     };
                     // Copy as DNG: the copied raw becomes a DNG (the copy is ours to replace)
-                    let dng = opts.convert_dng && mode == ImportMode::Copy && raw && !info.format.eq_ignore_ascii_case("DNG");
+                    let dng = opts.convert_dng && mode == ImportMode::Copy && info.kind == MediaKind::Raw && !info.format.eq_ignore_ascii_case("DNG");
                     plan.slots.push(Slot::Transfer);
                     // (transfers of one folder and name family can take each other's names, so they never run together)
                     plan.pending_families.insert(family);

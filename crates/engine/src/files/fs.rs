@@ -90,9 +90,13 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
         let meta = file.metadata().ok();
         let len = meta.as_ref().map_or(0, |m| usize::try_from(m.len()).unwrap_or(usize::MAX));
         let _permit = crate::memory::work_gate().acquire(len);
+        // the time is taken after the modification time and before the bytes: a write while or
+        // after they are read is stamped this second or later
+        let read_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok().and_then(|d| i64::try_from(d.as_secs()).ok());
         let bytes = crate::read_file::read_open(file, crate::read_file::MAX_MEDIA_BYTES).map_err(|e| format!("{path}: {e}"))?;
         let mut info = probe_bytes(path, &bytes)?;
         info.file_modified = meta.as_ref().and_then(modified_iso);
+        info.read_at = read_at;
         Ok(info)
     });
     (loader, probe)
@@ -119,9 +123,13 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
 /// The modification time in `meta` as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the
 /// filesystem doesn't say or the time is before 1970.
 fn modified_iso(meta: &std::fs::Metadata) -> Option<String> {
+    modified_secs(meta).map(crate::import::civil)
+}
+
+/// The modification time in `meta` in whole seconds since 1970, as [`modified_iso`] writes it.
+pub(crate) fn modified_secs(meta: &std::fs::Metadata) -> Option<i64> {
     let t = meta.modified().ok()?;
-    let secs = i64::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()?;
-    Some(crate::import::civil(secs))
+    i64::try_from(t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs()).ok()
 }
 
 impl crate::Session {
