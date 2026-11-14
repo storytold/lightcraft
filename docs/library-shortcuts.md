@@ -55,6 +55,17 @@ Detail and in the full-screen preview (`F`) it keeps showing the original (Devel
 View → Filter Bar (`Shift+F`) works in every view. A Show Original moved to another key keeps its meaning
 in the grids, and `\` given to another command runs that command.
 
+## Map view
+
+| Key | Action |
+|---|---|
+| ⌘⌥3 / Ctrl+Alt+3 | Open the Map view (View → Map) |
+| `\` (backslash) | In the Map view: show / hide the map's location filter bar |
+| ⌘K / Ctrl+K | In the Map view: lock / unlock the markers (elsewhere it stays Add Keywords) |
+
+In the Map view `\` and ⌘K follow the same rule as `\` in the grids: they act on the map only while their default
+commands (Show Original, Add Keywords) keep those keys, and a key given to another command runs that command.
+
 Flag cycling and raise/lower use each photo's own flag, so a mixed selection steps together without being made uniform. Adobe's shortcut list names the backtick "Cycle flag settings" but does not state the order; unflagged → pick → reject is LightCraft's choice. The key is the logical grave key, so it follows the keyboard layout (on layouts where it is a dead accent key, assign another key in Help → Keyboard Shortcuts to `photo.cycleFlag`).
 
 `Home` and `End` make the first or last photo of the view the active, selected one. `Shift` + `←` /

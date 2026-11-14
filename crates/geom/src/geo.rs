@@ -119,16 +119,6 @@ impl GeoBounds {
     pub fn center(self) -> LatLon {
         LatLon { lat: (self.min_lat + self.max_lat) / 2.0, lon: (self.min_lon + self.max_lon) / 2.0 }
     }
-
-    /// Calculate bounding box covering a circle defined by center point and radius in meters.
-    pub fn from_center_and_radius(center: LatLon, radius_meters: f64) -> Self {
-        let r = radius_meters.max(0.0);
-        let lat_delta = (r / EARTH_RADIUS_METERS).to_degrees();
-        let cos_lat = center.lat.to_radians().cos().abs().max(0.0001);
-        let lon_delta = ((r / EARTH_RADIUS_METERS) / cos_lat).to_degrees();
-
-        Self::new(center.lat - lat_delta, center.lat + lat_delta, center.lon - lon_delta, center.lon + lon_delta)
-    }
 }
 
 /// Discrete Slippy Map Tile Coordinate at integer zoom level `z`.

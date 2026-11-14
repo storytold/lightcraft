@@ -2,8 +2,9 @@
 //! photo marker clustering, loupe popover, GPX tracklog overlay, and saved locations.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use egui::{Align2, Color32, ColorImage, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -35,13 +36,60 @@ struct TileStore {
     pending: HashSet<TileKey>,
     tx: Sender<(TileKey, ColorImage)>,
     rx: Receiver<(TileKey, ColorImage)>,
+    /// The tile loads in flight, while there are any. Only the workers hold it strongly.
+    batch: Weak<TileBatch>,
 }
 
 impl TileStore {
     fn new() -> Self {
         let (tx, rx) = channel();
-        Self { textures: HashMap::new(), pending: HashSet::new(), tx, rx }
+        Self { textures: HashMap::new(), pending: HashSet::new(), tx, rx, batch: Weak::new() }
     }
+}
+
+/// The tile loads in flight share one activity row. Each worker holds an `Arc` until it ends, so
+/// the last one to finish (fetched, failed or not started) drops the row, whether or not the Map
+/// view is still drawn.
+struct TileBatch {
+    guard: lightcraft_engine::activity::TaskGuard,
+    done: AtomicU64,
+    total: AtomicU64,
+}
+
+impl TileBatch {
+    fn progress(&self) {
+        self.guard.progress(self.done.load(Ordering::Relaxed), self.total.load(Ordering::Relaxed));
+    }
+
+    fn finish(&self) {
+        self.done.fetch_add(1, Ordering::Relaxed);
+        self.progress();
+    }
+}
+
+/// Held by a tile worker: counts its load as done when the worker ends, then lets go of the batch.
+struct TileLoadEnd(Arc<TileBatch>);
+
+impl Drop for TileLoadEnd {
+    fn drop(&mut self) {
+        self.0.finish();
+    }
+}
+
+/// Counts one more tile load into the batch in flight, starting a batch (and its row) if none is.
+fn join_tile_batch(slot: &mut Weak<TileBatch>, activity: &lightcraft_engine::activity::Activity) -> Arc<TileBatch> {
+    let batch = slot.upgrade().unwrap_or_else(|| {
+        let batch = Arc::new(TileBatch {
+            guard: activity.start("download", "Loading map tiles", lightcraft_engine::activity::Cancel::No),
+            done: AtomicU64::new(0),
+            total: AtomicU64::new(0),
+        });
+        *slot = Arc::downgrade(&batch);
+        batch
+    });
+    batch.total.fetch_add(1, Ordering::Relaxed);
+    batch.progress();
+    batch
 }
 
 static TILES: Mutex<Option<TileStore>> = Mutex::new(None);
@@ -135,7 +183,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
 
     // Draw Map Grid / Tile outlines
-    render_tile_grid(&painter, canvas_rect, screen_center, center, zoom, map_ui.provider);
+    render_tile_grid(&painter, &app.session.activity, canvas_rect, screen_center, center, zoom, map_ui.provider);
 
     // 2. Fetch and Cluster Candidate Photos
     let candidate_photos = collect_photos(app, map_ui.filter, |p| screen_to_lat_lon(p, zoom, center), canvas_rect);
@@ -240,9 +288,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.ui.map = map_ui;
 }
 
-fn fetch_and_cache_tile(key: TileKey, url: String, disk_path: std::path::PathBuf, tx: Sender<(TileKey, ColorImage)>, ctx: egui::Context) {
+fn fetch_and_cache_tile(
+    key: TileKey,
+    url: String,
+    disk_path: std::path::PathBuf,
+    tx: Sender<(TileKey, ColorImage)>,
+    ctx: egui::Context,
+    batch: Arc<TileBatch>,
+) {
     #[cfg(not(target_arch = "wasm32"))]
     let _ = std::thread::Builder::new().name("lc-tile-fetch".into()).spawn(move || {
+        // ends this load in the batch's row however the worker returns
+        let _counted = TileLoadEnd(batch);
         let bytes = if disk_path.exists() {
             std::fs::read(&disk_path).ok()
         } else {
@@ -269,7 +326,15 @@ fn fetch_and_cache_tile(key: TileKey, url: String, disk_path: std::path::PathBuf
     });
 }
 
-fn render_tile_grid(p: &Painter, canvas: Rect, center_pos: Pos2, center: LatLon, zoom: f64, provider: MapProvider) {
+fn render_tile_grid(
+    p: &Painter,
+    activity: &lightcraft_engine::activity::Activity,
+    canvas: Rect,
+    center_pos: Pos2,
+    center: LatLon,
+    zoom: f64,
+    provider: MapProvider,
+) {
     let int_zoom = (zoom.floor() as u8).min(provider.max_zoom());
     let scale = 2.0_f64.powf(zoom - int_zoom as f64);
     let tile_screen_size = (TILE_SIZE as f64 * scale) as f32;
@@ -327,7 +392,8 @@ fn render_tile_grid(p: &Painter, canvas: Rect, center_pos: Pos2, center: LatLon,
                     if !store.pending.contains(&key) {
                         store.pending.insert(key);
                         let disk_path = lightcraft_engine::map::tile_cache_path(&cache_root, provider, coord, layer_idx);
-                        fetch_and_cache_tile(key, url, disk_path, store.tx.clone(), p.ctx().clone());
+                        let batch = join_tile_batch(&mut store.batch, activity);
+                        fetch_and_cache_tile(key, url, disk_path, store.tx.clone(), p.ctx().clone(), batch);
                     }
                 }
             }
@@ -459,7 +525,7 @@ fn render_top_filter_bar(_app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
     let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
     bar_ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
-        ui.label(egui::RichText::new("Location Filter:").strong().color(Color32::WHITE));
+        ui.label(egui::RichText::new(crate::i18n::tr("Location Filter:")).strong().color(Color32::WHITE));
         ui.add_space(8.0);
 
         let filters = [
@@ -471,7 +537,7 @@ fn render_top_filter_bar(_app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
 
         for (f, name) in filters {
             let active = map_ui.filter == f;
-            let btn = ui.selectable_label(active, name);
+            let btn = ui.selectable_label(active, crate::i18n::tr(name));
             if btn.clicked() {
                 map_ui.filter = f;
             }
@@ -495,7 +561,7 @@ fn render_bottom_toolbar(_app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
     let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
     bar_ui.horizontal_centered(|ui| {
         ui.add_space(12.0);
-        ui.label(egui::RichText::new("Map Style:").small().color(Color32::LIGHT_GRAY));
+        ui.label(egui::RichText::new(crate::i18n::tr("Map Style:")).small().color(Color32::LIGHT_GRAY));
 
         crate::widgets::combo_box("map_style_combo").selected_text(map_ui.provider.label()).show_ui(ui, |ui| {
             for p in MapProvider::ALL {
@@ -515,7 +581,7 @@ fn render_bottom_toolbar(_app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
         }
 
         ui.add_space(12.0);
-        let lock_btn = ui.selectable_label(map_ui.locked, if map_ui.locked { "Locked (Ctrl+K)" } else { "Unlocked" });
+        let lock_btn = ui.selectable_label(map_ui.locked, crate::i18n::tr("Lock Markers"));
         if lock_btn.clicked() {
             map_ui.locked = !map_ui.locked;
         }
@@ -543,7 +609,7 @@ fn render_legend_overlay(ui: &mut egui::Ui, canvas: Rect, _map_ui: &mut crate::s
     for (i, (color, text)) in items.iter().enumerate() {
         let y = legend_rect.top() + 20.0 + i as f32 * 28.0;
         p.circle_filled(pos2(legend_rect.left() + 20.0, y), 5.0, *color);
-        p.text(pos2(legend_rect.left() + 34.0, y), Align2::LEFT_CENTER, *text, FontId::proportional(11.0), Color32::WHITE);
+        p.text(pos2(legend_rect.left() + 34.0, y), Align2::LEFT_CENTER, crate::i18n::tr(text), FontId::proportional(11.0), Color32::WHITE);
     }
 }
 
@@ -583,7 +649,7 @@ fn render_loupe_popover(app: &mut LightcraftApp, ui: &mut egui::Ui, pin_pos: Pos
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            if ui.button("Open in Detail").clicked() {
+            if ui.button(crate::i18n::tr("Open in Detail")).clicked() {
                 app.ui.view = ViewMode::Detail;
             }
         });
@@ -632,7 +698,7 @@ fn render_left_navigator(
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Navigator").strong().color(Color32::WHITE));
+            ui.label(egui::RichText::new(crate::i18n::tr("Navigator")).strong().color(Color32::WHITE));
         });
 
         ui.add_space(4.0);
@@ -680,7 +746,7 @@ fn render_left_navigator(
         nav_painter.rect_filled(mini_rect, 4.0, Color32::from_rgb(18, 22, 26));
 
         // Render overview map tiles
-        render_tile_grid(&nav_painter, mini_rect, mini_rect.center(), *center, nav_zoom, map_ui.provider);
+        render_tile_grid(&nav_painter, &app.session.activity, mini_rect, mini_rect.center(), *center, nav_zoom, map_ui.provider);
 
         // Viewport rectangle showing the visible area on the main map
         let scale_diff = 2.0_f64.powf(nav_zoom - *zoom);
@@ -701,10 +767,10 @@ fn render_left_navigator(
         ui.add_space(14.0);
         ui.horizontal(|ui| {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Saved Locations").strong().color(Color32::WHITE));
+            ui.label(egui::RichText::new(crate::i18n::tr("Saved Locations")).strong().color(Color32::WHITE));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
-                if ui.button("+").on_hover_text("Save current map location").clicked() {
+                if ui.button("+").on_hover_text(crate::i18n::tr("Save current map location")).clicked() {
                     let _ = app.run(
                         "map.savedLocations.create",
                         json!({
@@ -724,7 +790,7 @@ fn render_left_navigator(
             if app.session.saved_locations.is_empty() {
                 ui.horizontal(|ui| {
                     ui.add_space(12.0);
-                    ui.label(egui::RichText::new("No saved locations. Click + to save.").small().italics().color(Color32::GRAY));
+                    ui.label(egui::RichText::new(crate::i18n::tr("No saved locations. Click + to save.")).small().italics().color(Color32::GRAY));
                 });
             } else {
                 for loc in &app.session.saved_locations {
@@ -741,7 +807,7 @@ fn render_left_navigator(
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.add_space(8.0);
-                            if ui.small_button("✕").on_hover_text("Delete location").clicked() {
+                            if ui.small_button("✕").on_hover_text(crate::i18n::tr("Delete location")).clicked() {
                                 delete_id = Some(loc.id.clone());
                             }
                         });
@@ -881,5 +947,30 @@ mod tests {
 
         assert_eq!(app.ui.map.zoom, 14.0);
         assert_eq!(app.ui.map.navigator_zoom, 3.0);
+    }
+
+    #[test]
+    fn tile_loads_share_one_activity_row_that_goes_with_the_last_load() {
+        let activity = lightcraft_engine::activity::Activity::default();
+        let mut slot = Weak::new();
+        let first = TileLoadEnd(join_tile_batch(&mut slot, &activity));
+        let second = TileLoadEnd(join_tile_batch(&mut slot, &activity));
+
+        let rows = activity.list();
+        assert_eq!(rows.len(), 1, "every tile load in flight shares one row");
+        assert_eq!((rows[0].kind, rows[0].label.as_str()), ("download", "Loading map tiles"));
+        assert_eq!((rows[0].done, rows[0].total), (0, 2));
+        assert!(!rows[0].cancellable);
+
+        drop(first);
+        assert_eq!((activity.list()[0].done, activity.list()[0].total), (1, 2), "a finished load counts");
+        drop(second);
+        assert!(activity.list().is_empty(), "the row goes with the last load, drawn or not");
+
+        // a load after that starts a new row
+        let third = TileLoadEnd(join_tile_batch(&mut slot, &activity));
+        assert_eq!(activity.list().len(), 1);
+        drop(third);
+        assert!(activity.list().is_empty());
     }
 }
