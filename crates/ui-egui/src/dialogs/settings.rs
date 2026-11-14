@@ -35,7 +35,9 @@ use display::{display_tab, interface_tab};
 use general::general_tab;
 use import::import_tab;
 pub(crate) use libraries::{can_switch_library, free_name};
-pub use libraries::{forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, remember_library};
+pub use libraries::{
+    forget_library, library_name, new_library, open_library, open_library_name, recent_libraries, recent_library_labels, remember_library,
+};
 use performance::performance_tab;
 use slideshow::slideshow_tab;
 pub(crate) use widgets::{check, choices, heading, hint, row};

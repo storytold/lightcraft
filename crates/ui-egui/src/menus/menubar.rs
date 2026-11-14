@@ -717,18 +717,18 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             let can = crate::panels::settings::can_switch_library(app).is_ok();
             let open = app.session.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
             let recent = &app.ui.settings.recent_libraries;
-            let label = |r: &str| {
-                let d = std::path::Path::new(r);
-                format!("{} — {}", crate::panels::settings::library_name(d), d.parent().map(|p| p.display().to_string()).unwrap_or_default())
-            };
+            // names, and folders only where two share a name (issue #4000)
+            let home = lightcraft_engine::library::home_folder().map(|h| h.to_string_lossy().into_owned());
+            let labels = crate::panels::settings::recent_library_labels(recent, home.as_deref());
             let mut v: Vec<MenuNode> = recent
                 .iter()
-                .map(|r| {
+                .zip(&labels)
+                .map(|(r, label)| {
                     let d = std::path::Path::new(r);
                     // a library a check found missing (moved, drive disconnected) is greyed out; the
                     // check runs on a worker (`RecentChecks`), never here: the menu is rebuilt every frame
                     let gone = app.recent_checks.exists(r) == Some(false);
-                    item("app.openLibrary", json!({"path": r}), label(r), None, can && !gone, Some(open.as_deref() == Some(d)))
+                    item("app.openLibrary", json!({"path": r}), label.clone(), None, can && !gone, Some(open.as_deref() == Some(d)))
                 })
                 .collect();
             if v.is_empty() {
@@ -736,7 +736,8 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
             } else {
                 v.push(MenuNode::Separator);
                 // one entry at a time, missing ones too: only the list forgets it (issue #1290)
-                let forget = recent.iter().map(|r| item("app.recentLibraries", json!({"remove": r}), label(r), None, true, None)).collect();
+                let forget =
+                    recent.iter().zip(labels).map(|(r, label)| item("app.recentLibraries", json!({"remove": r}), label, None, true, None)).collect();
                 v.push(MenuNode::Submenu { label: "Remove from List".into(), children: forget });
                 v.push(item("app.clearRecentLibraries", Value::Null, "Clear Recent Libraries", None, true, None));
             }
