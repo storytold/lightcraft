@@ -288,6 +288,7 @@
   "{count} more warnings.": "კიდევ გაფრთხილება: {count}.",
   "{in_trash} catalog photos are in this library's Recently Deleted and stay there; restore them from Recently Deleted to see them.": "კატალოგის ფოტოები ამ ბიბლიოთეკის ახლახან წაშლილებში: {in_trash}. ისინი იქ რჩება; სანახავად აღადგინეთ ისინი ახლახან წაშლილებიდან.",
   "{skipped} catalog images were not imported because their records in the catalog are incomplete.": "კატალოგის {skipped} სურათი არ დაიმპორტდა, რადგან მათი ჩანაწერები კატალოგში არასრულია.",
+  "{skipped} catalog images were not imported because their records in the catalog contradict others (a repeated image id, or a virtual copy of a virtual copy).": "კატალოგის {skipped} სურათი არ დაიმპორტდა, რადგან მათი ჩანაწერები კატალოგში სხვა ჩანაწერებს ეწინააღმდეგება (გამეორებული სურათის ID ან ვირტუალური ასლის ვირტუალური ასლი).",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "დაკარგულია ორიგინალი: {missing}. მათი კატალოგის ჩანაწერები ხელმისაწვდომია; ხელახლა დასაკავშირებლად გამოიყენეთ „დაკარგული ფოტოების მოძებნა“.",
   "{n} JPEG files": "JPEG ფაილი: {n}",
   "{n} pages": "გვერდი: {n}",
