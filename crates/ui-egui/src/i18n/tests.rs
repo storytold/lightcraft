@@ -357,6 +357,7 @@ fn language_commands_cover_every_language() {
         ("app.language.finnish", Locale::Fi),
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
+        ("app.language.lithuanian", Locale::Lt),
     ];
     // One command per language, and every command reachable from the menu table.
     assert_eq!(commands.len(), Locale::ALL.len());
