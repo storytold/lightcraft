@@ -8,8 +8,8 @@
 use candle_core::{Module, Tensor};
 use candle_nn::{Conv2d, Conv2dConfig, ConvTranspose2d, ConvTranspose2dConfig, VarBuilder};
 
-use crate::Result;
 use crate::vit::HIDDEN;
+use crate::{Result, cpu};
 
 pub const FPN: usize = 256;
 
@@ -64,8 +64,11 @@ impl Neck {
     pub fn forward(&self, x: &Tensor, n: usize) -> Result<Vec<Tensor>> {
         let mut out = Vec::with_capacity(n);
         for l in self.levels.iter().take(n) {
+            let cpu = x.device().is_cpu();
             let y = match &l.scale {
+                Scale::Up4(a, b) if cpu => cpu::upsample2(&cpu::upsample2(x, a, true)?, b, false)?,
                 Scale::Up4(a, b) => b.forward(&a.forward(x)?.gelu_erf()?)?,
+                Scale::Up2(a) if cpu => cpu::upsample2(x, a, false)?,
                 Scale::Up2(a) => a.forward(x)?,
                 Scale::Same => x.clone(),
                 Scale::Down2 => x.max_pool2d(2)?,
