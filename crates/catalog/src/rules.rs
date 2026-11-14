@@ -315,7 +315,128 @@ fn number_problem(field: &str, v: &Value) -> Found {
 /// The album an Album rule names: its id as a whole number, written as a number (`3`, `3.0`) or a
 /// numeric string (`"3"`). The check, the matcher and the editor all read it this way.
 pub fn album_rule_id(value: &Value) -> Option<crate::AlbumId> {
-    number(value).filter(|n| n.is_finite() && *n >= 0.0 && n.fract() == 0.0).map(|n| crate::AlbumId(n as u64))
+    let id = match value {
+        Value::Number(number) => {
+            if let Some(id) = number.as_u64() {
+                id
+            } else {
+                let number = number.as_f64()?;
+                if !number.is_finite() || number < 0.0 || number.fract() != 0.0 || number >= u64::MAX as f64 {
+                    return None;
+                }
+                number as u64
+            }
+        }
+        Value::String(value) => decimal_album_id(value)?,
+        _ => return None,
+    };
+    Some(crate::AlbumId(id))
+}
+
+/// Reads an exact, non-negative integral decimal or exponent form without rounding through `f64`.
+fn decimal_album_id(value: &str) -> Option<u64> {
+    let value = value.trim();
+    let bytes = value.as_bytes();
+    let mut start = 0;
+    let negative = match bytes.first() {
+        Some(b'-') => {
+            start = 1;
+            true
+        }
+        Some(b'+') => {
+            start = 1;
+            false
+        }
+        _ => false,
+    };
+
+    let exponent_at = bytes.get(start..)?.iter().position(|byte| matches!(byte, b'e' | b'E')).map(|offset| start + offset);
+    let mantissa_end = exponent_at.unwrap_or(bytes.len());
+    let mut decimal_point = false;
+    let mut digits = 0usize;
+    let mut fractional_digits = 0usize;
+    let mut first_nonzero = None;
+    let mut last_nonzero = None;
+    for byte in bytes.get(start..mantissa_end)? {
+        match byte {
+            b'.' if !decimal_point => decimal_point = true,
+            b'0'..=b'9' => {
+                if *byte != b'0' {
+                    first_nonzero.get_or_insert(digits);
+                    last_nonzero = Some(digits);
+                }
+                digits = digits.checked_add(1)?;
+                if decimal_point {
+                    fractional_digits = fractional_digits.checked_add(1)?;
+                }
+            }
+            _ => return None,
+        }
+    }
+    if digits == 0 {
+        return None;
+    }
+
+    let mut exponent_negative = false;
+    let mut exponent = 0usize;
+    if let Some(index) = exponent_at {
+        let mut exponent_start = index.checked_add(1)?;
+        match bytes.get(exponent_start) {
+            Some(b'-') => {
+                exponent_negative = true;
+                exponent_start = exponent_start.checked_add(1)?;
+            }
+            Some(b'+') => {
+                exponent_start = exponent_start.checked_add(1)?;
+            }
+            _ => {}
+        }
+        if exponent_start == bytes.len() {
+            return None;
+        }
+        for byte in bytes.get(exponent_start..)? {
+            if !byte.is_ascii_digit() {
+                return None;
+            }
+            exponent = exponent.saturating_mul(10).saturating_add((byte - b'0') as usize);
+        }
+    }
+
+    // Zero stays zero for any valid exponent, including one too large for a machine integer.
+    let (Some(first_nonzero), Some(last_nonzero)) = (first_nonzero, last_nonzero) else { return Some(0) };
+    if negative {
+        return None;
+    }
+
+    // Beyond this bound a nonzero value cannot be an integer representable by u64. Saturation
+    // lets us reject huge exponents without imposing a digit limit on the input itself.
+    if exponent > digits.saturating_add(20) {
+        return None;
+    }
+    let digits_before_point = digits.checked_sub(fractional_digits)?;
+    let integer_digits = if exponent_negative { digits_before_point.checked_sub(exponent)? } else { digits_before_point.checked_add(exponent)? };
+    if first_nonzero >= integer_digits || last_nonzero >= integer_digits {
+        return None;
+    }
+    let significant_digits = integer_digits.checked_sub(first_nonzero)?;
+    if significant_digits > 20 {
+        return None;
+    }
+
+    let mut result = 0u64;
+    let mut digit_index = 0usize;
+    for byte in bytes.get(start..mantissa_end)? {
+        if byte.is_ascii_digit() {
+            if digit_index >= first_nonzero && digit_index < integer_digits {
+                result = result.checked_mul(10)?.checked_add((byte - b'0') as u64)?;
+            }
+            digit_index = digit_index.checked_add(1)?;
+        }
+    }
+    for _ in digits..integer_digits {
+        result = result.checked_mul(10)?;
+    }
+    Some(result)
 }
 
 /// An Album rule's value: an album that exists and holds photos (a plain or a smart album, not a
@@ -1119,9 +1240,9 @@ impl Rule {
             "sharpness" => num_op(op, p.analysis.map(|a| a.sharpness as f64), value),
             "bestOfGroup" => yes(p.analysis.is_some_and(|a| a.best || a.group.is_none())),
             "album" => {
-                let id = album_rule_id(value);
+                let Some(id) = album_rule_id(value) else { return false };
                 // a smart album's photos are its matches; one being evaluated (a loop) holds none
-                id.is_some_and(|a| cat.album_contains(a, p)) == (op == "is")
+                cat.album_contains(id, p) == (op == "is")
             }
             _ => false,
         }
