@@ -203,6 +203,7 @@ pub(crate) fn dng_colour(tags: &ColorData, declared: &crate::files::DngWhite, t:
         baseline_exposure: t.baseline_exposure + k.log2(),
         baseline_sharpness: tags.baseline_sharpness,
         kelvin_presets: None,
+        balanced_with: None,
         profile: ProfileLook {
             hue_sat_map: [look.and_then(|l| l.hue_sat.clone()), None],
             tone_curve: look.and_then(|l| dng_tone_curve(&l.tone)),
