@@ -665,6 +665,8 @@ fn brush_tool(
     d: &DevelopSettings,
 ) {
     let active = app.session.active_mask;
+    // (`ui.set` takes any number: a stroke at density 0 would paint nothing)
+    let density = app.ui.brush_density.clamp(1.0, 100.0);
     // the stroke goes into the selected mask (or a new one): in its coordinates
     let map = &map.for_mask_id(d, active);
     let long = (map.rect.width().max(map.rect.height())) as f64;
@@ -715,7 +717,7 @@ fn brush_tool(
             r,
             hard: r * (1.0 - (app.ui.brush_feather / 100.0).clamp(0.0, 1.0)),
             flow: (app.ui.brush_flow / 100.0).clamp(0.0, 1.0),
-            density: 1.0,
+            density: density / 100.0,
             color: app.ui.mask_overlay_color,
             opacity: opacity.clamp(0.0, 1.0),
         };
@@ -735,7 +737,7 @@ fn brush_tool(
         let connect = shift && resp.clicked() && pts.len() == 1;
         let _ = app.run(
             "mask.brushStroke",
-            json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
+            json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow, "density": density,
                    "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect}),
         );
     }

@@ -74,6 +74,8 @@ pub fn apply(app: &mut LightcraftApp, ctx: &egui::Context, name: &str, params: V
     }
 }
 
+/// Take the brush settings an applied effect carries (size, feather, flow, density, Auto Mask),
+/// each clamped to its slider's range; settings it doesn't carry stay as they are.
 fn take_brush(app: &mut LightcraftApp, b: &Value) {
     let Some(b) = b.as_object() else { return };
     let f = |k: &str| b.get(k).and_then(Value::as_f64).filter(|v| v.is_finite());
@@ -86,6 +88,9 @@ fn take_brush(app: &mut LightcraftApp, b: &Value) {
     if let Some(v) = f("flow") {
         app.ui.brush_flow = (v as f32).clamp(1.0, 100.0);
     }
+    if let Some(v) = f("density") {
+        app.ui.brush_density = (v as f32).clamp(1.0, 100.0);
+    }
     if let Some(v) = b.get("auto_mask").and_then(Value::as_bool) {
         app.ui.brush_auto_mask = v;
     }
@@ -93,7 +98,7 @@ fn take_brush(app: &mut LightcraftApp, b: &Value) {
 
 /// The brush settings in use, as an effect carries them.
 fn brush_now(app: &LightcraftApp) -> Value {
-    json!({"size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow, "auto_mask": app.ui.brush_auto_mask})
+    json!({"size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow, "density": app.ui.brush_density, "auto_mask": app.ui.brush_auto_mask})
 }
 
 /// Open the New Effect Preset dialog for the selected mask.
@@ -717,4 +722,29 @@ fn in_groups_message(groups: usize) -> String {
 
 fn not_applied_message(settings: &[&str]) -> String {
     crate::i18n::tr_format!(" — kept but not applied: {}", settings.join(", "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An effect preset saved with the brush carries its Density through the engine, and applying
+    /// it restores it, as size, feather and flow (#4005).
+    #[test]
+    fn an_effect_carries_the_brush_density() {
+        let services = crate::Services { png: None, ..Default::default() };
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        app.run("library.select", json!({"ids": [1]})).expect("a demo photo");
+        app.run("mask.brushStroke", json!({"points": [[0.5, 0.5]]})).expect("a brush mask to save from");
+        app.ui.brush_density = 35.0;
+        save_confirm(&mut app, "Dense", "", &["exposure".to_string()], false, true).expect("saved");
+        app.ui.brush_density = 100.0;
+        let v = app.run("mask.applyEffect", json!({"name": "Dense"})).expect("applied");
+        take_brush(&mut app, &v["brush"]);
+        assert_eq!(app.ui.brush_density, 35.0);
+        take_brush(&mut app, &json!({"density": 0.0}));
+        assert_eq!(app.ui.brush_density, 1.0);
+        take_brush(&mut app, &json!({"density": 150.0}));
+        assert_eq!(app.ui.brush_density, 100.0);
+    }
 }
