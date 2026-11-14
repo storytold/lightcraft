@@ -883,17 +883,29 @@ fn alias_catalog_inverted(v: &mut lightcraft_meta::XmpValue) {
 /// image. So the points go through the orientation, a radial's radii (in long-edge units, from the
 /// stored image's aspect) swap when the axes do, and a mirror turns its angle the other way. A
 /// quarter turn keeps the angle: the ellipse turned 90° is the same ellipse with its radii swapped.
+/// Spot removal is on the stored image too: its points turn the same way, and its source offset
+/// with them (a spot's radius is in long-edge units, which no turn changes).
 fn catalog_masks(partial: &mut Value, orientation: Orientation) {
     if orientation == Orientation::Normal {
         return;
     }
+    let xy = |p: &Value| Some((p.get("x")?.as_f64()?, p.get("y")?.as_f64()?));
     let point = |p: Option<&mut Value>| {
-        let Some(p) = p.and_then(Value::as_object_mut) else { return };
-        let (Some(x), Some(y)) = (p.get("x").and_then(Value::as_f64), p.get("y").and_then(Value::as_f64)) else { return };
+        let Some(p) = p else { return };
+        let Some((x, y)) = xy(p) else { return };
         let (u, v) = orientation.map(x, y, 1.0, 1.0);
-        p.insert("x".into(), json!(u));
-        p.insert("y".into(), json!(v));
+        p["x"] = json!(u);
+        p["y"] = json!(v);
     };
+    for spot in partial.get_mut("spots").and_then(Value::as_array_mut).into_iter().flatten() {
+        // the offset turns as the vector from the spot's (first) point to its source
+        let source = spot.pointer("/points/0").and_then(xy).zip(spot.get("source_offset").and_then(xy));
+        if let Some(((x, y), (dx, dy))) = source {
+            let ((u0, v0), (u1, v1)) = (orientation.map(x, y, 1.0, 1.0), orientation.map(x + dx, y + dy, 1.0, 1.0));
+            spot["source_offset"] = json!({"x": u1 - u0, "y": v1 - v0});
+        }
+        spot.get_mut("points").and_then(Value::as_array_mut).into_iter().flatten().for_each(|p| point(Some(p)));
+    }
     let Some(masks) = partial.get_mut("masks").and_then(Value::as_array_mut) else { return };
     let components = masks.iter_mut().filter_map(|m| m.get_mut("components").and_then(Value::as_array_mut)).flatten();
     for shape in components.filter_map(|c| c.get_mut("shape").and_then(Value::as_object_mut)) {
