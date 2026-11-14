@@ -659,52 +659,58 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"mix": m}))
             }
         ),
-        cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{}", has_selection, |s, p| {
-            const C: &str = "develop.auto";
-            let ids = s.targets(p)?;
-            // a wrong id is a bad request, unlike a photo that can't be read just now
-            if let Some(id) = ids.iter().find(|id| s.catalog.photo(**id).is_none()) {
-                return Err(bad(C, format!("no such photo: {}", id.0)));
-            }
-            let mut first: Option<Value> = None;
-            let mut ops: Vec<Op> = Vec::new();
-            let mut failed = None;
-            for id in ids {
-                // a photo that can't be read (offline, no decoder) is left out, not the whole selection
-                let src = match s.source_now(id, SourceLevel::Thumb) {
-                    Ok(src) => src,
-                    Err(e) => {
-                        failed.get_or_insert(e);
-                        continue;
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!("develop.auto", "Auto Settings", ["Photo"], Some("Shift+A"), "{ids?}", has_selection, |s, p| {
+                const C: &str = "develop.auto";
+                let ids = s.targets(p)?;
+                if ids.is_empty() {
+                    return Err(bad(C, "`ids` names no photos"));
+                }
+                // a wrong id is a bad request, unlike a photo that can't be read just now
+                if let Some(id) = ids.iter().find(|id| s.catalog.photo(**id).is_none()) {
+                    return Err(bad(C, format!("no such photo: {}", id.0)));
+                }
+                let mut first: Option<Value> = None;
+                let mut ops: Vec<Op> = Vec::new();
+                let mut failed = None;
+                for id in ids {
+                    // a photo that can't be read (offline, no decoder) is left out, not the whole selection
+                    let src = match s.source_now(id, SourceLevel::Thumb) {
+                        Ok(src) => src,
+                        Err(e) => {
+                            failed.get_or_insert(e);
+                            continue;
+                        }
+                    };
+                    let info = s.source_info(id);
+                    let d = s.develop_of(id).unwrap_or_default();
+                    let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
+                    if first.is_none() {
+                        first = Some(serde_json::to_value(a).unwrap_or_default());
                     }
-                };
-                let info = s.source_info(id);
-                let d = s.develop_of(id).unwrap_or_default();
-                let a = lightcraft_pipeline::auto::auto_tone(&src, &info, &d);
-                if first.is_none() {
-                    first = Some(serde_json::to_value(a).unwrap_or_default());
+                    let mut nd = (*d).clone();
+                    nd.light.exposure = a.exposure;
+                    nd.light.contrast = a.contrast;
+                    nd.light.highlights = a.highlights;
+                    nd.light.shadows = a.shadows;
+                    nd.light.whites = a.whites;
+                    nd.light.blacks = a.blacks;
+                    nd.color.vibrance = a.vibrance;
+                    nd.color.saturation = a.saturation;
+                    if let Some(op) = s.develop_op(id, nd, "Auto") {
+                        ops.push(op);
+                    }
                 }
-                let mut nd = (*d).clone();
-                nd.light.exposure = a.exposure;
-                nd.light.contrast = a.contrast;
-                nd.light.highlights = a.highlights;
-                nd.light.shadows = a.shadows;
-                nd.light.whites = a.whites;
-                nd.light.blacks = a.blacks;
-                nd.color.vibrance = a.vibrance;
-                nd.color.saturation = a.saturation;
-                if let Some(op) = s.develop_op(id, nd, "Auto") {
-                    ops.push(op);
+                if let (None, Some(e)) = (&first, failed) {
+                    return Err(bad(C, e));
                 }
-            }
-            if let (None, Some(e)) = (&first, failed) {
-                return Err(bad(C, e));
-            }
-            if !ops.is_empty() {
-                s.commit("Auto", Op::Batch { ops })?;
-            }
-            Ok(first.unwrap_or_default())
-        }),
+                if !ops.is_empty() {
+                    s.commit("Auto", Op::Batch { ops })?;
+                }
+                Ok(first.unwrap_or_default())
+            })
+        },
         cmd!(
             "develop.wb",
             "White Balance",
