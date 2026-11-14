@@ -124,15 +124,18 @@ fn system_icc_profiles() {
         assert_eq!(info.model, IccColorModel::Cmyk);
         assert_eq!(info.kind, IccKind::NeedsCms);
         // CMYK TIFF tagged with it: paper white stays near white, 100% K near black.
-        use tiff::encoder::{TiffEncoder, colortype};
-        let mut cur = std::io::Cursor::new(Vec::new());
-        {
-            let mut enc = TiffEncoder::new(&mut cur).unwrap();
-            let mut im = enc.new_image::<colortype::CMYK8>(2, 1).unwrap();
-            im.encoder().write_tag(tiff::tags::Tag::IccProfile, &b[..]).unwrap();
-            im.write_data(&[0u8, 0, 0, 0, 0, 0, 0, 255]).unwrap();
-        }
-        let d = decode(&cur.into_inner(), DecodeOptions::default()).unwrap();
+        let mut ifd = craft_tiff::IfdBuilder::new()
+            .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![2]))
+            .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![1]))
+            .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8, 8, 8, 8]))
+            .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![5]))
+            .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![4]))
+            .with(craft_tiff::tags::PLANAR_CONFIGURATION, craft_tiff::Value::Short(vec![1]))
+            .with(craft_tiff::tags::ICC_PROFILE, craft_tiff::Value::Undefined(b.clone()));
+        ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 1, strips: vec![vec![0u8, 0, 0, 0, 0, 0, 0, 255]] });
+        let tif = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap();
+        let d = decode(&tif, DecodeOptions::default()).unwrap();
         assert_eq!(d.space.origin, SpaceOrigin::IccCms);
         let w = d.image.get(0, 0);
         let k = d.image.get(1, 0);

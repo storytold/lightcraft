@@ -3,7 +3,7 @@
 
 use lightcraft_develop::VignetteStyle;
 use lightcraft_pipeline::colorops::POINT_WORDS;
-use lightcraft_pipeline::finish::{FinishParams, MASK_TERMS, srgb_lut};
+use lightcraft_pipeline::finish::{FinishParams, GrainModel, MASK_TERMS, srgb_lut};
 
 use crate::ctx::{FailKind, fail};
 
@@ -71,6 +71,12 @@ const FIELDS: &[(&str, usize)] = &[
     // the window's offset in the whole output and the whole output's size (pixels)
     ("VIG_VIEW", 4),
     ("GRAIN", 1),
+    // 0 = value noise (processes V1 to V6: GRAIN_AMT, GRAIN_SC, GRAIN_ROUGH), 1 = crystal layers (V7)
+    ("GRAIN_MODEL", 1),
+    // crystal grain: amplitude, footprint (tile px per output px), the tori's tables in `aux`
+    ("GRAIN_K", 1),
+    ("GRAIN_FOOT", 1),
+    ("GRAIN_SAT", 2),
     ("GRAIN_AMT", 1),
     ("GRAIN_SC", 1),
     ("GRAIN_ROUGH", 1),
@@ -178,7 +184,8 @@ pub struct Present {
 }
 
 /// The `finish` kernel's parameter block and auxiliary table (tone LUT | chroma curve | sRGB LUT | curve LUTs |
-/// mask terms | light operator tables) for `fp` with `masks` (their local adjustments' terms).
+/// mask terms | light operator tables) for `fp` with `masks` (their local adjustments' terms). The crystal
+/// grain's tables go after `aux` in the kernel's buffer ([`crate::render`] copies them there).
 ///
 /// `deep`: the kernel writes float samples, as the pipeline's `finish_deep` does.
 ///
@@ -219,6 +226,16 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     let lut_off = aux.len();
     if let Some((l, _)) = &fp.lut {
         aux.extend(l.data.iter().flatten());
+    }
+    // the crystal grain's tables follow `aux` on the GPU without being part of it: they stay
+    // resident between renders ([`crate::Gpu::grain_tables`]) and the render copies them in
+    let mut sat_off = [0u32; 2];
+    if let Some(GrainModel::Crystal(g)) = &fp.grain {
+        let mut off = aux.len();
+        for (slot, sat) in sat_off.iter_mut().zip(&g.tile.sats) {
+            *slot = off as u32;
+            off += sat.len();
+        }
     }
 
     let mut p = Block::new();
@@ -330,12 +347,27 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.b("PROOF_DEST_WARN", pp.dest_warning);
         p.b("PROOF_DISP_WARN", pp.display_warning);
     }
-    if let Some((amt, cell, rough, seed)) = fp.grain {
+    if let Some(model) = &fp.grain {
         p.b("GRAIN", true);
-        p.f("GRAIN_AMT", amt);
-        p.f("GRAIN_SC", fp.px_per_long as f32 / cell);
-        p.f("GRAIN_ROUGH", rough);
-        p.u("GRAIN_SEED", seed);
+        match model {
+            GrainModel::Value(g) => {
+                p.u("GRAIN_MODEL", 0);
+                p.f("GRAIN_AMT", g.amt);
+                p.f("GRAIN_SC", fp.px_per_long as f32 / g.cell);
+                p.f("GRAIN_ROUGH", g.rough);
+                p.u("GRAIN_SEED", g.seed);
+            }
+            GrainModel::Crystal(g) => {
+                p.u("GRAIN_MODEL", 1);
+                p.f("GRAIN_K", g.k);
+                p.f("GRAIN_FOOT", g.foot);
+                if let Some(i) = index("GRAIN_SAT") {
+                    for (slot, off) in p.0.iter_mut().skip(i).zip(sat_off) {
+                        *slot = off;
+                    }
+                }
+            }
+        }
         let long = fp.ow.max(fp.oh);
         let [a, b, c, d, e, f] = fp.out_to_norm.0;
         let (kx, ky) = (fp.ow / long, fp.oh / long);

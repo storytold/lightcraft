@@ -1,6 +1,6 @@
 //! Issue #2882 / TEST-TIFF-ZIP: noisy 8/16-bit ZIP TIFFs stay within their uncompressed size.
-//! Use the backend selected by the application dependency graph, without forcing a test-only backend:
-//! #3800 removed craft-update's zlib-rs feature so Windows uses miniz_oxide like the other platforms.
+//! Exercise the shared TIFF codec with the backend selected by the application dependency graph.
+//! Downstream dependencies can change flate2's selected implementation; do not force a test-only backend.
 //! Backend regression qualification requires `cargo xtask ci`, which runs these tests with workspace
 //! feature unification, or `cargo test --workspace --lib --bins --tests tiff_zip::` with the same
 //! application features. A package-only `cargo test -p lightcraft-codecs` is a codec diagnostic,
@@ -35,14 +35,19 @@ fn noisy16(w: u32, h: u32, noise: f64) -> Vec<u16> {
 /// Both depths must preserve integer samples, dimensions and the application's linear-light pixels.
 fn checked_zip_size(img: &EncodeImage<'_>) -> usize {
     let bytes = encode_tiff(img, TiffCompression::Deflate, &EncodeMeta::default()).unwrap();
-    let mut decoder = tiff::decoder::Decoder::new(std::io::Cursor::new(&bytes)).unwrap();
-    let compression = decoder.get_tag_u32(tiff::tags::Tag::Compression).unwrap();
+    let parsed = craft_tiff::Tiff::parse(&bytes).unwrap();
+    let compression = parsed.ifds.first().unwrap().u16(craft_tiff::tags::COMPRESSION).unwrap();
     assert!(matches!(compression, 8 | 32946), "Compression tag {compression} is not Deflate");
-    match (img.samples, decoder.read_image().unwrap()) {
-        (Samples::U8(expected), tiff::decoder::DecodingResult::U8(actual)) => {
-            assert!(actual.as_slice() == expected, "8-bit TIFF samples changed during the lossless round trip");
+    // Inspect encoded integer samples before the application's colour conversion.
+    let raw = craft_image_codecs::decode_as(craft_image_codecs::Format::Tiff, &bytes).unwrap();
+    assert_eq!(raw.dimensions(), (img.width, img.height));
+    assert_eq!(raw.layout(), craft_image_codecs::ChannelLayout::Rgb);
+    match (img.samples, raw.sample_type()) {
+        (Samples::U8(expected), craft_image_codecs::SampleType::U8) => {
+            assert!(raw.as_u8().unwrap() == expected, "8-bit TIFF samples changed during the lossless round trip");
         }
-        (Samples::U16(expected), tiff::decoder::DecodingResult::U16(actual)) => {
+        (Samples::U16(expected), craft_image_codecs::SampleType::U16) => {
+            let actual = raw.to_u16_samples().unwrap();
             assert!(actual.as_slice() == expected, "16-bit TIFF samples changed during the lossless round trip");
         }
         _ => panic!("decoded TIFF sample type differs from the integer fixture"),
