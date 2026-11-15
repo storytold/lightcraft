@@ -81,4 +81,13 @@ mod tests {
             assert!(decoded.image.data.iter().any(|pixel| pixel[0] > 1.0), "HDR highlights were lost");
         }
     }
+    #[test]
+    fn avif_alpha_survives_public_round_trip() {
+        let pixels = [200u8, 100, 50, 96].repeat(16 * 16);
+        let image = crate::encode::EncodeImage::new(16, 16, 4, crate::encode::Samples::U8(&pixels));
+        let bytes = crate::encode::encode_avif(&image, 95, 10, &crate::encode::EncodeMeta::default()).unwrap();
+        let decoded = crate::decode(&bytes, DecodeOptions::default()).unwrap();
+        let alpha = decoded.alpha.expect("alpha plane");
+        assert!((alpha.data[0] - 96.0 / 255.0).abs() < 0.04);
+    }
 }
