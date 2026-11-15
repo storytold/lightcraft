@@ -74,4 +74,13 @@ mod tests {
         let opts = DecodeOptions { max_pixels: 100, ..DecodeOptions::default() };
         assert!(matches!(crate::decode(FIXTURE, opts), Err(Error::TooLarge(..))));
     }
+    #[test]
+    fn hdr_avif_round_trips_highlights_through_public_decoder() {
+        let pixels = vec![2.0f32; 16 * 16 * 3];
+        for transfer in [crate::encode::HdrTransfer::Pq, crate::encode::HdrTransfer::Hlg] {
+            let bytes = crate::encode::encode_avif_hdr(16, 16, &pixels, 95, 10, &crate::encode::EncodeMeta::default(), transfer).unwrap();
+            let decoded = crate::decode(&bytes, DecodeOptions::default()).unwrap();
+            assert!(decoded.image.data.iter().any(|pixel| pixel[0] > 1.0), "HDR highlights were lost");
+        }
+    }
 }
