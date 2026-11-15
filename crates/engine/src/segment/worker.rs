@@ -51,6 +51,12 @@ pub enum Kind {
     Prepare,
     Clicks(Vec<lightcraft_segment::Click>),
     Text(String),
+    /// The photo's subject among its people and animals (`Sam3::segment_subject`); `focus`: where
+    /// the camera focused (normalized), when the file records it. No result: the subject is
+    /// something else.
+    Subject {
+        focus: Option<(f32, f32)>,
+    },
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
         prompt: Prompt,
@@ -604,6 +610,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
     let operation = match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Prepare => Operation::Prepare,
         Kind::Text(text) => Operation::Text(text),
+        Kind::Subject { focus } => Operation::Subject(focus.map(|(x, y)| [x, y])),
         Kind::Clicks(clicks) => Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect()),
         Kind::Detail { prompt, region: r } => {
             region = Some(r);
@@ -666,6 +673,14 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, failed: Option<&st
             // the text heads may have moved to the CPU on the way (a failure on the GPU)
             shared.backend.lock().unwrap_or_else(PoisonError::into_inner).heads = Some(m.heads_device());
             Ok(logits.map(|l| SegMask::from_logits(side, &l)))
+        }
+        Kind::Subject { focus } => {
+            let (m, enc) = encoded(state, shared, job, failed)?;
+            // (the reference score threshold, as Describe uses)
+            let subject = m.segment_subject(enc, focus, 0.5)?;
+            // the text heads may have moved to the CPU on the way (a failure on the GPU), as for Describe
+            shared.backend.lock().unwrap_or_else(PoisonError::into_inner).heads = Some(m.heads_device());
+            Ok(subject.map(|p| SegMask::from_logits(side, &p.logits)))
         }
         #[cfg(test)]
         #[allow(clippy::panic)]
