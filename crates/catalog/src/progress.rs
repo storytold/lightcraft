@@ -93,21 +93,29 @@ impl MigrationProgress {
     }
 }
 
-static CURRENT: Mutex<Option<MigrationProgress>> = Mutex::new(None);
+static CURRENT: Mutex<Option<(u64, MigrationProgress)>> = Mutex::new(None);
+
+/// The next migration's identity: each [`Running`] gets its own, so two migrations in one
+/// process (tests run them side by side) never write each other's numbers.
+static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+std::thread_local! {
+    /// The migration running on this thread ([`Running::start`] sets it): reports from a thread
+    /// update only the record of the migration that thread runs.
+    static HERE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
 
 /// The migration running in this process, if any.
 pub fn migration() -> Option<MigrationProgress> {
-    CURRENT.lock().unwrap_or_else(PoisonError::into_inner).clone()
-}
-
-pub(crate) fn set(p: Option<MigrationProgress>) {
-    *CURRENT.lock().unwrap_or_else(PoisonError::into_inner) = p;
+    CURRENT.lock().unwrap_or_else(PoisonError::into_inner).clone().map(|(_, p)| p)
 }
 
 /// Move the running migration (if any) to `phase`.
 pub(crate) fn phase(phase: MigrationPhase, done: u64, total: u64) {
     let mut cur = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(p) = cur.as_mut() {
+    if let Some((id, p)) = cur.as_mut()
+        && *id == HERE.get()
+    {
         p.phase = phase;
         p.done = done;
         p.total = total;
@@ -117,7 +125,8 @@ pub(crate) fn phase(phase: MigrationPhase, done: u64, total: u64) {
 /// How far the backup copy is (`done` of `total` bytes), while one runs.
 pub(crate) fn bytes(done: u64, total: u64) {
     let mut cur = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(p) = cur.as_mut()
+    if let Some((id, p)) = cur.as_mut()
+        && *id == HERE.get()
         && p.phase == MigrationPhase::Backup
     {
         p.done = done;
@@ -127,21 +136,29 @@ pub(crate) fn bytes(done: u64, total: u64) {
 
 /// Whether a migration is running (only then do checkpoints and copies report their progress).
 pub(crate) fn active() -> bool {
-    CURRENT.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+    let here = HERE.get();
+    here != 0 && CURRENT.lock().unwrap_or_else(PoisonError::into_inner).as_ref().is_some_and(|(id, _)| *id == here)
 }
 
 /// Clears the progress when the migration ends, however it ends.
-pub(crate) struct Running;
+pub(crate) struct Running(u64);
 
 impl Running {
     pub(crate) fn start(kind: MigrationKind, library: String) -> Running {
-        set(Some(MigrationProgress { library, kind, phase: MigrationPhase::Backup, done: 0, total: 0 }));
-        Running
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        HERE.set(id);
+        *CURRENT.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some((id, MigrationProgress { library, kind, phase: MigrationPhase::Backup, done: 0, total: 0 }));
+        Running(id)
     }
 }
 
 impl Drop for Running {
     fn drop(&mut self) {
-        set(None);
+        HERE.set(0);
+        let mut cur = CURRENT.lock().unwrap_or_else(PoisonError::into_inner);
+        if cur.as_ref().is_some_and(|(id, _)| *id == self.0) {
+            *cur = None;
+        }
     }
 }

@@ -183,7 +183,7 @@ fn a_damaged_store_is_refused_by_the_prepare_step() {
     let s = older_store("prepare-damaged", Some("17"));
     let ours = s.path().display().to_string();
     std::fs::write(s.path().join(DB_FILE), b"not a redb file at all").unwrap();
-    let e = library::prepare_upgrade(s.path()).err().expect("refused");
+    let e = library::prepare_upgrade(s.path()).unwrap_err();
     assert!(matches!(e, CatalogError::Corrupt(_) | CatalogError::Io(_)), "{e:?}");
     assert_eq!(std::fs::read(s.path().join(DB_FILE)).unwrap(), b"not a redb file at all");
     assert!(kept(s.path(), "before-v").is_empty() && kept(s.path(), ".before-v").is_empty(), "nothing written");
