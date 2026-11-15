@@ -286,6 +286,11 @@ fn wait_in_line(s: &Session, c: &str, p: &Value, what: &str, prep: bool, request
     if !build_running(s, prep) && !s.activity.lane_waiting(Lane::Previews) {
         return None;
     }
+    // a build with no row of its own (`row: false`) never frees the lane for the line: what waited behind it would be
+    // started at once, refused as already running, and lost
+    if build_running(s, prep) && !s.activity.lane_busy(Lane::Previews) {
+        return Some(Err(bad(c, REFUSED)));
+    }
     if p.get("wait").and_then(Value::as_bool) == Some(true) {
         return Some(Err(bad(c, "a build that waits in line can't also be waited for: leave out wait")));
     }

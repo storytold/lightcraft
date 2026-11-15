@@ -228,6 +228,35 @@ fn a_build_that_would_wait_for_its_turn_and_its_end_is_refused() {
     release(h);
 }
 
+/// Given a build with no row of its own (`row: false`) running, when a build is asked for with `queue`, then it is
+/// refused as before, and nothing waits: a build in line behind it would be started at once, refused as running, and
+/// lost, because no row ever holds the lane.
+#[test]
+fn a_build_asked_to_queue_behind_one_with_no_row_is_refused_not_lost() {
+    let mut s = Session::with_demo();
+    let build = Arc::new(PreviewBuild::default());
+    s.preview_build = Some(build.clone());
+    let e = s.execute("library.buildPreviews", &json!({"edge": 256, "queue": true})).unwrap_err().to_string();
+    assert!(e.contains("a preview build is already running"), "{e}");
+    assert!(tasks(&mut s).is_empty(), "nothing waits");
+    build.finished.store(true, Ordering::Release);
+}
+
+/// Given the background preparation running, when a build is asked for with `queue`, then it starts at once, as one
+/// without `queue` does, and the preparation stops: it gives way, it is not waited for.
+#[test]
+fn a_build_asked_to_queue_while_the_background_preparation_runs_starts_at_once() {
+    let mut s = Session::with_demo();
+    let ids = build_ids(&s, 2);
+    let prep = Arc::new(PreviewBuild { background: true, ..Default::default() });
+    s.preview_build = Some(prep.clone());
+    let _row = s.activity.start("previews", "Preparing photos in the background", Cancel::Yes);
+    let r = s.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true, "wait": true})).unwrap();
+    assert!(r.get("queued").is_none(), "{r}");
+    assert_eq!(r["total"].as_u64(), Some(2), "{r}");
+    assert!(prep.cancel.load(Ordering::Relaxed), "the preparation was stopped");
+}
+
 /// Given a build waiting and one still running, when another library is opened, then nothing waits any more: the
 /// build asked for was about the old library's photos.
 #[test]
