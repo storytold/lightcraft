@@ -669,6 +669,18 @@ fn a_folder_taken_in_by_one_that_cant_be_synchronized_comes_back() {
     assert_eq!(covered.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec!["/mnt/card/2024/day 1"], "still taken in by 2024");
 }
 
+/// Given chosen folders the sidebar doesn't show (its order lacks them), then they go after the ones it shows, by
+/// name.
+#[test]
+fn a_chosen_folder_missing_from_the_sidebar_goes_after_the_others_by_name() {
+    let sidebar = ["/pics/Zed", "/pics/Beta"].map(String::from);
+    let chosen = ["/pics/Cat", "/pics/Beta", "/pics/Ant", "/pics/Zed"].map(String::from);
+    let (folders, covered) = crate::sync::many_folders(&chosen, &sidebar);
+    let listed: Vec<&str> = folders.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(listed, vec!["/pics/Zed", "/pics/Beta", "/pics/Ant", "/pics/Cat"], "the sidebar's, then the rest by name");
+    assert!(covered.is_empty());
+}
+
 /// `trip` (c new, b missing), `home` (g new), `still` (unchanged) and `gone` (its folder deleted), all imported.
 fn changed_folders(dir: &Scratch) -> Headless {
     write_png(&dir.path("trip/a.png"), 1);
@@ -705,8 +717,11 @@ fn open_many_and_scan(h: &mut Headless, folders: &[String]) {
     h.step();
     let r = h.request("ui.clickWidget", json!({"id": "sideMenu:folders:synchronize"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolders { .. })), "the dialog opens at once: {:?}", h.app.ui.dialog);
+    assert!(
+        h.step_until(T, |h| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolders { .. }))),
+        "the dialog opens: {:?}",
+        h.app.ui.dialog
+    );
     assert!(h.step_until(T, |h| h.app.ui.dialog.as_ref().is_some_and(crate::sync::many_scanned)), "every folder was scanned");
 }
 
@@ -880,4 +895,99 @@ fn the_folders_dialog_stays_open_when_confirmed_for_a_full_line_from_the_control
     assert!(matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolders { .. })), "the dialog stays: {:?}", h.app.ui.dialog);
     assert_eq!(h.app.session.activity.waiting().len(), MAX_WAITING - 1, "neither of the folders took a place");
     drop(hold);
+}
+
+/// Given two chosen folders, one up to date and one changed, when Synchronize is confirmed, then the one folder with
+/// something to do is put in line, and the toast speaks of one folder, not "1 folders".
+#[test]
+fn one_folder_with_something_to_do_is_put_in_line_and_the_toast_says_so() {
+    let dir = Scratch::new("many-one");
+    let mut h = changed_folders(&dir);
+    open_many_and_scan(&mut h, &[dir.path("still"), dir.path("trip")]);
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).expect("it synchronizes");
+    assert_eq!(r["queued"].as_array().map(Vec::len), Some(1), "trip only: {r}");
+    assert!(
+        h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "Synchronizing the folder: see it under the bell"),
+        "{:?}",
+        h.app.ui.toast
+    );
+}
+
+/// Given folders that are up to date or not there (nothing is wrong with the choices: the scans found nothing to
+/// do), when Synchronize is confirmed, then nothing is put in line and the toast says nothing was synchronized.
+#[test]
+fn folders_that_are_up_to_date_or_not_there_synchronize_nothing() {
+    let dir = Scratch::new("many-offline");
+    let mut h = changed_folders(&dir);
+    open_many_and_scan(&mut h, &[dir.path("still"), dir.path("gone")]);
+    let found: Vec<(bool, bool)> = many_folders_of(&h).iter().map(|f| (f.counts.as_ref().is_some_and(|c| c.offline), f.skipped.is_some())).collect();
+    assert_eq!(found, vec![(true, false), (false, false)], "gone is not there, still is up to date");
+    let dlg = h.app.ui.dialog.take().expect("the dialog is open");
+    let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).expect("nothing to do is not an error");
+    assert_eq!(r["queued"].as_array().map(Vec::len), Some(0), "{r}");
+    assert!(h.app.session.activity.waiting().is_empty(), "nothing waits");
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "Nothing was synchronized"), "{:?}", h.app.ui.toast);
+}
+
+/// `outer` holding `inner`, both imported, with the folders' dialog open for both: `outer` is listed and `inner`,
+/// taken in by it, waits to come back if `outer` can't be synchronized.
+fn nested_folders(dir: &Scratch) -> (Headless, String, String) {
+    write_png(&dir.path("outer/a.png"), 1);
+    write_png(&dir.path("outer/inner/b.png"), 2);
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [dir.path("outer")]})).unwrap();
+    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1400.0, 1200.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let (outer, inner) = (dir.path("outer"), dir.path("outer/inner"));
+    crate::sync::open_many(&mut h.app, &[outer.clone(), inner.clone()]).unwrap();
+    (h, outer, inner)
+}
+
+/// Assert the folders' dialog lists `outer` as left out for `why` and `inner` as scanned.
+fn outer_left_out_inner_scanned(h: &Headless, outer: &str, inner: &str, why: &str) {
+    let folders = many_folders_of(h);
+    let state = |p: &str| folders.iter().find(|f| f.path == p).map(|f| (f.skipped.clone(), f.counts.is_some()));
+    assert_eq!(state(outer), Some((Some(why.to_string()), false)), "{folders:?}");
+    assert_eq!(state(inner), Some((None, true)), "the folder it took in is listed and scanned: {folders:?}");
+}
+
+/// Given a folder that takes in another chosen one but whose scan can't start (it holds disks), when the dialog
+/// scans, then the outer folder says why it was left out and the folder it took in is scanned and listed after all.
+#[test]
+fn a_folder_whose_scan_cant_start_gives_back_the_folder_it_took_in() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    for path in ["/Volumes/lc-sync-card/2024/a.jpg", "/Volumes/lc-sync-card/2024/day/b.jpg"] {
+        let id = session.catalog.alloc_photo_id();
+        let p = Photo::new(id, Source::File { path: path.into() }, "x.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+        session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let mut h = Headless::new(LightcraftApp::new(session, Services { png: None, ..Default::default() }), [1400.0, 1200.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "photoGrid", "leftPanel": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    // (`/Volumes` lies above a disk: the engine refuses to scan it with the others)
+    let (outer, inner) = ("/Volumes".to_string(), "/Volumes/lc-sync-card/2024".to_string());
+    crate::sync::open_many(&mut h.app, &[outer.clone(), inner.clone()]).unwrap();
+    assert_eq!(many_folders_of(&h).iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec![outer.as_str()], "the inner one is taken in");
+    assert!(h.step_until(T, |h| h.app.ui.dialog.as_ref().is_some_and(crate::sync::many_scanned)), "every folder was scanned");
+    outer_left_out_inner_scanned(&h, &outer, &inner, "Can't be synchronized with the others: synchronize it by itself");
+}
+
+/// Given a folder that takes in another chosen one whose scan's worker dies (its result never comes), when the
+/// dialog polls, then the outer folder says its scan failed and the folder it took in is scanned and listed after all.
+#[test]
+fn a_folder_whose_scan_dies_gives_back_the_folder_it_took_in() {
+    let dir = Scratch::new("many-died");
+    let (mut h, outer, inner) = nested_folders(&dir);
+    assert_eq!(many_folders_of(&h).iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), vec![outer.as_str()], "the inner one is taken in");
+    let (tx, rx) = std::sync::mpsc::channel();
+    drop(tx);
+    let Some(scan) = h.app.sync_scans.as_mut() else { panic!("the dialog's scans are set up") };
+    scan.at = Some((0, std::sync::Arc::new(lightcraft_engine::sync::SyncProgress::default()), rx));
+    assert!(h.step_until(T, |h| h.app.ui.dialog.as_ref().is_some_and(crate::sync::many_scanned)), "every folder was scanned");
+    outer_left_out_inner_scanned(&h, &outer, &inner, "Scan failed");
 }

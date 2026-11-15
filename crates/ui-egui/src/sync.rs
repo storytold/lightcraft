@@ -298,7 +298,7 @@ pub fn confirm(app: &mut LightcraftApp, dlg: &Dialog) -> Result<Value, String> {
 pub struct ManyScan {
     guard: TaskGuard,
     /// The folder being scanned (its place in the dialog), how far it is, and where its result comes.
-    at: Option<(usize, Arc<SyncProgress>, std::sync::mpsc::Receiver<FolderChanges>)>,
+    pub(crate) at: Option<(usize, Arc<SyncProgress>, std::sync::mpsc::Receiver<FolderChanges>)>,
     /// Chosen folders left out because another chosen one takes them in: back in the dialog if that one can't be
     /// synchronized after all.
     covered: Vec<SyncFolder>,
@@ -315,7 +315,12 @@ impl ManyScan {
 
 /// `path` as a list of names (as the catalog spells a folder's identity), to tell whether one folder is inside another.
 fn names(path: &str) -> Vec<String> {
-    lightcraft_catalog::query::folder_key(path).split('/').filter(|n| !n.is_empty()).map(str::to_string).collect()
+    key_names(&lightcraft_catalog::query::folder_key(path))
+}
+
+/// The names of a folder's identity key ([`folder_key`](lightcraft_catalog::query::folder_key)).
+fn key_names(key: &str) -> Vec<String> {
+    key.split('/').filter(|n| !n.is_empty()).map(str::to_string).collect()
 }
 
 /// Whether folder `inner` (its [`names`]) is inside folder `outer`.
@@ -329,11 +334,18 @@ fn inside(inner: &[String], outer: &[String]) -> bool {
 /// disk is listed but left out, saying why: it is synchronized by itself, after its own question.
 pub fn many_folders(paths: &[String], order: &[String]) -> (Vec<SyncFolder>, Vec<SyncFolder>) {
     use lightcraft_catalog::query::folder_key;
-    let place = |p: &str| {
-        let k = folder_key(p);
-        order.iter().position(|o| folder_key(o) == k).unwrap_or(order.len())
-    };
-    let mut chosen: Vec<(usize, Vec<String>, &String)> = paths.iter().map(|p| (place(p), names(p), p)).collect();
+    // (each sidebar folder's key made once: the first of two spellings of one folder wins)
+    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::with_capacity(order.len());
+    for (i, o) in order.iter().enumerate() {
+        index.entry(folder_key(o)).or_insert(i);
+    }
+    let mut chosen: Vec<(usize, Vec<String>, &String)> = paths
+        .iter()
+        .map(|p| {
+            let key = folder_key(p);
+            (index.get(&key).copied().unwrap_or(order.len()), key_names(&key), p)
+        })
+        .collect();
     // (a folder the sidebar doesn't show goes last, by name)
     chosen.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     chosen.dedup_by(|a, b| a.1 == b.1);
@@ -576,8 +588,9 @@ pub fn many_body(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog) {
                 (None, Some(c)) if c.up_to_date() => crate::i18n::tr("Up to date").to_string(),
                 (None, Some(c)) => changes_found(c),
             };
+            // (the state wraps under the name when it doesn't fit, as the other dialogs' long lines do)
             let r = ui
-                .horizontal(|ui| {
+                .horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new(f.name.as_str()).strong()).on_hover_text(f.path.as_str());
                     ui.label(egui::RichText::new(state).color(t.text_dim));
                 })
