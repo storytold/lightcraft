@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::db::{CatalogDb, DB_FILE};
 use crate::journal::{LOG, SNAPSHOT, VERSION};
-use crate::progress::MigrationPhase;
+use crate::progress::{MigrationKind, MigrationPhase};
 use crate::store::FsStore;
 use crate::{Catalog, CatalogError, Journal, LoadReport, Result, Store};
 
@@ -162,6 +162,58 @@ pub fn migrate(dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// Bring the v4 store of the library in `dir` up to this build's format version without opening
+/// the library — the step [`Journal::open_v4`] otherwise does while it opens one: a log a newer
+/// build wrote to is refused first, then the store, its log and the stub are copied and verified
+/// to `backups/before-v<N> <time>/` ([`crate::upgrade_backup`]) and only then is the store marked
+/// with this version, so the build that made it can still open the copy. Split out so a frontend
+/// can run it on a worker thread and show [`crate::progress::migration`] (the copy is nearly all
+/// of the wait after an update, byte for byte over a store that can be gigabytes) while the
+/// opening that follows — in the session, on the interface's thread — finds the current version
+/// and is quick. `Ok(false)`: nothing to do (no store, or already this version). The library
+/// must be locked by the caller ([`crate::lock`]).
+pub fn prepare_upgrade(dir: &Path) -> Result<bool> {
+    prepare_upgrade_inner(dir).map_err(|e| match e {
+        CatalogError::Corrupt(m) => CatalogError::Corrupt(format!("{m}. {}", backup_hint(dir))),
+        e => e,
+    })
+}
+
+fn prepare_upgrade_inner(dir: &Path) -> Result<bool> {
+    let db_path = dir.join(DB_FILE);
+    if !db_path.is_file() {
+        return Ok(false);
+    }
+    let mut db = CatalogDb::open(&db_path)?;
+    let stored = db.version();
+    if stored >= crate::journal::VERSION {
+        return Ok(false);
+    }
+    // (as the open reads it: a missing log is an empty one)
+    let log_path = dir.join(LOG);
+    let log = if log_path.exists() { std::fs::read(&log_path).map_err(ioe)? } else { Vec::new() };
+    crate::journal::refuse_newer_records(&log)?;
+    let _running = crate::progress::Running::start(MigrationKind::FormatBump, dir.display().to_string());
+    // copy first: the store, its log and stub as the older build left them, checked, before
+    // anything of the library is written (the store is closed meanwhile, so the copy is the file
+    // as it is on disk)
+    drop(db);
+    crate::upgrade_backup::keep_copy(dir, stored, crate::journal::VERSION, &[DB_FILE, LOG, SNAPSHOT])?;
+    db = CatalogDb::open(&db_path)?;
+    crate::progress::phase(MigrationPhase::Finishing, 0, 0);
+    db.mark_version().map_err(|e| match e {
+        CatalogError::Io(e) => CatalogError::Io(format!(
+            "can't upgrade {} from catalog format v{stored} to v{} ({e}). The catalog was left unchanged: free some disk space (or make it writable), then try again",
+            db_path.display(),
+            crate::journal::VERSION
+        )),
+        // a damaged store keeps its kind (and gets the backup hint)
+        e => e,
+    })?;
+    log::info!("catalog: upgraded {} from format v{stored} to v{}", db_path.display(), crate::journal::VERSION);
+    Ok(true)
+}
+
 /// Open the catalog at `path` (entry point or folder): migrating a v3 library on the way.
 pub fn open(path: &Path) -> Result<(Journal, Catalog, LoadReport)> {
     let dir = resolve(path)?;
@@ -298,7 +350,7 @@ fn migrate_v3(store: Box<dyn Store>, dir: &Path) -> Result<(Box<dyn Store>, Cata
     if let Some(f) = foreign_format(dir) {
         return Err(CatalogError::Foreign(format!("{SNAPSHOT}: format {f:?}")));
     }
-    let _running = crate::progress::Running::start(dir.display().to_string());
+    let _running = crate::progress::Running::start(MigrationKind::V3ToV4, dir.display().to_string());
     #[derive(Deserialize)]
     struct Header {
         #[serde(default)]

@@ -223,6 +223,13 @@ library: those given on the command line, and photos dropped on the window while
 up (desktop app); they are imported into the library that opens, or into the temporary session. Presets dropped
 then are refused with a toast.
 
+The catalog opens on a worker thread once the window is up, behind a small blocking window
+(`libraryProblem.opening: true`, the bar `progress:libraryOpening`; `libraryProblem.upgrading: true` with
+`progress:libraryUpgrade` for a v3 catalog's one-time migration) — scripts that wait for the library should
+settle rather than expect it on the first frame. While a catalog upgrade runs, `libraryProblem.upgrade` is its
+progress: `{library, kind, phase, done, total}` with `kind` `"v3ToV4"` or `"formatBump"` (the byte-verified copy
+after an update; `done`/`total` are bytes in its `backup` phase and photos in `writing`).
+
 ### Choosing the library at launch
 
 With Settings ▸ General ▸ At launch set to Ask me (`ui.set {"settings": {"atLaunch": "ask"}}`; `"last"`, the
