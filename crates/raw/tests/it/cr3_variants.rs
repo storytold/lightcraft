@@ -19,6 +19,13 @@
 
 use lightcraft_raw::{RawData, RawError, decode, probe_info};
 
+/// The header probe can't see what only the samples tell: a full CR3 decode adds the white headroom
+/// it found to `baseline_exposure`. Everything else must match.
+fn without_baseline(mut info: lightcraft_raw::RawInfo) -> lightcraft_raw::RawInfo {
+    info.color.baseline_exposure = 0.0;
+    info
+}
+
 // --- minimal CR3 container -------------------------------------------------
 
 fn box_bytes(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
@@ -227,7 +234,7 @@ fn control_lossless_fixture_decodes_through_the_container() {
     let raw = decode(&file).unwrap();
     assert_eq!((raw.width, raw.height, raw.bits, raw.cpp), (4, 4, 14, 1));
     assert_eq!(raw.data, RawData::U16(vec![8193; 16]));
-    assert_eq!(probe_info(&file).unwrap(), raw.info());
+    assert_eq!(without_baseline(probe_info(&file).unwrap()), without_baseline(raw.info()));
 }
 
 #[test]
@@ -235,11 +242,11 @@ fn control_craw_and_adaptive_fixtures_decode_through_the_container() {
     let craw = cr3_file(&craw_coding(), &craw_stream(4));
     let raw = decode(&craw).unwrap();
     assert_eq!(raw.data, RawData::U16(vec![8192; 256]));
-    assert_eq!(probe_info(&craw).unwrap(), raw.info());
+    assert_eq!(without_baseline(probe_info(&craw).unwrap()), without_baseline(raw.info()));
     let adaptive = cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, ADAPTIVE_QP));
     let raw = decode(&adaptive).unwrap();
     assert_eq!(raw.data, RawData::U16(vec![8192; 256]));
-    assert_eq!(probe_info(&adaptive).unwrap(), raw.info());
+    assert_eq!(without_baseline(probe_info(&adaptive).unwrap()), without_baseline(raw.info()));
 }
 
 // --- supports() gates -------------------------------------------------------
@@ -344,7 +351,7 @@ fn uniform_quantization_edges_of_the_accepted_range_decode() {
         let file = cr3_file(&craw_coding(), &craw_stream(quant));
         let raw = decode(&file).unwrap();
         assert_eq!(raw.data, RawData::U16(vec![8192; 256]), "quant {quant}");
-        assert_eq!(probe_info(&file).unwrap(), raw.info(), "quant {quant}");
+        assert_eq!(without_baseline(probe_info(&file).unwrap()), without_baseline(raw.info()), "quant {quant}");
     }
 }
 
@@ -370,7 +377,7 @@ fn adaptive_qp_edges_of_the_accepted_range_decode() {
         let file = cr3_file(&adaptive_coding(), &adaptive_stream(&ADAPTIVE_GAINS, 0, 0, qp_with_literal(literal)));
         let raw = decode(&file).unwrap();
         assert_eq!(raw.data, RawData::U16(vec![8192; 256]), "QP {value}");
-        assert_eq!(probe_info(&file).unwrap(), raw.info(), "QP {value}");
+        assert_eq!(without_baseline(probe_info(&file).unwrap()), without_baseline(raw.info()), "QP {value}");
     }
 }
 

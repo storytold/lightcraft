@@ -644,3 +644,19 @@ fn an_export_develops_from_a_source_twice_its_size() {
     }
     assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview, "a view keeps the preview");
 }
+
+#[test]
+fn a_thumbnail_is_cut_from_the_decoded_full_source() {
+    let mut s = crate::Session::new();
+    let p = Photo::new(PhotoId(1), Source::File { path: "/nowhere/a.ARW".into() }, "a.ARW", "ARW", 2400, 1600, "");
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+    s.media.insert(p.id, SourceLevel::Full, Arc::new(Rgb32f::from_fn(2400, 1600, |x, _| [x as f32 / 2400.0, 0.5, 0.25])));
+    let job = s.thumb_job(p.id, 512).unwrap();
+    assert!(matches!(job.source, SourceRef::Fit { .. }));
+    let r = job.run();
+    let thumb = r.rendered.as_ref().unwrap();
+    assert_eq!((thumb.image.width, thumb.image.height), (512, 341));
+    s.accept(&r);
+    let cached = s.media.get(p.id, SourceLevel::Thumb).unwrap();
+    assert_eq!((cached.width, cached.height), (512, 341), "a thumbnail-sized source is kept, not the full source");
+}

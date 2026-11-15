@@ -237,6 +237,7 @@ pub fn summarize(doc: &Doc) -> (Vec<(String, Counts)>, Counts) {
         if sections.last().is_none_or(|(s, _)| *s != r.section) {
             sections.push((r.section.clone(), Counts::default()));
         }
+        #[allow(clippy::expect_used)] // either non-empty above or a section was just pushed
         sections.last_mut().expect("pushed").1.add(r);
         total.add(r);
     }
