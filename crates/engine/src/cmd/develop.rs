@@ -120,13 +120,11 @@ fn wb_mode_ignores_its_numbers(mode: WbMode, info: &lightcraft_pipeline::SourceI
 /// numbers, neither, or a mode of its own. [`merge_settings_for_photo`] and `preset.apply` both start here, and
 /// both finish with `normalize_wb` so the photo ends on the scale it is edited on.
 pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value, info: &lightcraft_pipeline::SourceInfo) -> Option<DevelopSettings> {
-    let mut d = (*d).clone();
-    let wb = partial.get("wb").and_then(Value::as_object);
-    // the partial names one of the two numbers, and not both or neither
-    let one_field = wb.is_some_and(|wb| wb.contains_key("temp") != wb.contains_key("tint"));
-    if !one_field {
+    if !wb_partial_names_one_field(partial) {
         return None;
     }
+    let mut d = (*d).clone();
+    let wb = partial.get("wb").and_then(Value::as_object);
     // a photo whose source is edited in Kelvin is the one with two scales to trip over
     let kelvin_source = info.raw && !info.relative_wb;
     // the scale the partial's numbers are written on: an unmentioned scale means the relative scale, as `merged` reads it
@@ -152,6 +150,12 @@ pub(crate) fn prepare_photo_for_wb_partial(d: &DevelopSettings, partial: &Value,
         }
     }
     Some(d)
+}
+
+/// Whether `partial`'s white balance names one of the two numbers, and not both or neither: the partials
+/// [`prepare_photo_for_wb_partial`] prepares the photo for.
+pub(crate) fn wb_partial_names_one_field(partial: &Value) -> bool {
+    partial.get("wb").and_then(Value::as_object).is_some_and(|wb| wb.contains_key("temp") != wb.contains_key("tint"))
 }
 
 /// Merge a partial settings JSON into a photo's settings (issue #2910). `DevelopSettings::merged` keeps a white
@@ -1323,24 +1327,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let ops = ids
                 .iter()
                 .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| {
-                    // a hand-written preset may name one white balance number only, and then it means the same as
-                    // a partial: bring the photo onto that scale first, with its own as-shot white, and put the
-                    // result back on the scale the photo is edited on (issue #2910) — the merge `develop.merge` uses
-                    let info = s.source_info(id);
-                    let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
-                    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
-                    let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
-                    // Amount is measured from the import look only when the photo has one.
-                    // Otherwise the current settings (on the partial's WB scale) are its baseline.
-                    let imported = s.catalog.photo(id).filter(|p| p.import_look.is_some() && amount != 1.0).map(|p| p.import_defaults());
-                    let prepared_import =
-                        imported.as_ref().map(|d| prepare_photo_for_wb_partial(d, &preset.settings, &info).unwrap_or_else(|| d.clone()));
-                    let original = prepared_import.as_ref().unwrap_or(base);
-                    let mut next = preset.apply_on(base, original, amount);
-                    if on_kelvin_scale {
-                        lightcraft_pipeline::local::normalize_wb(&mut next, &info);
-                    }
+                .filter_map(|(id, _)| {
+                    // the same composition, white balance preparation and final scale as previews and import
+                    // (`Session::preset_applied`, issues #2159 and #2910)
+                    let next = s.preset_applied(id, &preset, amount)?;
                     s.develop_op(id, next, &format!("Preset: {}", preset.name))
                 })
                 .collect::<Vec<_>>();
