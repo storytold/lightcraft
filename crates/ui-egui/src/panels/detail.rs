@@ -797,7 +797,10 @@ fn whole_frame_edge(app: &LightcraftApp, interacting: bool, plan: &crate::region
         plan.main_edge
     } else {
         // The floor is the preview source level, or the user's explicit Preview size when one is
-        // set: a size below the preview level caps it, a size above it raises it.
+        // set: a size below the preview level caps it, a size above it raises it. When an explicit
+        // Preview size is set it also caps the whole-frame render at that size, so a view larger
+        // than the Preview size (a canvas bigger than the Preview size, for example) is not
+        // rendered above it.
         let explicit = app.ui.settings.preview_limit;
         let limit = if explicit == 0 { usize::MAX } else { explicit as usize };
         let preview_edge = if explicit == 0 { lightcraft_engine::SourceLevel::Preview.max_edge() } else { explicit as usize };
@@ -943,9 +946,9 @@ fn camera_jpeg_shown(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, sho
 /// Uses the engine's 1% reuse tolerance so a cached edge slightly below the request
 /// is still accepted, avoiding an unnecessary render.
 ///
-/// Rejection excludes the undersized view from cache reads only: `view_cache` is kept
-/// as the write destination, so `RenderJob::run_photo` still stores the larger render
-/// there instead of rendering from the source on every return to the photo.
+/// Rejection drops `view_cache` entirely: the undersized view no longer satisfies the
+/// request, and the replacement render is not written back to it either, so the photo is
+/// rendered from the source on each return until a view that covers the request is built.
 fn reject_undersized_cached_view(job: &mut lightcraft_engine::media::RenderJob) {
     // Read the cached view's dimensions directly from the cache handle instead of calling
     // `cached_view()`: that would run `fit_cached` (a Lanczos shrink of the pixels) merely
@@ -958,9 +961,10 @@ fn reject_undersized_cached_view(job: &mut lightcraft_engine::media::RenderJob) 
     // This avoids rejecting a cached view that the engine would accept.
     if cached_long < requested_long && (requested_long as f32 / cached_long as f32 - 1.0) > 0.01 {
         // The undersized view only satisfies the request via the display-fit shortcut
-        // (an image larger than the size it is drawn at). Drop the cache read so
-        // `cached_view()` reads `None`, but keep `display_fit`: the worker still
-        // downsamples the completed replacement render to the drawn size.
+        // (an image larger than the size it is drawn at). Drop `view_cache` so
+        // `cached_view()` reads `None` and the replacement render is not written back
+        // to it; `display_fit` is kept so the worker downsamples the replacement render
+        // to the drawn size.
         job.view_cache = None;
     }
 }
@@ -1580,6 +1584,19 @@ mod tests {
         let plan = LoupePlan { main_edge: SourceLevel::Preview.max_edge(), window_edge: None };
         let edge = whole_frame_edge(&app, false, &plan, 6000, 16384);
         assert_eq!(edge, 3840, "raising the preview size raises the whole-frame render edge");
+    }
+
+    /// An explicit Preview size caps the whole-frame render even when the plan asks for a larger
+    /// edge (a canvas bigger than the Preview size): the render stays at the Preview size.
+    #[test]
+    fn explicit_preview_limit_caps_whole_frame_render_edge() {
+        use super::whole_frame_edge;
+        use crate::region::LoupePlan;
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+        app.ui.settings.preview_limit = 3840;
+        let plan = LoupePlan { main_edge: 6000, window_edge: None };
+        let edge = whole_frame_edge(&app, false, &plan, 6000, 16384);
+        assert_eq!(edge, 3840, "the Preview size caps a larger plan edge");
     }
 
     /// An explicit preview limit of 3840 must not be satisfied by a cached view built at 2560
