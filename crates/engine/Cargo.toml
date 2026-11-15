@@ -9,6 +9,7 @@ description = "LightCraft engine: session, command registry, history, render job
 workspace = true
 
 [dependencies]
+craft-mime = { workspace = true }
 # Paths stored in a Lightroom catalog are followed only to local files or the catalog's share.
 craft-docpath = { workspace = true }
 lightcraft-geom = { workspace = true }
@@ -66,6 +67,6 @@ lightcraft-testkit = { workspace = true }
 # HDR JPEG XL tests read the file's colour encoding
 jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
-lightcraft-heif = { workspace = true, features = ["testdata"] }
+craft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
-lightcraft-tiff = { workspace = true }
+craft-tiff = { workspace = true }

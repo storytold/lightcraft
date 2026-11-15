@@ -40,6 +40,8 @@ mod mask_effects;
 mod mask_geometry;
 mod merge;
 mod move_to_share;
+#[cfg(unix)]
+mod opened_folder;
 mod organize;
 mod persist;
 mod prefs;

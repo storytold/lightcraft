@@ -384,6 +384,10 @@ existing library (format 13 or earlier) upgrades its catalog automatically, pres
 settings, existing face assignments and boxes, and ignore decisions from earlier feature builds. Older builds then
 refuse the newer format instead of trying to decode it as an older catalog.
 
+The catalog keeps its own region kind for ignored faces. Conversion to shared metadata for
+interchange/export omits ignored regions rather than turning them back into ordinary faces;
+ordinary region types and unknown type strings retain their geometry and metadata.
+
 **Show photos** puts their photos in the grid; **‹ People** or Escape goes back. "More" only holds faces the scan has
 already embedded, so it fills in as the scan goes; it shows faces scoring above four fifths of the model's suggestion bar,
 since you look at each one before anything is named.
