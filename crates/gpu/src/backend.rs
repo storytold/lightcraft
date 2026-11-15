@@ -121,12 +121,20 @@ pub fn compute_backends() -> Option<Backends> {
 /// The backends for the desktop window's renderer (eframe/egui-wgpu). The window always needs
 /// one: `off` keeps the platform default.
 pub fn window_backends() -> Backends {
-    let default = default_window_backends(std::env::consts::OS);
-    let choice = match env_choice() {
-        BackendChoice::Off => BackendChoice::Auto,
-        c => c,
-    };
-    resolve(choice, default, wgpu::Instance::enabled_backend_features()).unwrap_or(default)
+    let os = std::env::consts::OS;
+    let default = default_window_backends(os);
+    let compiled = wgpu::Instance::enabled_backend_features();
+    let forced = forced_window_renderer(std::env::var("LIGHTCRAFT_GPU_BACKEND").ok().as_deref(), std::env::var("WGPU_BACKEND").ok().as_deref());
+    // Wire the renderer selection into production (issue #3885): on Linux
+    // without a startup marker, start with glow. remembered/failed/marker
+    // availability/glow are not tracked at this layer; callers that own that
+    // state call initial_window_renderer directly with those values.
+    match initial_window_renderer(forced, None, None, true, os, compiled, false) {
+        Some(WindowRenderer::Wgpu(b)) => b,
+        // Glow is not a wgpu backend; fall back to the platform default so
+        // callers always get a usable backend set.
+        Some(WindowRenderer::Glow) | None => default,
+    }
 }
 
 /// The DX12 shader compiler: FXC (`d3dcompiler_47.dll`, part of Windows) unless
