@@ -186,7 +186,7 @@ fn trashed_file_is_gone(cat: &lightcraft_catalog::Catalog, id: PhotoId) -> bool 
 /// taken back.
 pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepared: Prepared) -> crate::Result<ImportReport> {
     let now = now.to_string();
-    let mut report = ImportReport { scanned: prepared.scanned, ..Default::default() };
+    let mut report = ImportReport { scanned: prepared.scanned, skipped: prepared.skipped, ..Default::default() };
     let mut ops = Vec::new();
     // Move: placed at the destination, sources untouched until the records are committed
     let mut placed: Vec<crate::import_move::Placed> = Vec::new();

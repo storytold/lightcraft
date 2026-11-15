@@ -173,6 +173,15 @@ pub struct FileFacts {
     pub captured: Option<String>,
 }
 
+/// Files an import's folder walk left out ([`super::Expansion::unreadable`], [`super::Expansion::unsupported`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Skipped {
+    /// Folders whose contents couldn't be listed.
+    pub unreadable: usize,
+    /// Files in the folders walked that are not a supported photo type (XMP sidecars not counted).
+    pub unsupported: usize,
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ImportReport {
     pub imported: Vec<u64>,
@@ -193,6 +202,8 @@ pub struct ImportReport {
     pub scanned: usize,
     /// Photos whose metadata/develop settings were read from an XMP sidecar (or embedded XMP).
     pub sidecars: usize,
+    /// What the folder walk left out ([`super::Expansion`]), as `library.importPreview` reports it.
+    pub skipped: Skipped,
     /// Per-photo diagnostics from foreign XMP develop settings that could not be fully carried over.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<ImportWarning>,
