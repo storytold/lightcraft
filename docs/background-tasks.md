@@ -21,6 +21,9 @@ Where the tasks show depends on the layout:
   (`Tokens::radius`).
 - **Modern**: a floating card centred under the Library / Develop switch, three rows and "+N more"
   (`activity:more`).
+- **Full-screen preview** (`F`): a quiet card top right over the black, one task's name over a thin bar, several as
+  "N operations in progress…" over a bar each (`activity:fullscreen`, bars `activity:fullscreen:bar:<id>`), never during a
+  slideshow. The same stack's data drawn small — not a second progress system.
 
 The registry is `lcc_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack (every layout) is
 `crates/ui-egui/src/panels/activity.rs`; the module bar calls it from `crates/ui-egui/src/module.rs`. Every job that can last more than a moment uses it; **don't add a progress
@@ -112,7 +115,7 @@ let photo = batch.child("denoise", "AI Denoise"); // the photo in progress, unde
 | Job | Where | Shows how to |
 |---|---|---|
 | Export, contact sheet | `crates/ui-egui/src/export_task.rs` | adopt the job's flag; update the row each frame; an export is a batch that reports itself, its failures counted when it ends |
-| Build Previews | `crates/engine/src/cmd/previews.rs` | move the guard into the worker thread |
+| Build Previews | `crates/engine/src/cmd/previews.rs` | move the guard into the worker thread; a build asked for while another runs waits in `Session::preview_queue` and the next one starts (a fresh row) when the running build ends — `library.cancelPreviews` stops the running one and drops the waiting ones |
 | Preparing photos in the background | `crates/engine/src/prep.rs`, `crates/engine/src/cmd/previews.rs` | a background build in one row ("Preparing photos in the background") whose ✕ sets the build's flag; it waits while the photo on screen is being made and says "Paused while exporting" in its detail while the user's own work runs (`Activity::user_work`); a build asked for replaces it |
 | Slideshow export | `crates/engine/src/cmd/slideshow.rs`, `crates/engine/src/slideshow_export.rs` | an engine command that owns its worker and row; progress from the worker through a `TaskHandle`; results read back by command |
 | Folder metadata save / read | `crates/engine/src/cmd/folder_metadata.rs` | a job that needs the session, so a per-frame pump (`folder.metadataPump`) does a few photos at a time and the row's flag stops it |
