@@ -759,6 +759,8 @@ fn damaged_connections_file_never_panics() {
         pinned: None,
         path_maps: vec![PathMap { container: "/usr/src/app/upload".into(), local: "/pics".into() }],
         linked_until: None,
+        collections: true,
+        shared: true,
         sync: Default::default(),
     });
     a.save(&path).unwrap();

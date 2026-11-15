@@ -83,6 +83,13 @@ A file imported from disk whose SHA-1 is the checksum of a link-only photo's ass
 photo: the link-only photo takes the file as `immich.fetchOriginal` would (`cmd::immich::merge_into_link_only`,
 called from `library.import`), the new entry is removed, and it joins the import's collection in its place.
 
+## Albums as device-sync collections
+
+`immich.collections {account, on}` shows an account's albums as collections in device sync; each device picks
+None, Previews or Full Quality per album. Design and rules: [sync.md](sync.md) ▸ Immich collections. The
+listing, imports and uploads run on workers with activity rows ("Listing Immich albums", "Adding photos to Immich
+albums"); `cmd::immich::collections`.
+
 ## External libraries (IMM-EXTLIB)
 
 When Immich indexes the same folders as the catalog as an *external library*, nothing is uploaded. Immich does not

@@ -1015,6 +1015,7 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
                 });
             }
         });
+        collections_rows(app, ui, t, i, &id, a);
         confirm_box(app, ui, t, i, &id, "card");
         if app.immich.libraries.contains_key(&id) {
             extlib(app, ui, t, &id);
@@ -1031,6 +1032,32 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
     });
     register(ui.ctx(), format!("immichAccount:{i}"), r.response.rect);
     ui.add_space(4.0);
+}
+
+/// The account in device sync: its albums as collections (each device picks what it keeps of
+/// each in Settings ▸ Sync).
+fn collections_rows(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &str, a: &Value) {
+    ui.horizontal_wrapped(|ui| {
+        let mut on = a["collections"] == true;
+        let c = ui.checkbox(&mut on, crate::i18n::tr("Show Immich albums as collections"));
+        register(ui.ctx(), format!("check:immichCollections-{i}"), c.rect);
+        if c.changed() {
+            let r = app.run("immich.collections", json!({"account": id, "on": on}));
+            if report(app, ui.ctx(), r) && on {
+                let _ = app.run("app.settings", json!({"tab": "sync"}));
+            }
+        }
+        if a["collections"] == true && text_button(ui, &format!("immichCollectionsOpen-{i}"), crate::i18n::tr("Choose in Sync…"), false).clicked() {
+            let _ = app.run("app.settings", json!({"tab": "sync"}));
+        }
+    });
+    if a["collections"] == true {
+        ui.label(
+            RichText::new(crate::i18n::tr("Each album is a collection in the Immich set; in Settings ▸ Sync each device chooses None, Previews or Full Quality."))
+                .size(11.0)
+                .color(t.text_dim),
+        );
+    }
 }
 
 /// IMM-SIDECARS: push the catalog's metadata to Immich (whole sidecars for external-library

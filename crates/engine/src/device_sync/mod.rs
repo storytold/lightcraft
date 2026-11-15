@@ -432,7 +432,9 @@ fn catalogue_status(s: &Session, online: &HashSet<String>, paired: &[lcc_peer::P
                 "immich": c.is_immich(),
                 "grant": c.grant.v,
                 "take": c.take_of(me),
-                "most": c.grant.v.most(),
+                // (an Immich album is taken up to full quality: its files come from the server)
+                "most": if c.is_immich() { c.grant.v.most().min(Take::FullQuality) } else { c.grant.v.most() },
+                "private": r.is_private(c),
                 "takes": takes,
                 "photos": r.members_of(id).count(),
                 "letters": format!("{}{}", location.letter(), depth.letter()),

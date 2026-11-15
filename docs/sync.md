@@ -57,6 +57,29 @@ A photo that arrives from another device and has a SHA-1 key is looked up on the
 checksum straight away (the same lookup as for a new import), so an original Immich already has is linked, not
 uploaded again. A link-only photo doesn't ask other devices for its original: it comes from Immich.
 
+## Immich collections
+
+- **Immich ▸ Show Immich albums as collections** (`immich.collections {account, on}`) on a device that holds the
+  account's key: each of its albums becomes a shared collection `immich:<user id>:<album id>` inside the set
+  `immich:<user id>` named "Immich", owner `immich:<user id>`, grant fixed at Sync. Every device with the account
+  writes the same ids, so their copies merge and a renamed album is renamed everywhere.
+- Each device takes **None**, **Previews** (link-only previews from Immich) or **Full Quality** (originals from
+  Immich); Full Sync isn't offered (`Replica::set_take` refuses it). A device that takes an album lists it in the
+  catalog under the album folder "Immich", created on demand.
+- Which photos are in an album comes from the server, on each device that holds the key: the account's albums
+  are listed on a worker about once a minute (`sync.immichRefresh` at once), and what a device takes is brought in
+  with the ordinary Immich import (`link` or `copy`) and `immich.fetchOriginal`. Members of Immich collections are
+  never told to another device (`Replica::tells`) and their files are never fetched from one (`may_fetch`,
+  `depth_from_peers`); the collection items and the photos' records (develop settings, rating, …) travel as usual.
+- A photo added to an Immich collection on any device that takes it is looked up on the server by checksum and
+  linked if Immich has it (the phone's own upload, another device's), else uploaded once, then put into the album.
+  A photo taken out of the collection is taken out of the album. An album removed on the server is removed from
+  every device's list (its photos stay).
+- An album folder named "Immich" holds the account's albums; with two accounts there are two such folders.
+- **Account identity.** The catalog's links to Immich stay under the local `<url>#<user id>` account id. Device sync
+  names the account by Immich's user id alone (a UUID), so two devices that reach one server by different URLs
+  (LAN and public) share its collections.
+
 ## Pills
 
 Two letters and an arrow (`RF ↓`), no colour: where the original is (**L**ocal, **R**emote, **I**mmich,
@@ -93,4 +116,4 @@ Tracked in [gaps.md](gaps.md) (gaps 31–33).
   Android NSD.
 - A second import of identical bytes is the same photo, so it doesn't sync as a new one.
 - Not yet tested between real devices; the tests run two devices over loopback on one machine.
-- Next stages: Immich collections (owner `immich:`) and the Android camera roll as collections.
+- Next stage: the Android camera roll as a collection.

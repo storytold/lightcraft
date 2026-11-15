@@ -110,6 +110,8 @@ fn account_json(s: &Session, a: &Account) -> Value {
         "permissions": a.permissions,
         "missingPermissions": missing.iter().map(|(f, p)| json!({"feature": f, "permissions": p})).collect::<Vec<_>>(),
         "pinned": a.pinned,
+        "collections": a.collections,
+        "shared": a.shared,
         "pathMaps": a.path_maps,
         "linked": linked,
         "probable": probable,
