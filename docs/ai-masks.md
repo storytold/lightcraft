@@ -61,6 +61,35 @@ The result is stored with the mask: the model's 288 × 288 mask logits over the 
 need the model, so masks survive moving the library to a machine without it, and the web build
 renders them. Editing the photo's look later does not recompute a mask (click again to update).
 
+### Pasting settings with masks
+
+When **Masking** is included in copied settings, **Paste Edit Settings**, **Paste Selected
+Settings** and **Paste Settings from Previous** recompute every Object and Describe component
+on each destination photo, using its pasted look. Local adjustments, component names,
+Add/Subtract/Intersect, inversion, Edge and manual components are preserved. The source photo's
+segmentation and detail patches are not reused. Object masks reuse their normalized include/exclude
+points; check the result if the subject moved far from those points. An Object without include
+points must be selected on the source photo before copying.
+
+The app stays responsive and shows **Recomputing AI masks** in Activity. Settings are applied
+together as one undo step only after all selections succeed.
+
+Cancel, a missing or damaged model, a destination edited while waiting or computing, or an edit
+interaction still open on any destination when computation finishes leaves the entire paste
+unapplied. Finish or cancel the interaction, then paste again; interactions on unrelated photos
+do not block the paste.
+A description with no match produces an empty selection. SAM 3 must already be installed
+(or a remote worker configured); nothing downloads automatically.
+
+Subject, Sky and Background already evaluate on each photo during rendering; their current
+heuristic/model limitations are unchanged. Sync Settings, Auto Sync and presets are not covered
+by this paste-specific recomputation yet.
+
+Control/MCP: `develop.paste` and `develop.pastePrevious` return `{pending: true, changed: 0,
+targets}` in the desktop app while inference runs. `activity.list` reports progress
+(`kind: "segment"`); `activity.cancel` cancels it after the current selection finishes.
+Waiting-mode clients complete the computation before returning `{changed}`.
+
 ## Remote Metal inference
 
 Native builds with `sam` can keep the editor, RAW files, library, and exports local while

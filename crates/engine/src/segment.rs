@@ -17,6 +17,7 @@
 
 #[cfg(feature = "sam")]
 mod download;
+mod paste;
 #[cfg(feature = "sam")]
 mod worker;
 
@@ -132,6 +133,8 @@ pub struct Segmenter {
     pending: Option<PendingClicks>,
     messages: Vec<String>,
     #[cfg(feature = "sam")]
+    paste: Option<paste::Pending>,
+    #[cfg(feature = "sam")]
     worker: worker::Worker,
     #[cfg(feature = "sam")]
     download: download::Downloader,
@@ -149,6 +152,8 @@ impl Default for Segmenter {
             background: false,
             pending: None,
             messages: Vec::new(),
+            #[cfg(feature = "sam")]
+            paste: None,
             #[cfg(feature = "sam")]
             worker: worker::Worker::default(),
             #[cfg(feature = "sam")]
@@ -182,7 +187,7 @@ impl Segmenter {
     /// Whether requests are queued or running (loading, analyzing the photo, a click…).
     pub fn busy(&self) -> bool {
         #[cfg(feature = "sam")]
-        return self.worker.pending() > 0;
+        return self.worker.pending() > 0 || self.paste.is_some();
         #[cfg(not(feature = "sam"))]
         false
     }
@@ -385,8 +390,14 @@ impl Session {
     /// selection stays on its content when they change, and changing them doesn't ask again.
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     pub(crate) fn segment_key(&self, id: PhotoId) -> Option<(u64, lightcraft_develop::DevelopSettings)> {
+        self.segment_key_for(id, &self.catalog.photo(id)?.develop)
+    }
+
+    /// Also used for a paste's proposed look, before any settings are committed.
+    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
+    fn segment_key_for(&self, id: PhotoId, settings: &lightcraft_develop::DevelopSettings) -> Option<(u64, lightcraft_develop::DevelopSettings)> {
         let p = self.catalog.photo(id)?;
-        let mut d = (*p.develop).clone();
+        let mut d = settings.clone();
         d.masks.clear();
         // (the crop doesn't show in the uncropped input: it doesn't ask again either)
         d.crop = Default::default();
@@ -667,6 +678,7 @@ impl Session {
             if idle {
                 self.segmenter.pending = None;
             }
+            self.poll_mask_paste(&mut polled);
         }
         polled
     }

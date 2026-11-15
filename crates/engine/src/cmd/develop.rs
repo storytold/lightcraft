@@ -1146,7 +1146,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Settings from Previous",
             ["Edit"],
             Some("Cmd+Alt+V"),
-            "{ids?, groups?: [settingsGroup] (default: the copy groups)} — from the photo that was active before this one",
+            "{ids?, groups?: [settingsGroup] (default: the copy groups)} — from the photo that was active before this one; copied AI masks are recomputed on each destination (SAM 3 required)",
             has_active,
             |s, p| {
                 let c = "develop.pastePrevious";
@@ -1155,14 +1155,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let groups = groups_param(p, c)?.unwrap_or_else(|| s.copy_groups.clone());
                 let partial = lightcraft_develop::extract_groups(&s.develop_of(prev).unwrap_or_default(), &groups);
                 let ids: Vec<PhotoId> = s.targets(p)?.into_iter().filter(|id| *id != prev).collect();
-                let ops = ids
-                    .iter()
-                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &partial, 1.0), "Paste from Previous"))
-                    .collect::<Vec<_>>();
-                let n = ops.len();
-                s.commit("Paste from Previous", Op::Batch { ops })?;
-                Ok(json!({"changed": n, "from": prev.0}))
+                let mut out = s.paste_settings(&ids, &partial, "Paste from Previous")?;
+                out["from"] = json!(prev.0);
+                Ok(out)
             }
         ),
         cmd!(
@@ -1170,7 +1165,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Edit Settings",
             ["Edit"],
             Some("Cmd+V"),
-            "{ids?, groups?: [settingsGroup] (paste only these of the copied groups)}",
+            "{ids?, groups?: [settingsGroup] (paste only these of the copied groups)} — copied Object/Describe masks are recomputed on each destination (SAM 3 required); the app returns {pending, targets} while computing",
             has_clipboard,
             |s, p| {
                 let c = "develop.paste";
@@ -1182,14 +1177,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     clip = lightcraft_develop::extract_groups(&full, &only);
                 }
                 let ids = s.targets(p)?;
-                let ops = ids
-                    .iter()
-                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &clip, 1.0), "Paste Settings"))
-                    .collect::<Vec<_>>();
-                let n = ops.len();
-                s.commit("Paste Settings", Op::Batch { ops })?;
-                Ok(json!({"changed": n}))
+                s.paste_settings(&ids, &clip, "Paste Settings")
             }
         ),
         cmd!(
