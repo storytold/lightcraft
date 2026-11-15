@@ -326,5 +326,8 @@
   "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
   "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。",
+  "{} selected photos": "选中的 {} 张照片",
+  "Showing the target photo: at most {} selected photos can be compared": "显示目标照片：最多可比较 {} 张选中的照片",
+  "Not compared, could not be read: {}": "无法读取，未参与比较：{}"
 }
