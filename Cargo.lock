@@ -1204,7 +1204,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9b
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b#ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1274,7 +1274,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
 dependencies = [
  "craft-jpeg",
- "craft-metadata",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "exr",
  "flate2",
  "half",
@@ -1316,7 +1316,19 @@ source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9b
 dependencies = [
  "brotli-decompressor 6.0.1",
  "chrono",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "quick-xml 0.41.0",
+ "serde",
+]
+
+[[package]]
+name = "craft-metadata"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b#ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b"
+dependencies = [
+ "brotli-decompressor 6.0.1",
+ "chrono",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -1345,12 +1357,12 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b#ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b"
 dependencies = [
  "chrono",
  "craft-crw",
- "craft-metadata",
- "craft-tiff",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b)",
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -1364,6 +1376,15 @@ dependencies = [
 name = "craft-tiff"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-tiff"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b#ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -3849,7 +3870,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-jxl",
  "craft-psd",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b)",
  "dhat",
  "jxl-oxide",
  "lightcraft-color",
@@ -3928,7 +3949,7 @@ dependencies = [
  "craft-docpath",
  "craft-heif",
  "craft-mime",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b)",
  "crc32fast",
  "fs4",
  "harfrust 0.13.3",
@@ -4086,10 +4107,10 @@ version = "0.21.1"
 dependencies = [
  "chrono",
  "craft-heif",
- "craft-metadata",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "craft-psd",
  "craft-raw",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b)",
  "lightcraft-geom",
  "proptest",
  "serde",
@@ -4144,7 +4165,7 @@ dependencies = [
  "chrono",
  "craft-image-codecs",
  "craft-raw",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=ffb280d65e9f2abbb17b796e0996bee3a0bc5e8b)",
  "dhat",
  "lightcraft-color",
  "lightcraft-geom",
