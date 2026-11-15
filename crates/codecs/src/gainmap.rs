@@ -14,7 +14,7 @@
 pub use craft_gainmap::{GainImage, GainMapMeta, GainMapOptions, ISO_URN, apply, compute};
 
 use crate::encode::{EncodeImage, EncodeMeta, Samples, jpeg_app_segments, xmp_segment};
-use crate::{ChromaSubsampling, Error, Format, Result, jpeg, jpeg_par};
+use crate::{ChromaSubsampling, Error, Format, Result, jpeg};
 
 /// Encode a gain map JPEG: `base` (8-bit SDR, 3 or 4 channels, colour-managed by `meta.icc`) and
 /// its gain map, both at `quality`. `meta.xmp` is kept, with the gain map container added.
@@ -23,32 +23,49 @@ pub fn encode_jpeg(base: &EncodeImage, gain: &GainImage, m: &GainMapMeta, qualit
         return Err(Error::Encode("gain map JPEG needs an 8-bit base image".into()));
     };
     let (w, h) = (base.width as usize, base.height as usize);
-    if !matches!(base.channels, 3 | 4) || data.len() < w * h * base.channels as usize {
+    if !matches!(base.channels, 3 | 4) {
+        return Err(Error::Encode("gain map JPEG needs an RGB base image".into()));
+    }
+    let Some(base_bytes) = w.checked_mul(h).and_then(|pixels| pixels.checked_mul(base.channels as usize)) else {
+        return Err(Error::Encode("gain map JPEG needs an RGB base image".into()));
+    };
+    if data.len() < base_bytes {
         return Err(Error::Encode("gain map JPEG needs an RGB base image".into()));
     }
     if w == 0 || h == 0 || w > u16::MAX as usize || h > u16::MAX as usize {
         return Err(Error::Encode("JPEG dimensions are limited to 65535".into()));
     }
-    if !matches!(gain.channels, 1 | 3) || gain.width == 0 || gain.height == 0 || gain.data.len() < gain.width * gain.height * gain.channels {
+    if !matches!(gain.channels, 1 | 3) || gain.width == 0 || gain.height == 0 {
         return Err(Error::Encode("gain map image is malformed".into()));
     }
-    // (jpeg_par::encode gives an empty JPEG past this, which would be appended as a size-0 gain map)
+    // Check the JPEG frame-header limit before multiplying dimensions, then validate the source
+    // buffer with checked arithmetic on both 32- and 64-bit targets.
     if gain.width > u16::MAX as usize || gain.height > u16::MAX as usize {
         return Err(Error::Encode("JPEG dimensions are limited to 65535".into()));
+    }
+    let Some(gain_bytes) = gain.width.checked_mul(gain.height).and_then(|pixels| pixels.checked_mul(gain.channels)) else {
+        return Err(Error::Encode("gain map image is malformed".into()));
+    };
+    if gain.data.len() < gain_bytes {
+        return Err(Error::Encode("gain map image is malformed".into()));
     }
     if !m.is_valid() || m.multichannel != (gain.channels == 3) {
         return Err(Error::Encode("gain map metadata doesn't match the map".into()));
     }
-    // jpeg_par writes 4:4:4 or 4:2:0
-    let sub = if sub == ChromaSubsampling::S422 { ChromaSubsampling::S420 } else { sub };
-
     let gain_segs = vec![(0xE1, xmp_segment(&m.to_gain_map_xmp())?), (0xE2, m.to_iso())];
-    let gain_jpeg = jpeg_par::encode(&gain.data, gain.width, gain.height, gain.channels, quality, ChromaSubsampling::S444, &gain_segs);
+    let gain_jpeg =
+        craft_jpeg::encode_baseline(&gain.data, gain.width, gain.height, gain.channels, quality, craft_jpeg::ChromaSubsampling::S444, &gain_segs)
+            .map_err(|e| Error::Encode(e.to_string()))?;
 
     let xmp = craft_gainmap::primary_xmp(meta.xmp, gain_jpeg.len());
     let mut segs = jpeg_app_segments(&EncodeMeta { xmp: Some(&xmp), ..*meta })?;
     segs.push((0xE2, craft_gainmap::primary_iso_marker()));
-    let primary = jpeg_par::encode(data, w, h, base.channels as usize, quality, sub, &segs);
+    let sub = match sub {
+        ChromaSubsampling::S444 => craft_jpeg::ChromaSubsampling::S444,
+        ChromaSubsampling::S422 => craft_jpeg::ChromaSubsampling::S420,
+        ChromaSubsampling::S420 => craft_jpeg::ChromaSubsampling::S420,
+    };
+    let primary = craft_jpeg::encode_baseline(data, w, h, base.channels as usize, quality, sub, &segs).map_err(|e| Error::Encode(e.to_string()))?;
     craft_metadata::mpf::write(&primary, &[(jpeg::MPF_GAIN_MAP, &gain_jpeg)]).map_err(|error| Error::Encode(format!("gain map JPEG: {error}")))
 }
 
@@ -138,6 +155,51 @@ mod tests {
             &EncodeMeta::default(),
         );
         assert!(matches!(r, Err(Error::Encode(m)) if m.contains("65535")));
+    }
+
+    fn encode_fixture(base: &EncodeImage<'_>, gain: &GainImage, meta: &GainMapMeta, sub: ChromaSubsampling) -> Result<Vec<u8>> {
+        encode_jpeg(base, gain, meta, 90, sub, &EncodeMeta::default())
+    }
+
+    #[test]
+    fn gain_map_encoder_rejects_malformed_buffers_and_metadata() {
+        let base = [0u8; 3];
+        let rgb = EncodeImage::new(1, 1, 3, Samples::U8(&base));
+        let gain = GainImage { width: 1, height: 1, channels: 1, data: vec![128] };
+
+        let short_base = EncodeImage::new(1, 1, 4, Samples::U8(&base));
+        assert!(
+            matches!(encode_fixture(&short_base, &gain, &GainMapMeta::default(), ChromaSubsampling::S444), Err(Error::Encode(m)) if m.contains("RGB base"))
+        );
+
+        let short_gain = GainImage { data: Vec::new(), ..gain.clone() };
+        assert!(
+            matches!(encode_fixture(&rgb, &short_gain, &GainMapMeta::default(), ChromaSubsampling::S444), Err(Error::Encode(m)) if m.contains("malformed"))
+        );
+
+        let wrong_metadata = GainMapMeta { multichannel: true, ..GainMapMeta::default() };
+        assert!(matches!(encode_fixture(&rgb, &gain, &wrong_metadata, ChromaSubsampling::S444), Err(Error::Encode(m)) if m.contains("metadata")));
+    }
+
+    #[test]
+    fn gain_map_jpeg_writer_preserves_supported_base_layouts_and_subsampling() {
+        let gain = GainImage { width: 1, height: 1, channels: 1, data: vec![128] };
+        let meta = GainMapMeta::default();
+        let rgb = [10u8, 20, 30];
+        let rgba = [10u8, 20, 30, 255];
+
+        for (base, sub) in [
+            (EncodeImage::new(1, 1, 3, Samples::U8(&rgb)), ChromaSubsampling::S444),
+            (EncodeImage::new(1, 1, 3, Samples::U8(&rgb)), ChromaSubsampling::S422),
+            (EncodeImage::new(1, 1, 3, Samples::U8(&rgb)), ChromaSubsampling::S420),
+            (EncodeImage::new(1, 1, 4, Samples::U8(&rgba)), ChromaSubsampling::S420),
+        ] {
+            let encoded = encode_fixture(&base, &gain, &meta, sub).unwrap();
+            assert!(is_gain_map_jpeg(&encoded));
+            let decoded = crate::decode(&encoded, crate::DecodeOptions::default()).unwrap();
+            assert_eq!((decoded.width, decoded.height), (1, 1));
+            assert!(read_jpeg(&encoded).is_some());
+        }
     }
 
     #[test]
