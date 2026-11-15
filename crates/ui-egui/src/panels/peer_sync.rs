@@ -233,7 +233,10 @@ fn this_device(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
     }
     error_line(app, ui, t, "name");
     if flag(st, "nameCollides") {
-        crate::dialog_frame::note(ui, RichText::new(tr("Another device nearby has this name too: give this one another.")).size(11.0).color(t.caution));
+        crate::dialog_frame::note(
+            ui,
+            RichText::new(tr("Another device nearby has this name too: give this one another.")).size(11.0).color(t.caution),
+        );
     }
     if flag(st, "pairingsLost") {
         crate::dialog_frame::note(
@@ -455,7 +458,9 @@ fn mode_words(mode: &str) -> &'static str {
 fn needs_empty(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, key: &str) {
     crate::dialog_frame::note(
         ui,
-        RichText::new(tr("The catalog is shared from the other device, so this device starts from a new, empty catalog. This one has photos.")).size(11.0).color(t.caution),
+        RichText::new(tr("The catalog is shared from the other device, so this device starts from a new, empty catalog. This one has photos."))
+            .size(11.0)
+            .color(t.caution),
     );
     crate::dialog_frame::control_row(ui, |ui| {
         if text_button(ui, &format!("syncNewCatalog-{key}"), "New Catalog…", false).clicked()
@@ -528,14 +533,17 @@ fn start_box(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value, photos
         let r = ui.radio_value(&mut setup.catalogue, false, tr("Collections only"));
         register(ui.ctx(), "radio:syncModeCollections", r.rect);
         ui.label(
-            RichText::new(tr("Each device keeps its own catalog and sees only the collections it is allowed and chooses to take.")).size(11.0).color(t.text_dim),
+            RichText::new(tr("Each device keeps its own catalog and sees only the collections it is allowed and chooses to take."))
+                .size(11.0)
+                .color(t.text_dim),
         );
         if setup.catalogue {
             ui.add_space(4.0);
             ui.label(RichText::new(tr("Which catalog is kept?")).color(t.text));
             let r = ui.radio_value(&mut setup.keep_mine, true, tr("This one: the other device starts from a new, empty catalog"));
             register(ui.ctx(), "radio:syncKeepThis", r.rect);
-            let r = ui.radio_value(&mut setup.keep_mine, false, tr_format!("{name}'s: this device starts from a new, empty catalog", name = setup.name));
+            let r =
+                ui.radio_value(&mut setup.keep_mine, false, tr_format!("{name}'s: this device starts from a new, empty catalog", name = setup.name));
             register(ui.ctx(), "radio:syncKeepOther", r.rect);
         }
     });
@@ -814,7 +822,9 @@ pub fn dialogs(app: &mut LccApp, ctx: &egui::Context) {
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             register(ui.ctx(), "dialog:syncUndecided", ui.max_rect());
-            ui.label(RichText::new(tr_format!("“{name}” is new. What may the other devices syncing this catalog have of it?", name = name)).color(t.text));
+            ui.label(
+                RichText::new(tr_format!("“{name}” is new. What may the other devices syncing this catalog have of it?", name = name)).color(t.text),
+            );
             ui.add_space(6.0);
             for (g, label, why) in GRANTS {
                 ui.horizontal(|ui| {

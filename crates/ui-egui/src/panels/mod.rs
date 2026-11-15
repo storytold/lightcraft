@@ -41,8 +41,6 @@ pub mod navigator;
 pub mod notices;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer_sync;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod sync_pill;
 pub mod people;
 pub mod person;
 pub mod plugin_filters;
@@ -74,6 +72,8 @@ pub mod slide_titles;
 pub mod slideshow;
 pub mod strip;
 pub mod surface_osd;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sync_pill;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tether_bar;
 pub mod topbar;

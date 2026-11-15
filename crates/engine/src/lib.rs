@@ -42,6 +42,8 @@ pub(crate) mod decode_share;
 pub mod demo;
 pub mod denoise;
 pub mod desktop;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod device_sync;
 pub mod devices;
 pub mod disk_delete;
 pub mod display;
@@ -104,8 +106,6 @@ mod model_download;
 pub mod open_path;
 pub mod originals;
 mod pdf;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod device_sync;
 mod people_smart;
 pub mod people_store;
 pub mod phash;

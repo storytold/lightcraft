@@ -345,7 +345,8 @@ fn collection_pill(lib: &Lib, id: &str, hub: Option<&Hub>) -> Option<Pill> {
 
 pub(crate) fn status(s: &mut Session) -> Result<Value> {
     let mut v = base_status(s)?;
-    let online: HashSet<String> = s.device_sync.service.as_ref().map(|svc| svc.online_peers().into_iter().map(|p| p.device_id).collect()).unwrap_or_default();
+    let online: HashSet<String> =
+        s.device_sync.service.as_ref().map(|svc| svc.online_peers().into_iter().map(|p| p.device_id).collect()).unwrap_or_default();
     let paired: Vec<lcc_peer::Peer> = s.device_sync.stored().map(|st| st.peers).unwrap_or_default();
     let offers: Vec<Value> = s
         .device_sync
@@ -382,7 +383,9 @@ pub(crate) fn status(s: &mut Session) -> Result<Value> {
 fn catalogue_status(s: &Session, online: &HashSet<String>, paired: &[lcc_peer::Peer]) -> Value {
     let Some(l) = s.library.as_ref().filter(|l| l.on_disk) else { return Value::Null };
     let name = library_name(&l.dir);
-    let Some(lib) = s.device_sync.lib.as_ref() else { return json!({"name": name, "group": null, "collections": [], "undecided": [], "photos": s.catalog.photos().count()}) };
+    let Some(lib) = s.device_sync.lib.as_ref() else {
+        return json!({"name": name, "group": null, "collections": [], "undecided": [], "photos": s.catalog.photos().count()});
+    };
     let r = &lib.replica;
     let me = r.device.as_str();
     let group = r.group.as_ref().filter(|g| g.has(me)).map(|g| {
@@ -731,7 +734,11 @@ pub(crate) fn setup(s: &mut Session, device: &str, mode: Mode, keep_mine: bool) 
 /// Joins the group a paired device invited this catalogue to, or turns the invitation down.
 pub(crate) fn answer(s: &mut Session, device: &str, accept: bool) -> Result<Value> {
     let hub = s.device_sync.hub.clone().ok_or_else(|| EngineError::Other("no device asked to sync".into()))?;
-    let offer = lock(&hub.offers).iter().find(|o| o.peer.device_id == device).cloned().ok_or_else(|| EngineError::Other("that device didn't ask to sync".into()))?;
+    let offer = lock(&hub.offers)
+        .iter()
+        .find(|o| o.peer.device_id == device)
+        .cloned()
+        .ok_or_else(|| EngineError::Other("that device didn't ask to sync".into()))?;
     if !accept {
         lock(&hub.offers).retain(|o| o.peer.device_id != device);
         return status(s);
@@ -859,8 +866,11 @@ pub(crate) fn sync_now(s: &mut Session) {
 
 /// The pills of some photos (`null` for a photo that isn't shared).
 pub(crate) fn pills(s: &mut Session, ids: &[u64]) -> Value {
-    let map: serde_json::Map<String, Value> =
-        ids.iter().take(10_000).map(|id| (id.to_string(), s.sync_pill(PhotoId(*id)).map_or(Value::Null, |p| json!({"text": p.text(), "pill": p})))).collect();
+    let map: serde_json::Map<String, Value> = ids
+        .iter()
+        .take(10_000)
+        .map(|id| (id.to_string(), s.sync_pill(PhotoId(*id)).map_or(Value::Null, |p| json!({"text": p.text(), "pill": p}))))
+        .collect();
     Value::Object(map)
 }
 
@@ -897,7 +907,9 @@ pub(crate) fn tick(s: &mut Session) -> Result<Value> {
         }
         // one side looks in regularly (also when its catalogue shares nothing: the other may invite it);
         // either side starts at once when it has something for the other
-        let owes = relevant && lib.changed_at.is_some_and(|t| t.elapsed() >= soon) && (r.has_outgoing(&peer.device_id) || r.invited.contains(&peer.device_id) || (member && !lib.wanting.is_empty()));
+        let owes = relevant
+            && lib.changed_at.is_some_and(|t| t.elapsed() >= soon)
+            && (r.has_outgoing(&peer.device_id) || r.invited.contains(&peer.device_id) || (member && !lib.wanting.is_empty()));
         let since = lock(&hub.tried).get(&peer.device_id).map(Instant::elapsed);
         let due = match since {
             None => me < peer.device_id || owes,
@@ -945,7 +957,15 @@ fn answer_job(s: &mut Session, hub: &Arc<Hub>, job: Job) {
                 }
                 None => (None, None),
             };
-            let _ = reply.send(Hello { proto: lcc_sync::proto::VERSION, app: lcc_catalog::APP_VERSION.to_string(), name, now_ms: now_ms(), group, catalogue, invite });
+            let _ = reply.send(Hello {
+                proto: lcc_sync::proto::VERSION,
+                app: lcc_catalog::APP_VERSION.to_string(),
+                name,
+                now_ms: now_ms(),
+                group,
+                catalogue,
+                invite,
+            });
         }
         Job::Their { peer, hello } => {
             let mut offers = lock(&hub.offers);

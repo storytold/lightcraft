@@ -302,7 +302,9 @@ fn fetch(hub: &Hub, peer: &lcc_peer::Peer, ch: &mut Channel, wants: Vec<Want>) -
                 task.progress(i as u64 + 1, wants.len() as u64);
                 continue;
             }
-            Msg::Blob { key, depth, size, offset } if key == w.key && depth == w.depth && size <= MAX_BLOB && offset <= size && (offset == 0 || offset == g.offset) => {
+            Msg::Blob { key, depth, size, offset }
+                if key == w.key && depth == w.depth && size <= MAX_BLOB && offset <= size && (offset == 0 || offset == g.offset) =>
+            {
                 (size, offset)
             }
             Msg::Bye { reason } => return Err(reason.chars().take(300).collect()),

@@ -77,14 +77,27 @@ pub enum Msg {
     Hello(Hello),
     Batch(Batch),
     /// Send me these photos' files, each from its offset on; they are answered in order.
-    Gets { wants: Vec<Get> },
+    Gets {
+        wants: Vec<Get>,
+    },
     /// The file follows, `size` bytes in all, from `offset`, in raw frames.
-    Blob { key: String, depth: Depth, size: u64, offset: u64 },
+    Blob {
+        key: String,
+        depth: Depth,
+        size: u64,
+        offset: u64,
+    },
     /// Not sent: it isn't here (`later`: it is being made, ask again), or it isn't allowed.
-    NotHere { key: String, depth: Depth, later: bool },
+    NotHere {
+        key: String,
+        depth: Depth,
+        later: bool,
+    },
     /// Nothing more to ask; the other side may ask now.
     Turn,
-    Bye { reason: String },
+    Bye {
+        reason: String,
+    },
 }
 
 /// Why two devices that reached each other don't exchange.
@@ -131,7 +144,9 @@ mod tests {
 
     #[test]
     fn hostile_messages_are_errors_not_panics() {
-        for bad in ["", "{}", "[]", r#"{"t":"gets"}"#, r#"{"t":"blob","key":1}"#, r#"{"t":"batch","items":[{"photo":{}}]}"#, r#"{"t":"hello","proto":"x"}"#] {
+        for bad in
+            ["", "{}", "[]", r#"{"t":"gets"}"#, r#"{"t":"blob","key":1}"#, r#"{"t":"batch","items":[{"photo":{}}]}"#, r#"{"t":"hello","proto":"x"}"#]
+        {
             assert!(serde_json::from_str::<Msg>(bad).is_err(), "{bad}");
         }
         // unknown extra items in a batch fail the whole message (the session ends with an error)

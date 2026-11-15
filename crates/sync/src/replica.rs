@@ -374,7 +374,16 @@ impl Replica {
     }
 
     /// A collection made on this device.
-    pub fn add_collection(&mut self, id: &str, kind: CollectionKind, name: &str, parent: Option<String>, grant: Grant, album: Option<u64>, now_ms: u64) {
+    pub fn add_collection(
+        &mut self,
+        id: &str,
+        kind: CollectionKind,
+        name: &str,
+        parent: Option<String>,
+        grant: Grant,
+        album: Option<u64>,
+        now_ms: u64,
+    ) {
         let s = self.stamp(now_ms);
         let c = Collection::new(id, &self.device, kind, name, parent, grant, s);
         self.collections.insert(id.to_string(), CollEntry { c, seq: 0, via: None });
@@ -384,7 +393,12 @@ impl Replica {
         self.touch_collection(id, None, None);
     }
 
-    fn edit_collection(&mut self, id: &str, now_ms: u64, f: impl FnOnce(&mut Collection, Stamp, &str) -> Result<bool, Refused>) -> Result<bool, Refused> {
+    fn edit_collection(
+        &mut self,
+        id: &str,
+        now_ms: u64,
+        f: impl FnOnce(&mut Collection, Stamp, &str) -> Result<bool, Refused>,
+    ) -> Result<bool, Refused> {
         let before = self.collection(id).cloned().ok_or(Refused::NoCollection)?;
         let s = self.stamp(now_ms);
         let me = self.device.clone();
@@ -565,7 +579,8 @@ impl Replica {
         let known = self.photos.get(key);
         let fresh = known.is_none();
         let differs = |name: &str, d: u64| known.and_then(|e| e.fields.get(name)).is_none_or(|f| f.d != d);
-        let changed: Vec<(String, u64, bool)> = fields.iter().filter(|(n, d, _)| differs(n, *d)).map(|(n, d, def)| (n.to_string(), *d, *def)).collect();
+        let changed: Vec<(String, u64, bool)> =
+            fields.iter().filter(|(n, d, _)| differs(n, *d)).map(|(n, d, def)| (n.to_string(), *d, *def)).collect();
         let had = known.map(|e| e.have);
         if changed.is_empty() && !fresh && had == Some(have) {
             return false;

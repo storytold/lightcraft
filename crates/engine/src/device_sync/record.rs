@@ -89,7 +89,8 @@ fn is_empty(v: &Value) -> bool {
 pub(crate) fn value(p: &Photo, cat: &Catalog, field: &str) -> Option<(Value, bool)> {
     Some(match field {
         "develop" => {
-            let maps: Vec<_> = p.develop.optics.vignetting_calibration.as_ref().and_then(|id| cat.vignetting_map(id)).map(|r| r.map.clone()).into_iter().collect();
+            let maps: Vec<_> =
+                p.develop.optics.vignetting_calibration.as_ref().and_then(|id| cat.vignetting_map(id)).map(|r| r.map.clone()).into_iter().collect();
             let mut v = json!({"s": &*p.develop});
             if !maps.is_empty() {
                 v["maps"] = serde_json::to_value(&maps).unwrap_or(Value::Null);

@@ -4256,7 +4256,10 @@ mod tests {
         let pill = json!({"location": "remote", "depth": "full", "status": "remoteAhead", "syncing": true});
         let states = [
             // nothing paired, nothing found for a while: the troubleshooting hint
-            (json!({"running": true, "name": "Here", "found": [], "paired": [], "pairing": null, "catalogue": null}), vec!["field:syncDeviceName", "text:syncNothingFound"]),
+            (
+                json!({"running": true, "name": "Here", "found": [], "paired": [], "pairing": null, "catalogue": null}),
+                vec!["field:syncDeviceName", "text:syncNothingFound"],
+            ),
             // a device found, another of an older version
             (
                 json!({"running": true, "name": "Here", "paired": [], "pairing": null, "catalogue": null,
@@ -4292,7 +4295,16 @@ mod tests {
                                {"id": "c2", "album": 1, "name": "Mine", "kind": "album", "owner": "me", "ownerName": "Here", "mine": true,
                                 "grant": "sync", "take": "none", "most": "fullSync", "photos": 2, "letters": "EF", "pill": null}],
                            "undecided": []}}),
-                vec!["text:syncMode", "text:syncMember-a", "error:sync-link-a", "button:syncNow", "button:syncLeave", "combo:syncPick-c1", "combo:syncPick-c2", "combo:syncPick-unfiled"],
+                vec![
+                    "text:syncMode",
+                    "text:syncMember-a",
+                    "error:sync-link-a",
+                    "button:syncNow",
+                    "button:syncLeave",
+                    "combo:syncPick-c1",
+                    "combo:syncPick-c2",
+                    "combo:syncPick-unfiled",
+                ],
             ),
         ];
         for (status, ids) in states {

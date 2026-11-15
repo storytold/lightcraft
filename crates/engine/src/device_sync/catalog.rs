@@ -74,7 +74,12 @@ fn reindex(s: &Session, lib: &mut Lib, id: PhotoId) {
 /// The photos this device should hold more of than it does.
 fn wanting(lib: &mut Lib) {
     let r = &lib.replica;
-    lib.wanting = r.photos.iter().filter(|(k, e)| e.ghost.is_none() && lib.keys.contains_key(*k) && e.have < r.depth_wanted(k)).map(|(k, _)| k.clone()).collect();
+    lib.wanting = r
+        .photos
+        .iter()
+        .filter(|(k, e)| e.ghost.is_none() && lib.keys.contains_key(*k) && e.have < r.depth_wanted(k))
+        .map(|(k, _)| k.clone())
+        .collect();
 }
 
 fn in_group(lib: &Lib) -> Option<Mode> {
@@ -92,7 +97,12 @@ pub(super) fn undecided(s: &Session, lib: &Lib) -> Vec<Value> {
     if in_group(lib).is_none() {
         return Vec::new();
     }
-    s.catalog.albums().filter(|a| plain(a) && !a.folder && !lib.replica.asked.contains(&a.id.0)).map(|a| json!({"album": a.id.0, "name": a.name})).take(50).collect()
+    s.catalog
+        .albums()
+        .filter(|a| plain(a) && !a.folder && !lib.replica.asked.contains(&a.id.0))
+        .map(|a| json!({"album": a.id.0, "name": a.name}))
+        .take(50)
+        .collect()
 }
 
 /// Makes the catalogue's collection `album` a shared one (not allowed to anyone yet).
@@ -203,7 +213,11 @@ fn scan_albums(s: &Session, lib: &mut Lib, mode: Mode, now: u64) -> bool {
             continue;
         };
         if c.owner == me {
-            let parent = if mode == Mode::Catalogue { a.parent.and_then(|p| lib.replica.collection_of_album(p.0).map(str::to_string)) } else { c.meta.v.parent.clone() };
+            let parent = if mode == Mode::Catalogue {
+                a.parent.and_then(|p| lib.replica.collection_of_album(p.0).map(str::to_string))
+            } else {
+                c.meta.v.parent.clone()
+            };
             changed |= lib.replica.set_collection_meta(&id, &a.name, parent, now).unwrap_or(false);
         }
         if a.folder || c.kind == CollectionKind::Set {
@@ -219,10 +233,16 @@ fn scan_albums(s: &Session, lib: &mut Lib, mode: Mode, now: u64) -> bool {
     }
     // the photos in no collection, when this device shares them
     let unfiled = format!("unfiled:{me}");
-    if lib.replica.collection(&unfiled).is_some_and(|c| !c.gone() && c.grant.v != Grant::None) && lib.unfiled_at.is_none_or(|t| t.elapsed() >= UNFILED_EVERY) {
+    if lib.replica.collection(&unfiled).is_some_and(|c| !c.gone() && c.grant.v != Grant::None)
+        && lib.unfiled_at.is_none_or(|t| t.elapsed() >= UNFILED_EVERY)
+    {
         lib.unfiled_at = Some(Instant::now());
-        let cur: BTreeSet<String> =
-            s.catalog.photos().filter(|p| !p.deleted && !p.local && s.catalog.albums_of(p.id).is_empty()).filter_map(|p| lib.ids.get(&p.id).cloned()).collect();
+        let cur: BTreeSet<String> = s
+            .catalog
+            .photos()
+            .filter(|p| !p.deleted && !p.local && s.catalog.albums_of(p.id).is_empty())
+            .filter_map(|p| lib.ids.get(&p.id).cloned())
+            .collect();
         changed |= scan_members(s, lib, &unfiled, cur, now);
     }
     changed
@@ -281,8 +301,13 @@ pub(super) fn prepare(s: &Session, lib: &Lib, peer: &str) -> (Batch, Outgoing) {
             // a device that left says so and nothing else
             out.refs.retain(|x| *x == Ref::Group);
         }
-        let items: Vec<Item> =
-            out.refs.iter().filter_map(|x| r.item(x, |key| lib.keys.get(key).and_then(|id| s.catalog.photo(*id)).map(|p| (record::info(p), record::values(p, &s.catalog))))).collect();
+        let items: Vec<Item> = out
+            .refs
+            .iter()
+            .filter_map(|x| {
+                r.item(x, |key| lib.keys.get(key).and_then(|id| s.catalog.photo(*id)).map(|p| (record::info(p), record::values(p, &s.catalog))))
+            })
+            .collect();
         let size: usize = items.iter().map(|i| serde_json::to_vec(i).map_or(0, |b| b.len())).sum();
         if size > MAX_BATCH_BYTES && limit > 1 {
             limit = (limit / 4).max(1);
@@ -365,7 +390,9 @@ fn display_name(lib: &Lib, c: &Collection) -> String {
 fn synced_path(s: &Session, lib: &Lib, name: &str, key: &str) -> PathBuf {
     let dir = lib.dir.join("Synced");
     let plain = dir.join(name);
-    let taken = |p: &PathBuf| p.exists() || s.catalog.photos().any(|q| matches!(&q.source, Source::File { path } if std::path::Path::new(path) == p.as_path()));
+    let taken = |p: &PathBuf| {
+        p.exists() || s.catalog.photos().any(|q| matches!(&q.source, Source::File { path } if std::path::Path::new(path) == p.as_path()))
+    };
     if !taken(&plain) {
         return plain;
     }
@@ -414,7 +441,8 @@ fn adopt(s: &mut Session, lib: &mut Lib, key: &str) {
             log::warn!("sync: {e}");
         }
     }
-    let digests: Vec<(&str, u64)> = s.catalog.photo(id).map(|p| record::digests(p, &s.catalog).into_iter().map(|(n, d, _)| (n, d)).collect()).unwrap_or_default();
+    let digests: Vec<(&str, u64)> =
+        s.catalog.photo(id).map(|p| record::digests(p, &s.catalog).into_iter().map(|(n, d, _)| (n, d)).collect()).unwrap_or_default();
     lib.replica.adopt(key, &digests, have);
 }
 
@@ -444,7 +472,14 @@ pub(super) fn reconcile(s: &mut Session, lib: &mut Lib) {
                 let mut a = Album::new(aid, display_name(lib, &c));
                 a.folder = c.kind == CollectionKind::Set;
                 if mode == Mode::Catalogue {
-                    a.parent = c.meta.v.parent.as_ref().and_then(|p| lib.replica.albums.get(p)).map(|p| AlbumId(*p)).filter(|p| s.catalog.album(*p).is_some_and(|x| x.folder));
+                    a.parent = c
+                        .meta
+                        .v
+                        .parent
+                        .as_ref()
+                        .and_then(|p| lib.replica.albums.get(p))
+                        .map(|p| AlbumId(*p))
+                        .filter(|p| s.catalog.album(*p).is_some_and(|x| x.folder));
                 }
                 if s.apply_system(Op::AddAlbum { album: a }).is_ok() {
                     lib.replica.albums.insert(id.clone(), aid.0);
@@ -468,7 +503,8 @@ pub(super) fn reconcile(s: &mut Session, lib: &mut Lib) {
         }
     }
     // photos told of that this device takes (or imported meanwhile)
-    let ghosts: Vec<String> = lib.replica.ghosts().filter(|k| lib.keys.contains_key(*k) || lib.replica.depth_wanted(k) >= Depth::Preview).cloned().collect();
+    let ghosts: Vec<String> =
+        lib.replica.ghosts().filter(|k| lib.keys.contains_key(*k) || lib.replica.depth_wanted(k) >= Depth::Preview).cloned().collect();
     for key in ghosts {
         adopt(s, lib, &key);
     }
