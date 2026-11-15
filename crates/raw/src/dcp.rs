@@ -4,10 +4,12 @@
 //! `UniqueCameraModel`, `ProfileName`, the colour/forward matrices and calibration illuminants, the
 //! hue/saturation map, look table and tone curve. Nothing here ships a profile.
 
-use craft_tiff::{Ifd, ParseOptions, Tiff, tags as t};
+use craft_tiff::{ByteOrder, Ifd, ParseOptions, Tiff, tags as t};
+use lightcraft_color::Xy;
 
-use crate::ColorData;
-use crate::dng::color_data;
+use crate::gaintable::GainTableMap;
+use crate::profile::{HsvTable, ProfileLook, ToneCurve};
+use crate::{ColorData, Mat3};
 
 /// The magic number of a DNG camera profile file (`IIRC` / `MMCR`).
 pub const DCP_MAGIC: u16 = 0x4352;
@@ -169,6 +171,78 @@ pub fn write_dcp(p: &DcpProfile) -> Result<Vec<u8>, DcpError> {
         m.copy_from_slice(&DCP_MAGIC.to_le_bytes());
     }
     Ok(out)
+}
+
+// The colour tags a profile shares with DNG, read as DNG reads them (a DNG's own are read by `craft-raw`).
+
+fn mat3(v: Option<Vec<f64>>) -> Option<Mat3> {
+    let v = v?;
+    if v.len() != 9 || v.iter().any(|x| !x.is_finite()) {
+        return None;
+    }
+    let m = Mat3([[v[0], v[1], v[2]], [v[3], v[4], v[5]], [v[6], v[7], v[8]]]);
+    (m.determinant().abs() > 1e-12).then_some(m)
+}
+
+fn vec3(v: Option<Vec<f64>>) -> Option<[f64; 3]> {
+    let v = v?;
+    (v.len() == 3 && v.iter().all(|x| x.is_finite() && *x > 0.0)).then(|| [v[0], v[1], v[2]])
+}
+
+/// Colour tags: DNG puts them in IFD0, but some writers use the raw IFD; prefer the raw IFD.
+/// `order` is the file's byte order (for the binary gain-table-map tags).
+fn color_data(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> ColorData {
+    let get = |tag: u16| raw.f64s(tag).or_else(|| ifd0.f64s(tag));
+    let geti = |tag: u16| raw.u16(tag).or_else(|| ifd0.u16(tag));
+    ColorData {
+        illuminant: [geti(t::CALIBRATION_ILLUMINANT_1).unwrap_or(0), geti(t::CALIBRATION_ILLUMINANT_2).unwrap_or(0)],
+        color_matrix: [mat3(get(t::COLOR_MATRIX_1)), mat3(get(t::COLOR_MATRIX_2))],
+        forward_matrix: [mat3(get(t::FORWARD_MATRIX_1)), mat3(get(t::FORWARD_MATRIX_2))],
+        camera_calibration: [mat3(get(t::CAMERA_CALIBRATION_1)), mat3(get(t::CAMERA_CALIBRATION_2))],
+        analog_balance: vec3(get(t::ANALOG_BALANCE)),
+        as_shot_neutral: vec3(get(t::AS_SHOT_NEUTRAL)),
+        as_shot_white_xy: get(t::AS_SHOT_WHITE_XY).filter(|v| v.len() == 2 && v[0] > 0.0 && v[1] > 0.0).map(|v| Xy::new(v[0], v[1])),
+        baseline_exposure: get(t::BASELINE_EXPOSURE).and_then(|v| v.first().copied()).filter(|v| v.is_finite()).unwrap_or(0.0)
+            + get(t::BASELINE_EXPOSURE_OFFSET).and_then(|v| v.first().copied()).filter(|v| v.is_finite()).unwrap_or(0.0),
+        // DNG 1.7 BaselineSharpness (IFD 0 or the enhanced IFD); implausible values are ignored
+        baseline_sharpness: get(t::BASELINE_SHARPNESS).and_then(|v| v.first().copied()).filter(|v| v.is_finite() && *v > 0.0 && *v <= 16.0),
+        profile: profile_look(ifd0, raw, order),
+        kelvin_presets: None,
+    }
+}
+
+/// The profile look tags (`ProfileHueSatMap*`, `ProfileLookTable*`, `ProfileToneCurve`,
+/// `ProfileGainTableMap*`); malformed ones are ignored. Like the colour tags, read from the raw IFD
+/// first, else IFD 0.
+fn profile_look(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> ProfileLook {
+    let pick = |tag: u16| if raw.contains(tag) { raw } else { ifd0 };
+    let table = |dims: u16, data: u16, enc: u16| {
+        let ifd = pick(dims);
+        let dims = ifd.u64s(dims)?;
+        let data = ifd.f64s(data)?;
+        HsvTable::from_tags(&dims, &data, ifd.u64s(enc).and_then(|v| v.first().copied()).unwrap_or(0))
+    };
+    ProfileLook {
+        hue_sat_map: [
+            table(t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_DATA_1, t::PROFILE_HUE_SAT_MAP_ENCODING),
+            table(t::PROFILE_HUE_SAT_MAP_DIMS, t::PROFILE_HUE_SAT_MAP_DATA_2, t::PROFILE_HUE_SAT_MAP_ENCODING),
+        ],
+        look_table: table(t::PROFILE_LOOK_TABLE_DIMS, t::PROFILE_LOOK_TABLE_DATA, t::PROFILE_LOOK_TABLE_ENCODING),
+        tone_curve: pick(t::PROFILE_TONE_CURVE).f64s(t::PROFILE_TONE_CURVE).and_then(|v| ToneCurve::from_tag(&v)),
+        gain_table_map: gain_table_map(ifd0, raw, order),
+    }
+}
+
+/// The gain table map (DNG 1.7 precedence): `ProfileGainTableMap2` from IFD 0 (the embedded
+/// camera profile), else from the raw IFD; else `ProfileGainTableMap` from the raw IFD (where DNG
+/// 1.6 put it, and where Apple writes it), else from IFD 0 (where DNG 1.7 says it was meant to be).
+/// A malformed tag falls through to the next one.
+fn gain_table_map(ifd0: &Ifd, raw: &Ifd, order: ByteOrder) -> Option<GainTableMap> {
+    let parse = |ifd: &Ifd, tag: u16| ifd.bytes(tag).and_then(|b| GainTableMap::parse(b, order, tag == t::PROFILE_GAIN_TABLE_MAP_2));
+    parse(ifd0, t::PROFILE_GAIN_TABLE_MAP_2)
+        .or_else(|| parse(raw, t::PROFILE_GAIN_TABLE_MAP_2))
+        .or_else(|| parse(raw, t::PROFILE_GAIN_TABLE_MAP))
+        .or_else(|| parse(ifd0, t::PROFILE_GAIN_TABLE_MAP))
 }
 
 #[cfg(test)]
