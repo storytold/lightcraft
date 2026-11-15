@@ -343,7 +343,7 @@ pub fn encode_avif(img: &EncodeImage, quality: u8, speed: u8, meta: &EncodeMeta)
     }
     #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
     {
-        let _ = (quality, speed, meta, img.has_alpha());
+        let _ = (quality, speed, meta);
         Err(Error::Encode("AVIF encoding is not available in this build".into()))
     }
 }
