@@ -44,6 +44,8 @@ fn open_merged<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<craft_psd::m
             let (w, h) = craft_psd::merged::declared_dimensions(bytes).unwrap_or((0, 0));
             Error::TooLarge(u64::from(w), u64::from(h))
         }
+        craft_psd::PsdError::Invalid(message) => err(&message),
+        craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
         other => err(&other.to_string()),
     })
 }
@@ -86,6 +88,8 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let planes = merged.read_planes(used).map_err(|error| match error {
         craft_psd::PsdError::LimitExceeded(_) | craft_psd::PsdError::OutOfMemory(_) => too_large(),
         craft_psd::PsdError::Unsupported(_) => Error::Unsupported(F, "ZIP-compressed merged image data"),
+        craft_psd::PsdError::Invalid(message) => err(&message),
+        craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
         other => err(&other.to_string()),
     })?;
     let samples = n.checked_mul(used).ok_or_else(too_large)?;
@@ -296,6 +300,8 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     }
     merged.validate_all().map_err(|error| match error {
         craft_psd::PsdError::Unsupported(_) => Error::Unsupported(F, "ZIP-compressed merged image data"),
+        craft_psd::PsdError::Invalid(message) => err(&message),
+        craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
         other => err(&other.to_string()),
     })?;
     let orientation = exif.as_deref().map(crate::exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
