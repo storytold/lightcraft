@@ -657,7 +657,7 @@ mod tests {
         let mut second = base.clone();
         apply(&mut second, &[spot2.clone(), spot1.clone()], &frame, ppl);
         assert!(first.get(30, 50)[0] > 0.5, "spot 1 copied the bright columns");
-    assert_eq!(first.data, second.data, "spot 2 read spot 1's output when spot 1 ran first");
+        assert_eq!(first.data, second.data, "spot 2 read spot 1's output when spot 1 ran first");
     }
 
     #[test]
@@ -808,7 +808,6 @@ mod tests {
             feather: 0.0,
             opacity: 100.0,
             source_offset: Some(Point::new(0.1, 0.1)),
-            ..Default::default()
         };
         let spot2 = Spot {
             mode: SpotMode::Clone,
@@ -817,10 +816,42 @@ mod tests {
             feather: 0.0,
             opacity: 50.0,
             source_offset: Some(Point::new(0.0, 0.0)),
-            ..Default::default()
         };
         apply(&mut img, &[spot1, spot2], &frame, ppl);
         let c = img.get(50, 50);
         assert!(c[0] > 0.4, "second spot should blend against the current output, preserving the first correction: {c:?}");
+    }
+
+    #[test]
+    fn overlapping_spot_reads_source_from_snapshot_not_prior_output() {
+        // Spot 1 copies bright columns onto the left quarter. Spot 2's source patch
+        // overlaps the pixels spot 1 wrote. Spot 2 must read from the pre-spot
+        // snapshot, so its source is the original dark pixels, not spot 1's output.
+        let base = Rgb32f::from_fn(100, 100, |x, _| if x < 50 { [0.1; 3] } else { [0.9; 3] });
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.30, 0.50)],
+            size: 10.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.30, 0.0)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.40, 0.50)],
+            size: 10.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(-0.10, 0.0)),
+        };
+        let mut img = base.clone();
+        apply(&mut img, &[spot1.clone(), spot2.clone()], &frame, ppl);
+        // Spot 2's target covers x in [30, 50]. Its source reads from x in [20, 40]
+        // (offset -10). Those pixels were overwritten by spot 1 with bright values,
+        // but spot 2 must read from the snapshot, so they are dark (original x < 50).
+        let c = img.get(35, 50);
+        assert!(c[0] < 0.5, "spot 2 read spot 1's output instead of the snapshot: {c:?}");
     }
 }
