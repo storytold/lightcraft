@@ -68,30 +68,9 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
 /// as a decode would refuse it: a layout or compression we can't decode, or strips/tiles that
 /// start past the end of the file (truncated). The compressed data itself is not checked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let (tiff, complete) = craft_tiff::Tiff::parse_with_status(bytes, &Default::default()).map_err(err)?;
-    if !complete {
-        return Err(err("truncated TIFF"));
-    }
-    let ifd = tiff.ifds.first().ok_or_else(|| err("no IFD"))?;
-    let info = ifd.image().map_err(err)?;
-    check_size(F, info.width as u64, info.height as u64, &DecodeOptions::default())?;
-    let bits = info.bits_per_sample.first().copied().unwrap_or(1);
-    if bits < 8 && info.planar == 2 && info.samples_per_pixel > 1 {
-        return Err(Error::Unsupported(F, "planar TIFF with samples narrower than a byte"));
-    }
-    if !(matches!(info.photometric, 0 | 1 | 2 | 3 | 5) || info.photometric == 6 && info.compression == 7) {
-        return Err(Error::Unsupported(F, "colour type"));
-    }
-    // what `craft-image-codecs`'s TIFF decoder decompresses: none, CCITT G4, LZW, JPEG, Deflate, PackBits
-    if !matches!(info.compression, 1 | 4 | 5 | 7 | 8 | 32773 | 32946) {
-        return Err(Error::Unsupported(F, "compression method"));
-    }
-    let len = bytes.len() as u64;
-    if info.offsets.is_empty()
-        || info.offsets.iter().zip(&info.byte_counts).any(|(&o, &c)| c > 0 && (o >= len || (info.compression == 1 && o.saturating_add(c) > len)))
-    {
-        return Err(err("truncated: image data past the end of the file"));
-    }
-    let orientation = ifd.u16(craft_tiff::tags::ORIENTATION).filter(|o| (1..=8).contains(o)).unwrap_or(1);
-    Ok((info.width, info.height, orientation))
+    craft_image_codecs::tiff_probe::header(bytes, DecodeOptions::default().max_pixels).map_err(|error| match error {
+        craft_image_codecs::tiff_probe::Error::TooLarge { width, height } => Error::TooLarge(u64::from(width), u64::from(height)),
+        craft_image_codecs::tiff_probe::Error::Unsupported(reason) => Error::Unsupported(F, reason),
+        craft_image_codecs::tiff_probe::Error::Malformed(message) => err(message),
+    })
 }
