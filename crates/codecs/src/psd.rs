@@ -4,7 +4,7 @@
 //! Also a flat-file writer ([`encode`]): the merged image of an 8- or 16-bit gray/RGB document
 //! with no layers, so an image editor opens it as one background layer and saves back to it.
 
-use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
+use crate::convert::{Buf, Meta, Model, Raw, finish};
 use crate::encode::{EncodeImage, EncodeMeta, Samples};
 use crate::{DecodeOptions, Decoded, Error, Format, Result};
 
@@ -38,7 +38,7 @@ impl<'a> Rd<'a> {
     }
 }
 
-fn open_merged(bytes: &[u8], opts: &DecodeOptions) -> Result<craft_psd::merged::Merged<'_>> {
+fn open_merged<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<craft_psd::merged::Merged<'a>> {
     craft_psd::merged::Merged::open(bytes, opts.max_pixels).map_err(|error| match error {
         craft_psd::PsdError::LimitExceeded("pixel count") => {
             let (w, h) = craft_psd::merged::declared_dimensions(bytes).unwrap_or((0, 0));
