@@ -499,7 +499,9 @@ fn clip_on_the_gpu_matches_the_cpu() {
     lcc_ml::Clip::write_synthetic_dir(&dir, "test-clip").unwrap();
     let cpu = Arc::new(lcc_ml::Clip::load_lazy(&dir).unwrap());
     let gpu = Arc::new(lcc_ml::Clip::load_lazy(&dir).unwrap().with_accelerator(crate::ml::clip_accelerator()));
-    let img = RgbImage::new(16, 16, (0..16 * 16 * 3).map(|i| (i * 7 % 256) as u8).collect()).unwrap();
+    // A warm-to-cool gradient: a clear signal on the synthetic model's red and blue axes. (A pattern whose patch means
+    // cancel, like `i * 7 % 256`, projects to ~1e-6 before normalization, so its direction is rounding noise on any device.)
+    let img = RgbImage::new(16, 16, (0..16 * 16).flat_map(|i| [(200 - i / 2) as u8, 60, (40 + i / 3) as u8]).collect()).unwrap();
     let run = |clip: Arc<lcc_ml::Clip>, gpu: bool| {
         let probe: lcc_ml::Probe = if gpu { Box::new(lcc_gpu::clip::adapter) } else { Box::new(|| Err("cpu".into())) };
         let pref = if gpu { Preference::Auto } else { Preference::Cpu };
