@@ -21,7 +21,7 @@ import Shot from '../../../components/Shot.astro';
 - Older catalogs are upgraded in place after a verified copy in `backups/`; a failure leaves the old version intact.
 - Scale: hundreds of thousands of photos open in about a second.
 - Everything is undoable; catalog data is separate from your files, which are never changed without your say.
-- **Previews** (**Library ▸ Previews**): build standard or 1:1 previews of selected photos, discard 1:1 previews.
+- **Previews** (**Library ▸ Previews**): build standard or 1:1 previews of selected photos, discard 1:1 previews. A build asked for while another runs waits for its turn and starts by itself when it ends; **Stop Building Previews** stops the running one and drops the waiting ones.
 
 <Aside type="note" title="Modern layout">
   **File ▸ Libraries** and **Edit ▸ Library Settings…** in the ☰ menu.

@@ -684,6 +684,9 @@ pub struct Session {
     pub genfill: genfill::GenfillState,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Builds asked for while one was already running, waiting for their turn
+    /// ([`cmd::previews::drain_queue`] starts the next one when the running build ends).
+    pub preview_queue: std::collections::VecDeque<cmd::previews::QueuedPreview>,
     /// Preparing photos in the background: settings (app-wide and this library's) and the build
     /// it runs ([`prep`]).
     pub prep: prep::PrepState,
@@ -956,6 +959,7 @@ impl Session {
             genfill: Default::default(),
             upright_jobs: Default::default(),
             preview_build: None,
+            preview_queue: Default::default(),
             prep: Default::default(),
             loupe_edge: 0,
             finishing: None,
