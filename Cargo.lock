@@ -4070,6 +4070,7 @@ dependencies = [
  "craft-heif",
  "craft-metadata",
  "craft-psd",
+ "craft-raw",
  "craft-tiff",
  "lightcraft-geom",
  "proptest",
