@@ -143,7 +143,7 @@ impl Reader {
     /// missing table yields no rows unless `required`. `Blob` columns never become JSON; they reach `f` separately,
     /// as (column, bytes), and are dropped after it. `kept` says that `f` keeps every row, which bounds the walk to a
     /// million rows and the reader's table payload budget.
-    fn each_row(
+    pub(crate) fn each_row(
         &self,
         name: &str,
         required: bool,
@@ -386,6 +386,9 @@ pub struct CatalogPhoto {
     /// `settings` is measured from (upstream #3906; [`custom_as_shot`]). Not archived.
     #[serde(skip)]
     pub as_shot_white: Option<(f64, f64)>,
+    /// A Capture One variant's develop settings ([`crate::capture_one_develop`]), in place of `settings`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_one: Option<Box<crate::capture_one_develop::CaptureOneDevelop>>,
 }
 
 /// Whether the original a catalog lists may be looked at. Its path is resolved with the catalog
@@ -1006,6 +1009,7 @@ fn read_lightroom(path: &Path, reader: Reader, source_guard: SourceGuard, cancel
             snapshots: snapshots.remove(&id).unwrap_or_default(),
             original,
             as_shot_white: as_shot_whites.get(&id).copied(),
+            capture_one: None,
         });
     }
     if left_out > LEFT_OUT_NAMED {
@@ -1437,6 +1441,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     let mut imported = files.imported.len();
     let mut promoted = HashSet::new();
     let mut unmapped = BTreeMap::new();
+    // Capture One white balances applied on the relative scale (`crate::capture_one_develop`): approximate
+    let mut capture_one_wb_approximate = 0usize;
     let mut preserved = 0;
     let mut history_imported = 0usize;
     let mut snapshots_imported = 0usize;
@@ -1544,6 +1550,10 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
         {
             p.develop = Arc::new(p.camera_defaults());
         }
+        // a Capture One variant's settings (partial: what it uses) start from the camera's defaults too
+        if fresh && src.settings.is_empty() && src.capture_one.as_deref().is_some_and(|c| !c.is_empty()) {
+            p.develop = Arc::new(p.camera_defaults());
+        }
         if !src.xmp.is_empty() {
             match crate::sidecar::parse_sidecar(&src.xmp, crate::crs::Target::for_photo(&p)) {
                 Ok(mut sc) => {
@@ -1623,6 +1633,26 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 snapshots_imported += versions.len();
                 p.versions = versions;
             }
+        } else if let Some(c1) = src.capture_one.as_deref()
+            && !keep_develop
+        {
+            // what the variant uses that isn't imported is reported for it, settings applied or not
+            let target = crate::crs::Target::for_photo(&p);
+            let (partial, unknown) = crate::capture_one_develop::partial(c1, target, p.as_shot_wb);
+            if target == crate::crs::Target::RawRelative && partial.get("wb").is_some() {
+                capture_one_wb_approximate = capture_one_wb_approximate.saturating_add(1);
+            }
+            if partial.as_object().is_some_and(|o| !o.is_empty()) {
+                p.develop = Arc::new(lcc_develop::apply_partial(&p.develop, &partial, 1.0));
+                if touched.is_none() {
+                    untimed.push(src.source_id);
+                }
+                p.edited = Some(touched.clone().unwrap_or_else(|| now.clone()));
+                dated = true;
+            }
+            if !unknown.is_empty() {
+                unmapped.insert(src.source_id, unknown);
+            }
         }
         // Lightroom dates every photo at its last edit, settings or not (or settings that can't be read); one edited
         // in the library keeps its own date.
@@ -1690,6 +1720,12 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             ops.push(Op::AddPhoto { photo: Box::new(p) });
         }
         by_path.entry(key(&src.path)).or_insert(photo_id);
+    }
+    if capture_one_wb_approximate > 0 {
+        warnings.push(format!(
+            "Capture One White Balance: approximate on {capture_one_wb_approximate} photo(s) — their raws are edited on the \
+             relative white balance scale, where Capture One's change can only be approximated"
+        ));
     }
     if let Some(first) = untimed.first() {
         let named: Vec<String> = untimed.iter().take(LEFT_OUT_NAMED).map(i64::to_string).collect();
@@ -2125,6 +2161,7 @@ pub(crate) mod tests {
             snapshots: Vec::new(),
             original: Original::Local,
             as_shot_white: None,
+            capture_one: None,
         };
         let mut copy = photo.clone();
         copy.source_id = 2;
@@ -5124,6 +5161,7 @@ pub(crate) mod tests {
             snapshots: Vec::new(),
             original: Original::Local,
             as_shot_white: None,
+            capture_one: None,
         };
         let data = CatalogImport {
             source: "test.lrcat".into(),
@@ -5183,6 +5221,7 @@ pub(crate) mod tests {
                 snapshots: Vec::new(),
                 original: Original::Local,
                 as_shot_white: None,
+                capture_one: None,
             }],
             collections: Vec::new(),
             members: Vec::new(),
@@ -5304,6 +5343,7 @@ pub(crate) mod tests {
             snapshots: Vec::new(),
             original: Original::Local,
             as_shot_white: None,
+            capture_one: None,
         }
     }
     /// `sample()` (a virtual copy, then its master) with a Copy Name on the master, Lightroom's edit times, a photo

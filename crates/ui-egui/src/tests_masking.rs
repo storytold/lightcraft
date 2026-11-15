@@ -2944,3 +2944,253 @@ fn the_next_mask_settings_are_inert_until_a_mask_exists() {
     let d = h.app.session.develop_of(id).expect("develop");
     assert!(d.masks[0].adjust.exposure.abs() > 0.1, "a mask exists: the slider works again");
 }
+
+/// Issue #1161 (Part A): clicking another mask's pin while the Brush tool (or an armed new tool)
+/// is active selects that mask and its component instead of painting a stroke or adding a new mask.
+#[test]
+fn the_brush_tool_selects_the_mask_whose_pin_is_clicked() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
+    // Mask 1: Brush stroke at (0.3, 0.3)
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    brush_at(&mut h, 0.3, 0.3);
+    h.settle(SETTLE);
+    // Mask 2: Radial at (0.7, 0.6)
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.7, 0.6], "rx": 0.12, "ry": 0.12}));
+    exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
+    exec(&mut h, "mask.editComponent", json!({"id": 1, "component": 0}));
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.tool, "brush");
+
+    // Hovering the active mask's pin shows Move cursor and hides the brush cursor.
+    pointer(&mut h, json!([{"kind": "move", "x": 0.3, "y": 0.3}]));
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::Move, "hovering active mask pin shows Move cursor");
+    assert!(!has(&h, "brushCursor:paint"), "no brush cursor over active pin");
+
+    // Hovering another mask's pin also shows Move cursor and hides the brush cursor.
+    pointer(&mut h, json!([{"kind": "move", "x": 0.7, "y": 0.6}]));
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::Move, "hovering other mask pin shows Move cursor");
+    assert!(!has(&h, "brushCursor:paint"), "no brush cursor over other pin");
+
+    // Hovering away from any pin shows the brush cursor.
+    pointer(&mut h, json!([{"kind": "move", "x": 0.5, "y": 0.5}]));
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::None, "canvas hover hides system cursor for brush");
+    assert!(has(&h, "brushCursor:paint"), "brush cursor shown away from pins");
+
+    // Clicking the active mask's own pin does not add a stroke / dab.
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "up", "x": 0.3, "y": 0.3}]));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.tool, "brush");
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "clicking active mask pin did not add a stroke");
+
+    // Clicking mask 2's pin selects mask 2, clears the brush tool (radial is not brush), and adds
+    // no extra stroke to mask 1.
+    pointer(&mut h, json!([{"kind": "down", "x": 0.7, "y": 0.6}, {"kind": "up", "x": 0.7, "y": 0.6}]));
+    assert_eq!(h.app.session.active_mask, Some(2));
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "clicking mask 2's pin did not paint on mask 1");
+    assert_eq!(h.app.ui.tool, "");
+
+    // Arming the brush for a new mask and clicking mask 1's pin selects mask 1, keeps Brush active,
+    // clears `mask_new`, and creates neither a new mask nor a new stroke.
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    h.step();
+    assert!(h.app.ui.mask_new.is_some());
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "up", "x": 0.3, "y": 0.3}]));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(develop(&h).masks.len(), 2, "no third mask was added");
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "no stroke added to mask 1");
+    assert!(h.app.ui.mask_new.is_none());
+    assert_eq!(h.app.ui.tool, "brush");
+
+    // Dragging the active Brush pin translates its strokes without adding a new stroke.
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    let p0 = strokes[0].points[0];
+    pointer(
+        &mut h,
+        json!([
+            {"kind": "down", "x": p0.x, "y": p0.y},
+            {"kind": "drag", "x": p0.x + 0.05, "y": p0.y + 0.05},
+            {"kind": "up", "x": p0.x + 0.05, "y": p0.y + 0.05}
+        ]),
+    );
+    h.settle(SETTLE);
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "dragging the pin did not paint a stroke");
+    let p1 = strokes[0].points[0];
+    assert!((p1.x - (p0.x + 0.05)).abs() < 0.01 && (p1.y - (p0.y + 0.05)).abs() < 0.01, "stroke translated: {p0:?} -> {p1:?}");
+    assert_eq!(h.app.ui.tool, "brush");
+    assert!(h.app.gesture.is_none());
+
+    // Armed Color Range also refuses to create a new mask when clicking another mask's pin.
+    exec(&mut h, "tool.colorRange", json!({"new": true}));
+    h.step();
+    assert!(h.app.ui.mask_new.is_some());
+    pointer(&mut h, json!([{"kind": "down", "x": 0.7, "y": 0.6}, {"kind": "up", "x": 0.7, "y": 0.6}]));
+    assert_eq!(develop(&h).masks.len(), 2, "armed Color Range did not add a mask on pin click");
+}
+
+/// Clicking another component's pin on a multi-component mask while Brush is active selects that
+/// component (switching tool if non-Brush, or keeping Brush if Brush) without painting.
+#[test]
+fn brush_tool_selects_another_component_pin_on_same_mask() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    // Mask 1 Component 0: Brush stroke at (0.3, 0.3)
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    brush_at(&mut h, 0.3, 0.3);
+    h.settle(SETTLE);
+    // Add Component 1: Radial at (0.7, 0.7) to Mask 1
+    exec(&mut h, "mask.addComponent", json!({"id": 1, "op": "add", "kind": "radial", "center": [0.7, 0.7], "rx": 0.1, "ry": 0.1}));
+    exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
+    exec(&mut h, "mask.editComponent", json!({"id": 1, "component": 0}));
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.active_mask_component, Some(0));
+    assert_eq!(h.app.ui.tool, "brush");
+
+    // Clicking component 1's pin (0.7, 0.7) switches active component to 1 and clears tool (radial)
+    pointer(&mut h, json!([{"kind": "down", "x": 0.7, "y": 0.7}, {"kind": "up", "x": 0.7, "y": 0.7}]));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.active_mask_component, Some(1));
+    assert_eq!(h.app.ui.tool, "");
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "no extra stroke painted on component 0");
+
+    // Clicking back to component 0's pin (0.3, 0.3) switches back to component 0 without painting
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "up", "x": 0.3, "y": 0.3}]));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.active_mask_component, Some(0));
+    assert_eq!(h.app.ui.tool, "");
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "no extra stroke painted on component 0");
+}
+
+/// Issue #1161 (Part B): releasing a brush drag commits the stroke before the main render job is
+/// built on the same `"up"` frame, so `view_overlay` and `Slot::Main` reflect `Overlay::Mask`
+/// immediately without a 1-frame delay, while an additive live stroke bridges while `Slot::Main`
+/// is pending and clears once settled.
+#[test]
+fn brush_release_requests_mask_overlay_immediately() {
+    use crate::render::Slot;
+    use lcc_pipeline::Overlay;
+
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    brush_at(&mut h, 0.3, 0.4);
+    h.settle(SETTLE);
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 0.6}}));
+    h.app.ui.mask_adjusting_until = None;
+    exec(&mut h, "view.maskOverlay", json!({"show": true}));
+    exec(&mut h, "tool.brush", json!({}));
+    h.app.ui.brush_auto_mask = false;
+    h.settle(SETTLE);
+
+    let img = h.app.image_rect.expect("image rect");
+    let pt = |nx: f32, ny: f32| egui::pos2(img.left() + img.width() * nx, img.top() + img.height() * ny);
+    let overlay = |h: &Headless| crate::panels::detail::view_overlay(&h.app, &develop(h), false);
+
+    // Part 1: live stroke (`sent > 0` during drag) -> single-step `"up"` frame queues the exact
+    // post-stroke `Overlay::Mask` job on `Slot::Main` immediately.
+    let (a, b, c) = (pt(0.3, 0.6), pt(0.34, 0.6), pt(0.45, 0.6));
+    let m = egui::Modifiers::default();
+    h.app.synthetic.push(egui::Event::PointerMoved(a));
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerButton { pos: a, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerMoved(b));
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerMoved(c));
+    h.step();
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::Brush { .. })));
+    assert_eq!(overlay(&h), Overlay::None, "no overlay while brushing a mask with settings");
+    let drag_wanted = h.app.renderer.wanted(Slot::Main);
+
+    h.app.synthetic.push(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
+    h.step();
+    assert!(h.app.gesture.is_none(), "brush gesture committed on the up frame");
+    assert!(matches!(overlay(&h), Overlay::Mask { .. }), "mask overlay is active on the up frame itself");
+    let release_wanted = h.app.renderer.wanted(Slot::Main).expect("main render requested or completed on release");
+    assert_ne!(Some(release_wanted), drag_wanted, "release frame updates Slot::Main away from the drag render");
+    h.settle(SETTLE);
+    assert_eq!(
+        h.app.renderer.textures.get(&Slot::Main).map(|t| t.key),
+        Some(release_wanted),
+        "release frame requested the exact settled overlay job"
+    );
+
+    // Part 2: additive non-live stroke (`sent == 0`, `brush_live`) -> kept while `Slot::Main` is
+    // pending on release and subsequent pending frames, then cleared once settled.
+    let open = std::rc::Rc::new(std::cell::Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    h.app.ui.brush_auto_mask = true;
+    let (d0, d1, d2) = (pt(0.3, 0.72), pt(0.34, 0.72), pt(0.45, 0.72));
+    h.app.synthetic.push(egui::Event::PointerMoved(d0));
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerButton { pos: d0, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerMoved(d1));
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerMoved(d2));
+    h.step();
+    assert!(h.app.brush_live.is_some(), "live stroke buffer active during additive drag");
+
+    h.app.synthetic.push(egui::Event::PointerButton { pos: d2, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
+    h.step();
+    assert!(h.app.gesture.is_none());
+    assert!(matches!(overlay(&h), Overlay::Mask { .. }));
+    assert!(h.app.renderer.is_pending(Slot::Main), "RenderGate holds Slot::Main pending");
+    assert!(h.app.brush_live.is_some(), "additive live stroke bridges while Slot::Main is pending");
+
+    h.step();
+    assert!(h.app.renderer.is_pending(Slot::Main));
+    assert!(h.app.brush_live.is_some(), "additive live stroke stays drawn across pending frames");
+
+    // Part 3: starting a new stroke after a 1-point dab while `Slot::Main` is still pending must
+    // clear the bridged `brush_live` buffer instead of skipping/bridging from the old dab.
+    let e0 = pt(0.2, 0.2);
+    h.app.synthetic.push(egui::Event::PointerMoved(e0));
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerButton { pos: e0, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerButton { pos: e0, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
+    h.step();
+    assert!(h.app.renderer.is_pending(Slot::Main));
+    assert!(h.app.brush_live.is_some(), "1-point dab bridges while Slot::Main is pending");
+
+    let (f0, f1) = (pt(0.8, 0.8), pt(0.85, 0.8));
+    h.app.synthetic.push(egui::Event::PointerMoved(f0));
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerButton { pos: f0, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
+    h.step();
+    h.app.synthetic.push(egui::Event::PointerMoved(f1));
+    h.step();
+    let live = h.app.brush_live.as_ref().expect("fresh live stroke buffer on second stroke");
+    let ([w, h_px], _) = live.size();
+    let near = |nx: f32, ny: f32| {
+        let cx = (nx * w as f32).round() as isize;
+        let cy = (ny * h_px as f32).round() as isize;
+        (-2..=2)
+            .flat_map(|dy| (-2..=2).map(move |dx| (cx + dx, cy + dy)))
+            .any(|(x, y)| x >= 0 && y >= 0 && live.coverage(x as usize, y as usize) > 0.0)
+    };
+    assert!(!near(0.2, 0.2), "old 1-point dab was cleared before the new stroke");
+    assert!(!near(0.5, 0.5), "no bridge segment drawn across the photo");
+    assert!(near(0.85, 0.8), "new stroke painted at its own path");
+    h.app.synthetic.push(egui::Event::PointerButton { pos: f1, button: egui::PointerButton::Primary, pressed: false, modifiers: m });
+    h.step();
+
+    open.set(true);
+    h.settle(SETTLE);
+    h.step();
+    assert!(!h.app.renderer.is_pending(Slot::Main));
+    assert!(h.app.brush_live.is_none(), "live stroke clears once Slot::Main settles");
+}

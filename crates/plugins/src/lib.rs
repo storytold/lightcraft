@@ -49,7 +49,7 @@ pub use manifest::{
 };
 pub use permissions::{FsRoot, Group, Permissions, Request, refused_root};
 pub use programs::{EndStatus, Exit, Found, ProgramDecl, Reservation, RunDir, Running, StartRequest};
-pub use runtime::{ABI_VERSION, Limits, Outcome, Plugin};
+pub use runtime::{ABI_VERSION, Inspection, Limits, MANIFEST_SECTION, ManifestSource, Outcome, Plugin};
 pub use settings::SettingsStore;
 pub use store::NamespaceStore;
 

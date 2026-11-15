@@ -132,18 +132,16 @@ pub fn aperture_label(f: f32) -> Option<String> {
     (f.is_finite() && f > 0.0).then(|| format!("f/{}", (f * 10.0).round() / 10.0))
 }
 
-/// An exposure time (seconds) as a Metadata column lists it: `1/250 s` below 0.4 s (the nearest whole
-/// denominator), else seconds to one decimal (`0.5 s`, `2 s`, `30 s`). `None` for anything that isn't a
+/// An exposure time (seconds) as a Metadata column lists it: `1/250 s` and `1/3 s` for a near-exact reciprocal,
+/// else seconds to four significant digits (`0.4 s`, `0.3571 s`, `2 s`, `30 s`). `None` for anything that isn't a
 /// positive, finite time.
 pub fn shutter_label(secs: f64) -> Option<String> {
     if !(secs.is_finite() && secs > 0.0) {
         return None;
     }
-    if secs < 0.4 {
-        let denom = (1.0 / secs).round().max(1.0);
-        return Some(format!("1/{denom} s"));
-    }
-    Some(format!("{} s", (secs * 10.0).round() / 10.0))
+    // the one shutter formatter: `1/3 s`, `0.4 s`, `0.3571 s`, never a third-stop time rounded to a whole
+    // denominator (upstream #1692)
+    lcc_meta::format_exposure_time(secs).map(|text| format!("{text} s"))
 }
 
 /// The number a numeric Metadata column's value sorts by: the value itself, an aperture's f-number, a
@@ -289,6 +287,10 @@ mod tests {
         let secs: Vec<f64> = sh.iter().filter_map(|v| sort_key("shutter", v)).collect();
         assert!(secs.windows(2).all(|w| w[0] < w[1]), "{sh:?} runs fastest to slowest");
         assert!(shutter_label(f64::INFINITY).is_none() && shutter_label(0.0).is_none() && aperture_label(-1.0).is_none());
+        // third-stop times keep their value instead of rounding to a whole denominator (upstream #1692)
+        for (t, want) in [(0.4, "0.4 s"), (1.0 / 2.8, "0.3571 s"), (1.0 / 3.0, "1/3 s"), (0.3, "0.3 s")] {
+            assert_eq!(shutter_label(t).as_deref(), Some(want), "{t}");
+        }
     }
 
     #[test]

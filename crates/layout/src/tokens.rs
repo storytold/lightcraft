@@ -45,18 +45,10 @@ pub struct PhotoInfo {
     pub pages: usize,
 }
 
-/// `1/250 s`, `2 s`, `0.5 s`.
+/// `1/250 s`, `1/3 s`, `0.4 s`, `0.3571 s`, `2 s` ([`lcc_meta::format_exposure_time`]: a third-stop time keeps its
+/// value instead of rounding to a whole denominator, upstream #1692); empty for no time.
 pub fn format_shutter(t: f64) -> String {
-    if !(t.is_finite() && t > 0.0) {
-        return String::new();
-    }
-    if t < 0.5 {
-        format!("1/{} s", (1.0 / t).round())
-    } else if (t - t.round()).abs() < 1e-6 {
-        format!("{} s", t.round())
-    } else {
-        format!("{t:.1} s")
-    }
+    lcc_meta::format_exposure_time(t).map(|text| format!("{text} s")).unwrap_or_default()
 }
 
 fn format_f(v: f64) -> String {
@@ -223,6 +215,8 @@ mod tests {
         assert_eq!(expand("{date:%Y-%Q}", &PhotoInfo { date: "20".into(), ..p.clone() }), "-%Q");
         assert_eq!(expand("é{Title}ü{", &p), "éü{");
         assert_eq!(format_shutter(2.0), "2 s");
+        assert_eq!(format_shutter(0.4), "0.4 s");
+        assert_eq!(format_shutter(1.0 / 3.0), "1/3 s");
         assert_eq!(format_shutter(f64::NAN), "");
         assert_eq!(expand("{seq:99999999999999999999}", &p), "000");
     }
