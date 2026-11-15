@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Raw + JPEG pairs stacked automatically
+- View ▸ Stack Raw + JPEG Pairs, and the new toggle beside Sort in the bottom bar, stack a shot your camera saved as
+  both a raw and a JPEG: one collapsed stack with the raw on top, so the grid shows the shot once. Turning it on stacks
+  the pairs already in the library, and photos you import or browse in a Local folder afterwards are stacked as they
+  arrive; turning it off takes
+  the JPEGs out of those stacks again. They are ordinary stacks: expand one to see its JPEG, or undo. Files pair when
+  they are in the same folder and share their name but for the extension. Off by default, remembered per library.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

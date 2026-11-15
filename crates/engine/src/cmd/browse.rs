@@ -100,7 +100,10 @@ fn forget_gone(s: &mut Session, dir: &str, subfolders: bool, files: &[String]) -
     }
     let mut forgotten = 0;
     for chunk in s.catalog.forgettable_local(&gone).chunks(2000) {
-        let op = Op::Batch { ops: chunk.iter().map(|id| Op::RemovePhoto { id: *id }).collect() };
+        // (out of the raw + JPEG stack it may be in first: no stack is left pointing at a record that is gone)
+        let mut ops = s.catalog.forget_from_stacks_ops(&chunk.iter().copied().collect());
+        ops.extend(chunk.iter().map(|id| Op::RemovePhoto { id: *id }));
+        let op = Op::Batch { ops };
         match s.catalog.apply(op.clone()) {
             Ok(_) => {
                 s.pending_log.push(op);
