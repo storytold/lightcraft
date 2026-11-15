@@ -417,10 +417,10 @@ fn xmp_warning_text(warning: &ImportWarning) -> String {
             }
         },
         ImportWarningCode::UnmappedXmp => {
-            crate::i18n::tr_format!("XMP adjustments were not imported for {path}: {fields}.", path = path, fields = warning.fields.join(", "),)
+            crate::i18n::tr_format!("XMP adjustments were not imported for {path}: {fields}.", path = path, fields = field_list(&warning.fields),)
         }
         ImportWarningCode::SkippedXmpMetadata => {
-            crate::i18n::tr_format!("Non-rendering XMP metadata was skipped for {path}: {fields}.", path = path, fields = warning.fields.join(", "),)
+            crate::i18n::tr_format!("Non-rendering XMP metadata was skipped for {path}: {fields}.", path = path, fields = field_list(&warning.fields),)
         }
     }
 }

@@ -205,3 +205,16 @@ fn adjustments_and_metadata_get_separate_lines() {
     assert!(!text.contains("img0.png") && !text.contains("img1.png"), "counted lines carry no paths: {text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A single photo's warning is capped like the counted lines: many fields still fit the
+/// toast (#3050).
+#[test]
+fn a_single_photo_warning_is_capped_too() {
+    let attrs = (1..=10).map(|i| format!("crs:G{i:02}=\"{i}\"")).collect::<Vec<_>>().join(" ");
+    let (h, dir, text) = import_with("cap-one", std::slice::from_ref(&attrs));
+    assert_eq!(h.app.session.catalog.len(), 1, "the photo imported");
+    assert!(text.contains("Import warnings (1):"), "{text}");
+    assert!(text.contains("G08") && text.contains("+2 more"), "eight fields and a count: {text}");
+    assert!(!text.contains("G09") && !text.contains("G10"), "the overflow is not listed: {text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
