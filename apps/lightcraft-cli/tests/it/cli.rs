@@ -268,6 +268,40 @@ fn non_unicode_argument_fails_without_a_panic_on_windows() {
     assert!(Command::new(binary()).arg("--version").status().unwrap().success());
 }
 
+/// Issue #3033: `render` says which quality a file-size limit settled on, and nothing when the limit
+/// lowered nothing or there is none.
+#[test]
+fn render_reports_the_quality_a_size_limit_settled_on() {
+    let input = tmp("limit-in.png");
+    let img = lightcraft_raster::Rgba8::from_fn(256, 192, |x, y| {
+        let n = (x as u32).wrapping_mul(73856093) ^ (y as u32).wrapping_mul(19349663);
+        [n as u8, (n >> 8) as u8, (n >> 16) as u8, 255]
+    });
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap();
+    std::fs::write(&input, png).unwrap();
+    let out = tmp("limit-out.jpg");
+    let render = |extra: &[&str]| {
+        let o = Command::new(binary())
+            .args(["render", input.to_str().unwrap(), "-o", out.to_str().unwrap(), "--quality", "90"])
+            .args(extra)
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&o.stderr).into_owned();
+        assert!(o.status.success(), "{stderr}");
+        stderr
+    };
+    assert!(!render(&[]).contains("JPEG quality"), "no limit, nothing to say");
+    let full_kb = std::fs::metadata(&out).unwrap().len() / 1024;
+    let roomy = format!("limitKb={}", full_kb * 4);
+    assert!(!render(&["--opt", &roomy]).contains("JPEG quality"), "the limit lowered nothing");
+    // a quarter, not a half: with a limit the chroma is 4:2:0, which already halves this noise
+    let kb = full_kb / 4;
+    let tight = format!("limitKb={kb}");
+    let said = render(&["--opt", &tight]);
+    assert!(said.contains("JPEG quality ") && said.contains(&format!("to fit {kb} KB")), "{said}");
+    assert!(std::fs::metadata(&out).unwrap().len() <= kb * 1024);
+}
+
 #[test]
 fn render_subcommand() {
     let input = tmp("r-in.png");

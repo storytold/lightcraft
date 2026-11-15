@@ -21,7 +21,7 @@ pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap}
 pub(crate) use export::preset_lzw_note;
 use export::{
     LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, export_dialog_params, export_size,
-    group_checklist, tiff_lzw_note, watermark_preview,
+    group_checklist, size_limit_tight, tiff_lzw_note, watermark_preview,
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
@@ -1389,9 +1389,10 @@ fn export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut
     ui.add_space(4.0);
     export_format_rows(ui, t, opts);
     export_color_rows(ui, t, opts);
-    export_quality_rows(ui, opts, limit_kb);
+    export_quality_rows(ui, t, opts, limit_kb);
     if opts.format.is_rendered() {
         export_size(ui, full_size, resize, &mut opts.ppi);
+        export_limit_warning(app, ui, t, opts, *full_size, resize, *limit_kb);
         export_output_rows(app, ui, opts, *full_size, *resize);
     }
     ui.add_space(4.0);
@@ -1542,7 +1543,7 @@ fn export_color_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
 }
 
 /// Export dialog: quality and the other options of a lossy or JPEG XL file.
-fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &mut u32) {
+fn export_quality_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions, limit_kb: &mut u32) {
     use lightcraft_engine::export::ExportFormat as F;
     if opts.format == F::Jxl {
         let tip = "Mathematically lossless: every pixel is kept exactly (larger files)";
@@ -1565,6 +1566,28 @@ fn export_quality_rows(ui: &mut egui::Ui, opts: &mut ExportOptions, limit_kb: &m
         if num(ui, &LIMIT_KB, &mut k) {
             *limit_kb = k as u32;
         }
+        if *limit_kb > 0 {
+            let note = "The limit picks the highest quality, up to Quality, whose file fits.";
+            ui.label(egui::RichText::new(crate::i18n::tr(note)).color(t.text_dim));
+        }
+    }
+}
+
+/// Export dialog: the caution when a JPEG size limit is tight at the chosen size. Issue #3033: too
+/// few bytes per pixel break skies into flat blocks.
+fn export_limit_warning(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    opts: &ExportOptions,
+    full_size: bool,
+    resize: &Resize,
+    limit_kb: u32,
+) {
+    use lightcraft_engine::export::ExportFormat as F;
+    if opts.format == F::Jpeg && limit_kb > 0 && size_limit_tight(app, full_size, resize, limit_kb) {
+        let warn = "At this size the limit leaves little data per pixel, so skies and other smooth areas can turn blotchy. A smaller size or a larger limit keeps more quality.";
+        ui.label(egui::RichText::new(crate::i18n::tr(warn)).color(t.caution));
     }
 }
 

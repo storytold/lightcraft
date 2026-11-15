@@ -67,6 +67,49 @@ fn size_limit_respected() {
     assert!(b.len() <= kb as usize * 1024);
 }
 
+/// The quantisation tables of a JPEG: what its quality sets, whatever the pixels.
+fn quant_tables(jpeg: &[u8]) -> Vec<u8> {
+    let (mut i, mut tables) = (2, Vec::new());
+    while jpeg[i] == 0xFF && jpeg[i + 1] != 0xDA {
+        let len = usize::from(u16::from_be_bytes([jpeg[i + 2], jpeg[i + 3]]));
+        if jpeg[i + 1] == 0xDB {
+            tables.extend_from_slice(&jpeg[i + 4..i + 2 + len]);
+        }
+        i += 2 + len;
+    }
+    assert!(!tables.is_empty(), "no quantisation tables");
+    tables
+}
+
+// Issue #3033: a size limit can cut the quality far below the requested one, so each file says
+// what it settled on; without a limit the file is written at the requested quality and says nothing
+#[test]
+fn a_size_limit_reports_the_quality_it_settled_on() {
+    let mut s = crate::Session::with_demo();
+    let ids: Vec<_> = s.visible().iter().copied().take(1).collect();
+    let limited = ExportOptions::from_json(&json!({"format": "jpeg", "quality": 90, "limitKb": 8, "width": 512}));
+    let (files, written, _) = lanes_batch(&mut s, &ids, &limited, 1, true, usize::MAX);
+    let files = files.unwrap();
+    let q = files[0]["quality"].as_u64().unwrap_or_else(|| panic!("no quality: {files:?}"));
+    assert!((1..90).contains(&q), "{files:?}");
+    assert!(files[0]["bytes"].as_u64().unwrap() <= 8 * 1024, "{files:?}");
+    // the number is the file's: it has the tables that quality writes (not the same bytes: a GPU
+    // render may differ from a CPU one by an LSB, see `shape`)
+    let at_q = encode_image(&test_image(), &ExportOptions { quality: q as u8, ..Default::default() }).unwrap();
+    assert_eq!(quant_tables(&written[0].1), quant_tables(&at_q), "reported quality {q}");
+    let plain = ExportOptions::from_json(&json!({"format": "jpeg", "quality": 90, "width": 512}));
+    let (files, _, _) = lanes_batch(&mut s, &ids, &plain, 1, true, usize::MAX);
+    assert!(files.unwrap()[0].get("quality").is_none());
+}
+
+#[test]
+fn a_size_limit_is_tight_below_half_a_bit_per_pixel() {
+    assert!(size_limit_is_tight(1024, 5152 * 7728), "1 MB over 40 MP is about 0.2 bits per pixel");
+    assert!(!size_limit_is_tight(1024, 1365 * 2048), "about 3 bits per pixel");
+    assert!(!size_limit_is_tight(200, 1365 * 2048), "0.6 bits per pixel: a smooth demo scene fits at quality 87");
+    assert!(!size_limit_is_tight(1024, 0));
+}
+
 #[test]
 fn hdr_jpeg_size_limit_respected() {
     let img = Rgba8::from_fn(256, 192, |x, y| {
@@ -82,8 +125,9 @@ fn hdr_jpeg_size_limit_respected() {
     let opts = ExportOptions { hdr: true, quality: 100, limit_kb: Some(u32::MAX), ..Default::default() };
     let full = encode_gain_map_jpeg(&img, &hdr, &opts, None).unwrap();
     let kb = (full.len() / 2048) as u32;
-    let limited = encode_gain_map_jpeg(&img, &hdr, &ExportOptions { limit_kb: Some(kb), ..opts.clone() }, None).unwrap();
+    let (limited, q) = encoding::encode_gain_map_with_quality(&img, &hdr, &ExportOptions { limit_kb: Some(kb), ..opts.clone() }, None).unwrap();
     assert!(limited.len() <= kb as usize * 1024, "{} bytes exceeds {kb} KB", limited.len());
+    assert!(q.is_some_and(|q| q < 100), "the limit lowered the quality: {q:?}");
     let decoded = lightcraft_codecs::gainmap::read_jpeg(&limited).unwrap();
     assert!(decoded.meta.alternate_headroom > 1.0, "the gain map must survive size limiting");
     let impossible = encode_gain_map_jpeg(&img, &hdr, &ExportOptions { limit_kb: Some(1), ..opts }, None);

@@ -27,6 +27,9 @@ pub struct ExportTask {
     rx: Receiver<Result<(Vec<Value>, Option<Value>, bool), String>>,
     /// The export's row in the activity stack (`activity.cancel` sets `cancel`).
     guard: TaskGuard,
+    /// The JPEG quality asked for when a file-size limit is set: the toast says when the limit
+    /// settled below it ([`limit_quality_note`]).
+    limit_from: Option<u8>,
 }
 
 impl ExportTask {
@@ -45,6 +48,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     }
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
     let total = items.len();
+    let limit_from = opts.limit_kb.map(|_| opts.quality);
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
@@ -81,7 +85,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard, limit_from });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -128,7 +132,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     work();
     let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, limit_from: None });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -181,7 +185,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     work();
     let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, limit_from: None });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -205,6 +209,22 @@ pub fn apple_photos_note(outcome: &Value) -> String {
         m += &format!(" ({w})");
     }
     m
+}
+
+/// Below this JPEG quality a file-size limit leaves smooth areas such as skies blotchy (issue #3033).
+/// The Export dialog's warning estimates the same thing beforehand from the bits per pixel
+/// (`lightcraft_engine::export::TIGHT_LIMIT_BITS_PER_PIXEL`); this reports what the encode did.
+const LOW_LIMIT_QUALITY: u64 = 40;
+
+/// The toast's account of a file-size limit set with quality `requested`: the lowest quality it
+/// settled on across `files`, and what to do when that is low. None when the limit lowered no file.
+pub fn limit_quality_note(files: &[Value], requested: u8) -> Option<String> {
+    let q = files.iter().filter_map(|f| f.get("quality").and_then(Value::as_u64)).filter(|&q| q < u64::from(requested)).min()?;
+    Some(if q < LOW_LIMIT_QUALITY {
+        crate::i18n::tr_format!("JPEG quality {q} to fit the size limit (a smaller size or a larger limit keeps more quality)", q = q)
+    } else {
+        crate::i18n::tr_format!("JPEG quality {q} to fit the size limit", q = q)
+    })
 }
 
 /// Per frame: when an Apple Photos import that no export task reports finishes (`app.export`
@@ -232,8 +252,9 @@ pub fn poll_photos(app: &mut LightcraftApp, ctx: &egui::Context) {
 #[cfg(target_arch = "wasm32")]
 pub fn poll_photos(_: &mut LightcraftApp, _: &egui::Context) {}
 
-/// What a finished export says: how many files were written, skipped or failed, and the Apple Photos note.
-fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancelled: bool) -> String {
+/// What a finished export says: how many files were written, skipped or failed, the quality a size
+/// limit (set with quality `limit_from`) settled on, and the Apple Photos note.
+fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancelled: bool, limit_from: Option<u8>) -> String {
     let sheet = files.first().filter(|f| f["contactSheet"] == true);
     let ok = files.iter().filter(|f| f.get("path").is_some()).count();
     let failed: Vec<&Value> = files.iter().filter(|f| f.get("error").is_some()).collect();
@@ -250,6 +271,10 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
     }
     if let Some(first) = failed.first() {
         m += &crate::i18n::tr_format!(" · {} failed: {}", failed.len(), first["error"].as_str().unwrap_or("error"));
+    }
+    if let Some(note) = limit_from.and_then(|q| limit_quality_note(files, q)) {
+        m += " · ";
+        m += &note;
     }
     if cancelled {
         m += " · cancelled";
@@ -268,12 +293,13 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
+            let limit_from = task.limit_from;
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
             let msg = match r {
                 Ok((files, photos, _)) => {
-                    let m = export_summary(&files, photos.as_ref(), total, cancelled);
+                    let m = export_summary(&files, photos.as_ref(), total, cancelled, limit_from);
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
                     m
                 }
@@ -406,6 +432,27 @@ mod contact_sheet_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #3033: the toast says which quality a size limit settled on (the lowest of the batch)
+    /// and, when it is low, what keeps more; nothing when the limit lowered nothing.
+    #[test]
+    fn a_size_limit_quality_reads_well() {
+        assert_eq!(limit_quality_note(&[json!({"path": "a.jpg"})], 90), None);
+        assert_eq!(limit_quality_note(&[json!({"path": "a.jpg", "quality": 90})], 90), None, "the limit changed nothing");
+        let fine = limit_quality_note(&[json!({"path": "a.jpg", "quality": 90}), json!({"path": "b.jpg", "quality": 72})], 90);
+        assert_eq!(fine.as_deref(), Some("JPEG quality 72 to fit the size limit"));
+        let low = limit_quality_note(&[json!({"path": "a.jpg", "quality": 12}), json!({"error": "disk full"})], 90);
+        assert_eq!(low.as_deref(), Some("JPEG quality 12 to fit the size limit (a smaller size or a larger limit keeps more quality)"));
+    }
+
+    /// The whole toast line: the size limit's note comes before " · cancelled" and only with a limit.
+    #[test]
+    fn the_export_summary_names_the_size_limit_quality() {
+        let files = [json!({"path": "a.jpg", "quality": 72})];
+        assert_eq!(export_summary(&files, None, 1, false, None), "Exported 1 of 1 photo");
+        assert_eq!(export_summary(&files, None, 1, false, Some(90)), "Exported 1 of 1 photo · JPEG quality 72 to fit the size limit");
+        assert_eq!(export_summary(&files, None, 2, true, Some(90)), "Exported 1 of 2 photos · JPEG quality 72 to fit the size limit · cancelled");
+    }
 
     /// The toast's Apple Photos part (issue #236): the count and album, a partial import's
     /// warning, an error with what to do, a cancelled export.
