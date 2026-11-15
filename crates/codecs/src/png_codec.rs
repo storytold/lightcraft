@@ -110,6 +110,23 @@ mod tests {
     /// bigger than it is dropped, not inflated. Compressing an 8 MiB string is a few
     /// kilobytes — the reverse of what the unbounded `get_text()` path allowed.
     #[test]
+    fn exif_orientation_mutation_parity() {
+        let image = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Gray, vec![0]).unwrap();
+        let base = craft_image_codecs::encode(&image, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let exif = crate::exif::minimal_exif(6);
+        for at in 0..exif.len() {
+            for value in [0, 255] {
+                let mut data = exif.clone();
+                data[at] = value;
+                let mut png = base.clone();
+                let iend = png.len() - 12;
+                png.splice(iend..iend, png_chunk(*b"eXIf", &data));
+                assert_eq!(super::header(&png).unwrap().2, crate::exif::summarize(&data).orientation.unwrap_or(1), "at {at}, value {value}");
+            }
+        }
+    }
+
+    #[test]
     fn compressed_xmp_over_the_cap_is_dropped() {
         let out = png_with_compressed_xmp(&"x".repeat(8 << 20));
         let d = crate::decode(&out, DecodeOptions::default()).unwrap();
