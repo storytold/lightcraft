@@ -530,7 +530,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                             None => err("no writer"),
                         }
                     }
-                    _ => ok(json!({"width": r.image.width, "height": r.image.height, "histogram": r.histogram})),
+                    (Some(_), None) => err("no encoder"),
+                    (None, _) => ok(json!({"width": r.image.width, "height": r.image.height, "histogram": r.histogram})),
                 },
                 Err(e) => err(e),
             }
@@ -910,4 +911,42 @@ fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
         "diskBudget": disk.map(|d| d.budget()),
         "loupeEdge": app.session.loupe_edge,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::fixtures::SyntheticLibrary;
+
+    #[test]
+    fn render_to_path_requires_a_png_encoder() {
+        let library = SyntheticLibrary::new("render-no-encoder");
+        let mut app = library.app();
+        assert!(app.services.png.is_none());
+        let path = std::env::temp_dir().join(format!("lc-render-no-encoder-{}.png", std::process::id()));
+        let path = path.to_string_lossy();
+        assert!(app.session.check_write_target(&path).is_ok());
+        let (req, _) = ControlRequest::new("ui.render", json!({"size": 16, "path": path}));
+        let Outcome::Done(reply) = handle(&mut app, &egui::Context::default(), &req) else {
+            panic!("ui.render must reply synchronously");
+        };
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert_eq!(reply["error"], "no encoder", "{reply}");
+    }
+
+    #[test]
+    fn render_without_a_path_needs_no_encoder() {
+        let library = SyntheticLibrary::new("render-metadata-no-encoder");
+        let mut app = library.app();
+        assert!(app.services.png.is_none());
+        let (req, _) = ControlRequest::new("ui.render", json!({"size": 16}));
+        let Outcome::Done(reply) = handle(&mut app, &egui::Context::default(), &req) else {
+            panic!("ui.render must reply synchronously");
+        };
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert!(reply["result"]["width"].as_u64().is_some_and(|n| n > 0), "{reply}");
+        assert!(reply["result"]["height"].as_u64().is_some_and(|n| n > 0), "{reply}");
+        assert!(!reply["result"]["histogram"].is_null(), "{reply}");
+        assert!(reply["result"]["path"].is_null(), "{reply}");
+    }
 }
