@@ -124,66 +124,6 @@ const ALIASES: &[(&str, &str)] = &[
 fn normalize_for_lookup(model: &str) -> String {
     normalized_model(model).replace(['-', ' '], "_")
 }
-=======
-=== FILE crates/engine/src/camera_profiles.rs ===
-<<<<<<< SEARCH
-    let profile = profile.or_else(|| {
-        let needle = normalize_for_local_match(model);
-        directory.clone().and_then(|d| {
-            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
-                let path = e.path();
-                if path.extension().is_some_and(|x| x == "json") {
-                    let stem = normalize_for_local_match(&path.file_stem()?.to_string_lossy());
-                    if stem == needle { load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new) } else { None }
-                } else {
-                    None
-                }
-            })
-        })
-    });
-    // Also try to find a local profile using normalized model name matching (full scan)
-    let profile = profile.or_else(|| {
-        let needle = normalize_for_local_match(model);
-        directory.clone().and_then(|d| {
-            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
-                let path = e.path();
-                if path.extension().is_some_and(|x| x == "json") {
-                    load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new)
-                } else {
-                    None
-                }
-            })
-        })
-    });
-=======
-    let profile = profile.or_else(|| {
-        let needle = normalize_for_local_match(model);
-        directory.and_then(|d| {
-            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
-                let path = e.path();
-                if path.extension().is_some_and(|x| x == "json") {
-                    let stem = normalize_for_local_match(&path.file_stem()?.to_string_lossy());
-                    if stem == needle { load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new) } else { None }
-                } else {
-                    None
-                }
-            })
-        })
-    });
-    // Also try to find a local profile using normalized model name matching (full scan)
-    let profile = profile.or_else(|| {
-        let needle = normalize_for_local_match(model);
-        directory.and_then(|d| {
-            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
-                let path = e.path();
-                if path.extension().is_some_and(|x| x == "json") {
-                    load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new)
-                } else {
-                    None
-                }
-            })
-        })
-    });
 
 /// Normalize a model name for local profile matching (case, whitespace, and separator folding).
 fn normalize_for_local_match(model: &str) -> String {
@@ -267,7 +207,7 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     // (e.g. "Nikon Z 6-2" vs saved "NIKON_Z_6_2.json") without a full directory scan.
     let profile = profile.or_else(|| {
         let needle = normalize_for_local_match(model);
-        directory.clone().and_then(|d| {
+        directory.and_then(|d| {
             std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
                 let path = e.path();
                 if path.extension().is_some_and(|x| x == "json") {
@@ -282,7 +222,7 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     // Also try to find a local profile using normalized model name matching (full scan)
     let profile = profile.or_else(|| {
         let needle = normalize_for_local_match(model);
-        directory.clone().and_then(|d| {
+        directory.and_then(|d| {
             std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
                 let path = e.path();
                 if path.extension().is_some_and(|x| x == "json") {
