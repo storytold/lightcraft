@@ -32,6 +32,21 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"cancelled": 1}))
             }
         ),
+        cmd!(
+            "activity.pause",
+            "Pause Background Task",
+            [],
+            None,
+            "{id, paused?: bool} → what the task's own command returns: pause (or with `paused: false`, resume; toggles when omitted) a task that has `controls` in `activity.list` (the face scan, search indexing), by running its own pause or resume command. A task without them, or an unknown id, is an error",
+            always,
+            |s, p| {
+                const C: &str = "activity.pause";
+                let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad(C, "missing `id`"))?;
+                let controls = s.activity.controls(id).map_err(|e| bad(C, e))?.ok_or_else(|| bad(C, "this task can't be paused"))?;
+                let pause = p.get("paused").and_then(Value::as_bool).unwrap_or(!controls.paused);
+                s.execute(if pause { controls.pause } else { controls.resume }, &json!({}))
+            }
+        ),
     ]
 }
 
@@ -63,5 +78,28 @@ mod tests {
             assert!(s.execute("activity.cancel", &json!({"id": 999})).is_err());
             assert!(s.execute("activity.cancel", &json!({})).is_err());
         }
+    }
+
+    #[test]
+    fn a_task_with_controls_lists_them_and_others_cannot_be_paused() {
+        let mut s = Session::new();
+        let plain = s.activity.start("export", "Exporting", Cancel::Yes);
+        let scan = s.activity.start("faces", "Finding faces", Cancel::No);
+        scan.set_controls(Some(crate::activity::Controls {
+            paused: false,
+            pause: "faces.pause",
+            resume: "faces.resume",
+            settings_tab: "faces",
+            settings_section: None,
+        }));
+        let r = s.execute("activity.list", &json!({})).unwrap();
+        let rows = r["tasks"].as_array().unwrap();
+        let row = |id: u64| rows.iter().find(|t| t["id"] == id).unwrap().clone();
+        assert!(row(plain.id()).get("controls").is_none());
+        assert_eq!(row(scan.id())["controls"]["pause"], "faces.pause");
+        assert_eq!(row(scan.id())["controls"]["settingsTab"], "faces");
+        assert!(s.execute("activity.pause", &json!({"id": plain.id()})).is_err());
+        assert!(s.execute("activity.pause", &json!({"id": 999})).is_err());
+        assert!(s.execute("activity.pause", &json!({})).is_err());
     }
 }

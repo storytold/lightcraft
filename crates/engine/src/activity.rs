@@ -23,6 +23,10 @@
 //! **Stopping that throws work away**: a task whose stop loses what it would still bring back (a plug-in's wait for
 //! a program) carries a warning ([`TaskGuard::warn_on_stop`], `stopWarning`). Frontends ask before they stop it;
 //! `activity.cancel` still stops it at once.
+//!
+//! **Pause and settings**: a continuous background job the user may want to hold (the face scan, search indexing)
+//! carries [`Controls`] ([`TaskGuard::set_controls`]): the commands that pause and resume it and the Settings page with
+//! its options. Frontends show a pause (or resume) button and a gear on its row; `activity.pause` runs the same commands.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
@@ -114,6 +118,25 @@ impl Unit {
     }
 }
 
+/// Pause / resume and a Settings page for a continuous background job (the face scan, search indexing): its row gets a
+/// pause button (resume while `paused`) and a gear that opens Settings there. The commands are engine command ids, so
+/// every frontend runs the same ones.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Controls {
+    /// The job is paused: the row offers resume.
+    pub paused: bool,
+    /// The command that pauses the job (`faces.pause`).
+    pub pause: &'static str,
+    /// The command that resumes it (`faces.resume`).
+    pub resume: &'static str,
+    /// The Settings tab with its options (`app.settings {tab}`).
+    pub settings_tab: &'static str,
+    /// A section of that tab to bring into view (`app.settings {section}`), if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings_section: Option<&'static str>,
+}
+
 /// One task as the frontends see it (`activity.list`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -151,6 +174,9 @@ pub struct TaskInfo {
     /// stops it at once.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop_warning: Option<String>,
+    /// Pause / resume and the Settings page, for a job that has them ([`TaskGuard::set_controls`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub controls: Option<Controls>,
     /// The label, detail and stop warning as written, before the names went in (`None`: the task has no names),
     /// for frontends that translate.
     #[serde(skip)]
@@ -227,6 +253,8 @@ struct Entry {
     names: Mutex<Vec<(&'static str, String)>>,
     /// [`TaskGuard::warn_on_stop`], as written (names not in).
     stop_warning: Mutex<Option<String>>,
+    /// [`TaskGuard::set_controls`].
+    controls: Mutex<Option<Controls>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -377,6 +405,7 @@ impl Entry {
             failed: self.failed.load(Ordering::Relaxed),
             eta_ms: if self.batch && unit == Unit::Count { self.eta_ms(done, total) } else { None },
             stop_warning,
+            controls: lock(&self.controls).clone(),
             templates,
         }
     }
@@ -437,6 +466,7 @@ impl Activity {
             reported: AtomicBool::new(false),
             names: Mutex::new(Vec::new()),
             stop_warning: Mutex::new(None),
+            controls: Mutex::new(None),
         });
         lock(&self.inner.tasks).push(entry.clone());
         TaskGuard { activity: self.clone(), entry }
@@ -458,6 +488,13 @@ impl Activity {
         let tasks = lock(&self.inner.tasks);
         let entry = tasks.iter().find(|e| e.id == id).ok_or_else(|| format!("no task {id}"))?;
         if entry.try_cancel() { Ok(()) } else { Err(format!("{} can't be cancelled", entry.label())) }
+    }
+
+    /// Task `id`'s pause / resume controls: `Ok(None)` for a task without them, an error for an unknown id.
+    pub fn controls(&self, id: u64) -> Result<Option<Controls>, String> {
+        let tasks = lock(&self.inner.tasks);
+        let entry = tasks.iter().find(|e| e.id == id).ok_or_else(|| format!("no task {id}"))?;
+        Ok(lock(&entry.controls).clone())
     }
 
     /// Ask every cancellable task to stop; returns how many were asked.
@@ -518,6 +555,11 @@ impl TaskGuard {
     /// A step that must not be cut short (the Lightroom import's commit) turns cancelling off for its duration.
     pub fn set_cancellable(&self, yes: bool) {
         self.entry.set_cancellable(yes);
+    }
+
+    /// Give the row pause / resume and a Settings page ([`Controls`]); `None` takes them away.
+    pub fn set_controls(&self, controls: Option<Controls>) {
+        *lock(&self.entry.controls) = controls;
     }
 
     pub fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
@@ -607,6 +649,11 @@ impl TaskHandle {
 
     pub fn is_cancelled(&self) -> bool {
         self.entry.is_cancelled()
+    }
+
+    /// [`TaskGuard::set_controls`] from another thread.
+    pub fn set_controls(&self, controls: Option<Controls>) {
+        *lock(&self.entry.controls) = controls;
     }
 
     /// [`TaskGuard::item_done`] from another thread.

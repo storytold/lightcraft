@@ -1,5 +1,5 @@
 //! The Settings window (OneSlips, LR-PREF-WINDOW): in the Classic layout on a desktop-sized window,
-//! Settings is a window with one row of tabs. Every tab is reachable from the row or its More
+//! Settings is a window; with its categories along the top, one row of tabs. Every tab is reachable from the row or its More
 //! menu, the window keeps its size and place on every tab, its controls stay inside it on a small
 //! screen, Esc closes it, and it opens again on the tab it was left at.
 
@@ -15,7 +15,9 @@ const T: Duration = Duration::from_secs(20);
 
 fn demo(size: [f32; 2]) -> Headless {
     let services = Services { png: None, write_shared: Some(std::sync::Arc::new(|_: &str, _: &[u8]| Ok(()))), ..Default::default() };
-    let app = LccApp::new(lcc_engine::Session::with_demo(), services);
+    let mut app = LccApp::new(lcc_engine::Session::with_demo(), services);
+    // (the row of tabs: Settings ▸ General ▸ Settings Categories: Top; Classic lists them on the left by default)
+    app.ui.settings.settings_categories_classic = Some(crate::state::SettingsCategories::Top);
     let mut h = Headless::new(app, size, 1.0);
     h.settle(T);
     h

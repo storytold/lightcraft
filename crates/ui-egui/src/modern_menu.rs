@@ -40,6 +40,12 @@ pub(crate) fn toggle(app: &mut LccApp) {
 /// Draws the open menu bar from `left` (right of the ☰ button) across the top of `area`.
 pub(crate) fn show(app: &mut LccApp, ui: &egui::Ui, area: Rect, left: f32, top: f32) {
     let Some(open) = app.ui.modern.menu.clone() else { return };
+    // the bar scrolls the open menu's title into view when the open menu changes — not every
+    // frame, which would pull the bar back under a finger that scrolls it away from that title
+    let fresh = app.ui.modern.menu_scrolled.as_deref() != Some(open.as_str());
+    if fresh {
+        app.ui.modern.menu_scrolled = Some(open.clone());
+    }
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let bar = menu_titles(app);
@@ -80,7 +86,7 @@ pub(crate) fn show(app: &mut LccApp, ui: &egui::Ui, area: Rect, left: f32, top: 
                             t.text_label
                         };
                         p.galley_with_override_text_color(r.center() - galley.size() / 2.0, galley, c);
-                        if on {
+                        if on && fresh {
                             resp.scroll_to_me(None);
                         }
                         if resp.clicked() {

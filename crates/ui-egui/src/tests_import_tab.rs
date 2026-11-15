@@ -657,6 +657,66 @@ fn the_import_bar_shows_the_folder_as_a_breadcrumb() {
     let _ = std::fs::remove_dir_all(&deep_root);
 }
 
+/// A folder browsed for the first time starts with its subfolders in (a folder picked to import
+/// means the tree under it), the bar carries the Include subfolders toggle the Local folder header
+/// and the import review have, and a re-browse of the same folder keeps the choice the toggle made.
+#[test]
+fn the_tab_browses_subfolders_by_default_and_the_bar_toggle_rebrowses() {
+    let mut h = app([1400.0, 900.0], "classic");
+    h.app.session = lcc_engine::Session::new().with_fs();
+    h.settle(SETTLE);
+    let dir = folder("sub-default", 2);
+    let nested = dir.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
+    let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 99, 255]);
+    std::fs::write(nested.join("deep.png"), lcc_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    assert!(h.app.session.browse.as_ref().is_some_and(|b| b.subfolders), "the default");
+    assert_eq!(h.app.session.visible_cloned().len(), 3, "the nested photo shows");
+    assert!(has_widget(&mut h, "check:includeSubfolders"), "the toggle is in the bar");
+
+    // the toggle re-browses flat; the choice then survives a re-browse of the same folder
+    let r = h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.visible_cloned().len(), 2, "flat");
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    assert_eq!(h.app.session.visible_cloned().len(), 2, "kept across a re-browse");
+    // and back on
+    let r = h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.visible_cloned().len(), 3, "the nested photo is back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The Import button takes what the browse shows: with subfolders in (the default), importing from
+/// the tab takes the photos in the folder's subfolders too, in place.
+#[test]
+fn importing_from_the_tab_takes_the_nested_photos() {
+    let mut h = app([1400.0, 900.0], "classic");
+    h.app.session = lcc_engine::Session::new().with_fs();
+    h.settle(SETTLE);
+    let dir = folder("sub-import", 1);
+    let nested = dir.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
+    let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 99, 255]);
+    std::fs::write(nested.join("deep.png"), lcc_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    assert_eq!(h.app.session.visible_cloned().len(), 2, "the nested photo shows");
+    exec(&mut h, "import.configure", json!({"take": "all", "previews": "none"}));
+    let r = exec(&mut h, "import.start", json!({}));
+    assert_eq!(r["importing"], 2, "{r}");
+    h.step_until(SETTLE, |h| h.app.import.is_none());
+    assert_eq!(h.app.session.catalog.photos().filter(|p| p.in_library()).count(), 2, "both, the nested one included");
+    assert!(nested.join("deep.png").is_file(), "added in place: no file moved");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Hides Local's built-in places (Pictures, Desktop, Downloads, Home), so a test's own Local row
 /// sits where the test expects it. On Windows the temporary folder is inside Home: browsing a
 /// test folder opens Home's tree down to it, and Home's subfolders on that machine push the
@@ -690,5 +750,163 @@ fn local_shows_a_library_folders_photos_after_show_not_imported() {
     h.settle(SETTLE);
     assert!(h.app.session.browse.as_ref().is_some_and(|b| !b.not_imported));
     assert_eq!(h.app.session.visible().len(), 2, "the library photos show");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The import bar says what its buttons do and nothing twice: "Import" and "Develop" (how many,
+/// into where, and "without Import" are in their tooltips), and no Photo Grid / Grid / Detail
+/// switch (the bottom bar has the view buttons).
+#[test]
+fn the_import_bar_has_short_labels_and_no_view_switch() {
+    let mut h = app([1600.0, 1000.0], "classic");
+    let dir = folder("bar-labels", 2);
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    assert!(has_widget(&mut h, "importGo") && has_widget(&mut h, "importDevelop"), "both buttons are on the bar");
+    assert!(!h.app.widgets.iter().any(|(n, _)| n.starts_with("button:browseView")), "no view switch on the bar");
+    let text = h.painted_text();
+    assert!(text.iter().any(|t| t == "Import") && text.iter().any(|t| t == "Develop"), "{text:?}");
+    assert!(!text.iter().any(|t| t.contains("Develop without Import") || (t.starts_with("Import ") && t.contains(" into "))), "{text:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Develop, Print, Export and Slideshow chosen from the Browse tab (the module bar, a shortcut, an
+/// agent) open on the browsed photo chosen there, without importing it — and moving between them
+/// never bounces back to the Browse tab.
+#[test]
+fn modules_from_the_browse_tab_act_on_the_browsed_photo_without_import() {
+    use crate::module::ModuleId;
+    for layout in ["classic", "modern"] {
+        let mut h = app([1400.0, 900.0], layout);
+        let dir = folder(&format!("in-place-{layout}"), 3);
+        for (command, module) in [("module.print", ModuleId::Print), ("module.export", ModuleId::Export), ("module.develop", ModuleId::Develop)] {
+            // Library from a module on a browsed photo is the Browse tab again
+            exec(&mut h, "module.library", json!({}));
+            exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+            assert_eq!(h.app.ui.tab, Tab::Import, "{layout} {command}");
+            let pick = h.app.session.visible_cloned()[1];
+            exec(&mut h, "library.select", json!({"ids": [pick.0]}));
+            exec(&mut h, command, json!({}));
+            h.settle(SETTLE);
+            if layout == "modern" && module == ModuleId::Export {
+                modern_export_dialog_on(&mut h, &[pick], layout);
+                continue;
+            }
+            assert_eq!(h.app.ui.module, module, "{layout} {command}: the module opened and stayed");
+            assert_eq!(h.app.ui.tab, Tab::Library, "{layout} {command}: the Browse tab handed over");
+            assert_eq!(h.app.session.source, lcc_engine::LibrarySource::Folder, "{layout} {command}: the folder view stays on");
+            assert_eq!(h.app.session.active(), Some(pick), "{layout} {command}: on the photo chosen in Browse");
+            assert!(h.app.session.catalog.photos().all(|p| !p.in_library()), "{layout} {command}: nothing was imported");
+        }
+        // from Develop on the browsed photo, Print, Export and Slideshow stay where they are (no bounce)
+        let open = h.app.session.active();
+        for (command, module) in [("module.print", ModuleId::Print), ("module.export", ModuleId::Export), ("module.slideshow", ModuleId::Slideshow)] {
+            exec(&mut h, command, json!({}));
+            h.settle(SETTLE);
+            if layout == "modern" && module == ModuleId::Export {
+                modern_export_dialog_on(&mut h, &open.into_iter().collect::<Vec<_>>(), layout);
+                assert_eq!(h.app.ui.module, ModuleId::Develop, "{layout}: the dialog over Develop, no bounce to Browse");
+                continue;
+            }
+            assert_eq!(h.app.ui.module, module, "{layout} {command} from Develop");
+            assert_eq!(h.app.ui.tab, Tab::Library, "{layout} {command} from Develop: no bounce to Browse");
+            assert_eq!(h.app.session.source, lcc_engine::LibrarySource::Folder, "{layout} {command}");
+            assert_eq!(h.app.session.selected(), open.into_iter().collect::<Vec<_>>(), "{layout} {command}: the open photo is acted on");
+            exec(&mut h, "module.develop", json!({}));
+        }
+        // a module about the library (Map) goes to the library, not back to Browse
+        exec(&mut h, "module.map", json!({}));
+        h.settle(SETTLE);
+        assert_eq!((h.app.ui.module, h.app.ui.tab), (ModuleId::Map, Tab::Library), "{layout}");
+        assert_ne!(h.app.session.source, lcc_engine::LibrarySource::Folder, "{layout}: Map shows the library");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Modern keeps the Export dialog (no room for the module's column): it opens on the browsed
+/// photos, the folder view still on.
+fn modern_export_dialog_on(h: &mut Headless, ids: &[lcc_catalog::PhotoId], layout: &str) {
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Export { .. })), "{layout}: the Export dialog");
+    assert_eq!(h.app.session.source, lcc_engine::LibrarySource::Folder, "{layout}: the browsed photos");
+    assert_eq!(h.app.session.selected(), ids.to_vec(), "{layout}: what the dialog exports");
+    h.app.ui.dialog = None;
+}
+
+/// The module bar's Print, picked while browsing, opens Print on the browsed photo (it went to the
+/// library first and lost it).
+#[test]
+fn the_module_bar_opens_print_on_the_browsed_photo() {
+    let mut h = app([1400.0, 900.0], "classic");
+    let dir = folder("bar-print", 2);
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    let pick = h.app.session.visible_cloned()[1];
+    exec(&mut h, "library.select", json!({"ids": [pick.0]}));
+    assert!(has_widget(&mut h, "module:print"));
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "module:print"}), T)["ok"], true);
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Print);
+    assert_eq!(h.app.session.source, lcc_engine::LibrarySource::Folder, "the browsed photo, not the library");
+    assert_eq!(h.app.session.selected(), vec![pick]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A file the library has already (Show All shows it in Browse) opens as the library's own photo:
+/// the module on the library, the same photo selected.
+#[test]
+fn a_file_in_the_library_opens_as_its_catalog_photo() {
+    let mut h = app([1400.0, 900.0], "classic");
+    h.app.session = lcc_engine::Session::new().with_fs();
+    h.settle(SETTLE);
+    let dir = folder("in-library", 2);
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    let first = h.app.session.visible_cloned()[0];
+    exec(&mut h, "photo.addToLibrary", json!({"ids": [first.0]}));
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy(), "show": "all"}));
+    exec(&mut h, "library.select", json!({"ids": [first.0]}));
+    exec(&mut h, "module.develop", json!({}));
+    h.settle(SETTLE);
+    assert_eq!((h.app.ui.module, h.app.ui.tab), (crate::module::ModuleId::Develop, Tab::Library));
+    assert_ne!(h.app.session.source, lcc_engine::LibrarySource::Folder, "the library, not the browsed folder");
+    assert_eq!(h.app.session.active(), Some(first), "the catalog photo");
+    assert!(h.app.session.catalog.photo(first).is_some_and(|p| p.in_library()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Export from a browsed photo developed without import stays in Export and writes the file
+/// (through `app.export`, as the module's Export button does).
+#[test]
+fn export_from_a_browsed_photo_writes_a_file() {
+    let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, usize)>::new()));
+    let sink = written.clone();
+    let services = crate::Services {
+        png: None,
+        write_shared: Some(std::sync::Arc::new(move |path: &str, data: &[u8]| {
+            sink.lock().unwrap().push((path.to_string(), data.len()));
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut h = Headless::new(LccApp::new(lcc_engine::Session::new().with_fs(), services), [1400.0, 900.0], 1.0);
+    let dir = folder("export-local", 2);
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    exec(&mut h, "import.develop", json!({}));
+    h.app.run("develop.set", json!({"control": "light.exposure", "value": 0.5})).unwrap();
+    exec(&mut h, "module.export", json!({}));
+    assert_eq!(h.app.ui.module, crate::module::ModuleId::Export);
+    let opts = lcc_engine::export::ExportOptions {
+        format: lcc_engine::export::ExportFormat::Png,
+        destination_mode: lcc_engine::export::DestinationMode::SpecificFolder,
+        ..Default::default()
+    };
+    let out = dir.join("out");
+    crate::panels::dialogs::start_export(&mut h.app, &opts, false, &lcc_engine::export::Resize::long_edge(16), 0, &out.to_string_lossy(), "")
+        .unwrap();
+    h.step_until(SETTLE, |h| h.app.export.is_none());
+    h.settle(SETTLE);
+    let files = written.lock().unwrap().clone();
+    assert_eq!(files.len(), 1, "one file: {files:?} {:?}", h.app.ui.toasts);
+    assert!(files[0].0.ends_with(".png") && files[0].1 > 0, "{files:?}");
+    assert_eq!((h.app.ui.module, h.app.ui.tab), (crate::module::ModuleId::Export, Tab::Library), "still in Export");
+    assert_eq!(h.app.session.source, lcc_engine::LibrarySource::Folder);
+    assert!(h.app.session.catalog.photos().all(|p| !p.in_library()), "nothing was imported");
     let _ = std::fs::remove_dir_all(&dir);
 }

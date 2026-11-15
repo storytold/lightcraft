@@ -28,7 +28,9 @@ fn browse(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("{path}: not a folder")));
     }
     let dir_s = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
-    let subfolders = bool_or(p, "subfolders", s.browse.as_ref().is_some_and(|b| b.subfolders));
+    // subfolders: given, it wins; left out, a re-browse of the same folder keeps the choice and a
+    // new folder starts with subfolders in (the Import tab's browse applies the same rule)
+    let subfolders = bool_or(p, "subfolders", s.browse.as_ref().is_none_or(|b| b.path != dir_s || b.subfolders));
     let files: Vec<String> = if subfolders {
         crate::import::expand(std::slice::from_ref(&dir_s), None)
     } else {
@@ -331,7 +333,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Browse Folder",
             [],
             None,
-            "{path, subfolders?: bool, show?: all|notImported}: show a folder's photos without adding them to the library (they're read in place; edits go to XMP sidecars; `show` picks the quick filter: everything on disk (the default) or just the files an import would take) → {path, photos, new, notImported}",
+            "{path, subfolders?: bool, show?: all|notImported}: show a folder's photos without adding them to the library (they're read in place; edits go to XMP sidecars; `subfolders` says whether the folder's subfolders come too (in for a folder browsed for the first time, kept as chosen for the same folder again); `show` picks the quick filter: everything on disk (the default) or just the files an import would take) → {path, photos, new, notImported}",
             always,
             browse
         ),

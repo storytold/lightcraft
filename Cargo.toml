@@ -1,8 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
-# vendored third-party crates patched for the app (see vendor/README.md); not workspace members
-exclude = ["vendor"]
+# vendored third-party crates patched for the app (see vendor/README.md), and the plug-in SDK (each crate in
+# sdk/ is its own workspace; lcc-plugins tests against sdk/stamp): not workspace members
+exclude = ["vendor", "sdk"]
 
 [workspace.package]
 version = "26.46.3"
@@ -28,6 +29,7 @@ lcc-winspool = { path = "crates/winspool" }
 lcc-winmsi = { path = "crates/winmsi" }
 lcc-android-host = { path = "crates/android-host" }
 lcc-peer = { path = "crates/peer" }
+lcc-sync = { path = "crates/sync" }
 lcc-audio-out = { path = "crates/audio-out" }
 lcc-color = { path = "crates/color" }
 lcc-raster = { path = "crates/raster" }

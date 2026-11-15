@@ -421,15 +421,21 @@ fn settings_of(d: &std::path::Path) -> Value {
     serde_json::from_slice(&std::fs::read(d.join("models").join("settings.json")).unwrap()).unwrap()
 }
 
+/// Recognition is off by default: installing a model chooses it but leaves the switch off (the face scan can take a
+/// long time), unless the install asks for it (`enable: true`); a settings file that says on stays on.
 #[test]
-fn installing_a_model_chooses_it_and_switches_recognition_on() {
+fn installing_a_model_chooses_it_and_leaves_recognition_off() {
     let d = temp("activate");
     let mut s = session(&d);
+    assert_eq!(s.execute("faces.models.list", &json!({})).unwrap()["enabled"], false, "off by default");
     let a = s.execute("faces.models.install", &json!({"path": model_file(&d, "First.onnx", 64), "acknowledged": true})).unwrap();
     let a_id = a["installed"]["id"].as_str().unwrap().to_string();
-    assert_eq!(a["active"], json!({"embedder": a_id, "enabled": true}));
+    assert_eq!(a["active"], json!({"embedder": a_id, "enabled": false}));
     assert_eq!(a["installed"]["selected"], true);
-    assert_eq!(settings_of(&d), json!({"enabled": true, "embedder": a_id}));
+    assert_eq!(settings_of(&d), json!({"enabled": false, "embedder": a_id}));
+    // someone who switched it on keeps it on, in this session and the next
+    s.execute("faces.enable", &json!({"enabled": true})).unwrap();
+    assert_eq!(session(&d).execute("faces.models.list", &json!({})).unwrap()["enabled"], true);
     // a second model takes over (the newest is the one the user just asked for); the first stays installed
     let b = s.execute("faces.models.install", &json!({"path": model_file(&d, "Second.onnx", 96), "acknowledged": true})).unwrap();
     let b_id = b["installed"]["id"].as_str().unwrap().to_string();
@@ -444,11 +450,13 @@ fn installing_a_model_chooses_it_and_switches_recognition_on() {
     let c_id = c["installed"]["id"].as_str().unwrap().to_string();
     assert_eq!(c["active"]["embedder"], json!(a_id));
     assert_eq!(c["installed"]["selected"], false);
-    // a switched-off recognition is switched back on by the next install, not by a refused one
+    // a switched-off recognition stays off through an install, and is switched on by one that asks (not a refused one)
     s.execute("faces.enable", &json!({"enabled": false})).unwrap();
-    assert!(s.execute("faces.models.install", &json!({"path": model_file(&d, "Nope.onnx", 64)})).is_err());
+    assert!(s.execute("faces.models.install", &json!({"path": model_file(&d, "Nope.onnx", 64), "enable": true})).is_err());
     assert_eq!(settings_of(&d)["enabled"], false);
-    s.execute("faces.models.install", &json!({"path": model_file(&d, "Fourth.onnx", 64), "acknowledged": true})).unwrap();
+    s.execute("faces.models.install", &json!({"path": model_file(&d, "Fifth.onnx", 72), "acknowledged": true})).unwrap();
+    assert_eq!(settings_of(&d)["enabled"], false);
+    s.execute("faces.models.install", &json!({"path": model_file(&d, "Fourth.onnx", 64), "acknowledged": true, "enable": true})).unwrap();
     assert_eq!(settings_of(&d)["enabled"], true);
     // removing the model in use hands over to another installed one instead of leaving nothing chosen
     let in_use = settings_of(&d)["embedder"].as_str().unwrap().to_string();
@@ -479,7 +487,7 @@ fn a_download_that_arrives_is_installed_and_switched_on_by_itself() {
     assert_eq!(r["downloads"][0]["id"], "fake-model");
     assert_eq!(r["downloads"][0]["state"], "installed", "{r}");
     let st = settings_of(&d);
-    assert_eq!(st["enabled"], true);
+    assert_eq!(st["enabled"], false, "a download chooses the model; recognition stays off until switched on");
     assert!(st["embedder"].as_str().unwrap().starts_with("custom-arrived-"), "{st}");
     assert!(!std::path::Path::new(&staged).exists(), "the staged file was moved into place");
     // the record stays until it is cleared, and is cleared once
@@ -545,7 +553,7 @@ fn the_users_own_catalog_adds_models_with_the_same_download_and_install() {
     let r = s.execute("faces.models.downloads", &json!({})).unwrap();
     assert_eq!(r["downloads"][0]["state"], "installed", "{r}");
     let st = settings_of(&d);
-    assert_eq!((st["embedder"].clone(), st["enabled"].clone()), (json!("my-research-model"), json!(true)));
+    assert_eq!((st["embedder"].clone(), st["enabled"].clone()), (json!("my-research-model"), json!(false)));
     let l = s.execute("faces.models.list", &json!({})).unwrap();
     assert_eq!(
         (find(&l, "my-research-model")["installed"].clone(), find(&l, "my-research-model")["accepted"]["commercial"].clone()),
@@ -562,7 +570,7 @@ fn the_users_own_catalog_adds_models_with_the_same_download_and_install() {
 }
 
 /// Issue #678: on means something only with a model to run. Turning recognition on with no chosen
-/// (installed) recogniser is refused; installing one chooses it and switches recognition on, after
+/// (installed) recogniser is refused; installing one chooses it (recognition stays off), after
 /// which the switch works both ways; removing the last recogniser switches it off again.
 #[test]
 fn recognition_cannot_be_turned_on_without_a_chosen_model() {
@@ -577,7 +585,8 @@ fn recognition_cannot_be_turned_on_without_a_chosen_model() {
     let f = model_file(&d, "m.onnx", 64);
     let r = s.execute("faces.models.install", &json!({"path": f, "acknowledged": true})).unwrap();
     let id = r["installed"]["id"].as_str().unwrap().to_string();
-    assert_eq!(r["active"]["enabled"], true, "installing chooses the model and switches recognition on: {r}");
+    assert_eq!(r["active"]["enabled"], false, "installing chooses the model; recognition stays off: {r}");
+    assert_eq!(s.execute("faces.enable", &json!({"enabled": true})).unwrap()["enabled"], true);
     assert_eq!(s.execute("faces.enable", &json!({"enabled": false})).unwrap()["enabled"], false);
     assert_eq!(s.execute("faces.enable", &json!({"enabled": true})).unwrap()["enabled"], true);
     assert_eq!(s.execute("faces.enable", &json!({})).unwrap()["enabled"], false, "toggles when omitted");

@@ -9,7 +9,7 @@
 use egui::RichText;
 use serde_json::{Value, json};
 
-use super::settings::{check, heading, hint, row};
+use super::settings::{check, hint, row};
 use crate::LccApp;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -195,7 +195,7 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
             v
         }
     };
-    heading(ui, t, tr("Folders"));
+    super::settings::heading_help(ui, t, tr("Folders"), "folders");
     hint(ui, t, tr("Every folder {app} uses. Changes apply at once; each is also on its own tab."));
     let mut action = None;
     for f in list.as_array().into_iter().flatten() {

@@ -14,6 +14,10 @@ pub const GROUP: std::net::Ipv4Addr = std::net::Ipv4Addr::new(224, 0, 0, 251);
 pub const MAX_LEN: usize = 9000;
 /// The TXT format version; others are ignored.
 pub const VERSION: u32 = 1;
+/// The connection protocol this build speaks (`lcc-peer-v2`, [`crate::secure::PROTOCOL`]), as the
+/// advert's `proto` entry. The TXT format version stays, so builds on different protocols still
+/// see each other and can say that both need the same version of the app.
+pub const PROTO: u32 = 2;
 
 /// The DNS-SD service name (RFC 6335 §5.1: 1–15 of `a-z`, `0-9`, `-`, at least one letter, no
 /// leading, trailing or doubled hyphen) made from `env_prefix`.
@@ -59,6 +63,9 @@ pub struct Beacon {
     pub port: u16,
     /// It is looking for devices to pair with (its Settings ▸ Sync is open).
     pub pairing: bool,
+    /// The connection protocol it speaks ([`PROTO`]); 1 when the advert doesn't say (an older
+    /// build). Devices on another protocol are listed, but can't be paired with or connected to.
+    pub proto: u32,
 }
 
 impl Beacon {
@@ -71,6 +78,7 @@ impl Beacon {
             format!("name={}", self.name),
             format!("key={}", self.key),
             format!("pairing={}", u8::from(self.pairing)),
+            format!("proto={}", self.proto),
         ]
         .into_iter()
         .map(String::into_bytes)
@@ -95,6 +103,7 @@ impl Beacon {
             key: get("key")?,
             port,
             pairing: get("pairing").as_deref() == Some("1"),
+            proto: get("proto").and_then(|p| p.parse().ok()).unwrap_or(1),
         };
         b.sane().then_some(b)
     }
@@ -124,6 +133,18 @@ mod tests {
             key: "k".into(),
             port: 4000,
             pairing: true,
+            proto: PROTO,
+        }
+    }
+
+    #[test]
+    fn an_advert_without_a_protocol_is_an_older_build() {
+        let txt: Vec<Vec<u8>> = sample().txt().into_iter().filter(|s| !s.starts_with(b"proto=")).collect();
+        assert_eq!(Beacon::from_txt(&txt, 4000).map(|b| b.proto), Some(1));
+        for junk in ["proto=", "proto=x", "proto=-1", "proto=99999999999999999999"] {
+            let mut t = txt.clone();
+            t.push(junk.as_bytes().to_vec());
+            assert_eq!(Beacon::from_txt(&t, 4000).map(|b| b.proto), Some(1), "{junk}");
         }
     }
 

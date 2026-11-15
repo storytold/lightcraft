@@ -31,6 +31,8 @@ import Shot from '../../../components/Shot.astro';
 - Anything slow (import, export, previews, sync, downloads) runs off the main thread and shows as a row with a progress bar and a stop button when it can stop.
 - **Classic and Compact**: in the module bar. One task shows its bar; several show "N operations in progress…"; click for the full list.
 - **Modern**: a floating card under the Library / Develop switch, three rows and "+N more".
+- **Full-screen preview** (F): a quiet card top right with the running task's name and a thin bar, several as "N operations in progress…" over a bar each.
+- Preview builds asked for while one runs wait for their turn and start by themselves when it ends; **Stop Building Previews** stops the running one and drops the waiting ones.
 - Quitting asks first while a stoppable task is running.
 
 <Aside type="note" title="Modern layout">

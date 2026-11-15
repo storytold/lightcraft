@@ -4861,6 +4861,7 @@ dependencies = [
  "lcc-scenes",
  "lcc-segment",
  "lcc-slideshow",
+ "lcc-sync",
  "lcc-sysmem",
  "lcc-testkit",
  "lcc-tether",
@@ -5210,6 +5211,7 @@ dependencies = [
  "lcc-brand",
  "lcc-testkit",
  "log",
+ "nix",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5248,6 +5250,7 @@ dependencies = [
  "lcc-net",
  "lcc-testkit",
  "log",
+ "plugin-stamp",
  "semver",
  "serde",
  "serde_json",
@@ -5409,6 +5412,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lcc-sync"
+version = "26.46.3"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lcc-sysmem"
 version = "26.46.3"
 dependencies = [
@@ -5507,6 +5518,7 @@ dependencies = [
  "lcc-raw",
  "lcc-slideshow",
  "lcc-surface",
+ "lcc-sync",
  "lcc-testkit",
  "lcc-text",
  "lcc-updater",
@@ -5516,7 +5528,6 @@ dependencies = [
  "resvg",
  "serde",
  "serde_json",
- "toml",
  "wat",
  "web-time",
 ]
@@ -6140,6 +6151,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -7205,6 +7217,14 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "plugin-stamp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wasmi",
+]
 
 [[package]]
 name = "png"

@@ -23,7 +23,10 @@ read ([xmp-interop.md](../xmp-interop.md)). App-wide settings (keymap, language,
 
 File → Libraries → New Catalog… creates an empty catalog folder; File → Libraries → Open Catalog… opens another, and
 the catalogs you opened last are listed below them. Settings → General → At launch opens the last one at the next
-start, or asks which one (*Ask me*); holding Alt (Option on a Mac) as the window appears asks once. From the command line, `--library DIR` opens or creates one:
+start, or asks which one (*Ask me*); holding Alt (Option on a Mac) as the window appears asks once. The catalog opens
+after the window appears, behind a small *Opening your catalog* window — after an update, the catalog's format
+upgrade happens there first, with the bytes of its safety copy as progress, so a long wait says what it is doing
+(a catalog that can't be opened ends at the usual window offering Try Again). From the command line, `--library DIR` opens or creates one:
 
 ```sh
 <cli> run --library ~/Pictures/Test catalog.info

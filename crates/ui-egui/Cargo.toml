@@ -23,6 +23,8 @@ lcc-raw = { workspace = true }
 lcc-geo = { workspace = true }
 web-time = { workspace = true }
 lcc-engine = { workspace = true }
+# the device-sync pill (Settings ▸ Sync, grid cells, collection rows)
+lcc-sync = { workspace = true }
 lcc-layout = { workspace = true }
 lcc-pdf = { workspace = true }
 lcc-print = { workspace = true }
@@ -75,4 +77,3 @@ lcc-brand = { workspace = true }
 # What's New: joins docs/whats-new/ and docs/whats-new.md into $OUT_DIR/whats-new.md
 lcc-notes = { workspace = true }
 serde_json = { workspace = true }
-toml = { workspace = true }

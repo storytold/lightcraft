@@ -6,7 +6,7 @@ sidebar:
 ---
 
 ## Settings
-- **Edit ▸ Settings…**. Tabs: General, Import, Folders, Performance, Display, Interface, Slideshow, Faces, Profiles, AI Denoise, AI Models, Generative Fill, Shortcuts, Controls, Connections, Sync.
+- **Edit ▸ Settings…**. Tabs: General, Import, Folders, Performance, Display, Interface, Slideshow, Faces, Profiles, Develop, AI Denoise, AI Models, Generative Fill, Shortcuts, Controls, Connections, Sync. Every page and group is described in [Settings](../../reference/settings/); the **?** beside a group opens the manual at it.
 - **Interface ▸ Expanded sliders** (off by default) lets sliders that support it reach past Lightroom's range; today only a mask's **Hue** (±180° instead of about ±34°). Expanded values are not XMP compliant: Lightroom gets them clamped. Turning it off narrows the slider but leaves edits already past the range as they are.
 - App settings are in a `Chromaforge` folder: `~/.config/Chromaforge` (Linux), `~/Library/Application Support/Chromaforge` (macOS), `%APPDATA%\Chromaforge` (Windows). A portable copy keeps them beside the program.
 - Logs are in a `logs` folder there, never in the library.

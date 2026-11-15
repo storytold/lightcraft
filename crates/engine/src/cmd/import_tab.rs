@@ -99,9 +99,11 @@ impl Session {
             Some(size) => self.execute("library.buildPreviews", &json!({"size": size, "ids": ordered}))?,
             None => json!({"running": false, "total": 0}),
         };
-        // kept in the library until done, so a restart takes it up again ([`crate::finishing`])
+        // kept in the library until done, so a restart takes it up again ([`crate::finishing`]).
+        // A build asked for while another runs waits for its turn; the one tracked here is the
+        // finish's own, not the running one it queued behind.
         if size.is_some() || masks > 0 || skin > 0 {
-            let build = size.and(self.preview_build.clone());
+            let build = size.filter(|_| out.get("queued") != Some(&serde_json::json!(true))).and(self.preview_build.clone());
             self.finishing_started(crate::finishing::FinishPlan { ids: ordered.clone(), previews: previews.to_string() }, build);
         }
         out["aiMasks"] = json!(masks);

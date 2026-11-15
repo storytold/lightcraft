@@ -119,6 +119,14 @@ impl Index {
         !self.unsaved.is_empty() || self.rewrite
     }
 
+    /// Forget every embedding (Settings ▸ Faces ▸ Clear): the cache file is written fresh, empty, at the next save.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.unsaved.clear();
+        self.skipped.clear();
+        self.rewrite = true;
+    }
+
     /// Start over for `tag` (`dim` numbers per face), loading what the cache file at `path` holds for it. What the
     /// previous model's index had not written yet is written first, so switching models loses nothing.
     pub fn reset(&mut self, tag: &str, dim: usize, path: Option<PathBuf>) {
@@ -320,6 +328,13 @@ impl Scanned {
 
     pub fn has_unsaved(&self) -> bool {
         !self.unsaved.is_empty() || self.rewrite
+    }
+
+    /// Forget every photo (they are all searched again): the record is written fresh, empty, at the next save.
+    pub fn clear(&mut self) {
+        self.set.clear();
+        self.unsaved.clear();
+        self.rewrite = true;
     }
 
     /// Start over with the record at `path` (written first: what was not yet saved is not lost).
@@ -592,6 +607,8 @@ mod tests {
 /// What the recognition commands keep between calls: the loaded model and the embeddings made with it.
 #[derive(Default)]
 pub(crate) struct FacesState {
+    /// Whether recognition was switched on and whether the scan was paused when last looked up, and when.
+    pub switches_seen: Option<(std::time::Instant, bool, bool)>,
     /// `<model id>@<sha256>` and the chosen model's manifest (reused without loading the ONNX network).
     pub manifest: Option<(String, lcc_faces::ModelManifest)>,
     /// `<model id>@<sha256>` and the loaded model.
@@ -599,8 +616,6 @@ pub(crate) struct FacesState {
     pub index: Index,
     /// When the models folder was last looked at (the per-frame pump trusts a look for a second).
     pub checked: Option<std::time::Instant>,
-    /// Whether recognition was switched on when last looked up, and when.
-    pub enabled_seen: Option<(std::time::Instant, bool)>,
     /// How many of a person's best matching faces a match is based on when last looked up, and when.
     pub top_seen: Option<(std::time::Instant, usize)>,
     pub worker: Option<crate::faces_worker::Worker>,

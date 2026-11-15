@@ -44,6 +44,27 @@ The agreement figures below come from a one-off comparison against an independen
 this repository; that tooling is not part of it, so those figures cannot be reproduced from here. What the repository
 does check is listed under "Agreement and regression coverage".
 
+## Switching recognition on, and the scan's controls
+
+Recognition (**Settings ▸ Faces ▸ Recognise faces**) is **off by default**, and installing or downloading a model chooses
+it without switching recognition on: the background scan can take a long time on a big library, so it starts only when
+the user ticks the switch (`faces.enable`; `faces.models.install {enable: true}` does both). The switch is saved as
+`enabled` in the models folder's `settings.json`; a missing file or field reads as off, and a file that already says on
+(someone switched it on, or an older version did on install) stays on.
+
+Settings ▸ Faces ▸ **Face scan** shows the scan's state (`faces.status`: `off`, `idle`, `indexing`, `paused`,
+`complete`, with `done` of `total` photos) and has:
+
+- **Pause / Resume** (`faces.pause`, `faces.resume`): nothing new starts while paused (what is running finishes). The
+  pause is saved (`paused` in `settings.json`), so the scan stays paused across restarts.
+- **Clear…** (`faces.clearIndex`): deletes what the scan learned for this library (every `face-embeddings-<model
+  id>.bin` and `face-scanned.bin`) and leaves the scan paused. Faces already in the catalog, named or found, stay.
+- **Restart…** (`faces.restart`): the same deletion, then the scan starts over (resuming a paused one).
+
+Clear… and Restart… ask first, in place. The scan's activity row ("Finding faces") has no ✕; it carries `controls`
+(`activity.list`): a pause button (resume while paused, the row staying with "Paused") and a gear that opens Settings ▸
+Faces. `activity.pause {id}` runs the same commands.
+
 ## Downloading a model
 
 **Settings ▸ Faces ▸ Download** (or Library ▸ Detect Faces, which offers it for the detector):
@@ -61,8 +82,8 @@ does check is listed under "Agreement and regression coverage".
 
 ## Adding a model file yourself
 
-Adding a model is how you say you want it: once it is installed it is **chosen and recognition is switched on**, with no
-further step. The one question is its licence, and that comes first.
+Once a model is installed it is **chosen**, with no further step; recognition itself stays off until you switch it on
+(see above). The one question is its licence, and that comes first.
 
 1. **Settings ▸ Faces ▸ Add a model file…**, or drop a `.onnx` file on the window.
 2. The app looks at the file (it never runs it at this point): it recognises models it knows by their SHA-256, and

@@ -731,7 +731,13 @@ pub fn browse(app: &mut LccApp, path: &str, subfolders: Option<bool>, show: Opti
         return Err("an import is running".into());
     }
     let dir_s = dir.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
-    let subfolders = subfolders.unwrap_or_else(|| app.session.browse.as_ref().is_some_and(|b| b.subfolders));
+    // subfolders: given, it wins; left out, a re-browse of the same folder keeps the choice and a
+    // new folder starts with subfolders in — a folder picked to import means the tree under it
+    // (the engine's library.browse applies the same rule)
+    let subfolders = match subfolders {
+        Some(given) => given,
+        None => app.session.browse.as_ref().is_none_or(|b| if b.path == dir_s { b.subfolders } else { true }),
+    };
     // the quick filter: given, it wins; left out, a re-browse of the same folder keeps the choice
     // and a new folder starts on Show Not Imported (the engine's library.browse applies the same
     // rule with the choice as it stands)
@@ -805,8 +811,7 @@ pub fn browse(app: &mut LccApp, path: &str, subfolders: Option<bool>, show: Opti
     #[cfg(target_arch = "wasm32")]
     job();
     let guard = scan_guard(app, &progress, true);
-    app.scan =
-        Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: true, sources: Vec::new(), guard, subfolders: false });
+    app.scan = Some(ScanTask { progress, rx, copy: false, destination: None, album: None, browse: true, sources: Vec::new(), guard, subfolders });
     app.renderer.forget_imports();
     app.lap(&mut lap, "browse.rest");
     Ok(json!({"path": dir_s, "subfolders": subfolders, "scanning": true}))

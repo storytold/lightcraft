@@ -172,6 +172,16 @@ pub(crate) fn tool_room(app: &LccApp, area: Rect) -> (f32, f32, f32) {
     if app.ui.modern.dock_side { (RAIL_ITEM.x + 2.0 * PAD + 2.0 * MARGIN, right, MARGIN) } else { (MARGIN, right, ITEM.y + 2.0 * PAD + 2.0 * MARGIN) }
 }
 
+/// The height the floating dock takes from the bottom of the photo's room, when the chrome shows
+/// (0 when it doesn't; a rail down the side takes only its margin). Whatever else floats over the
+/// photo's bottom edge — the loupe's shot-info strip — keeps clear of this.
+pub(crate) fn bottom_clearance(app: &LccApp) -> f32 {
+    if !app.ui.modern.chrome {
+        return 0.0;
+    }
+    if app.ui.modern.dock_side { MARGIN } else { ITEM.y + 2.0 * PAD + 2.0 * MARGIN }
+}
+
 /// The group's controls this photo has. White balance is on the photo's own scale, as the Edit
 /// panel shows it: Kelvin for raw files, relative (−100..100) for rendered ones.
 pub(crate) fn specs(app: &LccApp, g: Group) -> Vec<&'static ControlSpec> {

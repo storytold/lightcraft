@@ -1,0 +1,4 @@
+### Quick settings bar
+- Point at the empty stretch of the module bar between the identity plate and the module names: a row of quick switches fades in (and out again when the pointer leaves). It holds the **info overlay** (Off, Info 1, Info 2), the **on-screen overlay** that reports every change, the **eye focus strip**, **clipping**, the **focus point**, **face boxes** and the **filmstrip**. A message in the status line there goes away as soon as the pointer arrives.
+- The eye focus strip shows a **✕** and an **eye** when you point at it: the eye zooms the loupe to 100 % on the eye, the ✕ hides the strip, and its switch in the quick settings bar blinks twice so you know where to turn it back on. **Settings ▸ Interface ▸ Detail View** has it too.
+- Plug-ins can add their own buttons to the bar (`quickAction` on a command).
