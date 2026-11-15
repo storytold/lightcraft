@@ -15,6 +15,7 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 # Canon CRW decoder shared with the other Craft apps
 craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "94777dcf7f8962476e96b049d08d22e25b9330c2" }
 craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "94777dcf7f8962476e96b049d08d22e25b9330c2" }
+craft-mime = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18", version = "0.1.0" }
 craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "b77af389f30bb10de10d8436ca9b39fe94e3bb67", features = ["frames"] }
 craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "b77af389f30bb10de10d8436ca9b39fe94e3bb67", default-features = false, features = ["decode", "encode"] }
 # Photo metadata: EXIF, IPTC-IIM, XMP packets and GPX track logs (craft-libs#949)
