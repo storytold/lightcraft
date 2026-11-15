@@ -4111,6 +4111,7 @@ dependencies = [
  "craft-heif",
  "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=94777dcf7f8962476e96b049d08d22e25b9330c2)",
  "craft-psd",
+ "craft-raw",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=94777dcf7f8962476e96b049d08d22e25b9330c2)",
  "lightcraft-geom",
  "proptest",
