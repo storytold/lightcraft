@@ -117,6 +117,7 @@ fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
 
     drive.open.store(true, Ordering::SeqCst);
     until_done(&mut h);
+    assert!(h.step_until(T, |_| drive.reads.load(Ordering::SeqCst) == PHOTOS as usize), "the search never read every photo");
     assert_eq!(drive.on_ui.load(Ordering::SeqCst), 0, "a file was read on the UI thread");
     assert_eq!(drive.reads.load(Ordering::SeqCst), PHOTOS as usize);
     assert!(rows(&h).is_empty(), "the row goes with the search");
@@ -164,9 +165,18 @@ fn stopping_leaves_the_view_alone_and_the_next_search_reads_only_the_rest() {
     assert!(h.app.ui.toast.is_none(), "{:?}", h.app.ui.toast);
     assert_eq!(drive.reads.load(Ordering::SeqCst), 1);
 
+    // The Detail view has been drawing meanwhile: its main render and neighbour prefetch
+    // decode through the same drive on renderer threads, and the session keeps those
+    // decoded sources. The next search's plan would then cut some thumbnails from memory
+    // (`SourceRef::Fit`) without touching the drive, so its count would stay short of the
+    // library. Forget them (what the stopped search kept is signatures, which stay), so
+    // the next search reads from the drive everything it has not read yet.
+    h.app.session.media.clear_sources();
+
     let r = h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     assert_eq!(r["count"], PHOTOS - 1, "what was read isn't read again");
     until_done(&mut h);
+    assert!(h.step_until(T, |_| drive.reads.load(Ordering::SeqCst) == PHOTOS as usize), "the next search never read the rest");
     assert_eq!(drive.reads.load(Ordering::SeqCst), PHOTOS as usize);
     assert_eq!(h.app.session.filter.only.len(), PHOTOS as usize / 2);
 }
@@ -276,6 +286,7 @@ fn a_request_nobody_waits_for_any_more_leaves_what_it_read() {
     // (a frame takes the request and starts the search)
     h.step();
     until_done(&mut h);
+    assert!(h.step_until(T, |_| drive.reads.load(Ordering::SeqCst) == PHOTOS as usize), "the search never read every photo");
     let reads = drive.reads.load(Ordering::SeqCst);
     assert_eq!(reads, PHOTOS as usize);
     let rx = ask(&mut h);
