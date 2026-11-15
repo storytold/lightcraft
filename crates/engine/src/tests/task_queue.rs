@@ -242,6 +242,37 @@ fn a_build_asked_to_queue_behind_one_with_no_row_is_refused_not_lost() {
     build.finished.store(true, Ordering::Release);
 }
 
+/// Given a build running with its row, when a build with no row of its own (`row: false`) is asked for with `queue`,
+/// then it is refused and nothing waits: it would start from the line without holding the lane, and the build asked
+/// for after it would be started at once, refused as running, and lost. A build asked for with `queue` after that
+/// still waits and starts when the running one ends.
+#[test]
+fn a_build_with_no_row_of_its_own_is_refused_a_place_in_line_and_the_next_one_is_not_lost() {
+    let mut s = Session::with_demo();
+    let ids = build_ids(&s, 2);
+    let h = hold(&mut s);
+    let e = s.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true, "row": false})).unwrap_err().to_string();
+    assert!(e.contains("no row of its own"), "{e}");
+    assert_eq!(tasks(&mut s).len(), 1, "only the running build is listed");
+    let r = s.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true})).unwrap();
+    assert_eq!(r["place"], 1, "{r}");
+    release(h);
+    settle(&mut s);
+    let progress = s.execute("library.previewProgress", &json!({})).unwrap();
+    assert_eq!((progress["total"].as_u64(), progress["done"].as_u64()), (Some(2), Some(2)), "{progress}");
+}
+
+/// Given no build running, when a build with no row of its own is asked for with `queue`, then it starts at once, as
+/// one without `queue` does: there is nothing to wait for.
+#[test]
+fn a_build_with_no_row_that_asks_to_queue_starts_at_once_when_nothing_is_ahead_of_it() {
+    let mut s = Session::with_demo();
+    let ids = build_ids(&s, 2);
+    let r = s.execute("library.buildPreviews", &json!({"ids": ids, "edge": 256, "queue": true, "row": false, "wait": true})).unwrap();
+    assert!(r.get("queued").is_none(), "{r}");
+    assert_eq!((r["total"].as_u64(), r["done"].as_u64()), (Some(2), Some(2)), "{r}");
+}
+
 /// Given the background preparation running, when a build is asked for with `queue`, then it starts at once, as one
 /// without `queue` does, and the preparation stops: it gives way, it is not waited for.
 #[test]

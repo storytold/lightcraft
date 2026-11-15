@@ -82,6 +82,7 @@ every command and the app every frame. `activity.list` shows a waiting task afte
 of the line, `activity.cancel {all: true}` empties it, and opening another library drops it: the photos it names
 belong to the old one. At most `MAX_WAITING` (100) tasks wait. Without `queue` a call is refused while its lane is
 busy, as before. A waiting task whose start fails (there is no smart previews folder any more, say) is logged (the app's own, an import or a Synchronize Folder, also says why in a toast) and the next in line goes on.
+A build asked for with `row: false` (no row of its own: the job that asked shows its progress) starts at once when the lane is free. While the lane is busy it is refused, `queue` or not: from the line it would start without holding the lane, and the build behind it would be started at once, refused as running, and lost.
 
 ## Examples in the code
 

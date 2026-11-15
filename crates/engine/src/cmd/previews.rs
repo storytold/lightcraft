@@ -281,8 +281,9 @@ fn build_running(s: &Session, prep: bool) -> bool {
 }
 
 /// A build asked for with `queue`: while one runs (or others already wait) this one waits in line behind them →
-/// `{queued: id, place}`. `None`: nothing is ahead of it, so it starts now. (`prep`: as [`build_running`].)
-fn wait_in_line(s: &Session, c: &str, p: &Value, what: &str, prep: bool, request: &Request) -> Option<Result<Value>> {
+/// `{queued: id, place}`. `None`: nothing is ahead of it, so it starts now. (`prep`: as [`build_running`]; `row`: the
+/// build will have a row of its own, which holds the lane while it runs.)
+fn wait_in_line(s: &Session, c: &str, p: &Value, what: &str, prep: bool, row: bool, request: &Request) -> Option<Result<Value>> {
     if !build_running(s, prep) && !s.activity.lane_waiting(Lane::Previews) {
         return None;
     }
@@ -290,6 +291,11 @@ fn wait_in_line(s: &Session, c: &str, p: &Value, what: &str, prep: bool, request
     // started at once, refused as already running, and lost
     if build_running(s, prep) && !s.activity.lane_busy(Lane::Previews) {
         return Some(Err(bad(c, REFUSED)));
+    }
+    // nor can one that would start from the line without a row of its own: it would not hold the lane, and the build
+    // behind it would be started at once, refused as already running, and lost
+    if !row {
+        return Some(Err(bad(c, "a build with no row of its own can't wait in line: leave out row or queue")));
     }
     if p.get("wait").and_then(Value::as_bool) == Some(true) {
         return Some(Err(bad(c, "a build that waits in line can't also be waited for: leave out wait")));
@@ -604,7 +610,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         s.visible_cloned()
     };
-    if queue && let Some(queued) = wait_in_line(s, C, p, "", background, &request_for(C, p, &ids)) {
+    if queue && let Some(queued) = wait_in_line(s, C, p, "", background, row, &request_for(C, p, &ids)) {
         return queued;
     }
     let jobs: Vec<PhotoJobs> = ids.iter().map(|id| (id.0, jobs_for(s, *id, edge))).filter(|j| !j.1.is_empty()).collect();
@@ -832,7 +838,7 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, REFUSED));
     }
     let what = if discard { "discarding smart previews" } else { "smart previews" };
-    if queue && let Some(queued) = wait_in_line(s, C, p, what, false, &request_for(C, p, &ids)) {
+    if queue && let Some(queued) = wait_in_line(s, C, p, what, false, true, &request_for(C, p, &ids)) {
         return queued;
     }
     let mut jobs: Vec<SmartJob> = Vec::new();
@@ -1042,7 +1048,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Build Previews",
             [],
             None,
-            "{size?: standard (2048 px, or the loupe's size when bigger, or `edge`) | full (1:1), ids?, wait?: bool, force?: bool, from?: id, backward?: bool, background?: bool, row?: bool, queue?: bool} — render the grid thumbnail and loupe view of the selected photos (when more than one is selected; else all in view) into the preview cache (memory and disk), in the background unless `wait`. Photos whose previews are there already (big enough) are skipped unless `force`; the photos nearest `from` go first. `background`: the background preparation's build (two lanes, waits while the photo on screen renders; a build asked for replaces it). `row: false`: no row of its own in the activity stack (the caller's row shows it) → {total, done, failed, skipped, shared, running}. One build runs at a time (this, or Build / Discard Smart Previews in the background; the background preparation gives way to a build asked for): while one runs another is refused, or with queue waits in line for it and starts by itself when the builds ahead of it end → {queued: its activity id, place: 1 = next}. It builds the photos chosen when it was asked; activity.list shows it waiting, activity.cancel takes it out of the line. Not with wait while one runs",
+            "{size?: standard (2048 px, or the loupe's size when bigger, or `edge`) | full (1:1), ids?, wait?: bool, force?: bool, from?: id, backward?: bool, background?: bool, row?: bool, queue?: bool} — render the grid thumbnail and loupe view of the selected photos (when more than one is selected; else all in view) into the preview cache (memory and disk), in the background unless `wait`. Photos whose previews are there already (big enough) are skipped unless `force`; the photos nearest `from` go first. `background`: the background preparation's build (two lanes, waits while the photo on screen renders; a build asked for replaces it). `row: false`: no row of its own in the activity stack (the caller's row shows it) → {total, done, failed, skipped, shared, running}. One build runs at a time (this, or Build / Discard Smart Previews in the background; the background preparation gives way to a build asked for): while one runs another is refused, or with queue waits in line for it and starts by itself when the builds ahead of it end → {queued: its activity id, place: 1 = next}. It builds the photos chosen when it was asked; activity.list shows it waiting, activity.cancel takes it out of the line. Not with wait while one runs, and not with `row: false` (no row would hold the lane for it: refused)",
             always,
             build
         ),
