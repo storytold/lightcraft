@@ -4157,12 +4157,14 @@ fn other_pin_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) 
 }
 
 /// The `(mask_id, component_index)` whose pin is under `q` (within the 10 px pin grab radius),
-/// not counting the active component's own pin.
-fn other_pin_component_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, active_comp: Option<usize>, q: Pos2) -> Option<(u32, usize)> {
+/// preferring the active mask.
+fn hit_pin(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> Option<(u32, usize)> {
     grips
         .iter()
-        .filter(|g| g.2 == 0 && g.3.distance(q) < 10.0 && (Some(g.0) != active || (active_comp.is_some() && Some(g.1) != active_comp)))
-        .min_by(|a, b| a.3.distance(q).total_cmp(&b.3.distance(q)))
+        .filter(|g| g.2 == 0 && g.3.distance(q) < 10.0)
+        .min_by(|a, b| {
+            (Some(a.0) != active, a.3.distance(q)).partial_cmp(&(Some(b.0) != active, b.3.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
+        })
         .map(|g| (g.0, g.1))
 }
 
@@ -4647,7 +4649,7 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
     // and the tool then picks or selects there as usual
     if let Some((_, kind)) = app.ui.mask_new.clone().filter(|(_, k)| (k == "colorRange" || k == "object") && app.ui.tool == *k)
         && (resp.clicked() || resp.drag_started())
-        && resp.interact_pointer_pos().is_none_or(|q| other_pin_at(&grips, app.session.active_mask, q).is_none())
+        && resp.interact_pointer_pos().is_none_or(|q| hit_pin(&grips, app.session.active_mask, q).is_none())
     {
         match app.run_typed("mask.add", json!({"kind": kind})) {
             Ok(_) => {
@@ -4698,6 +4700,7 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
             && let Some(q) = resp.interact_pointer_pos()
         {
             if let Some(mid) = other_pin_at(&grips, app.session.active_mask, q) {
+                app.ui.mask_new = None;
                 let _ = app.run("mask.select", json!({"id": mid}));
                 let has_object =
                     d.masks.iter().find(|m| m.id == mid).is_some_and(|m| m.components.iter().any(|c| matches!(c.shape, MaskShape::Object { .. })));
@@ -4707,6 +4710,7 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
                 return;
             }
             if own_pin_at(&grips, app.session.active_mask, q) {
+                app.ui.mask_new = None;
                 return;
             }
             let n = map.for_mask_id(d, active).norm(q);
@@ -4723,7 +4727,7 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
         return;
     }
     // brush tool
-    if app.ui.tool == "brush" {
+    if app.ui.tool == "brush" && !matches!(app.gesture, Some(Gesture::MaskHandle { .. })) {
         // ⌥ / Alt switches painting and erasing, read every frame; the panel and the [ / ] keys
         // follow it to the eraser's own settings
         app.ui.brush_alt = ui.input(|i| i.modifiers.alt);
@@ -4732,27 +4736,42 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
         // size on the screen, the same at every zoom
         let r0 = crate::state::brush_core_points(set.size);
         let r = r0 * lcc_develop::brush_model::outer_ratio(set.feather as f64) as f32;
+        let is_brush_pin = |mid: u32, ci: usize| {
+            d.masks.iter().find(|m| m.id == mid).and_then(|m| m.components.get(ci)).is_some_and(|c| matches!(c.shape, MaskShape::Brush { .. }))
+        };
+        let pin_target = |q: Pos2| {
+            hit_pin(&grips, app.session.active_mask, q)
+                .filter(|&(mid, ci)| !app.ui.brush_erasing() || Some(mid) != app.session.active_mask || !is_brush_pin(mid, ci))
+        };
         if let Some(h) = resp.hover_pos() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-            // a bold circle round the core, a thin one where the halo ends
-            p.circle_stroke(h, r0, Stroke::new(2.0, Color32::WHITE));
-            if r > r0 + 0.5 {
-                p.circle_stroke(h, r, Stroke::new(1.0, Color32::from_white_alpha(150)));
-            }
-            // the centre, where Auto Mask samples what to follow: a minus while the stroke would
-            // erase (Erase on, or ⌥ / Alt held), a cross while it paints
-            let erasing = app.ui.brush_erasing();
-            if erasing {
-                brush_minus(p, h);
+            if app.gesture.is_none() && pin_target(h).is_some() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
             } else {
-                brush_crosshair(p, h);
+                ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                // a bold circle round the core, a thin one where the halo ends
+                p.circle_stroke(h, r0, Stroke::new(2.0, Color32::WHITE));
+                if r > r0 + 0.5 {
+                    p.circle_stroke(h, r, Stroke::new(1.0, Color32::from_white_alpha(150)));
+                }
+                // the centre, where Auto Mask samples what to follow: a minus while the stroke would
+                // erase (Erase on, or ⌥ / Alt held), a cross while it paints
+                let erasing = app.ui.brush_erasing();
+                if erasing {
+                    brush_minus(p, h);
+                } else {
+                    brush_crosshair(p, h);
+                }
+                register(
+                    ui.ctx(),
+                    if erasing { "brushCursor:erase" } else { "brushCursor:paint" },
+                    Rect::from_center_size(h, vec2(2.0 * r, 2.0 * r)),
+                );
             }
-            register(ui.ctx(), if erasing { "brushCursor:erase" } else { "brushCursor:paint" }, Rect::from_center_size(h, vec2(2.0 * r, 2.0 * r)));
         }
         if app.gesture.is_none()
             && (resp.clicked() || resp.drag_started())
             && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
-            && let Some((mid, ci)) = other_pin_component_at(&grips, app.session.active_mask, app.ui.active_mask_component, q)
+            && let Some((mid, ci)) = pin_target(q)
         {
             if app.session.active_mask != Some(mid) {
                 let _ = app.run("mask.select", json!({"id": mid}));
@@ -4760,10 +4779,30 @@ fn mask_overlay(app: &mut LccApp, ui: &mut egui::Ui, resp: &egui::Response, map:
             app.brush_live = None;
             app.ui.active_mask_component = Some(ci);
             app.ui.mask_new = None;
-            if d.masks.iter().find(|m| m.id == mid).and_then(|m| m.components.get(ci)).is_some_and(|c| matches!(c.shape, MaskShape::Brush { .. })) {
+            if is_brush_pin(mid, ci) {
                 app.ui.brush_erase = false;
             } else {
                 app.ui.tool.clear();
+            }
+            if resp.drag_started() && d.masks.iter().find(|m| m.id == mid).and_then(|m| m.components.get(ci)).is_some() {
+                let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
+                if let Some(original_shape) = current_shape(app, mid, ci)
+                    .or_else(|| d.masks.iter().find(|m| m.id == mid).and_then(|m| m.components.get(ci)).map(|c| c.shape.clone()))
+                {
+                    app.gesture = Some(Gesture::MaskHandle { mask: mid, comp: ci, handle: 0, original_shape: original_shape.clone() });
+                    if resp.dragged()
+                        && let Some(interact_q) = resp.interact_pointer_pos()
+                    {
+                        let map = &current_on_photo(app, mid).map_or_else(|| map.for_mask_id(d, Some(mid)), |on| map.for_mask(on));
+                        let n = map.norm(interact_q);
+                        let press_origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(interact_q);
+                        let n0 = map.norm(press_origin);
+                        let dn = Point::new(n.x - n0.x, n.y - n0.y);
+                        let alt = ui.input(|i| i.modifiers.alt);
+                        let new_shape = moved_shape(&original_shape, 0, dn, n, map, alt);
+                        let _ = app.run("mask.update", json!({"id": mid, "component": ci, "shape": new_shape}));
+                    }
+                }
             }
             return;
         }

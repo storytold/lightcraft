@@ -2929,6 +2929,7 @@ fn trackpad_brush_resize_keeps_cursor_and_is_quick() {
 fn the_brush_tool_selects_the_mask_whose_pin_is_clicked() {
     let mut h = detail("panel.masking");
     h.settle(SETTLE);
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // Mask 1: Brush stroke at (0.3, 0.3)
     exec(&mut h, "tool.brush", json!({"new": true}));
     brush_at(&mut h, 0.3, 0.3);
@@ -2940,6 +2941,31 @@ fn the_brush_tool_selects_the_mask_whose_pin_is_clicked() {
     h.settle(SETTLE);
     assert_eq!(h.app.session.active_mask, Some(1));
     assert_eq!(h.app.ui.tool, "brush");
+
+    // Hovering the active mask's pin shows Move cursor and hides the brush cursor.
+    pointer(&mut h, json!([{"kind": "move", "x": 0.3, "y": 0.3}]));
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::Move, "hovering active mask pin shows Move cursor");
+    assert!(!has(&h, "brushCursor:paint"), "no brush cursor over active pin");
+
+    // Hovering another mask's pin also shows Move cursor and hides the brush cursor.
+    pointer(&mut h, json!([{"kind": "move", "x": 0.7, "y": 0.6}]));
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::Move, "hovering other mask pin shows Move cursor");
+    assert!(!has(&h, "brushCursor:paint"), "no brush cursor over other pin");
+
+    // Hovering away from any pin shows the brush cursor.
+    pointer(&mut h, json!([{"kind": "move", "x": 0.5, "y": 0.5}]));
+    h.step();
+    assert_eq!(h.last_cursor, egui::CursorIcon::None, "canvas hover hides system cursor for brush");
+    assert!(has(&h, "brushCursor:paint"), "brush cursor shown away from pins");
+
+    // Clicking the active mask's own pin does not add a stroke / dab.
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "up", "x": 0.3, "y": 0.3}]));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.tool, "brush");
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "clicking active mask pin did not add a stroke");
 
     // Clicking mask 2's pin selects mask 2, clears the brush tool (radial is not brush), and adds
     // no extra stroke to mask 1.
@@ -2962,12 +2988,67 @@ fn the_brush_tool_selects_the_mask_whose_pin_is_clicked() {
     assert!(h.app.ui.mask_new.is_none());
     assert_eq!(h.app.ui.tool, "brush");
 
+    // Dragging the active Brush pin translates its strokes without adding a new stroke.
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    let p0 = strokes[0].points[0];
+    pointer(
+        &mut h,
+        json!([
+            {"kind": "down", "x": p0.x, "y": p0.y},
+            {"kind": "drag", "x": p0.x + 0.05, "y": p0.y + 0.05},
+            {"kind": "up", "x": p0.x + 0.05, "y": p0.y + 0.05}
+        ]),
+    );
+    h.settle(SETTLE);
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "dragging the pin did not paint a stroke");
+    let p1 = strokes[0].points[0];
+    assert!((p1.x - (p0.x + 0.05)).abs() < 0.01 && (p1.y - (p0.y + 0.05)).abs() < 0.01, "stroke translated: {p0:?} -> {p1:?}");
+    assert_eq!(h.app.ui.tool, "brush");
+    assert!(h.app.gesture.is_none());
+
     // Armed Color Range also refuses to create a new mask when clicking another mask's pin.
     exec(&mut h, "tool.colorRange", json!({"new": true}));
     h.step();
     assert!(h.app.ui.mask_new.is_some());
     pointer(&mut h, json!([{"kind": "down", "x": 0.7, "y": 0.6}, {"kind": "up", "x": 0.7, "y": 0.6}]));
     assert_eq!(develop(&h).masks.len(), 2, "armed Color Range did not add a mask on pin click");
+}
+
+/// Clicking another component's pin on a multi-component mask while Brush is active selects that
+/// component (switching tool if non-Brush, or keeping Brush if Brush) without painting.
+#[test]
+fn brush_tool_selects_another_component_pin_on_same_mask() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    // Mask 1 Component 0: Brush stroke at (0.3, 0.3)
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    brush_at(&mut h, 0.3, 0.3);
+    h.settle(SETTLE);
+    // Add Component 1: Radial at (0.7, 0.7) to Mask 1
+    exec(&mut h, "mask.addComponent", json!({"id": 1, "op": "add", "kind": "radial", "center": [0.7, 0.7], "rx": 0.1, "ry": 0.1}));
+    exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
+    exec(&mut h, "mask.editComponent", json!({"id": 1, "component": 0}));
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.active_mask_component, Some(0));
+    assert_eq!(h.app.ui.tool, "brush");
+
+    // Clicking component 1's pin (0.7, 0.7) switches active component to 1 and clears tool (radial)
+    pointer(&mut h, json!([{"kind": "down", "x": 0.7, "y": 0.7}, {"kind": "up", "x": 0.7, "y": 0.7}]));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.active_mask_component, Some(1));
+    assert_eq!(h.app.ui.tool, "");
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "no extra stroke painted on component 0");
+
+    // Clicking back to component 0's pin (0.3, 0.3) switches back to component 0 without painting
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.3}, {"kind": "up", "x": 0.3, "y": 0.3}]));
+    assert_eq!(h.app.session.active_mask, Some(1));
+    assert_eq!(h.app.ui.active_mask_component, Some(0));
+    assert_eq!(h.app.ui.tool, "");
+    let MaskShape::Brush { strokes } = &develop(&h).masks[0].components[0].shape else { panic!("brush") };
+    assert_eq!(strokes.len(), 1, "no extra stroke painted on component 0");
 }
 
 /// Issue #1161 (Part B): releasing a brush drag commits the stroke before the main render job is
