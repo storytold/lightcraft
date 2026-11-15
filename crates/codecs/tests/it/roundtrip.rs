@@ -618,6 +618,24 @@ fn avif_encode_native() {
 }
 
 #[test]
+fn avif_keeps_exif() {
+    // The ravif path wrote EXIF; the shared encoder must keep it, for 8- and 16-bit input.
+    let img = smooth(16, 12);
+    let exif = minimal_exif(3);
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let wide: Vec<u16> = img.data.iter().flat_map(|p| p.map(|c| u16::from(c) * 257)).collect();
+    for image in [EncodeImage::rgba8(&img), EncodeImage::new(16, 12, 4, Samples::U16(&wide))] {
+        let r = encode_avif(&image, 70, 10, &meta);
+        if cfg!(feature = "avif") {
+            let b = r.unwrap();
+            assert!(b.windows(exif.len()).any(|w| w == &exif[..]), "EXIF missing from the AVIF");
+        } else {
+            assert!(r.is_err());
+        }
+    }
+}
+
+#[test]
 fn raw_routing() {
     let mut b = b"II*\0\x08\0\0\0".to_vec();
     b.extend_from_slice(&1u16.to_le_bytes());

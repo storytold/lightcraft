@@ -20,6 +20,7 @@ craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d
 jixel = "=0.3.4"
 # Photo metadata: EXIF, IPTC-IIM, XMP packets and GPX track logs (craft-libs#949)
 craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+# AVIF EXIF, alpha quality and BT.2408 HLG levels (craft-libs#1448).
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d3c6fad3d613af2a30b35c3bc9f4c0f" }
 craft-video = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d3c6fad3d613af2a30b35c3bc9f4c0f", features = ["av1", "av1-large-encode"] }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
