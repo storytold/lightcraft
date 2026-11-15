@@ -45,6 +45,9 @@ Library → Validate DNG Files checks the selected DNGs' raw data against their 
 
 ## The catalog won't open
 
+- After an update the app first shows *Opening your catalog* while it makes and checks a safety copy of the
+  catalog (the progress bar moves by the copy's bytes); on a large catalog this takes a little while and is
+  normal, not a hang. A catalog that still can't be opened ends at the usual window offering Try Again.
 - "This library is already open in …": another running program holds the library's lock (the message names the
   process and computer). Close it there. A `catalog.lock` file left by a crash doesn't block anything: the
   operating system releases the lock when the process ends.

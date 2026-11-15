@@ -1047,7 +1047,9 @@ fn migrate_legacy_surface_file() {
 }
 
 /// A session with no library yet (one opens later), with the folders face models and slideshow
-/// templates are kept in.
+/// templates are kept in. The library itself opens on a worker thread once the window shows
+/// ([`lcc_ui_egui::panels::library_problem::start_open`]), so like every launch it answers
+/// control requests off the interface's thread and saves presets off it.
 fn unopened_session() -> Session {
     let mut s = Session::new()
         .with_fs()
@@ -1060,6 +1062,10 @@ fn unopened_session() -> Session {
     s.ml_models_dir = lcc_engine::config::default_ml_models_dir();
     s.lens_db = lcc_engine::lens_download::LensSettings::load(lcc_engine::config::config_dir());
     s.slide_templates_dir = lcc_engine::config::config_dir().map(|d| d.join(lcc_engine::slide_template::DIR_NAME));
+    // Control requests are answered on the UI thread: Add to Apple Photos must not wait there.
+    // presets.json (40 MB for an imported Lightroom collection) is saved off the UI thread.
+    s.apple_photos_background = true;
+    s.background_saves = true;
     s
 }
 
@@ -1082,6 +1088,30 @@ fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool, may_create: b
     // presets.json (40 MB for an imported Lightroom collection) is saved off the UI thread
     s.background_saves = true;
     (s, problem)
+}
+
+/// If the library can't be opened at all, why — the quick checks of [`open_library_session`]
+/// that read nothing but the folder: no folder to keep a catalog in, or a remembered library
+/// that isn't there any more, whose place must never get an empty new library made in it. The
+/// app can tell this before it opens the catalog on a worker thread.
+fn launch_problem(dir: Option<&std::path::PathBuf>, may_create: bool) -> Option<LibraryProblem> {
+    let Some(dir) = dir else {
+        log::warn!("no library location (set --library or {})", lcc_brand::env_var("LIBRARY"));
+        return Some(LibraryProblem::new("", "There is no home folder to keep the catalog in. Choose a folder for it."));
+    };
+    // a library the settings remember (or the default location) is opened, never created: on a drive that isn't
+    // connected its folder is missing, and opening it would make an empty library there, with demo photos, that
+    // the user then edits and adds to instead of the real one (upstream #3322). `--library` may create.
+    if !may_create && !lcc_engine::library::is_library(&lcc_engine::library::resolve_dir(dir).unwrap_or_else(|_| dir.clone())) {
+        log::warn!("the remembered library {} isn't there; not creating one", dir.display());
+        let mut problem = LibraryProblem::new(
+            dir.to_string_lossy(),
+            format!("{}: no catalog found here (is its drive connected, or was it moved or renamed?)", dir.display()),
+        );
+        problem.never_create = true;
+        return Some(problem);
+    }
+    None
 }
 
 /// The persistent library session, or with `--memory` an in-memory one (demo photos).
@@ -1111,22 +1141,11 @@ fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, seed_d
             .with_system_clock()
             .with_default_app_store()
     };
-    let Some(dir) = dir else {
-        log::warn!("no library location (set --library or {})", lcc_brand::env_var("LIBRARY"));
-        return (unopened(), Some(LibraryProblem::new("", "There is no home folder to keep the catalog in. Choose a folder for it.")));
-    };
-    // a library the settings remember (or the default location) is opened, never created: on a drive that isn't
-    // connected its folder is missing, and opening it would make an empty library there, with demo photos, that
-    // the user then edits and adds to instead of the real one (upstream #3322). `--library` may create.
-    if !may_create && !lcc_engine::library::is_library(&lcc_engine::library::resolve_dir(&dir).unwrap_or_else(|_| dir.clone())) {
-        log::warn!("the remembered library {} isn't there; not creating one", dir.display());
-        let mut problem = LibraryProblem::new(
-            dir.to_string_lossy(),
-            format!("{}: no catalog found here (is its drive connected, or was it moved or renamed?)", dir.display()),
-        );
-        problem.never_create = true;
+    if let Some(problem) = launch_problem(dir.as_ref(), may_create) {
         return (unopened(), Some(problem));
     }
+    // dir is Some here: launch_problem returned None
+    let dir = dir.unwrap_or_default();
     let t0 = std::time::Instant::now();
     let mut s = unopened();
     match s.open_library(&dir, seed_demo) {
@@ -1535,8 +1554,20 @@ fn main() -> eframe::Result {
                 came_up_app.store(true, std::sync::atomic::Ordering::Relaxed);
                 // an older catalog is upgraded on a worker thread once the window shows, with progress
                 let upgrade = library_dir.clone().filter(|d| !in_memory && lcc_engine::library::needs_migration(d));
+                // any other on-disk library opens there too: the open ran here, before the first
+                // frame, where a store an update left in an older format (its byte-verified backup
+                // copy) or simply a large one being read kept the window silent — as an import of a
+                // large folder once did (issue #374)
+                let deferred_open = upgrade.is_none() && welcome.is_none() && !in_memory && matches!(launch, Launch::Open { dir: Some(_), .. });
+                let open_dir = match (&launch, deferred_open) {
+                    (Launch::Open { dir: Some(d), .. }, true) => Some(d.clone()),
+                    _ => None,
+                };
                 let (mut session, mut problem) = if upgrade.is_some() || welcome.is_some() {
                     (unopened_session(), None)
+                } else if deferred_open {
+                    // why it can't be opened at all, told now; the rest is the worker's to find
+                    (unopened_session(), launch_problem(open_dir.as_ref(), explicit_given))
                 } else {
                     open_session(in_memory, &launch, seed_demo && files.is_empty(), explicit_given)
                 };
@@ -1578,8 +1609,10 @@ fn main() -> eframe::Result {
                 // the start-up update check, when the user turned it on (off by default)
                 app.startup_update_check = startup_update_check(keeps_settings, no_update_check);
                 // an empty library opens where Import is offered (a grid, with the sidebar); before
-                // the snapshot below, so this alone isn't written to the settings file
-                if problem.is_none() && files.is_empty() {
+                // the snapshot below, so this alone isn't written to the settings file. One whose
+                // open runs on a worker (a format upgrade, or the deferred open) is told after it
+                // opens, so a library with photos keeps the view it was left in
+                if problem.is_none() && files.is_empty() && upgrade.is_none() && open_dir.is_none() {
                     lcc_ui_egui::panels::empty_library::open_on_empty_library(&mut app);
                 }
                 // what's on disk now: only changes are written
@@ -1645,6 +1678,12 @@ fn main() -> eframe::Result {
                     app.catalog_ui.pending_import = files;
                 } else if let Some(dir) = upgrade {
                     lcc_ui_egui::panels::library_problem::start_upgrade(&mut app, dir, files);
+                } else if let Some(dir) = open_dir.filter(|_| problem.is_none()) {
+                    // the catalog opens on the worker once the window shows: "Opening your
+                    // catalog", with the progress of a format upgrade on the way. Files from the
+                    // command line wait for it, as behind the upgrade window
+                    let demo = seed_demo && files.is_empty();
+                    lcc_ui_egui::panels::library_problem::start_open(&mut app, dir, files, demo, opened_by_argument);
                 } else if let Some(mut p) = problem {
                     // imported once the user has chosen where (into the library, or the temporary session)
                     p.pending_import = files;

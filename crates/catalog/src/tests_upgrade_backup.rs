@@ -122,3 +122,70 @@ fn a_damaged_older_catalog_is_refused_before_anything_is_written() {
         assert!(!s.path().join(DB_FILE).exists(), "a refused migration writes no store");
     }
 }
+
+/// A store an update left in an older format is brought to the current one without opening the
+/// library ([`library::prepare_upgrade`]) — what the app runs on a worker thread once its window
+/// is up, so the open never blocks the first frame — keeping the verified copy and marking the
+/// version as the open itself would, with the copy's bytes as progress.
+#[test]
+fn an_older_store_is_bumped_with_progress_before_the_open() {
+    let s = older_store("prepare-bump", Some("17"));
+    // the entry file padded (trailing spaces keep it the JSON it was; nothing in this flow reads
+    // it), so the byte-verified copy spans several chunks and its progress is surely seen from
+    // another thread
+    if let Some(entry) = library::find_entry(s.path()) {
+        let mut body = std::fs::read_to_string(&entry).unwrap_or_default();
+        body.push_str(&" ".repeat(8 << 20));
+        std::fs::write(&entry, body).unwrap();
+    }
+    // progress is visible from another thread while it runs (other tests may upgrade too: only
+    // this library's reports count), and never goes backwards
+    let ours = s.path().display().to_string();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let (stop, ours) = (stop.clone(), ours.clone());
+        std::thread::spawn(move || {
+            let (mut seen, mut furthest) = (Vec::new(), -1.0f32);
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                if let Some(p) = crate::progress::migration().filter(|p| p.library == ours) {
+                    assert!((0.0..=1.0).contains(&p.fraction()), "{p:?}");
+                    assert!(p.fraction() >= furthest, "progress went backwards: {p:?}");
+                    furthest = p.fraction();
+                    assert!(!p.describe().is_empty());
+                    if seen.last() != Some(&p.phase) {
+                        seen.push(p.phase);
+                    }
+                }
+                std::thread::yield_now();
+            }
+            seen
+        })
+    };
+    assert!(library::prepare_upgrade(s.path()).unwrap());
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let seen = watcher.join().unwrap();
+    assert_eq!(stored_meta(s.path(), "version"), Some(VERSION.to_string()), "the store is upgraded");
+    assert_eq!(kept(s.path(), "before-v").len(), 1, "the older build's files are kept");
+    assert_eq!(seen.first(), Some(&crate::progress::MigrationPhase::Backup), "no progress reported: {seen:?}");
+    assert!(crate::progress::migration().is_none_or(|p| p.library != ours), "progress left behind");
+    // again: nothing to do, and the open that follows is a plain one in the current format
+    assert!(!library::prepare_upgrade(s.path()).unwrap());
+    assert_eq!(kept(s.path(), "before-v").len(), 1, "no second copy");
+    let (j, c, r) = open(s.path()).unwrap();
+    drop(j);
+    assert_eq!((r.upgraded_from, c.len()), (None, 3));
+}
+
+/// A store that isn't one is an error naming the backups, not a panic, and nothing is written;
+/// the progress it might have started is cleared.
+#[test]
+fn a_damaged_store_is_refused_by_the_prepare_step() {
+    let s = older_store("prepare-damaged", Some("17"));
+    let ours = s.path().display().to_string();
+    std::fs::write(s.path().join(DB_FILE), b"not a redb file at all").unwrap();
+    let e = library::prepare_upgrade(s.path()).err().expect("refused");
+    assert!(matches!(e, CatalogError::Corrupt(_) | CatalogError::Io(_)), "{e:?}");
+    assert_eq!(std::fs::read(s.path().join(DB_FILE)).unwrap(), b"not a redb file at all");
+    assert!(kept(s.path(), "before-v").is_empty() && kept(s.path(), ".before-v").is_empty(), "nothing written");
+    assert!(crate::progress::migration().is_none_or(|p| p.library != ours), "progress left behind");
+}

@@ -18,7 +18,7 @@ import Shot from '../../../components/Shot.astro';
 - **Edit ▸ Library Settings…**: backup schedule (never, every exit, daily, weekly, monthly) and folder, integrity test, standard preview size, discard 1:1 previews.
 - **Export as Library…**: selected or all photos, with or without originals and previews.
 - **Import from Another Library…**: merge it back, with a change preview.
-- Older catalogs are upgraded in place after a verified copy in `backups/`; a failure leaves the old version intact.
+- Older catalogs are upgraded in place after a verified copy in `backups/`; a failure leaves the old version intact. The upgrade runs after the window appears, behind a small **Upgrading your catalog** (a v3 catalog) or **Opening your catalog** window with a progress bar; the bar moves by the bytes of the safety copy, which on a large catalog takes a little while after an update.
 - Scale: hundreds of thousands of photos open in about a second.
 - Everything is undoable; catalog data is separate from your files, which are never changed without your say.
 - **Previews** (**Library ▸ Previews**): build standard or 1:1 previews of selected photos, discard 1:1 previews.
