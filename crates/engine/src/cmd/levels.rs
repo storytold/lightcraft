@@ -98,20 +98,22 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"channel": channel}))
 }
 
-/// The proxy of the active photo with the Levels neutral, as 8-bit encoded pixels.
-fn render_before(s: &mut Session, c: &str) -> Result<lcc_raster::Rgba8> {
-    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
-    let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(c, e))?;
+/// The histogram of the active photo as the Levels receive it (Levels and later stages neutral), counted on a small
+/// proxy: what the tool draws behind its markers.
+pub fn input_histogram(s: &mut Session) -> Result<lcc_raster::Histogram> {
+    const C: &str = "levels.histogram";
+    let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+    let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(C, e))?;
     let info = s.source_info(id);
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     before_levels(&mut d);
     let req = lcc_pipeline::RenderRequest::fit(HISTOGRAM_EDGE, HISTOGRAM_EDGE);
-    Ok(lcc_pipeline::render(&src, &info, &d, &req).image)
+    let img = lcc_pipeline::render(&src, &info, &d, &req).image;
+    Ok(lcc_raster::Histogram::of_srgb8(&img))
 }
 
 fn histogram(s: &mut Session, _p: &Value) -> Result<Value> {
-    let img = render_before(s, "levels.histogram")?;
-    let h = lcc_raster::Histogram::of_srgb8(&img);
+    let h = input_histogram(s)?;
     Ok(json!({"r": h.r, "g": h.g, "b": h.b, "luma": h.luma, "total": h.total}))
 }
 

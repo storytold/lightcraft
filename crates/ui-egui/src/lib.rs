@@ -324,6 +324,8 @@ mod tests_layout_image;
 #[cfg(test)]
 mod tests_lens_db;
 #[cfg(test)]
+mod tests_levels;
+#[cfg(test)]
 mod tests_library_grid;
 #[cfg(test)]
 mod tests_library_problem;

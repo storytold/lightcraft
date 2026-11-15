@@ -2550,7 +2550,7 @@ impl SyncCounts {
 /// (Point Color, Color Range). The white balance picker is left out: it puts itself away after one pick and keeps
 /// working across panels (W).
 pub fn is_picker(tool: &str) -> bool {
-    tool.starts_with("tat:") || matches!(tool, "pointColor" | "colorRange")
+    tool.starts_with("tat:") || matches!(tool, "pointColor" | "colorRange" | "levelsBlack" | "levelsWhite")
 }
 
 impl Default for UiState {
@@ -2898,6 +2898,12 @@ impl UiState {
             self.picker_armed_in = None;
             return;
         }
+        // the Levels pickers also end when the Levels section is closed
+        if matches!(self.tool.as_str(), "levelsBlack" | "levelsWhite") && !self.section_open("levels") {
+            self.tool.clear();
+            self.picker_armed_in = None;
+            return;
+        }
         let here = self.picker_layout();
         match &self.picker_armed_in {
             Some(armed) if *armed != here => {
@@ -2911,7 +2917,9 @@ impl UiState {
 
     /// A slider (or dial) was touched: a picker armed is put away.
     pub fn put_away_picker(&mut self) {
-        if is_picker(&self.tool) {
+        // the Levels pickers stay armed while its sliders and boxes are used: Esc, a second click, the other picker or
+        // leaving the section ends them
+        if is_picker(&self.tool) && !matches!(self.tool.as_str(), "levelsBlack" | "levelsWhite") {
             self.tool.clear();
             self.picker_armed_in = None;
         }

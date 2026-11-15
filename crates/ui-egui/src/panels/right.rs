@@ -1694,9 +1694,10 @@ fn activity(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// The heading of a History group: its Develop section, or for a step that spans several sections
 /// (a preset, paste, sync…) the step itself.
-fn group_title(section: Option<&str>, step_label: &str, presets: &[lcc_develop::Preset]) -> String {
+pub(crate) fn group_title(section: Option<&str>, step_label: &str, presets: &[lcc_develop::Preset]) -> String {
     let name = match section {
         Some("basic") => "Basic",
+        Some("levels") => "Levels",
         Some("curve") => "Tone Curve",
         Some("color") => "Color",
         Some("grading") => "Color Grading",
