@@ -45,3 +45,30 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     check_size(F, w as u64, h as u64, &DecodeOptions::default())?;
     Ok((w, h, orientation))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn exif_orientation_mutation_parity() {
+        let exif = crate::exif::minimal_exif(6);
+        let image = crate::encode::EncodeImage::new(2, 3, 3, crate::encode::Samples::U8(&[80; 18]));
+        let base = crate::encode::encode_webp_lossless(&image, &crate::encode::EncodeMeta { exif: Some(&exif), ..Default::default() }).unwrap();
+        let marker = base.windows(4).position(|v| v == b"EXIF").unwrap();
+        for at in 0..exif.len() {
+            for value in [0, 255] {
+                let mut data = exif.clone();
+                data[at] = value;
+                let mut webp = base.clone();
+                webp[marker + 8..marker + 8 + data.len()].copy_from_slice(&data);
+                if let Ok((w, h)) = craft_image_codecs::probe_size(&webp) {
+                    let orientation = crate::exif::summarize(&data).orientation.unwrap_or(1);
+                    let (w, h) = if (5..=8).contains(&orientation) { (h, w) } else { (w, h) };
+                    assert_eq!(header(&webp).unwrap(), (w, h, orientation), "at {at}, value {value}");
+                } else {
+                    assert!(header(&webp).is_err());
+                }
+            }
+        }
+    }
+}
