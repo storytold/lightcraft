@@ -3,18 +3,18 @@
 // Own design, following the CLIP paper's pre-norm transformer (Radford et al. 2021); `clip.rs` is the host side.
 
 struct Params {
-    rows: u32,     // matrix rows (batch * sequence)
-    k: u32,        // input width (linear, layernorm)
-    n: u32,        // output width (linear)
-    flags: u32,    // linear: 1 = GELU, 2 = add into `o` (residual)
+    rows: u32,     // matrix rows (batch * sequence, or batch for post-pooling)
+    k: u32,        // input width (linear, layernorm, hidden)
+    n: u32,        // output width (linear, or vocab_size for text_embed)
+    flags: u32,    // linear: 1 = GELU, 2 = add into `o` (residual); gather: 0 = CLS, 1 = EOT
     heads: u32,
     seq: u32,
     head_dim: u32,
     causal: u32,
     eps: f32,
     scale: f32,
-    _a: u32,
-    _b: u32,
+    patch_size: u32,
+    grid_w: u32,
 }
 
 @group(0) @binding(0) var<uniform> p: Params;
@@ -175,5 +175,104 @@ fn attention(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_ind
             acc = acc + sc[j] * c[(item * p.seq + j) * width + off + d];
         }
         o[qbase + d] = acc / total;
+    }
+}
+
+// Vision patch embedding + class/position embeddings:
+// a = preprocessed images [batch, 3, H, W], b = patch_weight [hidden, 3, patch_size, patch_size],
+// c = pos_with_cls [seq, hidden] (row 0 = class_embedding + position_embedding[0]), o = [batch * seq, hidden].
+@compute @workgroup_size(256)
+fn patch_embed(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) l: u32) {
+    let row = wg.x;
+    let seq = p.seq;
+    let b_idx = row / seq;
+    let t = row % seq;
+    let hidden = p.k;
+    let patch_size = p.patch_size;
+    let grid_w = p.grid_w;
+    let out_base = row * hidden;
+
+    if (t == 0u) {
+        for (var i = l; i < hidden; i = i + 256u) {
+            o[out_base + i] = c[i];
+        }
+        return;
+    }
+
+    let p_idx = t - 1u;
+    let py = p_idx / grid_w;
+    let px = p_idx % grid_w;
+    let y0 = py * patch_size;
+    let x0 = px * patch_size;
+    let grid_h = (seq - 1u) / grid_w;
+    let img_h = grid_h * patch_size;
+    let img_w = grid_w * patch_size;
+    let patch_area = patch_size * patch_size;
+    let patch_floats = 3u * patch_area;
+    let img_plane = img_h * img_w;
+
+    for (var d = l; d < hidden; d = d + 256u) {
+        var acc = 0.0;
+        let w_d_base = d * patch_floats;
+        for (var ch = 0u; ch < 3u; ch = ch + 1u) {
+            let img_ch_base = (b_idx * 3u + ch) * img_plane;
+            let w_ch_base = w_d_base + ch * patch_area;
+            for (var u = 0u; u < patch_size; u = u + 1u) {
+                let img_row = (y0 + u) * img_w + x0;
+                let w_row = u * patch_size;
+                for (var v = 0u; v < patch_size; v = v + 1u) {
+                    acc = acc + a[img_ch_base + img_row + v] * b[w_ch_base + w_row + v];
+                }
+            }
+        }
+        o[out_base + d] = acc + c[t * hidden + d];
+    }
+}
+
+// Text token embedding + position embedding:
+// a = token_ids ([batch * seq], bitcast<u32>), b = token_embedding [vocab_size, hidden],
+// c = position_embedding [seq, hidden], o = [batch * seq, hidden].
+@compute @workgroup_size(256)
+fn text_embed(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) l: u32) {
+    let row = wg.x;
+    let s = row % p.seq;
+    let tok = bitcast<u32>(a[row]);
+    let hidden = p.k;
+    let vocab_size = p.n;
+    var tok_base = 0u;
+    var valid = false;
+    if (tok < vocab_size) {
+        tok_base = tok * hidden;
+        valid = true;
+    }
+    let pos_base = s * hidden;
+    let out_base = row * hidden;
+    for (var i = l; i < hidden; i = i + 256u) {
+        var tv = 0.0;
+        if (valid) {
+            tv = b[tok_base + i];
+        }
+        o[out_base + i] = tv + c[pos_base + i];
+    }
+}
+
+// Gather one token per sequence for pooling:
+// a = input [batch * seq, hidden], b = eot_indices ([batch], bitcast<u32>) when flags != 0, o = [batch, hidden].
+@compute @workgroup_size(256)
+fn gather(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_index) l: u32) {
+    let b_idx = wg.x;
+    let hidden = p.k;
+    let seq = p.seq;
+    var idx = 0u;
+    if (p.flags != 0u) {
+        idx = bitcast<u32>(b[b_idx]);
+        if (idx >= seq) {
+            idx = seq - 1u;
+        }
+    }
+    let in_base = (b_idx * seq + idx) * hidden;
+    let out_base = b_idx * hidden;
+    for (var i = l; i < hidden; i = i + 256u) {
+        o[out_base + i] = a[in_base + i];
     }
 }
