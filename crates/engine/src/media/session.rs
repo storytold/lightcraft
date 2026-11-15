@@ -82,6 +82,10 @@ impl crate::Session {
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(super::decoder_cache_version(&format));
+            // (likewise an ORF decode whose sensor pixels were withdrawn: the cached thumb must not stand in)
+            if decoder != 0 {
+                k.str("decoder").u64(decoder);
+            }
             with_process(&mut k, &settings).u64(crate::camera_profiles::cache_key());
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
@@ -157,12 +161,17 @@ impl crate::Session {
             Source::File { path } => path.split('.').last().map(|ext| ext.to_ascii_uppercase()).unwrap_or_default(),
             _ => String::new(),
         };
+        let decoder = super::quick::decoder_key(p);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("variant")
             .u64(settings.hash64() ^ crate::files::hot_pixel_key(settings))
             .u64(edge as u64)
             .u64(super::decoder_cache_version(&format));
+            // (likewise an ORF decode whose sensor pixels were withdrawn: the cached variant must not stand in)
+            if decoder != 0 {
+                k.str("decoder").u64(decoder);
+            }
         with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
         if profile_salt != 0 {
             k.str("dcp").u64(profile_salt);
@@ -293,12 +302,17 @@ impl crate::Session {
             Source::File { path } => path.split('.').last().map(|ext| ext.to_ascii_uppercase()).unwrap_or_default(),
             _ => String::new(),
         };
+        let decoder = super::quick::decoder_key(p);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop))
             .u64(apply_crop as u64)
             .u64(super::decoder_cache_version(&format));
+            // (likewise an ORF decode whose sensor pixels were withdrawn: the cached view must not stand in)
+            if decoder != 0 {
+                k.str("decoder").u64(decoder);
+            }
         with_process(&mut k, &p.develop).u64(crate::camera_profiles::cache_key());
         if salt != 0 {
             k.u64(salt);
