@@ -105,10 +105,10 @@ fn cr3_file(coding: &[u8], sample: &[u8]) -> Vec<u8> {
     let trak = box_bytes(b"trak", &box_bytes(b"mdia", &box_bytes(b"minf", &box_bytes(b"stbl", &tables))));
     let mut file = box_bytes(b"ftyp", b"crx \0\0\0\x01crx isom");
     file.extend(box_bytes(b"moov", &trak));
-    let offset = file.len();
-    file.extend_from_slice(sample);
-    let at = file.len() - sample.len() - 8; // the co64 offset field ends the moov
+    let at = file.len() - 8; // the co64 offset field ends the moov
+    let offset = file.len() + 8; // samples belong to the mdat payload, after its header
     file[at..at + 8].copy_from_slice(&u64::try_from(offset).unwrap().to_be_bytes());
+    file.extend(box_bytes(b"mdat", sample));
     file
 }
 
