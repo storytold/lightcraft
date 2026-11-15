@@ -244,39 +244,9 @@ pub(crate) fn embedded_thumbnail(bytes: &[u8], max_edge: u32, min_edge: u32) -> 
 /// MP type code of a gain map image (CIPA DC-007 entry attribute, low 24 bits).
 pub(crate) const MPF_GAIN_MAP: u32 = 0x05_0000;
 
-/// An MPF-listed image other than the primary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct MpfEntry {
-    /// File offset and length of the image.
-    pub offset: usize,
-    pub len: usize,
-    /// MP type code (attribute low 24 bits).
-    pub kind: u32,
-}
-
 /// The MPF-listed images other than the primary.
-pub(crate) fn mpf_images(m: &Markers) -> Vec<MpfEntry> {
-    let Some((base, data)) = &m.mpf else { return vec![] };
-    let Some(t) = exif::Tiff::new(data) else { return vec![] };
-    let Some(ifd) = t.first_ifd() else { return vec![] };
-    let Some((entries, _)) = t.ifd(ifd) else { return vec![] };
-    let Some(e) = entries.iter().find(|e| e.tag == 0xB002) else { return vec![] };
-    let Some(list) = t.bytes(e) else { return vec![] };
-    let mut out = Vec::new();
-    for (i, rec) in list.as_chunks::<16>().0.iter().enumerate().take(16) {
-        if i == 0 {
-            continue;
-        }
-        let rd = |o: usize| {
-            let a = [rec[o], rec[o + 1], rec[o + 2], rec[o + 3]];
-            if data.starts_with(b"II") { u32::from_le_bytes(a) } else { u32::from_be_bytes(a) }
-        };
-        let (attr, size, off) = (rd(0), rd(4) as usize, rd(8) as usize);
-        if size > 0 && off > 0 {
-            out.push(MpfEntry { offset: base.saturating_add(off), len: size, kind: attr & 0x00FF_FFFF });
-        }
-    }
-    out
+pub(crate) fn mpf_images(m: &Markers) -> Vec<craft_metadata::mpf::MpfImage> {
+    m.mpf.as_ref().map_or_else(Vec::new, |(base, data)| craft_metadata::mpf::images_from_index(data, *base))
 }
 
 /// Decode to the file's 8-bit samples as stored (no colour management): 1 channel for greyscale
