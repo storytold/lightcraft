@@ -357,7 +357,7 @@ fn transpose(p: &Plane) -> Plane {
 }
 
 /// Detail scale of the highlights/shadows base from process V2, as a fraction of the long edge:
-/// the base is the edge-aware filter of the [`median_hv`] of log luminance at this radius, so
+/// the base is the edge-aware filter of log luminance without its detail at this radius, so
 /// twigs, lines and fine texture brighter or darker than their surroundings take their
 /// surroundings' shift (and keep their contrast, as with Exposure) while region boundaries stay
 /// sharp (no halos). V1's base is the edge-aware filter of log luminance itself (issue #632).
@@ -375,17 +375,76 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => base_detail_radius(px_per_long),
     }
 }
 
 /// The highlights/shadows base layer of log luminance `l`: the fast guided filter ([`BASE_EPS`])
-/// of its [`median_hv`] at `detail` px ([`tone_base_detail`]); at 0, of `l` itself (V1).
-pub fn tone_base(l: &Plane, sigma: f32, detail: usize) -> Plane {
+/// at `detail` px ([`tone_base_detail`]) of its [`detail_free`] plane when `keeps_gaps`
+/// ([`base_keeps_gaps`], V8 on), else of its [`median_hv`] (V2 to V7); at 0, of `l` itself (V1).
+pub fn tone_base(l: &Plane, sigma: f32, detail: usize, keeps_gaps: bool) -> Plane {
     if detail == 0 {
         return guided_fast(l, sigma, BASE_EPS);
     }
-    guided_fast(&median_hv(l, detail), sigma, BASE_EPS)
+    let m = if keeps_gaps { detail_free(l, detail) } else { median_hv(l, detail) };
+    guided_fast(&m, sigma, BASE_EPS)
+}
+
+/// Downscale factor of the coarse median in [`detail_free`]: its radius at full size is this many
+/// times the fine one's.
+pub const BASE_COARSE_STEP: usize = 3;
+
+/// Log luminance `l` without detail finer than `r` px (the highlights/shadows base of process V8
+/// on takes its edge-aware filter): each value moves toward its [`median_hv`] at `r` only as far as the
+/// median of a [`BASE_COARSE_STEP`]× wider neighbourhood agrees (`l` clamped between the two).
+/// A twig, line or speck in an even surround has both medians on the surround's side and takes
+/// its tone, as #632 wants. The gap between two letter strokes, which a median at `r` fills with the
+/// strokes' tone, sits in a wider neighbourhood mostly of the panel's tone: the two medians
+/// disagree and the gap keeps its own. The coarse median is taken at `r` of a box-downscaled copy and
+/// enlarged bilinearly, like [`guided_fast`]'s coefficients.
+pub fn detail_free(l: &Plane, r: usize) -> Plane {
+    use lightcraft_raster::resample::{Filter, resize};
+    if r == 0 || l.data.is_empty() {
+        return l.clone();
+    }
+    let (w, h) = (l.width, l.height);
+    let (lw, lh) = (w.div_ceil(BASE_COARSE_STEP).max(1), h.div_ceil(BASE_COARSE_STEP).max(1));
+    if (lw, lh) == (w, h) {
+        // nothing to downscale: both medians are the same
+        return median_hv(l, r);
+    }
+    let lo = median_hv(&resize(l, lw, lh, Filter::Box), r);
+    // The bilinear enlargement of `lo` (`resize`'s horizontal pass, then its vertical pass taken
+    // row by row with the same sums) is clamped into `out` as it is made, not stored.
+    let wide = resize(&lo, w, lh, Filter::Bilinear);
+    let wy = lightcraft_raster::resample::weights(lh, h, Filter::Bilinear);
+    let mut out = median_hv(l, r);
+    for_rows(&mut out.data, w, |y, row| {
+        let Some((y0, ws)) = wy.get(y) else { return };
+        let mut coarse = vec![0.0f32; w];
+        for (k, &wt) in ws.iter().enumerate() {
+            let Some(t) = wide.data.get((y0 + k) * w..(y0 + k + 1) * w) else { continue };
+            for (c, &v) in coarse.iter_mut().zip(t) {
+                *c += v * wt;
+            }
+        }
+        for ((o, &v), &c) in row.iter_mut().zip(l.row(y)).zip(&coarse) {
+            *o = clamp_between(v, *o, c);
+        }
+    });
+    out
+}
+
+/// `v` clamped between `a` and `b` (in either order); a NaN bound is ignored, not a panic.
+fn clamp_between(v: f32, a: f32, b: f32) -> f32 {
+    let (lo, hi) = (a.min(b), a.max(b));
+    if v < lo {
+        lo
+    } else if v > hi {
+        hi
+    } else {
+        v
+    }
 }
 
 /// Subsampling step of [`guided_fast`] for `sigma` (1 = no subsampling: the plain guided filter).
@@ -638,6 +697,12 @@ pub fn sharpen_key(s: &DevelopSettings, sigma: f32) -> SharpenKey {
     (sigma.to_bits(), s.process.process())
 }
 
+/// Whether `s`'s highlights/shadows base takes [`detail_free`] (process V8 on) instead of V2's plain
+/// [`median_hv`] (V2 to V7, which shipped with it and stay frozen).
+pub fn base_keeps_gaps(s: &DevelopSettings) -> bool {
+    s.process.process() >= Process::V8
+}
+
 pub fn pixel_sharpen(s: &DevelopSettings) -> bool {
     s.process.process() >= Process::V3
 }
@@ -677,7 +742,7 @@ pub const CHROMA_SIGMA: f32 = 0.004;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PlaneSigmas {
     /// Edge-aware base for highlights/shadows ([`tone_base`]: fast guided filter, [`BASE_EPS`]; from
-    /// process V2 of the [`BASE_DETAIL`] median).
+    /// process V2 of a median at [`BASE_DETAIL`], from V8 of a detail-free plane).
     pub base: Option<f32>,
     /// Median radius (px) of that base ([`tone_base_detail`]: 0 under V1).
     pub base_detail: usize,
@@ -806,7 +871,7 @@ pub(crate) fn prepare(
     });
     let l = &log_l;
     let (base, (clarity_blur, ((texture_blur, sharpen_blur), dark))) = par_join(
-        || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail)))),
+        || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail, base_keeps_gaps(s))))),
         || {
             par_join(
                 || clarity_sigma.map(|sg| plane_at(sc, sg.to_bits(), || timed("clarity", || guided_fast(l, sg, CLARITY_EPS)))),
@@ -1309,6 +1374,50 @@ mod tests {
 mod fast_tests {
     use super::*;
 
+    /// [`detail_free`] enlarges the coarse median as it clamps; the result is the plain
+    /// composition of `resize` and [`median_hv`], bit for bit.
+    #[test]
+    fn detail_free_matches_its_reference() {
+        use lightcraft_raster::resample::{Filter, resize};
+        for (w, h) in [(1, 1), (2, 1), (3, 3), (4, 7), (61, 47), (200, 31)] {
+            let p = Plane::from_fn(w, h, |x, y| ((x * 37 + y * 101) % 23) as f32 * 0.4 - 4.0 + if (x / 5 + y / 7) % 2 == 0 { 2.0 } else { 0.0 });
+            for r in [1, 2, 5, 10] {
+                let fine = median_hv(&p, r);
+                let (lw, lh) = (w.div_ceil(BASE_COARSE_STEP), h.div_ceil(BASE_COARSE_STEP));
+                let coarse = resize(&median_hv(&resize(&p, lw, lh, Filter::Box), r), w, h, Filter::Bilinear);
+                let want: Vec<u32> = (0..w * h).map(|i| clamp_between(p.data[i], fine.data[i], coarse.data[i]).to_bits()).collect();
+                let got: Vec<u32> = detail_free(&p, r).data.iter().map(|v| v.to_bits()).collect();
+                assert_eq!(got, want, "{w}×{h} r={r}");
+            }
+        }
+    }
+
+    /// CPU highlights/shadows base timings on the #3460 frame size:
+    /// `cargo test --release -p lightcraft-pipeline bench_tone_base_cpu -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_tone_base_cpu() {
+        let (w, h) = (6960, 4640);
+        let r = base_detail_radius(w as f64);
+        let p = Plane::from_fn(w, h, |x, y| ((x * 7 + y * 13) % 1000) as f32 / 250.0 - 6.0 + if (x / 40 + y / 40) % 2 == 0 { 1.0 } else { 0.0 });
+        let sigma = 0.015 * w as f32;
+        let time = |name: &str, f: &dyn Fn() -> Plane| {
+            let mut ts: Vec<f64> = (0..5)
+                .map(|_| {
+                    let t = std::time::Instant::now();
+                    std::hint::black_box(f());
+                    t.elapsed().as_secs_f64() * 1e3
+                })
+                .collect();
+            ts.sort_by(f64::total_cmp);
+            eprintln!("{name:<20} min {:.1} ms  median {:.1} ms", ts[0], ts[2]);
+        };
+        time("median_hv", &|| median_hv(&p, r));
+        time("detail_free", &|| detail_free(&p, r));
+        time("guided_fast", &|| guided_fast(&p, sigma, BASE_EPS));
+        time("tone_base", &|| tone_base(&p, sigma, r, true));
+    }
+
     /// The previous fast path, including its two materialized coefficient resizes.
     fn resized_reference(p: &Plane, sigma: f32, eps: f32) -> Plane {
         use lightcraft_raster::resample::{Filter, resize};
@@ -1353,12 +1462,12 @@ mod fast_tests {
     }
 
     #[test]
-    fn sampled_tone_base_keeps_the_median_before_the_guided_filter() {
+    fn sampled_tone_base_keeps_the_detail_free_plane_before_the_guided_filter() {
         let p = Plane::from_fn(73, 51, |x, y| if x % 9 == 0 { 3.0 } else { -4.0 + ((x + y) % 7) as f32 * 0.03 });
         for sigma in [6.0, 24.0, 120.0] {
             for detail in [0, 1, 3, BASE_DETAIL_MAX] {
-                let median = median_hv(&p, detail);
-                assert_eq!(tone_base(&p, sigma, detail).data, resized_reference(&median, sigma, BASE_EPS).data, "{sigma}, {detail}");
+                let free = detail_free(&p, detail);
+                assert_eq!(tone_base(&p, sigma, detail, true).data, resized_reference(&free, sigma, BASE_EPS).data, "{sigma}, {detail}");
             }
         }
     }
