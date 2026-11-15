@@ -106,9 +106,6 @@ fn rgb_to_xyz_d50_checked(space: &RgbSpace) -> Option<Mat3> {
 mod tests {
     use crate::DecodeOptions;
 
-    /// A compressed text chunk is expanded by `png` through our own cap: an XMP document
-    /// bigger than it is dropped, not inflated. Compressing an 8 MiB string is a few
-    /// kilobytes — the reverse of what the unbounded `get_text()` path allowed.
     #[test]
     fn exif_orientation_mutation_parity() {
         let image = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Gray, vec![0]).unwrap();
@@ -121,11 +118,17 @@ mod tests {
                 let mut png = base.clone();
                 let iend = png.len() - 12;
                 png.splice(iend..iend, png_chunk(*b"eXIf", &data));
-                assert_eq!(super::header(&png).unwrap().2, crate::exif::legacy_reference(&data).orientation.unwrap_or(1), "at {at}, value {value}");
+                let old = crate::exif::legacy_reference(&data);
+                let shared = crate::exif::summarize(&data);
+                assert_eq!((shared.orientation, shared.thumbnail, shared.adobe_rgb_hint), (old.orientation, old.thumbnail, old.adobe_rgb_hint));
+                assert_eq!(super::header(&png).unwrap().2, old.orientation.unwrap_or(1), "at {at}, value {value}");
             }
         }
     }
 
+    /// A compressed text chunk is expanded by `png` through our own cap: an XMP document
+    /// bigger than it is dropped, not inflated. Compressing an 8 MiB string is a few
+    /// kilobytes — the reverse of what the unbounded `get_text()` path allowed.
     #[test]
     fn compressed_xmp_over_the_cap_is_dropped() {
         let out = png_with_compressed_xmp(&"x".repeat(8 << 20));
