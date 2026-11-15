@@ -1438,7 +1438,7 @@ dependencies = [
 [[package]]
 name = "craft-video"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=662e906ef592411f20fa9ff04d218ee1e5f094ad#662e906ef592411f20fa9ff04d218ee1e5f094ad"
+source = "git+https://github.com/storytold/craft-libs?rev=662e906ef928655031c1f021a01da4979f6a3a35#662e906ef928655031c1f021a01da4979f6a3a35"
 dependencies = [
  "craft-media",
  "rav1e",
