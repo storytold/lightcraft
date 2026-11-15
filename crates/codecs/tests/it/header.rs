@@ -128,6 +128,31 @@ fn header_matches_decode() {
     assert_eq!((o("jpeg 420 o6"), o("png rgba o8"), o("webp o6"), o("psd o8"), o("tiff o6"), o("jpeg 444 o0")), (6, 8, 6, 8, 6, 1));
 }
 
+/// The header probe's colour/compression policy is unchanged by the Clippy repair (#4264).
+/// These are header-only fixtures, not compressed image streams for the decoder.
+#[test]
+fn tiff_header_colour_and_compression_policy() {
+    for photometric in [0, 1, 2, 3, 4, 5, 6, 8, u16::MAX] {
+        for compression in [1, 4, 5, 6, 7, 8, 32773, 32946, u16::MAX] {
+            let mut ifd = craft_tiff::IfdBuilder::new()
+                .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![1]))
+                .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![1]))
+                .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8, 8, 8]))
+                .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![3]))
+                .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![compression]))
+                .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![photometric]));
+            ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 1, strips: vec![vec![0; 3]] });
+            let bytes = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap();
+            let accepted = match photometric {
+                0 | 1 | 2 | 3 | 5 => [1, 4, 5, 7, 8, 32773, 32946].contains(&compression),
+                6 => compression == 7, // YCbCr is supported only with JPEG compression.
+                _ => false,
+            };
+            assert_eq!(read_header(&bytes).is_ok(), accepted, "photometric={photometric}, compression={compression}");
+        }
+    }
+}
+
 /// Whenever the decode the probe used to run accepts a file (here: every cut of every fixture),
 /// the header agrees with it: reading headers never refuses a file that decodes. The reverse
 /// is checked for truncation, which the header readers detect.
