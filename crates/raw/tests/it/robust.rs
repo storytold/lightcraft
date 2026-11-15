@@ -97,8 +97,8 @@ fn truncation_at_every_length() {
 #[test]
 fn hostile_dimensions_are_rejected_quickly() {
     // a DNG claiming a 60000 × 60000 16-bit image with 10 bytes of data
-    use lightcraft_tiff::tags as t;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags as t;
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
     let mut ifd = IfdBuilder::new();
     ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![60000]));
@@ -120,8 +120,8 @@ fn hostile_dimensions_are_rejected_quickly() {
 /// read as 0 and non-finite samples as black: the photo develops to finite numbers.
 #[test]
 fn non_finite_black_levels_and_samples_develop() {
-    use lightcraft_tiff::tags as t;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags as t;
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
     let (w, h) = (32u32, 16u32);
     for black in [Value::Float(vec![f32::NAN]), Value::Double(vec![f64::INFINITY]), Value::Float(vec![64.0, f32::NAN, 64.0, 64.0])] {
         let mut ifd = IfdBuilder::new();
