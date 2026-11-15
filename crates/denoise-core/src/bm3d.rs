@@ -430,8 +430,6 @@ fn scaled_lambda(lambda: f32, sigma_ref: f32, sigma: f32) -> f32 {
     lambda
 }
 
-/// Filter every plane of `y` over the groups: hard threshold when there is no `pilot`, Wiener shrinkage by it when
-/// there is.
 /// The threshold and the Wiener sigma of each plane of `y` (the rotated planes), as `(lambda, sigma)` absolute levels.
 /// The CPU filter and the GPU runner both use these, so every plane is denoised to the same level on either path.
 pub fn plane_levels(y: &[Vec<f32>], t: usize, p: &Params, lambda: f32) -> Vec<(f32, f32)> {
@@ -453,6 +451,8 @@ pub fn plane_levels(y: &[Vec<f32>], t: usize, p: &Params, lambda: f32) -> Vec<(f
         .collect()
 }
 
+/// Filter every plane of `y` over the groups: hard threshold when there is no `pilot`, Wiener shrinkage by it when
+/// there is.
 fn collaborate(y: &[Vec<f32>], pilot: Option<&[Vec<f32>]>, groups: &[Vec<u32>], t: usize, p: &Params, lambda: f32, tf: &Transform) -> Vec<Vec<f32>> {
     let n = tf.n;
     let levels = plane_levels(y, t, p, lambda);
