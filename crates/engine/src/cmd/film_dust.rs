@@ -217,7 +217,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Film Dust Mask",
             ["Photo", "Develop Settings"],
             None,
-            "{sensitivity?: 0..100 (50), expand?: px at the 2400 px search size (a smaller photo by the same fraction), -8..40 (2)} — the infrared pass's marks (dust, hairs, scratches) as a mask of the photo, named \"Film dust (infrared)\", replacing an earlier one and selected: the Remove panel shows it, the brush adds to or takes from it, and Fill Selected Mask / Generate into Selected Mask remove what it covers. An error without the pass → {mask, coverage: 0..1, sensitivity, expand}",
+            "{sensitivity?: 0..100 (50), expand?: px at the 2400 px search size (a smaller photo by the same fraction), -8..40 (2)}: the infrared pass's marks (dust, hairs, scratches) as a mask of the photo, named \"Film dust (infrared)\", replacing an earlier one and selected: the Remove panel shows it, the brush adds to or takes from it, and Fill Selected Mask / Generate into Selected Mask remove what it covers. An error without the pass → {mask, coverage: 0..1, sensitivity, expand}",
             has_active,
             film_dust_mask
         ),
@@ -226,7 +226,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Film Dust and Hair",
             ["Photo", "Develop Settings"],
             None,
-            "{sensitivity?: 0..100 (50), expand?: px at the 2400 px search size, -8..40 (2): how far each mark's spot is grown (shrunk when negative), mode?: fill|heal (fill: each spot is rebuilt from its surroundings; heal: copied from one source), add?: bool (true), replace?: bool (true: the spots an earlier run added go first, so a run at another sensitivity replaces them), infrared?: auto|only|never (auto)} — on a scanned negative or slide, find dust specks, hairs and scratches on the film inside the crop and add a heal spot on each speck or patch and a heal stroke along each line (one undo step). A film scanner's infrared pass (a VueScan or SilverFast RGBI TIFF) says where they are, whatever the picture shows; without one the converted picture is searched for the sharp bright marks they leave on smooth areas. `only`: an error without the pass; `never`: the picture alone. The spots are tagged auto film dust (`confirmed` when they came from the pass) → {spots: [{points: [[x, y], …], size}], added, replaced, infrared: bool, sensitivity, expand}",
+            "{sensitivity?: 0..100 (50), expand?: px at the 2400 px search size, -8..40 (2): how far each mark's spot is grown (shrunk when negative), mode?: fill|heal (fill: each spot is rebuilt from its surroundings; heal: copied from one source), add?: bool (true), replace?: bool (true: the spots an earlier run added go first, so a run at another sensitivity replaces them), infrared?: auto|only|never (auto)}: on a scanned negative or slide, find dust specks, hairs and scratches on the film inside the crop and add a heal spot on each speck or patch and a heal stroke along each line (one undo step). A film scanner's infrared pass (a VueScan or SilverFast RGBI TIFF) says where they are, whatever the picture shows; without one the converted picture is searched for the sharp bright marks they leave on smooth areas. `only`: an error without the pass; `never`: the picture alone. The spots are tagged auto film dust (`confirmed` when they came from the pass) → {spots: [{points: [[x, y], …], size}], added, replaced, infrared: bool, sensitivity, expand}",
             has_active,
             find_film_dust
         ),
