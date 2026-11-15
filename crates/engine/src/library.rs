@@ -278,6 +278,19 @@ fn lenient_prep<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<O
     Ok(serde_json::from_value(value).ok())
 }
 
+/// [`PrefsFile`]'s `mapSource`, or `None` (OpenStreetMap) when it isn't a tile source, with a log line.
+fn lenient_tile_source<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<crate::map::TileSource>, D::Error> {
+    use serde::Deserialize;
+    let value = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(value.and_then(|value| match serde_json::from_value::<crate::map::TileSource>(value) {
+        Ok(source) => Some(source),
+        Err(e) => {
+            log::warn!("prefs.json mapSource: {e}; using OpenStreetMap");
+            None
+        }
+    }))
+}
+
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct PrefsFile {
@@ -338,6 +351,10 @@ struct PrefsFile {
     /// User-saved map locations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     saved_locations: Vec<crate::map::SavedLocation>,
+    /// The map's tile source (missing = OpenStreetMap; re-checked when read). A damaged one is
+    /// dropped on its own, never taking the other preferences with it.
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_tile_source")]
+    map_source: Option<crate::map::TileSource>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -656,6 +673,9 @@ impl Session {
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
         self.saved_locations = prefs.saved_locations;
+        if let Some(notice) = self.map.load_source(prefs.map_source) {
+            settings.warnings.push(notice);
+        }
         self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
@@ -978,6 +998,7 @@ impl Session {
             slide_titles: self.slide_titles.clone(),
             hold_view: self.hold_view,
             saved_locations: self.saved_locations.clone(),
+            map_source: Some(self.map.source().clone()),
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };

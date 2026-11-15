@@ -3558,5 +3558,8 @@
   "Location Filter Bar": "Ortsfilterleiste",
   "Map Legend": "Kartenlegende",
   "Lock Map Markers": "Kartenmarkierungen sperren",
-  "Map (Ctrl+Alt+3)": "Karte (Strg+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Karte (Strg+Alt+3)",
+  "Map tiles are off": "Kartenkacheln sind aus",
+  "Offline (no tiles)": "Offline (keine Kacheln)",
+  "Custom tile server": "Eigener Kachelserver"
 }

@@ -361,6 +361,8 @@ pub struct Session {
     pub print_templates: Vec<print::template::PrintTemplate>,
     /// Saved geographical bookmarks for the Map module (`map.savedLocations.*`).
     pub saved_locations: Vec<map::SavedLocation>,
+    /// The map's tile source (persisted in prefs.json), tile cache folder and tile service.
+    pub map: map::MapState,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
     pub metadata_presets: Vec<cmd::metadata::MetadataPreset>,
     /// Saved filter-bar settings (`filter.*`), persisted in prefs.json.
@@ -535,6 +537,7 @@ impl Session {
             print: Default::default(),
             print_templates: Vec::new(),
             saved_locations: Vec::new(),
+            map: map::MapState::default(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),

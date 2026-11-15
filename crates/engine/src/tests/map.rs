@@ -1,18 +1,123 @@
 use crate::Session;
 use serde_json::json;
 
+/// The Esri layers used to be offered (and fetched) by default; their terms don't allow it, so
+/// they are neither listed nor accepted.
 #[test]
 fn test_map_providers_command() {
     let mut s = Session::new();
     let res = s.execute("map.providers", &json!({})).unwrap();
-    let arr = res.as_array().unwrap();
-    assert_eq!(arr.len(), 5);
-    let ids: Vec<&str> = arr.iter().filter_map(|v| v.get("id")?.as_str()).collect();
-    assert!(ids.contains(&"osm"));
-    assert!(ids.contains(&"esri-imagery"));
-    assert!(ids.contains(&"esri-streets"));
-    assert!(ids.contains(&"esri-topo"));
-    assert!(ids.contains(&"esri-hybrid"));
+    let ids: Vec<&str> = res.as_array().unwrap().iter().filter_map(|v| v.get("id")?.as_str()).collect();
+    assert_eq!(ids, vec!["osm", "opentopomap", "offline"]);
+    assert_eq!(res[0]["current"], true);
+    assert_eq!(res[0]["attribution"], "© OpenStreetMap contributors");
+}
+
+#[test]
+fn tile_source_get_and_set() {
+    let mut s = Session::new();
+    let r = s.execute("map.tileSource", &json!({})).unwrap();
+    assert_eq!(r["id"], "osm");
+    assert_eq!(r["urlTemplate"], "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
+    assert_eq!(r["attribution"], "© OpenStreetMap contributors");
+    assert_eq!(r["maxZoom"], 19);
+    assert!(r["userAgent"].as_str().unwrap().starts_with("LightCraft/"));
+    assert_eq!((r["offline"].as_bool(), r["esriEnabled"].as_bool()), (Some(false), Some(false)));
+
+    let r = s.execute("map.tileSource", &json!({"offline": true})).unwrap();
+    assert_eq!((r["id"].as_str(), r["offline"].as_bool()), (Some("offline"), Some(true)));
+    assert!(s.map_tiles().is_none(), "offline starts no tile service");
+    // a field alone needs a server when offline
+    assert!(s.execute("map.tileSource", &json!({"maxZoom": 10})).is_err());
+    let r = s.execute("map.tileSource", &json!({"offline": false})).unwrap();
+    assert_eq!(r["id"], "osm");
+    let r = s.execute("map.tileSource", &json!({"id": "opentopomap"})).unwrap();
+    assert_eq!((r["id"].as_str(), r["maxZoom"].as_u64()), (Some("opentopomap"), Some(17)));
+
+    let r = s
+        .execute("map.tileSource", &json!({"urlTemplate": "https://tiles.example.org/{z}/{x}/{y}.png", "attribution": "© Example", "maxZoom": 17}))
+        .unwrap();
+    assert!(r["id"].as_str().unwrap().starts_with("custom-"));
+    assert_eq!((r["maxZoom"].as_u64(), r["custom"].as_bool()), (Some(17), Some(true)));
+    // change one field of the current source
+    let r = s.execute("map.tileSource", &json!({"maxZoom": 15})).unwrap();
+    assert_eq!((r["maxZoom"].as_u64(), r["attribution"].as_str()), (Some(15), Some("© Example")));
+    // bad settings are refused and change nothing
+    for bad in [
+        json!({"urlTemplate": "http://tiles.example.org/{z}/{x}/{y}.png", "attribution": "x"}),
+        json!({"urlTemplate": "https://tiles.example.org/{z}/{x}.png", "attribution": "x"}),
+        json!({"urlTemplate": "https://other.example.org/{z}/{x}/{y}.png"}),
+        json!({"maxZoom": 99}),
+        json!({"maxZoom": -1}),
+        json!({"urlTemplate": 5}),
+        json!({"offline": "yes"}),
+        json!({"id": "../../etc"}),
+        json!({"id": "osm", "maxZoom": 12}),
+    ] {
+        assert!(matches!(s.execute("map.tileSource", &bad), Err(crate::EngineError::BadParams { .. })), "{bad}");
+    }
+    assert_eq!(s.map.source().max_zoom(), 15);
+    let r = s.execute("map.tileSource", &json!({"id": "osm"})).unwrap();
+    assert_eq!(r["urlTemplate"], crate::map::OSM_TILE_URL);
+}
+
+/// Esri is refused while its opt-in is off (it is, and no command turns it on: docs/map.md), and
+/// the refusal names why; the gate lets it through once enabled.
+#[test]
+fn esri_sources_are_refused_while_off_and_accepted_after_enabling() {
+    let mut s = Session::new();
+    for id in ["esri-imagery", "esri-streets", "esri-topo"] {
+        let e = s.execute("map.tileSource", &json!({"id": id})).unwrap_err().to_string();
+        assert!(e.contains("Esri") && e.contains("docs/map.md"), "{e}");
+    }
+    assert_eq!(*s.map.source(), crate::map::TileSource::Osm);
+    assert!(s.execute("map.enableEsri", &json!({"on": true})).is_err(), "no command turns Esri on");
+    s.map.set_esri_enabled(true);
+    let r = s.execute("map.tileSource", &json!({"id": "esri-imagery"})).unwrap();
+    assert_eq!(r["id"], "esri-imagery");
+    assert!(r["attribution"].as_str().unwrap().contains("Esri"));
+    let ids: Vec<String> =
+        s.execute("map.providers", &json!({})).unwrap().as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect();
+    assert!(ids.contains(&"esri-imagery".to_string()));
+    // turned off again: the map falls back to OpenStreetMap, the choice is kept
+    s.map.set_esri_enabled(false);
+    let r = s.execute("map.tileSource", &json!({})).unwrap();
+    assert_eq!((r["id"].as_str(), r["saved"].as_str()), (Some("osm"), Some("esri-imagery")));
+    assert!(r["notice"].as_str().unwrap().contains("OpenStreetMap"));
+    assert_eq!(s.map_tiles().unwrap().source(), &crate::map::TileSource::Osm, "Esri tiles are never fetched");
+}
+
+#[test]
+fn changing_the_source_restarts_the_service() {
+    let mut s = Session::new();
+    assert!(s.map.service().is_none(), "nothing starts until a map asks");
+    assert_eq!(s.map_tiles().unwrap().source().id(), "osm");
+    s.execute("map.tileSource", &json!({"id": "opentopomap"})).unwrap();
+    assert!(s.map.service().is_none());
+    assert_eq!(s.map_tiles().unwrap().source().id(), "opentopomap");
+}
+
+#[test]
+fn cache_info_and_clear() {
+    let mut s = Session::new();
+    let r = s.execute("map.cacheInfo", &json!({})).unwrap();
+    assert_eq!((r["bytes"].as_u64(), r["tiles"].as_u64(), r["dir"].is_null()), (Some(0), Some(0), true));
+    assert_eq!(s.execute("map.clearCache", &json!({})).unwrap()["tiles"], 0);
+    let root = std::env::temp_dir().join(format!("lightcraft-engine-map-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    s.map.cache_root = Some(root.clone());
+    let c = crate::map::TileCache::new(&root, "osm", 1 << 30).unwrap();
+    for x in 0..3 {
+        c.write(crate::map::TileKey::new(4, x, 1).unwrap(), &Default::default(), b"tile bytes").unwrap();
+    }
+    let r = s.execute("map.cacheInfo", &json!({})).unwrap();
+    assert_eq!(r["tiles"], 3);
+    assert!(r["bytes"].as_u64().unwrap() > 30);
+    assert_eq!(r["dir"], root.to_string_lossy().as_ref());
+    let r = s.execute("map.clearCache", &json!({})).unwrap();
+    assert_eq!(r["tiles"], 3);
+    assert_eq!(s.execute("map.cacheInfo", &json!({})).unwrap()["tiles"], 0);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -114,13 +219,76 @@ fn test_map_filter_photos() {
     assert!(untagged_photos.iter().any(|p| p.get("id").and_then(|v| v.as_u64()) == Some(ids[1].0)));
 }
 
+fn temp_lib(tag: &str) -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("lightcraft-map-prefs-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// The tile source is a library preference; a stored one is checked again when read.
 #[test]
-fn test_tile_fetch_and_decode() {
-    let esri_url = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/6/25/31";
-    if let Ok(b) = crate::map::fetch_tile_bytes(esri_url) {
-        assert!(!b.is_empty());
-        let decoded = crate::map::decode_tile(&b).unwrap();
-        assert_eq!(decoded.width, 256);
-        assert_eq!(decoded.height, 256);
+fn the_map_tile_source_persists_and_is_rechecked() {
+    let lib = temp_lib("persist");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        assert_eq!(s.map.source().id(), "osm");
+        s.execute(
+            "map.tileSource",
+            &json!({"urlTemplate": "https://tiles.example.org/{z}/{x}/{y}.png", "attribution": "© Example", "maxZoom": 16, "id": "example"}),
+        )
+        .unwrap();
     }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let src = s.map.source().clone();
+    assert_eq!((src.id(), src.max_zoom(), src.attribution()), ("example", 16, "© Example"));
+    s.execute("map.tileSource", &json!({"offline": true})).unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.map.source().is_offline());
+    drop(s);
+    // a hand-edited prefs.json pointing at plain http falls back to OpenStreetMap
+    let mut prefs: serde_json::Value = serde_json::from_slice(&std::fs::read(lib.join("prefs.json")).unwrap()).unwrap();
+    prefs["mapSource"] = json!({"kind": "custom", "id": "evil", "urlTemplate": "http://evil.example/{z}/{x}/{y}", "attribution": "x", "maxZoom": 19});
+    std::fs::write(lib.join("prefs.json"), serde_json::to_vec(&prefs).unwrap()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(*s.map.source(), crate::map::TileSource::Osm);
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// A library saved with an Esri layer (by an older build) opens on OpenStreetMap with a one-line
+/// notice, and prefs.json keeps the Esri choice.
+#[test]
+fn a_saved_esri_source_falls_back_with_a_notice_and_is_kept() {
+    let lib = temp_lib("esri");
+    std::fs::write(lib.join("prefs.json"), br#"{"cacheMb": 321, "mapSource": {"kind": "esriImagery"}}"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.cache_mb, 321);
+    assert_eq!(s.map.effective_source(), crate::map::TileSource::Osm);
+    let warnings = s.take_library_warnings();
+    assert_eq!(warnings.iter().filter(|w| w.contains("OpenStreetMap") && w.contains("Esri")).count(), 1, "{warnings:?}");
+    // saving other preferences keeps the Esri choice in the file
+    s.save_prefs().unwrap();
+    let prefs: serde_json::Value = serde_json::from_slice(&std::fs::read(lib.join("prefs.json")).unwrap()).unwrap();
+    assert_eq!(prefs["mapSource"], json!({"kind": "esriImagery"}));
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn a_damaged_saved_tile_source_keeps_the_other_preferences() {
+    let lib = temp_lib("damaged");
+    std::fs::write(lib.join("prefs.json"), br#"{"cacheMb": 777, "mapSource": {"kind": "custom", "urlTemplate": 5, "maxZoom": "high"}}"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.cache_mb, 777, "the rest of prefs.json is read");
+    assert_eq!(s.map.source().id(), "osm", "the damaged source falls back to OpenStreetMap");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
 }

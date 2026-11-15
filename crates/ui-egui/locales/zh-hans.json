@@ -2476,5 +2476,8 @@
   "Location Filter Bar": "位置过滤器栏",
   "Map Legend": "地图图例",
   "Lock Map Markers": "锁定地图标记",
-  "Map (Ctrl+Alt+3)": "地图（Ctrl+Alt+3）"
+  "Map (Ctrl+Alt+3)": "地图（Ctrl+Alt+3）",
+  "Map tiles are off": "地图图块已关闭",
+  "Offline (no tiles)": "离线（无图块）",
+  "Custom tile server": "自定义图块服务器"
 }

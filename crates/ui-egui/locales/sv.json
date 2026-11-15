@@ -2538,5 +2538,8 @@
   "Location Filter Bar": "Platsfilterfält",
   "Map Legend": "Kartförklaring",
   "Lock Map Markers": "Lås kartmarkörer",
-  "Map (Ctrl+Alt+3)": "Karta (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Karta (Ctrl+Alt+3)",
+  "Map tiles are off": "Kartrutor är avstängda",
+  "Offline (no tiles)": "Offline (inga rutor)",
+  "Custom tile server": "Egen rutserver"
 }

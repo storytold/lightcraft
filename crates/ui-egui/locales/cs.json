@@ -2523,5 +2523,8 @@
   "Location Filter Bar": "Lišta filtru polohy",
   "Map Legend": "Legenda mapy",
   "Lock Map Markers": "Uzamknout značky na mapě",
-  "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)",
+  "Map tiles are off": "Mapové dlaždice jsou vypnuté",
+  "Offline (no tiles)": "Offline (bez dlaždic)",
+  "Custom tile server": "Vlastní server dlaždic"
 }

@@ -2641,5 +2641,8 @@
   "Location Filter Bar": "Barra filtro posizione",
   "Map Legend": "Legenda della mappa",
   "Lock Map Markers": "Blocca indicatori della mappa",
-  "Map (Ctrl+Alt+3)": "Mappa (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Mappa (Ctrl+Alt+3)",
+  "Map tiles are off": "Le tessere della mappa sono disattivate",
+  "Offline (no tiles)": "Offline (nessuna tessera)",
+  "Custom tile server": "Server di tessere personalizzato"
 }

@@ -2473,5 +2473,8 @@
   "Location Filter Bar": "Панель фільтра за місцем",
   "Map Legend": "Легенда мапи",
   "Lock Map Markers": "Заблокувати мітки на мапі",
-  "Map (Ctrl+Alt+3)": "Мапа (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Мапа (Ctrl+Alt+3)",
+  "Map tiles are off": "Тайли мапи вимкнено",
+  "Offline (no tiles)": "Офлайн (без тайлів)",
+  "Custom tile server": "Власний сервер тайлів"
 }

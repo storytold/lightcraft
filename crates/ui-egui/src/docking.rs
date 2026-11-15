@@ -444,6 +444,8 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             crate::state::ViewMode::Map => crate::panels::map::show(app, ui),
         });
     }
+    // no map drawn for two frames: the tile service stops fetching (only what is in view)
+    crate::panels::map::tiles::end_frame(&app.session, ui.ctx());
 
     let rendered = workspace;
     let mut workspace = app.ui.docking.clone().unwrap_or_else(|| from_ui(app));

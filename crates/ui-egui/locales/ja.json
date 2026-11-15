@@ -2475,5 +2475,8 @@
   "Location Filter Bar": "場所フィルターバー",
   "Map Legend": "地図の凡例",
   "Lock Map Markers": "地図マーカーをロック",
-  "Map (Ctrl+Alt+3)": "地図（Ctrl+Alt+3）"
+  "Map (Ctrl+Alt+3)": "地図（Ctrl+Alt+3）",
+  "Map tiles are off": "地図タイルはオフです",
+  "Offline (no tiles)": "オフライン（タイルなし）",
+  "Custom tile server": "カスタムタイルサーバー"
 }

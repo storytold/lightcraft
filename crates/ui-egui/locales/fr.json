@@ -3660,5 +3660,8 @@
   "Location Filter Bar": "Barre de filtre de lieu",
   "Map Legend": "Légende de la carte",
   "Lock Map Markers": "Verrouiller les repères de la carte",
-  "Map (Ctrl+Alt+3)": "Carte (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Carte (Ctrl+Alt+3)",
+  "Map tiles are off": "Les tuiles de la carte sont désactivées",
+  "Offline (no tiles)": "Hors ligne (sans tuiles)",
+  "Custom tile server": "Serveur de tuiles personnalisé"
 }

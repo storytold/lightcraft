@@ -3743,5 +3743,8 @@
   "Location Filter Bar": "მდებარეობის ფილტრის ზოლი",
   "Map Legend": "რუკის ლეგენდა",
   "Lock Map Markers": "რუკის მარკერების ჩაკეტვა",
-  "Map (Ctrl+Alt+3)": "რუკა (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "რუკა (Ctrl+Alt+3)",
+  "Map tiles are off": "რუკის ფილები გამორთულია",
+  "Offline (no tiles)": "ოფლაინ (ფილების გარეშე)",
+  "Custom tile server": "საკუთარი ფილების სერვერი"
 }

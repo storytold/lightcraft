@@ -2400,5 +2400,8 @@
   "Location Filter Bar": "Pasek filtru lokalizacji",
   "Map Legend": "Legenda mapy",
   "Lock Map Markers": "Zablokuj znaczniki mapy",
-  "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)",
+  "Map tiles are off": "Kafelki mapy są wyłączone",
+  "Offline (no tiles)": "Offline (bez kafelków)",
+  "Custom tile server": "Własny serwer kafelków"
 }

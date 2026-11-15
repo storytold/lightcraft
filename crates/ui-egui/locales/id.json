@@ -2448,5 +2448,8 @@
   "Location Filter Bar": "Bilah filter lokasi",
   "Map Legend": "Legenda peta",
   "Lock Map Markers": "Kunci penanda peta",
-  "Map (Ctrl+Alt+3)": "Peta (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Peta (Ctrl+Alt+3)",
+  "Map tiles are off": "Petak peta nonaktif",
+  "Offline (no tiles)": "Luring (tanpa petak)",
+  "Custom tile server": "Server petak khusus"
 }

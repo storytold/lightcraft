@@ -2477,5 +2477,8 @@
   "Location Filter Bar": "位置篩選列",
   "Map Legend": "地圖圖例",
   "Lock Map Markers": "鎖定地圖標記",
-  "Map (Ctrl+Alt+3)": "地圖（Ctrl+Alt+3）"
+  "Map (Ctrl+Alt+3)": "地圖（Ctrl+Alt+3）",
+  "Map tiles are off": "地圖圖磚已關閉",
+  "Offline (no tiles)": "離線（無圖磚）",
+  "Custom tile server": "自訂圖磚伺服器"
 }

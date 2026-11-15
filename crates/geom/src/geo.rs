@@ -20,10 +20,21 @@ pub struct LatLon {
 }
 
 impl LatLon {
-    /// Create a new `LatLon` if coordinates are finite numbers.
-    /// Values outside valid ranges `[-90, 90]` or `[-180, 180]` are clamped.
+    /// The point, or `None` for NaN, infinities or values out of range: latitude in `[-90, 90]`,
+    /// longitude in `[-180, 180]`. Never clamped: a latitude of 95° is a broken record, not the
+    /// North Pole. A longitude of exactly 180 is kept as given (it is the same meridian as -180).
     pub fn new(lat: f64, lon: f64) -> Option<Self> {
-        if lat.is_finite() && lon.is_finite() { Some(Self { lat: lat.clamp(-90.0, 90.0), lon: Self::normalize_lon(lon) }) } else { None }
+        let ok = lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon);
+        ok.then_some(Self { lat, lon })
+    }
+
+    /// The point with its longitude wrapped into `[-180, 180)`: `None` for NaN, infinities or a
+    /// latitude out of `[-90, 90]` (commands that accept any longitude, such as `photo.setGps`).
+    pub fn wrapped(lat: f64, lon: f64) -> Option<Self> {
+        if !lon.is_finite() {
+            return None;
+        }
+        Self::new(lat, Self::normalize_lon(lon))
     }
 
     /// Normalizes longitude to `[-180.0, 180.0)`.
@@ -151,16 +162,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_lat_lon_clamping_and_normalization() {
-        let p = LatLon::new(100.0, 190.0);
-        assert!(p.is_some());
-        if let Some(p) = p {
-            assert_eq!(p.lat, 90.0);
-            assert_eq!(p.lon, -170.0);
-        }
-
+    fn out_of_range_positions_are_rejected_not_clamped() {
+        // a latitude of 100° used to become the North Pole, so commands that validate with
+        // `LatLon::new` accepted it
+        assert_eq!(LatLon::new(100.0, 10.0), None);
+        assert_eq!(LatLon::new(-90.5, 10.0), None);
+        assert_eq!(LatLon::new(10.0, 190.0), None);
+        assert_eq!(LatLon::new(10.0, -180.1), None);
         assert!(LatLon::new(f64::NAN, 0.0).is_none());
         assert!(LatLon::new(0.0, f64::INFINITY).is_none());
+        assert_eq!(LatLon::new(90.0, 180.0), Some(LatLon { lat: 90.0, lon: 180.0 }));
+        assert_eq!(LatLon::new(-90.0, -180.0), Some(LatLon { lat: -90.0, lon: -180.0 }));
+        // wrapped: any finite longitude, latitude still checked
+        assert_eq!(LatLon::wrapped(10.0, 190.0), Some(LatLon { lat: 10.0, lon: -170.0 }));
+        assert_eq!(LatLon::wrapped(10.0, -540.0), Some(LatLon { lat: 10.0, lon: -180.0 }));
+        assert_eq!(LatLon::wrapped(91.0, 0.0), None);
+        assert_eq!(LatLon::wrapped(0.0, f64::NAN), None);
     }
 
     #[test]

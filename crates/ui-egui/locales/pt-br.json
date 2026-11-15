@@ -2321,5 +2321,8 @@
   "Location Filter Bar": "Barra de filtro de local",
   "Map Legend": "Legenda do mapa",
   "Lock Map Markers": "Travar marcadores do mapa",
-  "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)",
+  "Map tiles are off": "Os blocos do mapa estão desativados",
+  "Offline (no tiles)": "Offline (sem blocos)",
+  "Custom tile server": "Servidor de blocos personalizado"
 }

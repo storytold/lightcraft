@@ -2762,5 +2762,8 @@
   "Location Filter Bar": "Thanh lọc vị trí",
   "Map Legend": "Chú giải bản đồ",
   "Lock Map Markers": "Khóa điểm đánh dấu trên bản đồ",
-  "Map (Ctrl+Alt+3)": "Bản đồ (Ctrl+Alt+3)"
+  "Map (Ctrl+Alt+3)": "Bản đồ (Ctrl+Alt+3)",
+  "Map tiles are off": "Ô bản đồ đang tắt",
+  "Offline (no tiles)": "Ngoại tuyến (không có ô)",
+  "Custom tile server": "Máy chủ ô tùy chỉnh"
 }
