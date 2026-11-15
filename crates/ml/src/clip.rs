@@ -662,27 +662,27 @@ impl Clip {
             JobError::Device(s) | JobError::Failed(s) => s,
             JobError::Cancelled => "cancelled".into(),
         };
-        // A full-tower test input through the CPU and GPU: one item, checked before the runner is trusted.
+        // A full-tower test input through the CPU and GPU: two items (so batched indexing is covered too), checked before the runner is trusted.
         if text {
             let t = self.ensure_cpu_text().map_err(to_s)?;
             let w = TowerWeights::Text(text_tower_weights(&t, self.arch)?);
             let seq = self.arch.context_len;
             let vocab = self.arch.vocab_size.max(1);
-            let ids: Vec<u32> = (0..seq).map(|i| ((i * 7 + 1) % vocab) as u32).collect();
-            let eot = [((seq / 2).min(seq.saturating_sub(1))) as u32];
+            let ids: Vec<u32> = (0..2 * seq).map(|i| ((i * 7 + 1) % vocab) as u32).collect();
+            let eot = [((seq / 2).min(seq.saturating_sub(1))) as u32, seq.saturating_sub(1) as u32];
             check_accel(
                 factory,
                 &w,
-                |acc| acc.run_text(&ids, &eot, 1, seq),
-                || run_cpu_text(&t, &ids, &eot, 1, seq, self.arch.text_hidden, None).map_err(to_s),
+                |acc| acc.run_text(&ids, &eot, 2, seq),
+                || run_cpu_text(&t, &ids, &eot, 2, seq, self.arch.text_hidden, None).map_err(to_s),
             )
         } else {
             let v = self.ensure_cpu_vision().map_err(to_s)?;
             let w = TowerWeights::Vision(vision_tower_weights(&v, self.arch, &self.manifest)?);
             let (h, img_w) = (self.manifest.input.height as usize, self.manifest.input.width as usize);
             let n = 3usize.checked_mul(h).and_then(|x| x.checked_mul(img_w)).ok_or("vision input too large")?;
-            let img: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.618).sin()).collect();
-            check_accel(factory, &w, |acc| acc.run_vision(&img, 1, h, img_w), || run_cpu_vision(&v, &img, 1, h, img_w, None).map_err(to_s))
+            let img: Vec<f32> = (0..2 * n).map(|i| ((i as f32) * 0.618).sin()).collect();
+            check_accel(factory, &w, |acc| acc.run_vision(&img, 2, h, img_w), || run_cpu_vision(&v, &img, 2, h, img_w, None).map_err(to_s))
         }
     }
 
