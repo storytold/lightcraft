@@ -15,6 +15,7 @@ lightcraft-raster = { workspace = true }
 craft-gainmap = { workspace = true }
 craft-cms = { workspace = true }
 craft-image-codecs = { workspace = true }
+craft-metadata = { workspace = true }
 craft-tiff = { workspace = true }
 craft-gif = { workspace = true }
 craft-psd = { workspace = true }
