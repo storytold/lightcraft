@@ -214,6 +214,8 @@ pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, m
     }
     // the previews the library builds at import (library.previewSettings atImport)
     let ids: Vec<PhotoId> = imported.iter().map(|i| PhotoId(*i)).collect();
+    // connected Immich servers are asked whether they have these photos already (`remote.pump`)
+    s.remote.link_queue.extend(ids.iter().copied());
     crate::cmd::previews::build_after_import(s, &ids);
     Ok(report)
 }
