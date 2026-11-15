@@ -361,3 +361,13 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod feature_name_tests {
+    #[test]
+    fn perspective_labels_keep_existing_command_ids() {
+        for (id, label) in [("geometry.upright", "Perspective Correction"), ("geometry.guides", "Perspective Guides")] {
+            assert_eq!(super::find_command(id).expect("existing command").label, label);
+        }
+    }
+}
