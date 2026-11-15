@@ -2479,5 +2479,19 @@
   "Map tiles are off": "地図タイルはオフです",
   "Offline (no tiles)": "オフライン（タイルなし）",
   "Custom tile server": "カスタムタイルサーバー",
-  "Set the location of this photo": "この写真の位置を設定"
+  "Set the location of this photo": "この写真の位置を設定",
+  "Esri map layers": "Esri マップレイヤー",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Esri Streets と Esri Outdoor のマップスタイルには、ご自身の ArcGIS Location Platform API キーが必要です。無料アカウントには毎月のタイル枠があり、タイルはキーに計上されます。Esri のサーバーには、見ている場所が伝わります。",
+  "Status": "状態",
+  "A key is set": "キーが設定されています",
+  "No key: the Esri styles are not offered": "キーなし：Esri スタイルは表示されません",
+  "ArcGIS API key": "ArcGIS API キー",
+  "Paste a new key to replace it": "置き換えるには新しいキーを貼り付け",
+  "Paste your key": "キーを貼り付け",
+  "Remove Key": "キーを削除",
+  "Get a free key at location.arcgis.com": "location.arcgis.com で無料キーを取得",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "キーには静的ベースマップタイルの権限だけを与えてください。キーは LightCraft の設定フォルダー（map-keys.json）に保存され、ライブラリには保存されず、Esri のタイルサーバーにだけ送信されます。スタイルはマップ表示の「マップスタイル」で選びます。",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor（地形図）",
+  "Set ArcGIS API Key": "ArcGIS API キーを設定"
 }

@@ -7,8 +7,10 @@
 //! another raster tile server (an `https://` URL template with `{z}`, `{x}` and `{y}`) or turn
 //! tiles off ([`TileSource::Offline`]).
 //!
-//! The Esri layers need an explicit opt-in ([`TileSource::requires_opt_in`]): until the user has
-//! turned them on they are not offered and never fetched. See `docs/map.md` (Esri's terms).
+//! The Esri layers come from the ArcGIS Location Platform's static basemap tiles service and need
+//! the user's own API key ([`TileSource::requires_key`]): without one they are not offered and
+//! never fetched. The key is never part of a source (nor of prefs.json): the tile service adds it
+//! to the request URL only ([`with_token`]). See `docs/map.md` (Esri layers).
 //!
 //! Validation of custom sources is ported from the map core of PR #797 (Jason Baldwin).
 
@@ -27,13 +29,21 @@ pub const OSM_MAX_ZOOM: u8 = 19;
 pub const OPENTOPOMAP_TILE_URL: &str = "https://tile.opentopomap.org/{z}/{x}/{y}.png";
 /// The credit OpenTopoMap asks for.
 pub const OPENTOPOMAP_ATTRIBUTION: &str = "Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)";
-const ESRI_STREET_URL: &str = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}";
-const ESRI_TOPO_URL: &str = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}";
-const ESRI_IMAGERY_URL: &str = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
-/// The credits of each Esri layer, as its ArcGIS Online item gives them (`accessInformation`).
-const ESRI_STREET_ATTRIBUTION: &str = "Powered by Esri | Sources: Esri, HERE, Garmin, USGS, Intermap, INCREMENT P, NRCAN, Esri Japan, METI, Esri China (Hong Kong), NOSTRA, © OpenStreetMap contributors, and the GIS User Community";
-const ESRI_TOPO_ATTRIBUTION: &str = "Powered by Esri | Sources: Esri, HERE, Garmin, Intermap, INCREMENT P, GEBCO, USGS, FAO, NPS, NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), © OpenStreetMap contributors, GIS User Community";
-const ESRI_IMAGERY_ATTRIBUTION: &str = "Powered by Esri | Esri, Vantor, Earthstar Geographics, and the GIS User Community";
+/// The ArcGIS Location Platform static basemap tiles service (keyed; read 2026-11-15:
+/// <https://developers.arcgis.com/rest/static-basemap-tiles/>). Its tiles are 512 px PNGs whose
+/// level `L` has the same 2^L × 2^L grid as a 256 px tile pyramid ("zoom levels are 1 less"), so
+/// the 256 px tile `(z, x, y)` is a quarter of its tile `(z − 1, x / 2, y / 2)` ([`Crop`]).
+pub const ESRI_STATIC_BASE: &str = "https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1";
+const ESRI_STREET_URL: &str =
+    "https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/streets/static/tile/{z}/{y}/{x}";
+const ESRI_OUTDOOR_URL: &str =
+    "https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/outdoor/static/tile/{z}/{y}/{x}";
+/// "Powered by Esri", painted before every Esri layer's data credits.
+pub const ESRI_POWERED_BY: &str = "Powered by Esri";
+/// The Esri layers' credit when the layer's own metadata (`copyrightText`) can't be fetched: the
+/// data providers the service's documentation lists for the ArcGIS styles.
+pub const ESRI_FALLBACK_ATTRIBUTION: &str =
+    "Powered by Esri | Esri, TomTom, Garmin, FAO, NOAA, USGS, © OpenStreetMap contributors, and the GIS User Community";
 /// The User-Agent sent with every tile request: distinct and stable, naming the app and where to
 /// find it, as the OSMF policy asks. No personal details.
 pub const USER_AGENT: &str = concat!("LightCraft/", env!("CARGO_PKG_VERSION"), " (+https://github.com/storytold/lightcraft)");
@@ -55,12 +65,10 @@ pub enum TileSource {
     Osm,
     /// OpenTopoMap (topographic, from OpenStreetMap data and SRTM).
     OpenTopoMap,
-    /// Esri World Street Map (opt-in).
+    /// Esri's ArcGIS Streets style (needs the user's ArcGIS API key).
     EsriStreet,
-    /// Esri World Topographic Map (opt-in).
+    /// Esri's ArcGIS Outdoor style, a topographic map (needs the user's ArcGIS API key).
     EsriTopo,
-    /// Esri World Imagery (opt-in).
-    EsriImagery,
     /// No tiles and no network: the map shows only what is drawn on top of it (pins, tracks).
     Offline,
     /// A user-configured raster tile server.
@@ -78,8 +86,8 @@ pub enum TileSource {
 
 impl TileSource {
     /// The built-in sources, in the order a picker lists them.
-    pub const BUILT_IN: [TileSource; 6] =
-        [TileSource::Osm, TileSource::OpenTopoMap, TileSource::EsriStreet, TileSource::EsriTopo, TileSource::EsriImagery, TileSource::Offline];
+    pub const BUILT_IN: [TileSource; 5] =
+        [TileSource::Osm, TileSource::OpenTopoMap, TileSource::EsriStreet, TileSource::EsriTopo, TileSource::Offline];
 
     /// The built-in source with id `id` (also accepts a few spellings: `openstreetmap`,
     /// `esri-street`, `esriImagery`…), case-insensitive.
@@ -89,8 +97,7 @@ impl TileSource {
             "osm" | "openstreetmap" => TileSource::Osm,
             "opentopomap" | "otm" => TileSource::OpenTopoMap,
             "esri-streets" | "esri-street" | "esristreet" | "esristreets" => TileSource::EsriStreet,
-            "esri-topo" | "esritopo" => TileSource::EsriTopo,
-            "esri-imagery" | "esriimagery" => TileSource::EsriImagery,
+            "esri-topo" | "esritopo" | "esri-outdoor" | "esrioutdoor" => TileSource::EsriTopo,
             "offline" | "none" => TileSource::Offline,
             _ => return None,
         })
@@ -103,7 +110,6 @@ impl TileSource {
             TileSource::OpenTopoMap => "opentopomap",
             TileSource::EsriStreet => "esri-streets",
             TileSource::EsriTopo => "esri-topo",
-            TileSource::EsriImagery => "esri-imagery",
             TileSource::Offline => "offline",
             TileSource::Custom { id, .. } => id,
         }
@@ -114,9 +120,8 @@ impl TileSource {
         match self {
             TileSource::Osm => "OpenStreetMap",
             TileSource::OpenTopoMap => "OpenTopoMap",
-            TileSource::EsriStreet => "Esri World Street Map",
-            TileSource::EsriTopo => "Esri World Topographic Map",
-            TileSource::EsriImagery => "Esri World Imagery",
+            TileSource::EsriStreet => "Esri Streets",
+            TileSource::EsriTopo => "Esri Outdoor (topographic)",
             TileSource::Offline => "Offline (no tiles)",
             TileSource::Custom { .. } => "Custom tile server",
         }
@@ -128,24 +133,51 @@ impl TileSource {
             TileSource::Osm => OSM_TILE_URL,
             TileSource::OpenTopoMap => OPENTOPOMAP_TILE_URL,
             TileSource::EsriStreet => ESRI_STREET_URL,
-            TileSource::EsriTopo => ESRI_TOPO_URL,
-            TileSource::EsriImagery => ESRI_IMAGERY_URL,
+            TileSource::EsriTopo => ESRI_OUTDOOR_URL,
             TileSource::Offline => return None,
             TileSource::Custom { url_template, .. } => url_template,
         })
     }
 
-    /// The credit painted on the map whenever its tiles are (empty for the offline source).
+    /// The credit painted on the map whenever its tiles are (empty for the offline source). For an
+    /// Esri layer this is the fallback; the tile service paints the layer's own credits once its
+    /// metadata arrived ([`super::TileService::attribution`]).
     pub fn attribution(&self) -> &str {
         match self {
             TileSource::Osm => OSM_ATTRIBUTION,
             TileSource::OpenTopoMap => OPENTOPOMAP_ATTRIBUTION,
-            TileSource::EsriStreet => ESRI_STREET_ATTRIBUTION,
-            TileSource::EsriTopo => ESRI_TOPO_ATTRIBUTION,
-            TileSource::EsriImagery => ESRI_IMAGERY_ATTRIBUTION,
+            TileSource::EsriStreet | TileSource::EsriTopo => ESRI_FALLBACK_ATTRIBUTION,
             TileSource::Offline => "",
             TileSource::Custom { attribution, .. } => attribution,
         }
+    }
+
+    /// The layer's metadata URL (without the key), whose `copyrightText` is its data credit; only
+    /// the Esri layers have one.
+    pub fn metadata_url(&self) -> Option<String> {
+        let style = match self {
+            TileSource::EsriStreet => "arcgis/streets",
+            TileSource::EsriTopo => "arcgis/outdoor",
+            _ => return None,
+        };
+        Some(format!("{ESRI_STATIC_BASE}/{style}/static?f=json"))
+    }
+
+    /// How the 256 px tile `key` is cut from the server's tile ([`TileSource::remote_key`]).
+    pub fn crop(&self, key: TileKey) -> Crop {
+        if !self.requires_key() {
+            Crop::Whole
+        } else if key.z == 0 {
+            Crop::Half
+        } else {
+            Crop::Quarter { right: key.x & 1 == 1, bottom: key.y & 1 == 1 }
+        }
+    }
+
+    /// The server's tile holding the 256 px tile `key`: the same key, or for the Esri layers (512 px
+    /// tiles, one level up) its parent.
+    pub fn remote_key(&self, key: TileKey) -> TileKey {
+        if self.requires_key() && key.z > 0 { TileKey { z: key.z - 1, x: key.x >> 1, y: key.y >> 1 } } else { key }
     }
 
     /// Deepest zoom the server has tiles for.
@@ -153,15 +185,14 @@ impl TileSource {
         match self {
             TileSource::Osm | TileSource::Offline => OSM_MAX_ZOOM,
             TileSource::OpenTopoMap => 17,
-            TileSource::EsriStreet | TileSource::EsriTopo => 18,
-            TileSource::EsriImagery => 19,
+            TileSource::EsriStreet | TileSource::EsriTopo => 20,
             TileSource::Custom { max_zoom, .. } => *max_zoom,
         }
     }
 
-    /// Esri's layers: offered and fetched only after the user turns them on (`docs/map.md`).
-    pub fn requires_opt_in(&self) -> bool {
-        matches!(self, TileSource::EsriStreet | TileSource::EsriTopo | TileSource::EsriImagery)
+    /// Esri's layers: offered and fetched only with the user's own ArcGIS API key (`docs/map.md`).
+    pub fn requires_key(&self) -> bool {
+        matches!(self, TileSource::EsriStreet | TileSource::EsriTopo)
     }
 
     /// No network: tiles are never fetched.
@@ -174,13 +205,15 @@ impl TileSource {
         USER_AGENT
     }
 
-    /// The URL of `key`, or `None` for the offline source (or a key past the source's max zoom).
+    /// The URL of the server's tile for `key` ([`TileSource::remote_key`]), without any API key, or
+    /// `None` for the offline source (or a key past the source's max zoom).
     pub fn url(&self, key: TileKey) -> Option<String> {
         let template = self.url_template()?;
         if key.z > self.max_zoom() {
             return None;
         }
-        Some(template.replace("{z}", &key.z.to_string()).replace("{x}", &key.x.to_string()).replace("{y}", &key.y.to_string()))
+        let r = self.remote_key(key);
+        Some(template.replace("{z}", &r.z.to_string()).replace("{x}", &r.x.to_string()).replace("{y}", &r.y.to_string()))
     }
 
     /// The server's host name (lower-case), for messages.
@@ -238,6 +271,24 @@ impl TileSource {
             other => Ok(other.clone()),
         }
     }
+}
+
+/// The part of the server's tile that makes a 256 px tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Crop {
+    /// The tile as it is.
+    Whole,
+    /// The tile halved in each direction (the 512 px world tile at zoom 0).
+    Half,
+    /// One quarter of a 512 px tile.
+    Quarter { right: bool, bottom: bool },
+}
+
+/// `url` with the API key added as its `token` query parameter: what the tile service sends. The
+/// result is never logged, used as a cache key, or shown.
+pub fn with_token(url: &str, token: &str) -> String {
+    let sep = if url.contains('?') { '&' } else { '?' };
+    format!("{url}{sep}token={token}")
 }
 
 fn bad(msg: impl Into<String>) -> MapError {
@@ -306,7 +357,8 @@ mod tests {
         assert_eq!(s.url(TileKey::new(20, 0, 0).unwrap()), None, "past the max zoom");
         assert_eq!(s.host().as_deref(), Some("tile.openstreetmap.org"));
         assert_eq!(s.checked().unwrap(), s);
-        assert!(!s.requires_opt_in());
+        assert!(!s.requires_key());
+        assert_eq!(s.crop(TileKey::new(3, 1, 1).unwrap()), Crop::Whole);
     }
 
     #[test]
@@ -318,10 +370,21 @@ mod tests {
                 assert!(s.url_template().is_some_and(|t| validate_template(t).is_ok()), "{s:?}");
             }
         }
-        let esri: Vec<_> = TileSource::BUILT_IN.into_iter().filter(TileSource::requires_opt_in).collect();
-        assert_eq!(esri, vec![TileSource::EsriStreet, TileSource::EsriTopo, TileSource::EsriImagery]);
-        // Esri's tile URLs are row before column
-        assert!(TileSource::EsriImagery.url(TileKey::new(3, 1, 2).unwrap()).unwrap().ends_with("/tile/3/2/1"));
+        let esri: Vec<_> = TileSource::BUILT_IN.into_iter().filter(TileSource::requires_key).collect();
+        assert_eq!(esri, vec![TileSource::EsriStreet, TileSource::EsriTopo]);
+        // Esri's static tiles: the keyed service only (never the keyless arcgisonline hosts), row
+        // before column, 512 px tiles one level up: the 256 px tile (4, 3, 5) is a quarter of (3, 1, 2)
+        let k = TileKey::new(4, 3, 5).unwrap();
+        let url = TileSource::EsriStreet.url(k).unwrap();
+        assert!(url.starts_with("https://static-map-tiles-api.arcgis.com/") && url.ends_with("/arcgis/streets/static/tile/3/2/1"), "{url}");
+        assert!(!url.contains("token"), "the key is not part of the source's URL");
+        assert_eq!(TileSource::EsriTopo.crop(k), Crop::Quarter { right: true, bottom: true });
+        assert_eq!(TileSource::EsriTopo.crop(TileKey::new(0, 0, 0).unwrap()), Crop::Half);
+        assert!(TileSource::BUILT_IN.iter().filter_map(TileSource::url_template).all(|t| !t.contains("arcgisonline")));
+        assert!(TileSource::EsriTopo.metadata_url().unwrap().ends_with("/arcgis/outdoor/static?f=json"));
+        assert_eq!(TileSource::Osm.metadata_url(), None);
+        assert_eq!(with_token("https://a.example/x?f=json", "K"), "https://a.example/x?f=json&token=K");
+        assert_eq!(with_token("https://a.example/1/2/3", "K"), "https://a.example/1/2/3?token=K");
         assert_eq!(TileSource::built_in("OpenStreetMap"), Some(TileSource::Osm));
         assert_eq!(TileSource::built_in("esri-street"), Some(TileSource::EsriStreet));
         assert_eq!(TileSource::built_in("bing"), None);
@@ -366,7 +429,7 @@ mod tests {
             ("https://tiles.example.org/{z}/{x}/{y}.png", Some("x"), Some(25), None),
             ("https://tiles.example.org/{z}/{x}/{y}.png", Some("x"), None, Some("osm")),
             ("https://tiles.example.org/{z}/{x}/{y}.png", Some("x"), None, Some("offline")),
-            ("https://tiles.example.org/{z}/{x}/{y}.png", Some("x"), None, Some("esri-imagery")),
+            ("https://tiles.example.org/{z}/{x}/{y}.png", Some("x"), None, Some("esri-topo")),
             ("https://tiles.example.org/{z}/{x}/{y}.png", Some("x"), None, Some("../etc")),
             ("https://tiles.example.org/{z}/{x}/{y}.png", Some("x"), None, Some("Upper")),
             (OSM_TILE_URL, None, Some(20), None),

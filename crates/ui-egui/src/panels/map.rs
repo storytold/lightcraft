@@ -548,7 +548,8 @@ fn render_bottom_toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rec
         // the tile provider's credit, always visible at the bottom right (tile licences require it)
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(12.0);
-            let credit = ui.label(egui::RichText::new(current.attribution()).small().color(Color32::from_white_alpha(170)));
+            // the source's credit; an Esri layer's comes from its metadata once fetched
+            let credit = ui.label(egui::RichText::new(app.session.map.attribution()).small().color(Color32::from_white_alpha(170)));
             crate::widgets::register(ui, "map:attribution", credit.rect);
         });
     });
@@ -1012,9 +1013,9 @@ mod tests {
         assert!(session.map.service().is_some_and(|s| s.is_idle() && s.stats().requests == 0));
     }
 
-    /// The Esri layers are not in the Map Style list (their terms, docs/map.md).
+    /// The Esri layers are not in the Map Style list without an ArcGIS API key (docs/map.md).
     #[test]
-    fn the_map_style_list_has_no_esri_layer() {
+    fn the_map_style_list_has_no_esri_layer_without_a_key() {
         let session = lightcraft_engine::Session::new();
         let offered: Vec<String> = session.map.offered().iter().map(|s| s.label().to_string()).collect();
         assert_eq!(offered, vec!["OpenStreetMap", "OpenTopoMap", "Offline (no tiles)"]);

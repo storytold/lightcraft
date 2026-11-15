@@ -3562,5 +3562,19 @@
   "Map tiles are off": "Kartenkacheln sind aus",
   "Offline (no tiles)": "Offline (keine Kacheln)",
   "Custom tile server": "Eigener Kachelserver",
-  "Set the location of this photo": "Ort dieses Fotos festlegen"
+  "Set the location of this photo": "Ort dieses Fotos festlegen",
+  "Esri map layers": "Esri-Kartenebenen",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Die Kartenstile Esri Streets und Esri Outdoor brauchen Ihren eigenen API-Schlüssel der ArcGIS Location Platform. Ein kostenloses Konto enthält ein monatliches Kachelkontingent; Kacheln werden Ihrem Schlüssel angerechnet. Der Esri-Server sieht dann, welche Orte Sie ansehen.",
+  "Status": "Status",
+  "A key is set": "Ein Schlüssel ist gesetzt",
+  "No key: the Esri styles are not offered": "Kein Schlüssel: Die Esri-Stile werden nicht angeboten",
+  "ArcGIS API key": "ArcGIS-API-Schlüssel",
+  "Paste a new key to replace it": "Neuen Schlüssel einfügen, um ihn zu ersetzen",
+  "Paste your key": "Schlüssel einfügen",
+  "Remove Key": "Schlüssel entfernen",
+  "Get a free key at location.arcgis.com": "Kostenlosen Schlüssel auf location.arcgis.com holen",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Geben Sie dem Schlüssel nur das Recht für statische Basemap-Kacheln. Er wird im Einstellungsordner von LightCraft gespeichert (map-keys.json), nie in Ihrer Bibliothek, und nur an den Kachelserver von Esri gesendet. Wählen Sie den Stil in der Liste Kartenstil der Kartenansicht.",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor (topografisch)",
+  "Set ArcGIS API Key": "ArcGIS-API-Schlüssel festlegen"
 }

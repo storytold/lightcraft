@@ -2480,5 +2480,19 @@
   "Map tiles are off": "地图图块已关闭",
   "Offline (no tiles)": "离线（无图块）",
   "Custom tile server": "自定义图块服务器",
-  "Set the location of this photo": "设置这张照片的位置"
+  "Set the location of this photo": "设置这张照片的位置",
+  "Esri map layers": "Esri 地图图层",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Esri Streets 和 Esri Outdoor 地图样式需要你自己的 ArcGIS Location Platform API 密钥。免费账户每月有图块额度，图块计入你的密钥。Esri 的服务器会看到你查看了哪些地方。",
+  "Status": "状态",
+  "A key is set": "已设置密钥",
+  "No key: the Esri styles are not offered": "无密钥：不提供 Esri 样式",
+  "ArcGIS API key": "ArcGIS API 密钥",
+  "Paste a new key to replace it": "粘贴新密钥以替换",
+  "Paste your key": "粘贴你的密钥",
+  "Remove Key": "移除密钥",
+  "Get a free key at location.arcgis.com": "在 location.arcgis.com 获取免费密钥",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "只给密钥授予静态底图图块权限。它保存在 LightCraft 的设置文件夹（map-keys.json）中，从不保存在图库里，只发送给 Esri 的图块服务器。在地图视图的“地图样式”列表中选择样式。",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor（地形）",
+  "Set ArcGIS API Key": "设置 ArcGIS API 密钥"
 }

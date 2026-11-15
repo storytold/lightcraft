@@ -59,6 +59,7 @@ mod library_problem;
 mod lifecycle_037;
 mod lightroom_destination;
 mod lights_out;
+mod map_esri;
 mod map_filmstrip;
 mod mask_effects;
 mod masking;

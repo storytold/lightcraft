@@ -2542,5 +2542,19 @@
   "Map tiles are off": "Kartrutor är avstängda",
   "Offline (no tiles)": "Offline (inga rutor)",
   "Custom tile server": "Egen rutserver",
-  "Set the location of this photo": "Ange platsen för det här fotot"
+  "Set the location of this photo": "Ange platsen för det här fotot",
+  "Esri map layers": "Esris kartlager",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Kartstilarna Esri Streets och Esri Outdoor kräver din egen API-nyckel för ArcGIS Location Platform. Ett gratiskonto ger en månatlig kvot av rutor; rutorna räknas mot din nyckel. Esris server ser då vilka platser du tittar på.",
+  "Status": "Status",
+  "A key is set": "En nyckel är angiven",
+  "No key: the Esri styles are not offered": "Ingen nyckel: Esri-stilarna erbjuds inte",
+  "ArcGIS API key": "ArcGIS API-nyckel",
+  "Paste a new key to replace it": "Klistra in en ny nyckel för att ersätta den",
+  "Paste your key": "Klistra in din nyckel",
+  "Remove Key": "Ta bort nyckel",
+  "Get a free key at location.arcgis.com": "Skaffa en gratis nyckel på location.arcgis.com",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Ge nyckeln bara behörigheten för statiska baskartrutor. Den sparas i LightCrafts inställningsmapp (map-keys.json), aldrig i ditt bibliotek, och skickas bara till Esris ruteserver. Välj stilen i listan Kartstil i kartvyn.",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor (topografisk)",
+  "Set ArcGIS API Key": "Ange ArcGIS API-nyckel"
 }

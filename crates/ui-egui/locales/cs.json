@@ -2527,5 +2527,19 @@
   "Map tiles are off": "Mapové dlaždice jsou vypnuté",
   "Offline (no tiles)": "Offline (bez dlaždic)",
   "Custom tile server": "Vlastní server dlaždic",
-  "Set the location of this photo": "Nastavit polohu této fotky"
+  "Set the location of this photo": "Nastavit polohu této fotky",
+  "Esri map layers": "Mapové vrstvy Esri",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Mapové styly Esri Streets a Esri Outdoor potřebují váš vlastní klíč API ArcGIS Location Platform. Bezplatný účet má měsíční limit dlaždic; dlaždice se počítají vašemu klíči. Server Esri pak vidí, na která místa se díváte.",
+  "Status": "Stav",
+  "A key is set": "Klíč je nastaven",
+  "No key: the Esri styles are not offered": "Bez klíče: styly Esri nejsou nabízeny",
+  "ArcGIS API key": "Klíč API ArcGIS",
+  "Paste a new key to replace it": "Vložte nový klíč pro nahrazení",
+  "Paste your key": "Vložte svůj klíč",
+  "Remove Key": "Odebrat klíč",
+  "Get a free key at location.arcgis.com": "Získejte bezplatný klíč na location.arcgis.com",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Dejte klíči jen oprávnění ke statickým dlaždicím podkladových map. Je uložen ve složce nastavení LightCraftu (map-keys.json), nikdy ve vaší knihovně, a posílá se jen na server dlaždic Esri. Styl zvolte v seznamu Styl mapy v zobrazení Mapa.",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor (topografická)",
+  "Set ArcGIS API Key": "Nastavit klíč API ArcGIS"
 }

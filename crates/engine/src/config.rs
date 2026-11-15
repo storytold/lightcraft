@@ -202,10 +202,12 @@ impl Session {
     }
 
     /// Fetch map tiles from the network and cache them in the shared default folder
-    /// ([`default_map_cache_dir`]). Without this a session never fetches tiles (tests).
+    /// ([`default_map_cache_dir`]), and keep the user's map API key in the config folder
+    /// (`map-keys.json`). Without this a session never fetches tiles and keeps no key (tests).
     pub fn with_default_map_cache(mut self) -> Self {
         self.map.cache_root = default_map_cache_dir();
         self.map.online = true;
+        self.map.load_esri_key(config_dir().map(|d| d.join(crate::map::KEY_FILE)));
         self.map.reset_service();
         self
     }

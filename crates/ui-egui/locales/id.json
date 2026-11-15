@@ -2452,5 +2452,19 @@
   "Map tiles are off": "Petak peta nonaktif",
   "Offline (no tiles)": "Luring (tanpa petak)",
   "Custom tile server": "Server petak khusus",
-  "Set the location of this photo": "Tetapkan lokasi foto ini"
+  "Set the location of this photo": "Tetapkan lokasi foto ini",
+  "Esri map layers": "Lapisan peta Esri",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Gaya peta Esri Streets dan Esri Outdoor memerlukan kunci API ArcGIS Location Platform milik Anda. Akun gratis memberi jatah ubin bulanan; ubin dihitung pada kunci Anda. Server Esri lalu melihat tempat yang Anda lihat.",
+  "Status": "Status",
+  "A key is set": "Kunci sudah diatur",
+  "No key: the Esri styles are not offered": "Tanpa kunci: gaya Esri tidak ditawarkan",
+  "ArcGIS API key": "Kunci API ArcGIS",
+  "Paste a new key to replace it": "Tempel kunci baru untuk menggantinya",
+  "Paste your key": "Tempel kunci Anda",
+  "Remove Key": "Hapus Kunci",
+  "Get a free key at location.arcgis.com": "Dapatkan kunci gratis di location.arcgis.com",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Beri kunci hanya hak ubin peta dasar statis. Kunci disimpan di folder pengaturan LightCraft (map-keys.json), tidak pernah di pustaka Anda, dan hanya dikirim ke server ubin Esri. Pilih gaya di daftar Gaya Peta pada tampilan Peta.",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor (topografi)",
+  "Set ArcGIS API Key": "Atur Kunci API ArcGIS"
 }

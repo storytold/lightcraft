@@ -20,6 +20,11 @@
 //! - **Hostile responses**: bodies over [`MAX_TILE_BYTES`], images that aren't PNG/JPEG/WebP of at
 //!   most 1024 px, or that fail to decode are errors, never panics.
 //!
+//! - **Keys stay secret**: a keyed source's API key ([`TileService::with_token`]) is added to the
+//!   request URL only; error messages, the cache (keyed by source id and tile) and the activity
+//!   row never carry it.
+//! - **Credit**: a source with metadata (the Esri layers) has it fetched once, bounded and checked
+//!   ([`TileService::attribution`]); until then, or when it fails, the source's fixed credit shows.
 //! - **Visible**: while tiles are queued or loading, one "Loading map tiles" row is on the activity
 //!   stack (`docs/background-tasks.md`); it goes when the queue is empty.
 //!
@@ -37,8 +42,9 @@ use web_time::Instant;
 
 use super::cache::{TileCache, TileMeta};
 use super::mercator::{TileKey, Viewport};
-use super::source::TileSource;
+use super::source::{Crop, ESRI_POWERED_BY, TileSource, with_token};
 use crate::activity::{Activity, Cancel, TaskGuard};
+use crate::map::ApiKey;
 
 /// Most tile requests on the wire at once.
 pub const MAX_IN_FLIGHT: usize = 2;
@@ -57,6 +63,14 @@ const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(300);
 /// Longest Retry-After honoured.
 const RETRY_AFTER_MAX: Duration = Duration::from_secs(3600);
+/// Largest metadata answer accepted.
+pub const MAX_METADATA_BYTES: usize = 64 * 1024;
+/// Longest credit text taken from metadata.
+const MAX_CREDIT: usize = 400;
+/// Server tiles kept a moment after they arrive, so the four 256 px tiles cut from one 512 px tile
+/// cost one request.
+const RECENT_TILES: usize = 16;
+const RECENT_FOR: Duration = Duration::from_secs(120);
 /// Worker threads: [`MAX_IN_FLIGHT`] for the network plus one so cache reads never wait behind it.
 const WORKERS: usize = MAX_IN_FLIGHT + 1;
 
@@ -157,6 +171,60 @@ pub fn decode_tile(bytes: &[u8]) -> Result<TileImage, crate::map::MapError> {
     Ok(TileImage { width, height, rgba: img.data.as_flattened().to_vec() })
 }
 
+/// The 256 px tile `crop` asks for, cut from (or scaled down from) the server's tile.
+pub fn crop_tile(img: TileImage, crop: Crop) -> Result<TileImage, crate::map::MapError> {
+    let bad = |m: String| crate::map::MapError::BadTile(m);
+    let (w, h) = (img.width as usize, img.height as usize);
+    if img.rgba.len() != w.saturating_mul(h).saturating_mul(4) {
+        return Err(bad("pixel data doesn't match the size".into()));
+    }
+    match crop {
+        Crop::Whole => Ok(img),
+        Crop::Quarter { right, bottom } => {
+            if w < 2 || h < 2 || w % 2 != 0 || h % 2 != 0 {
+                return Err(bad(format!("{w}×{h} can't be cut in quarters")));
+            }
+            let (qw, qh) = (w / 2, h / 2);
+            let (x0, y0) = (if right { qw } else { 0 }, if bottom { qh } else { 0 });
+            let mut rgba = Vec::with_capacity(qw * qh * 4);
+            for y in y0..y0 + qh {
+                let row = (y * w + x0) * 4;
+                rgba.extend_from_slice(img.rgba.get(row..row + qw * 4).ok_or_else(|| bad("tile row out of range".into()))?);
+            }
+            Ok(TileImage { width: qw as u32, height: qh as u32, rgba })
+        }
+        Crop::Half => {
+            if w < 2 || h < 2 || w % 2 != 0 || h % 2 != 0 {
+                return Ok(img);
+            }
+            let (hw, hh) = (w / 2, h / 2);
+            let mut rgba = Vec::with_capacity(hw * hh * 4);
+            let px = |x: usize, y: usize, c: usize| u32::from(img.rgba.get((y * w + x) * 4 + c).copied().unwrap_or(0));
+            for y in 0..hh {
+                for x in 0..hw {
+                    for c in 0..4 {
+                        let sum = px(2 * x, 2 * y, c) + px(2 * x + 1, 2 * y, c) + px(2 * x, 2 * y + 1, c) + px(2 * x + 1, 2 * y + 1, c);
+                        rgba.push(((sum + 2) / 4) as u8);
+                    }
+                }
+            }
+            Ok(TileImage { width: hw as u32, height: hh as u32, rgba })
+        }
+    }
+}
+
+/// The credit text in a layer's metadata answer: `copyrightText`, one line of plain text (no
+/// markup) of at most 400 characters; anything else is refused.
+pub fn metadata_credit(body: &[u8]) -> Option<String> {
+    if body.len() > MAX_METADATA_BYTES {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let t = v.get("copyrightText")?.as_str()?.trim();
+    let ok = !t.is_empty() && t.chars().count() <= MAX_CREDIT && !t.chars().any(|c| c.is_control() || matches!(c, '<' | '>'));
+    ok.then(|| t.to_string())
+}
+
 /// What [`TileService::poll`] reports.
 #[derive(Clone, Debug)]
 pub enum TileEvent {
@@ -185,6 +253,18 @@ pub struct ServiceStats {
     pub in_memory: usize,
     /// Milliseconds until the host may be asked again (0 = not backing off).
     pub backoff_ms: u64,
+    /// Server tiles reused from a recent answer instead of a request.
+    pub reused: u64,
+}
+
+/// Where the source's metadata (its credit) stands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Meta {
+    #[default]
+    NotAsked,
+    Queued,
+    Running,
+    Done,
 }
 
 struct MemTile {
@@ -221,6 +301,13 @@ struct State {
     row: Option<TaskGuard>,
     row_done: u64,
     activity: Option<Activity>,
+    /// The API key added to requests (keyed sources), never anywhere else.
+    token: Option<ApiKey>,
+    /// The credit from the source's metadata, and where fetching it stands.
+    credit: Option<String>,
+    meta: Meta,
+    /// Recent server answers by URL (without key), newest last.
+    recent: VecDeque<(String, Instant, Arc<HttpResponse>)>,
 }
 
 impl State {
@@ -300,6 +387,7 @@ impl std::fmt::Debug for TileService {
 enum Job {
     Disk(TileKey),
     Net(TileKey),
+    Meta,
 }
 
 impl TileService {
@@ -321,6 +409,22 @@ impl TileService {
             None
         };
         TileService::with_transport(source, cache, transport).with_activity(activity)
+    }
+
+    /// Add `token` (the user's API key) to this source's requests. Only to its tile and metadata
+    /// requests: never to messages, logs or the cache.
+    pub fn with_token(self, token: Option<ApiKey>) -> TileService {
+        self.shared.lock().token = token;
+        self
+    }
+
+    /// The credit to paint: for a source with metadata, "Powered by Esri" and the layer's own
+    /// `copyrightText` once fetched; otherwise (or until then) the source's fixed credit.
+    pub fn attribution(&self) -> String {
+        match &self.shared.lock().credit {
+            Some(c) => format!("{ESRI_POWERED_BY} | {c}"),
+            None => self.shared.source.attribution().to_string(),
+        }
     }
 
     /// Report loading on `activity` (one row while tiles are queued or loading).
@@ -397,6 +501,10 @@ impl TileService {
         st.failed.retain(|_, until| *until > now);
         let has_cache = self.shared.cache.is_some();
         let can_fetch = self.shared.transport.is_some();
+        // the credit: asked for once, with the first tiles
+        if can_fetch && !st.wanted.is_empty() && st.meta == Meta::NotAsked && self.shared.source.metadata_url().is_some() {
+            st.meta = Meta::Queued;
+        }
         for k in st.wanted.clone() {
             if st.busy.contains(&k) || st.disk_q.contains(&k) || st.net_q.contains(&k) || st.failed.contains_key(&k) {
                 continue;
@@ -484,6 +592,11 @@ fn next_job(sh: &Shared) -> Option<Job> {
         let backing_off = st.backoff_until.is_some_and(|u| u > now);
         // while the host is failing, one probe at a time
         let limit = if st.errors_in_row > 0 { 1 } else { MAX_IN_FLIGHT };
+        if sh.transport.is_some() && st.meta == Meta::Queued && st.net_in_flight < limit && !backing_off {
+            st.meta = Meta::Running;
+            st.net_in_flight += 1;
+            return Some(Job::Meta);
+        }
         if sh.transport.is_some() && !st.net_q.is_empty() && st.net_in_flight < limit && !backing_off {
             // the most central tile of the newest view
             let best = st
@@ -516,11 +629,22 @@ fn worker(sh: &Shared) {
         // a panic in a decoder or the transport is that tile's error, not a dead thread
         let key = match job {
             Job::Disk(k) | Job::Net(k) => k,
+            Job::Meta => {
+                let credit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| meta_job(sh))).ok().flatten();
+                let mut st = sh.lock();
+                st.net_in_flight = st.net_in_flight.saturating_sub(1);
+                st.meta = Meta::Done;
+                st.credit = credit;
+                drop(st);
+                sh.wake.notify_all();
+                continue;
+            }
         };
         let net = matches!(job, Job::Net(_));
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
             Job::Disk(k) => disk_job(sh, k),
             Job::Net(k) => net_job(sh, k),
+            Job::Meta => {}
         }));
         let mut st = sh.lock();
         st.busy.remove(&key);
@@ -541,11 +665,49 @@ fn worker(sh: &Shared) {
     }
 }
 
+/// Fetch the source's metadata and take its credit (`None`: none usable; the fixed one shows).
+fn meta_job(sh: &Shared) -> Option<String> {
+    let (transport, url) = (sh.transport.as_ref()?, sh.source.metadata_url()?);
+    let token = sh.lock().token.clone();
+    let full = match &token {
+        Some(t) => with_token(&url, t.secret()),
+        None => url.clone(),
+    };
+    let headers = [("User-Agent", sh.source.user_agent().to_string())];
+    match transport.get(&full, &headers, MAX_METADATA_BYTES, &sh.cancel) {
+        Ok(r) if r.status == 200 => metadata_credit(&r.body).or_else(|| {
+            log::warn!("map: {url}: no usable credit in the layer's metadata; showing the fixed one");
+            None
+        }),
+        Ok(r) => {
+            log::warn!("map: {url}: HTTP {} for the layer's metadata; showing the fixed credit", r.status);
+            None
+        }
+        Err(e) => {
+            log::warn!("map: {url}: {}", hide(&e, token.as_ref()));
+            None
+        }
+    }
+}
+
+/// `text` with the API key replaced, for messages (a transport error may quote the URL).
+fn hide(text: &str, token: Option<&ApiKey>) -> String {
+    match token {
+        Some(t) if !t.secret().is_empty() => text.replace(t.secret(), "[key]"),
+        _ => text.to_string(),
+    }
+}
+
+/// Decode a tile of the source and cut the 256 px tile `k` out of it.
+fn decode_for(sh: &Shared, k: TileKey, bytes: &[u8]) -> Result<TileImage, crate::map::MapError> {
+    crop_tile(decode_tile(bytes)?, sh.source.crop(k))
+}
+
 /// Look `k` up in the cache: show it if there (and revalidate it if stale), else fetch it.
 fn disk_job(sh: &Shared, k: TileKey) {
     let now = crate::map::now_secs();
     let cached = sh.cache.as_ref().and_then(|c| c.read(k));
-    let decoded = cached.and_then(|c| match decode_tile(&c.bytes) {
+    let decoded = cached.and_then(|c| match decode_for(sh, k, &c.bytes) {
         Ok(img) => Some((img, c.meta)),
         Err(e) => {
             log::warn!("map: cached tile {k:?} doesn't decode ({e}); fetching it again");
@@ -593,8 +755,43 @@ fn net_job(sh: &Shared, k: TileKey) {
     if let Some(m) = &cached {
         headers.extend(m.conditional_headers());
     }
-    sh.lock().stats.requests += 1;
-    let result = transport.get(&url, &headers, MAX_TILE_BYTES, &sh.cancel);
+    let token = sh.lock().token.clone();
+    let cropped = sh.source.crop(k) != Crop::Whole;
+    // a server tile that just arrived for a neighbour (a 512 px tile holds four of ours)
+    let reuse = if cropped {
+        let mut st = sh.lock();
+        let now = Instant::now();
+        st.recent.retain(|(_, at, _)| now.saturating_duration_since(*at) < RECENT_FOR);
+        let hit = st.recent.iter().find(|(u, _, _)| *u == url).map(|(_, _, r)| HttpResponse::clone(r));
+        if hit.is_some() {
+            st.stats.reused += 1;
+        }
+        hit
+    } else {
+        None
+    };
+    let result = match reuse {
+        Some(r) => Ok(r),
+        None => {
+            sh.lock().stats.requests += 1;
+            let full = match &token {
+                Some(t) => with_token(&url, t.secret()),
+                None => url.clone(),
+            };
+            let r = transport.get(&full, &headers, MAX_TILE_BYTES, &sh.cancel).map_err(|e| hide(&e, token.as_ref()));
+            if let Ok(resp) = &r
+                && resp.status == 200
+                && cropped
+            {
+                let mut st = sh.lock();
+                st.recent.push_back((url.clone(), Instant::now(), Arc::new(resp.clone())));
+                while st.recent.len() > RECENT_TILES {
+                    st.recent.pop_front();
+                }
+            }
+            r
+        }
+    };
     let now = crate::map::now_secs();
     let fail = |st: &mut State, error: String, retry: bool| {
         st.stats.errors += 1;
@@ -623,7 +820,7 @@ fn net_job(sh: &Shared, k: TileKey) {
     let header = |n: &str| resp.header(n);
     match resp.status {
         200 => {
-            let decoded = decode_tile(&resp.body);
+            let decoded = decode_for(sh, k, &resp.body);
             let (meta, store) = TileMeta::from_response(now, header);
             let mut st = sh.lock();
             st.errors_in_row = 0;

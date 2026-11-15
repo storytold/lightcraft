@@ -84,29 +84,76 @@ LightCraft uses OpenStreetMap's tile server under its tile usage policy
 
 Sessions that a host has not put online (tests, the web build) never fetch tiles.
 
-## Esri layers (off)
+## Esri layers (your own ArcGIS key)
 
-Earlier builds of this branch offered Esri's World Imagery, World Street Map, World Topographic Map and a
-Hybrid layer, fetched from `server.arcgisonline.com` without an account. They are **off and cannot be
-turned on** in this build: the Map Style list does not offer them, `map.tileSource` refuses them with an
-error naming this page, and nothing is ever fetched from Esri. A library saved with an Esri layer opens on
-OpenStreetMap with a one-line notice; `prefs.json` keeps the Esri choice.
+Two Esri map styles are offered once you give LightCraft your own ArcGIS Location Platform API key:
+**Esri Streets** (`esri-streets`, Esri's `arcgis/streets` style) and **Esri Outdoor (topographic)**
+(`esri-topo`, the `arcgis/outdoor` style). This is the "bring your own key" pattern of QGIS, darktable and
+digiKam: LightCraft has no Esri account of its own, and your tile use counts against your key.
 
-Why: Esri's terms for these layers do not allow this use. Each layer's ArcGIS Online item
-(e.g. <https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9> for World Imagery) says it is
-"licensed under the Esri Master License Agreement" and links its terms. The terms summary
-(<https://www.esri.com/content/dam/arcgisonline/docs/tou_summary.pdf>, "Last Updated: April 21, 2025", read
-2026-11-14) lists as conditions "Use with Esri software and comply with its terms of use. If you do not have
-Esri software, you must purchase an ArcGIS Online subscription", and among what you may not do,
-"Systematically harvest basemap tiles through any method other than using Esri Content Packages" and "Use
-content from ArcGIS Living Atlas for commercial use in your application or product". LightCraft is not Esri
-software and has no ArcGIS subscription. The full terms are the Esri Master Agreement
-(<https://www.esri.com/en-us/legal/terms/master-agreement>). The layers' required credits, kept in the code
-for when this changes, come from each item's `accessInformation`
-(<https://www.arcgis.com/sharing/rest/content/items/10df2279f9684e4a9f6a7f08febac2a9?f=json>).
+**Setting it up.** Create a free ArcGIS Location Platform account at <https://location.arcgis.com>, create an
+API key with the static basemap tiles privilege (`premium:user:staticbasemaptiles`) and nothing else, and paste
+it in Settings ▸ Map ▸ ArcGIS API key, then press Return or Apply (`map.setEsriKey {key}`; `""` removes it).
+The key is checked for its shape only; nothing is sent until a map shows an Esri style. The Esri styles then
+appear in the Map Style list at the bottom of the map.
 
-Turning them on would need a maintainer decision, for example a user-supplied ArcGIS key through Esri's
-token-based basemap service, with the privacy note that Esri's server then sees which places you look at.
+**Without a key** the Esri styles are not in the Map Style list, `map.tileSource` refuses them with a message
+saying a key is needed and where to get one, and nothing is fetched from Esri. A library saved with an Esri
+style opens on OpenStreetMap with a one-line notice; `prefs.json` keeps the Esri choice, which comes back once
+a key is set.
+
+**The key is a secret.** It is kept in LightCraft's settings folder in `map-keys.json` (readable only by you
+on macOS and Linux), never in the library, `prefs.json` or `ui.json`. It is not journaled, never logged, never
+shown again after you apply it (Settings shows only whether one is set), and `map.tileSource`,
+`map.providers` and `map.setEsriKey` report only `esriKeySet: true | false`. It is sent only to Esri's tile
+server, as the `token` query parameter of tile and metadata requests. The tile cache is keyed by style and
+tile (`maptiles/esri-streets/<z>/<x>/<y>.tile`), never by URL, so the key is in no file name or cache entry;
+an error message that would quote a request URL has the key replaced by `[key]`.
+
+**The service.** Tiles come from Esri's static basemap tiles service,
+`https://static-map-tiles-api.arcgis.com/arcgis/rest/services/static-basemap-tiles-service/v1/arcgis/<style>/static/tile/{z}/{y}/{x}?token=<key>`
+(read 2026-11-15: <https://developers.arcgis.com/rest/static-basemap-tiles/>,
+<https://developers.arcgis.com/rest/static-basemap-tiles/arcgis-streets-tile-get/>). Its tiles are 512 px PNGs on
+the same grid as a 256 px pyramid one level down ("zoom levels are 1 less"), so LightCraft fetches the 512 px
+tile once and cuts the four 256 px tiles it holds out of it; at zoom 0 it scales the world tile down. The same
+fetch queue as for OpenStreetMap applies (two requests at a time, backoff, cache with the server's
+`Cache-Control`). The keyless `services.arcgisonline.com` / `server.arcgisonline.com` endpoints are not used:
+Esri's terms summary (<https://www.esri.com/content/dam/arcgisonline/docs/tou_summary.pdf>, April 21, 2025)
+allows them only with Esri software or an ArcGIS subscription.
+
+**No imagery.** The static tiles service has no satellite imagery style (only `arcgis/imagery/labels`, a
+labels overlay), and Esri's `arcgis/topographic` and `arcgis/imagery` styles exist only as vector styles, which
+this renderer can't draw. Earlier builds of this branch offered World Imagery and World Topographic Map from the
+keyless endpoints; a library saved with World Imagery opens on OpenStreetMap (its saved value can't be read
+any more). Outdoor is Esri's raster topographic style.
+
+**Credit.** While an Esri style is shown the map's credit is "Powered by Esri" followed by the style's data
+credits, taken from the style's metadata (`…/arcgis/<style>/static?f=json`, its `copyrightText`), fetched once
+per style with the key. The answer is checked: at most 64 KiB, JSON, one line of plain text of at most 400
+characters, no markup. Until it arrives, or when it fails, the credit is the providers the service's
+documentation lists: "Powered by Esri | Esri, TomTom, Garmin, FAO, NOAA, USGS, © OpenStreetMap contributors,
+and the GIS User Community". The service's page says: "Applications that use this service must display both
+basemap and data attribution."
+
+**Terms: what was checked and what wasn't.** Read on 2026-11-15: the static tiles pages above (tile URL, 512
+px PNG, zoom 0–22, `token` parameter, the privilege, "2 million free then $0.15 per 1,000 tiles", metadata
+calls free) and <https://developers.arcgis.com/documentation/security-and-authentication/api-key-authentication/>
+(API keys "are typically embedded directly into client applications", usage "is billed to the ArcGIS
+subscription … associated with the developer's account who created the key"). Not verified, because the pages
+were not readable: Esri's attribution guide (<https://developers.arcgis.com/documentation/esri-and-data-attribution/>
+returned an empty page) and the ArcGIS Location Platform Agreement
+(<https://www.esri.com/content/dam/esrisites/en-us/media/legal/platform/platform-legal.pdf>), so whether its
+terms limit keeping tiles in a local cache is not confirmed. Your key, your account: read those terms before
+use.
+
+**Custom templates.** A custom tile source (`map.tileSource {urlTemplate, attribution}`) may carry your own
+key in its URL, for any provider, on your own responsibility. It is stored as you typed it in `prefs.json`
+(it is the source's URL), and it stays checked: `https://` only, `{z}`, `{x}` and `{y}` each once, at most
+512 characters.
+
+**Other keyless providers (checked, none added).** CARTO's free basemaps are for non-commercial use only;
+OpenFreeMap serves vector tiles only, which this renderer can't draw. OpenStreetMap stays the default and
+OpenTopoMap the other keyless choice.
 
 ## Privacy
 
@@ -119,7 +166,8 @@ GeoNames). Choose Offline to fetch nothing.
 
 | Command | What it does |
 |---------|--------------|
-| `map.tileSource` | `{}` reports the source; `{id: "osm" \| "opentopomap" \| "offline"}`, `{offline: true \| false}`, or `{urlTemplate, attribution, maxZoom?, id?}` sets it (saved in `prefs.json`) |
+| `map.tileSource` | `{}` reports the source; `{id: "osm" \| "opentopomap" \| "esri-streets" \| "esri-topo" \| "offline"}`, `{offline: true \| false}`, or `{urlTemplate, attribution, maxZoom?, id?}` sets it (saved in `prefs.json`); the Esri styles need a key → `{…, esriKeySet}` |
+| `map.setEsriKey` | `{key}`: sets your ArcGIS API key (`""` or null removes it); shape-checked only, never journaled or reported → `{esriKeySet, notice}` |
 | `map.providers` | The sources offered now, with credit and max zoom |
 | `map.cacheInfo` | `{bytes, tiles, capBytes, dir}` of the tile cache |
 | `map.clearCache` | Deletes every cached tile |

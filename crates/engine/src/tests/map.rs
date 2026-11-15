@@ -22,7 +22,7 @@ fn tile_source_get_and_set() {
     assert_eq!(r["attribution"], "© OpenStreetMap contributors");
     assert_eq!(r["maxZoom"], 19);
     assert!(r["userAgent"].as_str().unwrap().starts_with("LightCraft/"));
-    assert_eq!((r["offline"].as_bool(), r["esriEnabled"].as_bool()), (Some(false), Some(false)));
+    assert_eq!((r["offline"].as_bool(), r["esriKeySet"].as_bool()), (Some(false), Some(false)));
 
     let r = s.execute("map.tileSource", &json!({"offline": true})).unwrap();
     assert_eq!((r["id"].as_str(), r["offline"].as_bool()), (Some("offline"), Some(true)));
@@ -61,30 +61,50 @@ fn tile_source_get_and_set() {
     assert_eq!(r["urlTemplate"], crate::map::OSM_TILE_URL);
 }
 
-/// Esri is refused while its opt-in is off (it is, and no command turns it on: docs/map.md), and
-/// the refusal names why; the gate lets it through once enabled.
+const KEY: &str = "AAPK0123456789abcdef_TEST-key.x";
+
+/// The Esri layers need the user's own ArcGIS API key: refused (with where to get one) and not
+/// listed without it, listed and accepted with it; the key is never reported back.
 #[test]
-fn esri_sources_are_refused_while_off_and_accepted_after_enabling() {
+fn esri_sources_need_a_key_and_the_key_is_never_reported() {
     let mut s = Session::new();
-    for id in ["esri-imagery", "esri-streets", "esri-topo"] {
+    for id in ["esri-streets", "esri-topo"] {
         let e = s.execute("map.tileSource", &json!({"id": id})).unwrap_err().to_string();
-        assert!(e.contains("Esri") && e.contains("docs/map.md"), "{e}");
+        assert!(e.contains("API key") && e.contains("location.arcgis.com"), "{e}");
     }
+    assert!(s.execute("map.tileSource", &json!({"id": "esri-imagery"})).is_err(), "no keyless imagery layer");
     assert_eq!(*s.map.source(), crate::map::TileSource::Osm);
-    assert!(s.execute("map.enableEsri", &json!({"on": true})).is_err(), "no command turns Esri on");
-    s.map.set_esri_enabled(true);
-    let r = s.execute("map.tileSource", &json!({"id": "esri-imagery"})).unwrap();
-    assert_eq!(r["id"], "esri-imagery");
-    assert!(r["attribution"].as_str().unwrap().contains("Esri"));
-    let ids: Vec<String> =
-        s.execute("map.providers", &json!({})).unwrap().as_array().unwrap().iter().map(|p| p["id"].as_str().unwrap().to_string()).collect();
-    assert!(ids.contains(&"esri-imagery".to_string()));
-    // turned off again: the map falls back to OpenStreetMap, the choice is kept
-    s.map.set_esri_enabled(false);
+    // a key of the wrong shape is refused without being repeated
+    for bad in [json!({"key": "has spaces in it 0123456789"}), json!({"key": 5}), json!({})] {
+        let e = s.execute("map.setEsriKey", &bad).unwrap_err().to_string();
+        assert!(!e.contains("0123456789"), "{e}");
+    }
+    let r = s.execute("map.setEsriKey", &json!({"key": KEY})).unwrap();
+    assert_eq!(r["esriKeySet"], true);
+    let r = s.execute("map.tileSource", &json!({"id": "esri-streets"})).unwrap();
+    assert_eq!((r["id"].as_str(), r["esriKeySet"].as_bool()), (Some("esri-streets"), Some(true)));
+    assert!(r["attribution"].as_str().unwrap().starts_with("Powered by Esri"));
+    let providers = s.execute("map.providers", &json!({})).unwrap();
+    let ids: Vec<&str> = providers.as_array().unwrap().iter().filter_map(|p| p["id"].as_str()).collect();
+    assert_eq!(ids, vec!["osm", "opentopomap", "esri-streets", "esri-topo", "offline"]);
+    // the key appears in no reply, no journal entry and not in what prefs.json stores
+    let everything = format!(
+        "{r} {providers} {} {} {:?} {}",
+        s.execute("map.tileSource", &json!({})).unwrap(),
+        s.execute("map.setEsriKey", &json!({"key": KEY})).unwrap(),
+        s.journal,
+        serde_json::to_string(s.map.source()).unwrap()
+    );
+    assert!(!everything.contains(KEY), "{everything}");
+    assert_eq!(s.map_tiles().unwrap().source(), &crate::map::TileSource::EsriStreet);
+    // cleared: the map falls back to OpenStreetMap and keeps the choice, with a notice
+    let r = s.execute("map.setEsriKey", &json!({"key": ""})).unwrap();
+    assert_eq!(r["esriKeySet"], false);
+    assert!(r["notice"].as_str().unwrap().contains("OpenStreetMap"), "{r}");
     let r = s.execute("map.tileSource", &json!({})).unwrap();
-    assert_eq!((r["id"].as_str(), r["saved"].as_str()), (Some("osm"), Some("esri-imagery")));
-    assert!(r["notice"].as_str().unwrap().contains("OpenStreetMap"));
-    assert_eq!(s.map_tiles().unwrap().source(), &crate::map::TileSource::Osm, "Esri tiles are never fetched");
+    assert_eq!((r["id"].as_str(), r["saved"].as_str()), (Some("osm"), Some("esri-streets")));
+    assert_eq!(s.map_tiles().unwrap().source(), &crate::map::TileSource::Osm, "Esri tiles are never fetched without a key");
+    assert!(s.execute("map.setEsriKey", &json!({"key": null})).is_ok());
 }
 
 #[test]
@@ -266,17 +286,18 @@ fn the_map_tile_source_persists_and_is_rechecked() {
 #[test]
 fn a_saved_esri_source_falls_back_with_a_notice_and_is_kept() {
     let lib = temp_lib("esri");
-    std::fs::write(lib.join("prefs.json"), br#"{"cacheMb": 321, "mapSource": {"kind": "esriImagery"}}"#).unwrap();
+    std::fs::write(lib.join("prefs.json"), br#"{"cacheMb": 321, "mapSource": {"kind": "esriTopo"}}"#).unwrap();
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
     assert_eq!(s.cache_mb, 321);
     assert_eq!(s.map.effective_source(), crate::map::TileSource::Osm);
     let warnings = s.take_library_warnings();
     assert_eq!(warnings.iter().filter(|w| w.contains("OpenStreetMap") && w.contains("Esri")).count(), 1, "{warnings:?}");
+    assert!(warnings.iter().any(|w| w.contains("location.arcgis.com")), "the notice says where to get a key: {warnings:?}");
     // saving other preferences keeps the Esri choice in the file
     s.save_prefs().unwrap();
     let prefs: serde_json::Value = serde_json::from_slice(&std::fs::read(lib.join("prefs.json")).unwrap()).unwrap();
-    assert_eq!(prefs["mapSource"], json!({"kind": "esriImagery"}));
+    assert_eq!(prefs["mapSource"], json!({"kind": "esriTopo"}));
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }

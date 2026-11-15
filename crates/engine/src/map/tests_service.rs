@@ -502,3 +502,117 @@ fn a_huge_announced_tile_length_is_an_error_not_an_allocation() {
     assert!(err.contains("larger"), "{err}");
     server.join().unwrap();
 }
+
+const KEY: &str = "AAPK0123456789abcdef_TEST-key.x";
+
+fn esri_service(fake: Arc<Fake>, cache: Option<TileCache>) -> TileService {
+    let key = crate::map::ApiKey::parse(KEY).unwrap();
+    TileService::with_transport(TileSource::EsriStreet, cache, Some(fake)).with_token(Some(key))
+}
+
+/// The Esri layers: the key goes only into the request URL as `token`, never into errors, the
+/// cache's files or the stats; 512 px tiles are cut into the four 256 px tiles they hold, and one
+/// request serves all four.
+#[test]
+fn esri_tiles_carry_the_key_in_the_request_only_and_are_cut_in_quarters() {
+    let fake = Fake::new(|url, _| {
+        if url.contains("/static?f=json") {
+            return Ok(HttpResponse { status: 200, headers: vec![], body: br#"{"copyrightText": "Sources: Test Data Co"}"#.to_vec() });
+        }
+        if url.contains("/tile/3/") {
+            // a failing tile whose transport error quotes the URL (and so the key)
+            return Err(format!("connection reset fetching {url}"));
+        }
+        Ok(HttpResponse { status: 200, headers: vec![("Cache-Control".into(), "max-age=86400".into())], body: png(512, 512) })
+    });
+    let root = tmp("esri");
+    let svc = esri_service(fake.clone(), Some(TileCache::new(&root, "esri-streets", 1 << 30).unwrap()));
+    // the four 256 px tiles of one 512 px tile at level 4
+    let keys: Vec<TileKey> = [(10, 6), (11, 6), (10, 7), (11, 7)].iter().map(|&(x, y)| TileKey::new(5, x, y).unwrap()).collect();
+    svc.want(&keys);
+    wait_until("the tiles", 20, || svc.is_idle() && keys.iter().all(|k| svc.get(*k).is_some()));
+    for k in &keys {
+        let t = svc.get(*k).unwrap();
+        assert_eq!((t.width, t.height), (256, 256), "a quarter of the 512 px tile");
+    }
+    let tile_urls: Vec<String> = fake.urls().into_iter().filter(|u| u.contains("/tile/")).collect();
+    assert!(!tile_urls.is_empty() && tile_urls.len() <= 2, "one server tile serves its four quarters: {tile_urls:?}");
+    assert!(tile_urls.iter().all(|u| u.ends_with(&format!("/arcgis/streets/static/tile/4/3/5?token={KEY}"))), "{tile_urls:?}");
+    assert!(svc.stats().reused >= 2, "{:?}", svc.stats());
+    // the credit comes from the layer's metadata, fetched once with the key
+    wait_until("the credit", 20, || svc.attribution().contains("Test Data Co"));
+    assert_eq!(svc.attribution(), "Powered by Esri | Sources: Test Data Co");
+    assert_eq!(fake.urls().iter().filter(|u| u.contains("/static?f=json")).count(), 1);
+    // a failure's message hides the key
+    let bad = TileKey::new(4, 0, 0).unwrap();
+    svc.want(&[bad]);
+    let failed = Mutex::new(Vec::new());
+    wait_until("the failure", 20, || {
+        let mut f = failed.lock().unwrap();
+        f.extend(svc.poll().into_iter().filter_map(|e| if let TileEvent::Failed { error, .. } = e { Some(error) } else { None }));
+        !f.is_empty()
+    });
+    let failed = failed.into_inner().unwrap();
+    assert!(failed.iter().all(|e| !e.contains(KEY) && e.contains("[key]")), "{failed:?}");
+    // nothing on disk names the key
+    let mut stack = vec![root.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            assert!(!p.to_string_lossy().contains(KEY), "{}", p.display());
+            if p.is_dir() {
+                stack.push(p);
+            } else {
+                assert!(!std::fs::read(&p).unwrap().windows(KEY.len()).any(|w| w == KEY.as_bytes()), "{}", p.display());
+            }
+        }
+    }
+    assert!(!format!("{svc:?} {:?}", svc.stats()).contains(KEY));
+    drop(svc);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Metadata that is huge, not JSON, markup or the wrong shape gives the fixed credit.
+#[test]
+fn hostile_metadata_falls_back_to_the_fixed_credit() {
+    assert_eq!(metadata_credit(br#"{"copyrightText": "Esri, Maxar"}"#).as_deref(), Some("Esri, Maxar"));
+    let huge = format!(r#"{{"copyrightText": "{}"}}"#, "x".repeat(MAX_METADATA_BYTES));
+    for body in [
+        huge.as_bytes(),
+        b"<html><body>Service unavailable</body></html>",
+        br#"{"copyrightText": "<script>alert(1)</script>"}"#,
+        br#"{"copyrightText": "two\nlines"}"#,
+        br#"{"copyrightText": 5}"#,
+        br#"{"copyrightText": "   "}"#,
+        br#"{}"#,
+        b"",
+    ] {
+        assert_eq!(metadata_credit(body), None, "{}", String::from_utf8_lossy(&body[..body.len().min(60)]));
+    }
+    let fake = Fake::new(|url, _| {
+        if url.contains("/static?f=json") {
+            return Ok(HttpResponse { status: 200, headers: vec![], body: b"<html>nope</html>".to_vec() });
+        }
+        Ok(HttpResponse { status: 200, headers: vec![], body: png(512, 512) })
+    });
+    let svc = esri_service(fake.clone(), None);
+    svc.want(&[TileKey::new(2, 1, 1).unwrap()]);
+    wait_until("the metadata", 20, || fake.urls().iter().any(|u| u.contains("/static?f=json")) && svc.is_idle());
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(svc.attribution(), TileSource::EsriStreet.attribution());
+    assert!(svc.attribution().starts_with("Powered by Esri | "));
+}
+
+/// Cutting quarters and halving refuse sizes that don't fit, never panic.
+#[test]
+fn cropping_checks_the_tile() {
+    use super::source::Crop;
+    let img = |w: u32, h: u32| TileImage { width: w, height: h, rgba: vec![7; (w * h * 4) as usize] };
+    let q = crop_tile(img(512, 512), Crop::Quarter { right: true, bottom: false }).unwrap();
+    assert_eq!((q.width, q.height, q.rgba.len()), (256, 256, 256 * 256 * 4));
+    assert_eq!(crop_tile(img(512, 512), Crop::Half).unwrap().width, 256);
+    assert!(crop_tile(img(255, 256), Crop::Quarter { right: false, bottom: false }).is_err());
+    assert!(crop_tile(img(1, 1), Crop::Quarter { right: true, bottom: true }).is_err());
+    assert_eq!(crop_tile(img(3, 3), Crop::Half).unwrap().width, 3, "odd sizes are kept");
+    assert!(crop_tile(TileImage { width: 4, height: 4, rgba: vec![0; 3] }, Crop::Half).is_err(), "pixel data too short");
+}

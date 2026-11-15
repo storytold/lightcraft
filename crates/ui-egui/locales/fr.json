@@ -3664,5 +3664,19 @@
   "Map tiles are off": "Les tuiles de la carte sont désactivées",
   "Offline (no tiles)": "Hors ligne (sans tuiles)",
   "Custom tile server": "Serveur de tuiles personnalisé",
-  "Set the location of this photo": "Définir le lieu de cette photo"
+  "Set the location of this photo": "Définir le lieu de cette photo",
+  "Esri map layers": "Couches cartographiques Esri",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Les styles de carte Esri Streets et Esri Outdoor demandent votre propre clé d'API ArcGIS Location Platform. Un compte gratuit offre un quota mensuel de tuiles ; les tuiles sont décomptées sur votre clé. Le serveur d'Esri voit alors les lieux que vous regardez.",
+  "Status": "État",
+  "A key is set": "Une clé est définie",
+  "No key: the Esri styles are not offered": "Pas de clé : les styles Esri ne sont pas proposés",
+  "ArcGIS API key": "Clé d'API ArcGIS",
+  "Paste a new key to replace it": "Collez une nouvelle clé pour la remplacer",
+  "Paste your key": "Collez votre clé",
+  "Remove Key": "Supprimer la clé",
+  "Get a free key at location.arcgis.com": "Obtenir une clé gratuite sur location.arcgis.com",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Ne donnez à la clé que le privilège des tuiles statiques de fond de carte. Elle est conservée dans le dossier de réglages de LightCraft (map-keys.json), jamais dans votre bibliothèque, et envoyée seulement au serveur de tuiles d'Esri. Choisissez le style dans la liste Style de carte de la vue Carte.",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor (topographique)",
+  "Set ArcGIS API Key": "Définir la clé d'API ArcGIS"
 }

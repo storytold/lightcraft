@@ -2325,5 +2325,19 @@
   "Map tiles are off": "Os blocos do mapa estão desativados",
   "Offline (no tiles)": "Offline (sem blocos)",
   "Custom tile server": "Servidor de blocos personalizado",
-  "Set the location of this photo": "Definir a localização desta foto"
+  "Set the location of this photo": "Definir a localização desta foto",
+  "Esri map layers": "Camadas de mapa da Esri",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Os estilos de mapa Esri Streets e Esri Outdoor precisam da sua própria chave de API da ArcGIS Location Platform. Uma conta gratuita tem uma cota mensal de blocos; os blocos contam para a sua chave. O servidor da Esri passa a ver quais lugares você olha.",
+  "Status": "Status",
+  "A key is set": "Há uma chave definida",
+  "No key: the Esri styles are not offered": "Sem chave: os estilos da Esri não são oferecidos",
+  "ArcGIS API key": "Chave de API do ArcGIS",
+  "Paste a new key to replace it": "Cole uma chave nova para substituí-la",
+  "Paste your key": "Cole sua chave",
+  "Remove Key": "Remover chave",
+  "Get a free key at location.arcgis.com": "Obtenha uma chave gratuita em location.arcgis.com",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Dê à chave apenas o privilégio de blocos estáticos de mapa base. Ela fica na pasta de configurações do LightCraft (map-keys.json), nunca na sua biblioteca, e é enviada só ao servidor de blocos da Esri. Escolha o estilo na lista Estilo do mapa da visualização Mapa.",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor (topográfico)",
+  "Set ArcGIS API Key": "Definir chave de API do ArcGIS"
 }

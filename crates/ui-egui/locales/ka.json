@@ -3747,5 +3747,19 @@
   "Map tiles are off": "რუკის ფილები გამორთულია",
   "Offline (no tiles)": "ოფლაინ (ფილების გარეშე)",
   "Custom tile server": "საკუთარი ფილების სერვერი",
-  "Set the location of this photo": "ამ ფოტოს მდებარეობის დაყენება"
+  "Set the location of this photo": "ამ ფოტოს მდებარეობის დაყენება",
+  "Esri map layers": "Esri-ის რუკის ფენები",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Esri Streets-ისა და Esri Outdoor-ის რუკის სტილებს თქვენი საკუთარი ArcGIS Location Platform API გასაღები სჭირდება. უფასო ანგარიში ყოველთვიურ ფილების ლიმიტს იძლევა; ფილები თქვენს გასაღებზე ითვლება. ამ დროს Esri-ის სერვერი ხედავს, რომელ ადგილებს უყურებთ.",
+  "Status": "სტატუსი",
+  "A key is set": "გასაღები დაყენებულია",
+  "No key: the Esri styles are not offered": "გასაღები არ არის: Esri-ის სტილები არ არის შეთავაზებული",
+  "ArcGIS API key": "ArcGIS API გასაღები",
+  "Paste a new key to replace it": "ჩასვით ახალი გასაღები ჩასანაცვლებლად",
+  "Paste your key": "ჩასვით თქვენი გასაღები",
+  "Remove Key": "გასაღების წაშლა",
+  "Get a free key at location.arcgis.com": "მიიღეთ უფასო გასაღები location.arcgis.com-ზე",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "მიეცით გასაღებს მხოლოდ სტატიკური საბაზისო რუკის ფილების უფლება. ის ინახება LightCraft-ის პარამეტრების საქაღალდეში (map-keys.json), არასოდეს თქვენს ბიბლიოთეკაში, და იგზავნება მხოლოდ Esri-ის ფილების სერვერზე. სტილი აირჩიეთ რუკის ხედის „რუკის სტილის“ სიაში.",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor (ტოპოგრაფიული)",
+  "Set ArcGIS API Key": "ArcGIS API გასაღების დაყენება"
 }

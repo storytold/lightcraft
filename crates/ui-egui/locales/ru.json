@@ -2687,5 +2687,19 @@
   "Map tiles are off": "Тайлы карты отключены",
   "Offline (no tiles)": "Офлайн (без тайлов)",
   "Custom tile server": "Свой сервер тайлов",
-  "Set the location of this photo": "Задать местоположение этого фото"
+  "Set the location of this photo": "Задать местоположение этого фото",
+  "Esri map layers": "Слои карт Esri",
+  "The Esri Streets and Esri Outdoor map styles need your own ArcGIS Location Platform API key. A free account gives a monthly tile allowance; tiles count against your key. Esri's server then sees which places you look at.": "Стилям карт Esri Streets и Esri Outdoor нужен ваш собственный API-ключ ArcGIS Location Platform. Бесплатная учётная запись даёт месячный лимит тайлов; тайлы учитываются на вашем ключе. Сервер Esri при этом видит, какие места вы смотрите.",
+  "Status": "Состояние",
+  "A key is set": "Ключ задан",
+  "No key: the Esri styles are not offered": "Нет ключа: стили Esri недоступны",
+  "ArcGIS API key": "API-ключ ArcGIS",
+  "Paste a new key to replace it": "Вставьте новый ключ для замены",
+  "Paste your key": "Вставьте ваш ключ",
+  "Remove Key": "Удалить ключ",
+  "Get a free key at location.arcgis.com": "Получите бесплатный ключ на location.arcgis.com",
+  "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Дайте ключу только право на статические тайлы базовых карт. Он хранится в папке настроек LightCraft (map-keys.json), никогда в библиотеке, и отправляется только на сервер тайлов Esri. Стиль выбирается в списке «Стиль карты» в режиме «Карта».",
+  "Esri Streets": "Esri Streets",
+  "Esri Outdoor (topographic)": "Esri Outdoor (топографическая)",
+  "Set ArcGIS API Key": "Задать API-ключ ArcGIS"
 }

@@ -64,16 +64,33 @@ fn source_json(s: &Session) -> Value {
         "id": used.id(),
         "label": used.label(),
         "urlTemplate": used.url_template(),
-        "attribution": used.attribution(),
+        "attribution": s.map.attribution(),
         "maxZoom": used.max_zoom(),
         "userAgent": used.user_agent(),
         "offline": used.is_offline(),
         "custom": matches!(used, TileSource::Custom { .. }),
-        // what prefs.json keeps, when the map can't use it (an Esri layer while Esri is off)
+        // what prefs.json keeps, when the map can't use it (an Esri layer without a key)
         "saved": (*chosen != used).then(|| chosen.id().to_string()),
         "notice": s.map.fallback_notice(),
-        "esriEnabled": s.map.esri_enabled(),
+        // whether an ArcGIS API key is set; the key itself is never reported
+        "esriKeySet": s.map.esri_key_set(),
     })
+}
+
+/// `map.setEsriKey {key}`: set the user's ArcGIS API key (`""` or null clears it). Checked for
+/// shape only, no network call. Not journaled (a query spec), so the key never lands in the
+/// journal; the reply and every error only say whether a key is set.
+fn set_esri_key(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "map.setEsriKey";
+    let key = match p.get("key") {
+        None => return Err(bad(C, "give {key: \"<your ArcGIS API key>\"} (\"\" clears it)")),
+        Some(Value::Null) => None,
+        Some(Value::String(k)) if k.trim().is_empty() => None,
+        Some(Value::String(k)) => Some(crate::map::ApiKey::parse(k).map_err(|e| bad(C, e))?),
+        Some(_) => return Err(bad(C, "`key` must be text")),
+    };
+    s.map.set_esri_key(key).map_err(|e| EngineError::Other(format!("{C}: {e}")))?;
+    Ok(json!({"esriKeySet": s.map.esri_key_set(), "notice": s.map.fallback_notice()}))
 }
 
 fn opt_str<'a>(p: &'a Value, key: &str) -> Result<Option<&'a str>> {
@@ -192,15 +209,25 @@ fn clear_cache(s: &mut Session, _: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "map.providers", "Map Providers", [], None, "{} → [{id, label, maxZoom, attribution, offline, current}] — the tile sources the map offers now (the Esri layers are not offered: see docs/map.md); set one with map.tileSource", always, providers),
+        cmd!(query "map.providers", "Map Providers", [], None, "{} → [{id, label, maxZoom, attribution, offline, current}] — the tile sources the map offers now (the Esri layers only once an ArcGIS API key is set with map.setEsriKey: see docs/map.md); set one with map.tileSource", always, providers),
         cmd!(
             "map.tileSource",
             "Map Tile Source",
             [],
             None,
-            "{} → the map's tile source; set with {id: \"osm\" | \"opentopomap\" | \"offline\"}, {offline: true|false}, or {urlTemplate: \"https://…/{z}/{x}/{y}.png\", attribution: text, maxZoom?: 0–24, id?: cache-folder name [a-z0-9._-]}; fields alone change the current custom source. The Esri layers are refused (their terms, docs/map.md). Saved with the library preferences → {id, label, urlTemplate, attribution, maxZoom, userAgent, offline, custom, saved, notice, esriEnabled}",
+            "{} → the map's tile source; set with {id: \"osm\" | \"opentopomap\" | \"esri-streets\" | \"esri-topo\" | \"offline\"}, {offline: true|false}, or {urlTemplate: \"https://…/{z}/{x}/{y}.png\", attribution: text, maxZoom?: 0–24, id?: cache-folder name [a-z0-9._-]}; fields alone change the current custom source. The Esri layers need an ArcGIS API key (map.setEsriKey) and are refused without one. Saved with the library preferences → {id, label, urlTemplate, attribution, maxZoom, userAgent, offline, custom, saved, notice, esriKeySet}",
             always,
             tile_source
+        ),
+        // a query spec on purpose: not journaled, so the key never reaches the journal
+        cmd!(
+            query "map.setEsriKey",
+            "Set ArcGIS API Key",
+            [],
+            None,
+            "{key: text | \"\" | null} → {esriKeySet, notice} — the ArcGIS Location Platform API key for the Esri map layers (free at https://location.arcgis.com); \"\" or null clears it. Shape-checked only (no network call); kept in the config folder's map-keys.json; never reported back",
+            always,
+            set_esri_key
         ),
         cmd!(query "map.cacheInfo", "Map Cache Info", [], None, "{} → the map tile cache: {bytes, tiles, capBytes, dir (null = no disk cache)}", always, cache_info),
         cmd!(
