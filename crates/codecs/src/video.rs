@@ -852,7 +852,6 @@ impl Av1Encoder {
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
             use craft_video::av1::{Encoder, EncoderConfig, RateControl};
-            let _ = c.speed;
             let mut ec = EncoderConfig::new(w as u32, h as u32, c.fps, 1);
             ec.rate = RateControl::ConstantQ(quantizer(c.quality).clamp(1, 255) as u8);
             ec.keyint = 120;
