@@ -1349,7 +1349,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=2651dbeb2b13f621db23f65347380e7f26e316f0#2651dbeb2b13f621db23f65347380e7f26e316f0"
+source = "git+https://github.com/storytold/craft-libs?rev=0fd30aeb3e02207d9d4c7c601540d9da45abf8de#0fd30aeb3e02207d9d4c7c601540d9da45abf8de"
 dependencies = [
  "flate2",
  "roxmltree",
