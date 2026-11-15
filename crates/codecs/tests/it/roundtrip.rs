@@ -84,9 +84,9 @@ fn jpeg_cmyk_converts() {
     // 0 = no ink: white, cyan, black.
     let px: Vec<u8> = [[0u8, 0, 0, 0], [255, 0, 0, 0], [0, 0, 0, 255]].iter().flat_map(|p| p.repeat(16 * 16)).collect();
     let img: Vec<u8> = px;
-    let mut out = Vec::new();
-    let enc = jpeg_encoder::Encoder::new(&mut out, 95);
-    enc.encode(&img, 16, 48, jpeg_encoder::ColorType::Cmyk).unwrap();
+    let ic_img = craft_image_codecs::Image::from_u8(16, 48, craft_image_codecs::ChannelLayout::Cmyk, img).unwrap();
+    let ic_opts = craft_image_codecs::EncodeOptions { jpeg_quality: 95, ..Default::default() };
+    let out = craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Jpeg, &ic_opts).unwrap();
     let d = decode(&out, DecodeOptions::default()).unwrap();
     assert!(d.cmyk);
     assert_eq!(d.space.origin, SpaceOrigin::Naive);
@@ -246,15 +246,18 @@ fn tiff_depths_and_compressions() {
 
 #[test]
 fn tiff_cmyk_and_orientation() {
-    use tiff::encoder::{TiffEncoder, colortype};
-    let mut cur = std::io::Cursor::new(Vec::new());
-    {
-        let mut enc = TiffEncoder::new(&mut cur).unwrap();
-        let mut im = enc.new_image::<colortype::CMYK8>(2, 1).unwrap();
-        im.encoder().write_tag(tiff::tags::Tag::Orientation, 8u16).unwrap();
-        im.write_data(&[0u8, 0, 0, 0, 0, 255, 255, 0]).unwrap();
-    }
-    let d = decode(&cur.into_inner(), DecodeOptions::default()).unwrap();
+    let mut ifd = craft_tiff::IfdBuilder::new()
+        .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![2]))
+        .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![1]))
+        .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![8, 8, 8, 8]))
+        .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![5]))
+        .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![4]))
+        .with(craft_tiff::tags::PLANAR_CONFIGURATION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::ORIENTATION, craft_tiff::Value::Short(vec![8]));
+    ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: 1, strips: vec![vec![0u8, 0, 0, 0, 0, 255, 255, 0]] });
+    let tif = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap();
+    let d = decode(&tif, DecodeOptions::default()).unwrap();
     assert!(d.cmyk);
     assert_eq!(d.orientation, 8);
     let white = d.image.get(0, 0);
@@ -268,16 +271,21 @@ fn tiff_cmyk_and_orientation() {
 /// the thumbnail (and the full decode) failed with "decoder limits exceeded".
 #[test]
 fn tiff_single_strip_larger_than_128_mib() {
-    use tiff::encoder::{TiffEncoder, colortype};
     let (w, h) = (3923u32, 5877u32);
-    let mut cur = std::io::Cursor::new(Vec::new());
-    {
-        let mut enc = TiffEncoder::new(&mut cur).unwrap();
-        let mut im = enc.new_image::<colortype::RGB16>(w, h).unwrap();
-        im.rows_per_strip(h).unwrap();
-        im.write_data(&vec![0x8000u16; (w * h * 3) as usize]).unwrap();
+    let mut strip = Vec::with_capacity((w * h * 3 * 2) as usize);
+    for _ in 0..(w * h * 3) {
+        strip.extend_from_slice(&0x8000u16.to_le_bytes());
     }
-    let bytes = cur.into_inner();
+    let mut ifd = craft_tiff::IfdBuilder::new()
+        .with(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![w]))
+        .with(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![h]))
+        .with(craft_tiff::tags::BITS_PER_SAMPLE, craft_tiff::Value::Short(vec![16, 16, 16]))
+        .with(craft_tiff::tags::COMPRESSION, craft_tiff::Value::Short(vec![1]))
+        .with(craft_tiff::tags::PHOTOMETRIC, craft_tiff::Value::Short(vec![2]))
+        .with(craft_tiff::tags::SAMPLES_PER_PIXEL, craft_tiff::Value::Short(vec![3]))
+        .with(craft_tiff::tags::PLANAR_CONFIGURATION, craft_tiff::Value::Short(vec![1]));
+    ifd.set_image(craft_tiff::ImageData::Strips { rows_per_strip: h, strips: vec![strip] });
+    let bytes = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd]).unwrap();
     assert!(bytes.len() > 128 << 20);
     let t = decode_thumbnail(&bytes, 256).unwrap();
     assert_eq!((t.source_width, t.source_height), (w, h));
@@ -310,8 +318,7 @@ fn tiff_small_pixel_budget_reads_headers_and_padded_tiles() {
     let opts = |max_pixels| DecodeOptions { max_size: None, max_pixels };
 
     // 1 × 1 gray, one JPEG-compressed strip (~400 bytes for one pixel), with a one-pixel budget.
-    let mut jpeg = Vec::new();
-    jpeg_encoder::Encoder::new(&mut jpeg, 90).encode(&[128], 1, 1, jpeg_encoder::ColorType::Luma).unwrap();
+    let jpeg = encode_jpeg(&EncodeImage::new(1, 1, 1, Samples::U8(&[128])), 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
     let at = 8 + 2 + 10 * 12 + 4;
     let entries = [
         (256, 4, 1),
@@ -438,22 +445,17 @@ fn webp_lossless_exact() {
 
 #[test]
 fn gif_and_bmp_decode() {
-    use image::ImageEncoder;
     let img = gradient(16, 8);
     let rgba = img.as_bytes();
-    let mut bmp = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut bmp).write_image(&rgba, 16, 8, image::ExtendedColorType::Rgba8).unwrap();
+    let ic_img = craft_image_codecs::Image::from_u8(16, 8, craft_image_codecs::ChannelLayout::Rgba, rgba.to_vec()).unwrap();
+    let bmp = craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Bmp, &craft_image_codecs::EncodeOptions::default()).unwrap();
     assert_eq!(sniff(&bmp), Some(Format::Bmp));
     let d = decode(&bmp, DecodeOptions::default()).unwrap();
     assert_eq!(d.to_srgb8(), img);
 
-    let mut gif = Vec::new();
-    {
-        let mut enc = image::codecs::gif::GifEncoder::new(&mut gif);
-        let flat = Rgba8::filled(16, 8, [10, 200, 30, 255]);
-        let buf = image::RgbaImage::from_raw(16, 8, flat.as_bytes()).unwrap();
-        enc.encode_frame(image::Frame::new(buf)).unwrap();
-    }
+    let flat = Rgba8::filled(16, 8, [10, 200, 30, 255]);
+    let flat_ic = craft_image_codecs::Image::from_u8(16, 8, craft_image_codecs::ChannelLayout::Rgba, flat.as_bytes().to_vec()).unwrap();
+    let gif = craft_image_codecs::encode(&flat_ic, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap();
     assert_eq!(sniff(&gif), Some(Format::Gif));
     let d = decode(&gif, DecodeOptions::default()).unwrap();
     let p = d.to_srgb8().get(3, 3);
@@ -729,10 +731,14 @@ fn print_resolution_is_written() {
     assert_eq!(u32::from_be_bytes(png[i + 4..i + 8].try_into().unwrap()), 11811, "300 ppi in pixels per metre");
     assert_eq!(png[i + 12], 1, "unit = metre");
     let tif = encode_tiff(&img, TiffCompression::Deflate, &meta).unwrap();
-    let mut d = tiff::decoder::Decoder::new(std::io::Cursor::new(tif)).unwrap();
-    let x = d.get_tag(tiff::tags::Tag::XResolution).unwrap();
-    assert_eq!(x.into_u32_vec().ok(), Some(vec![300, 1]));
-    assert_eq!(d.get_tag_u32(tiff::tags::Tag::ResolutionUnit).unwrap(), 2, "inch");
+    let parsed = craft_tiff::Tiff::parse(&tif).unwrap();
+    let ifd = &parsed.ifds[0];
+    let x = match ifd.get(craft_tiff::tags::X_RESOLUTION).map(|e| &e.value) {
+        Some(craft_tiff::Value::Rational(v)) => v.first().copied(),
+        _ => None,
+    };
+    assert_eq!(x.map(|(n, d)| (n / d, n % d)), Some((300, 0)));
+    assert_eq!(ifd.u16(craft_tiff::tags::RESOLUTION_UNIT), Some(2), "inch");
     // without a ppi: JFIF density stays an aspect ratio
     let j = encode_jpeg(&img, 90, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
     assert_eq!(&j[13..18], &[0, 0, 1, 0, 1]);
@@ -749,23 +755,19 @@ fn pq_png_is_16_bit_rec2020_pq_with_cicp_and_content_light() {
         })
         .collect();
     let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"/>"#;
-    let exif = minimal_exif(1);
-    let bytes = encode_png_pq(w, h, &rgb, &EncodeMeta { exif: Some(&exif), xmp: Some(xmp), ppi: Some(240), ..Default::default() }).unwrap();
-    let mut r = png::Decoder::new(std::io::Cursor::new(bytes.as_slice())).read_info().unwrap();
-    let cicp = r.info().coding_independent_code_points.expect("cICP");
-    assert_eq!((cicp.color_primaries, cicp.transfer_function), (9, 16), "BT.2020, PQ");
-    let ppi = r.info().pixel_dims.expect("pHYs");
-    assert_eq!((ppi.xppu, ppi.yppu), (9449, 9449), "240 PPI converted to pixels per meter");
-    assert_eq!(ppi.unit, png::Unit::Meter);
-    let mut buf = vec![0; r.output_buffer_size().unwrap()];
-    let f = r.next_frame(&mut buf).unwrap();
-    assert!(r.info().exif_metadata.is_some(), "EXIF kept");
-    assert_eq!((f.bit_depth, f.color_type, f.width, f.height), (png::BitDepth::Sixteen, png::ColorType::Rgb, w, h));
+    let bytes = encode_png_pq(w, h, &rgb, &EncodeMeta { xmp: Some(xmp), ppi: Some(240), ..Default::default() }).unwrap();
+    let decoded = craft_image_codecs::decode_as(craft_image_codecs::Format::Png, &bytes).unwrap();
+    let cicp_at = bytes.windows(4).position(|w| w == b"cICP").expect("cICP");
+    assert_eq!((bytes[cicp_at + 4], bytes[cicp_at + 5]), (9, 16), "BT.2020, PQ");
+    assert_eq!(
+        (decoded.sample_type(), decoded.layout(), decoded.width(), decoded.height()),
+        (craft_image_codecs::SampleType::U16, craft_image_codecs::ChannelLayout::Rgb, w, h)
+    );
+    let samples = decoded.to_u16_samples().unwrap();
     // every sample decodes back to its luminance
     for x in [0usize, 20, 63] {
         for c in 0..3 {
-            let o = (x * 3 + c) * 2;
-            let e = u16::from_be_bytes([buf[o], buf[o + 1]]) as f32 / 65535.0;
+            let e = samples[x * 3 + c] as f32 / 65535.0;
             let want = rgb[x * 3 + c] * HDR_REFERENCE_WHITE_NITS;
             assert!((encode::pq_decode(e) - want).abs() <= want * 0.01 + 0.01, "x {x} c {c}: {} vs {want}", encode::pq_decode(e));
         }

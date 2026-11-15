@@ -14,26 +14,46 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod container;
-pub mod cr3;
+mod convert;
 mod exif;
 pub mod focus;
-mod focus_read;
 pub mod heif;
 mod iptc;
 pub mod mrw;
 mod psd;
-pub mod tags;
 mod xmp;
 
-pub use container::{Embedded, embedded, jpeg_segments, png_chunks, webp_chunks};
 pub use craft_metadata::DateTime;
+pub use craft_metadata::cr3;
+pub use craft_metadata::{Embedded, jpeg_segments, png_chunks, webp_chunks};
+pub use craft_metadata::{Flash, Gps, RegionKind};
 pub use craft_metadata::{GpxError, Match, TrackPoint, Tracklog, parse_gpx};
+pub use craft_metadata::{TagRow, tag_rows};
+
+/// Collect all EXIF/TIFF tag rows from a file (including PSD/PSB and HEIF containers).
+pub fn file_tag_rows(bytes: &[u8]) -> Vec<TagRow> {
+    if bytes.starts_with(b"8BPS") || heif::is_heif(bytes) {
+        let Some(exif) = embedded(bytes).exif else { return Vec::new() };
+        let data = strip_exif_header(&exif);
+        return craft_tiff::Tiff::parse(data).map(|t| tag_rows(&t)).unwrap_or_default();
+    }
+    craft_metadata::file_tag_rows(bytes)
+}
+
+/// Sniff the container and collect its metadata blocks. Unknown containers yield an empty result.
+pub fn embedded(bytes: &[u8]) -> Embedded {
+    if bytes.starts_with(b"8BPS") {
+        return psd::parse(bytes).unwrap_or_default();
+    }
+    if heif::is_heif(bytes) {
+        return heif::metadata(bytes);
+    }
+    craft_metadata::embedded(bytes)
+}
 pub use exif::{from_tiff, read_exif, strip_exif_header, try_read_exif, try_read_exif_with, write_exif};
 pub use focus::FocusPoint;
 pub use iptc::parse_iptc;
 pub use lightcraft_geom::{Orientation, Rect};
-pub use tags::{TagRow, file_tag_rows, tag_rows};
 pub use xmp::{CRS_NS, LC_NS, XmpData, XmpError, XmpValue, parse_xmp, write_xmp, write_xmp_lc};
 
 /// Which properties [`merge_xmp`] takes from the fresh packet.
@@ -57,23 +77,6 @@ pub fn merge_xmp(existing: &str, fresh: &str, rules: MergeRules) -> Result<Strin
 
 use serde::{Deserialize, Serialize};
 
-/// GPS position (WGS 84). Latitude/longitude in signed decimal degrees (north / east positive).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct Gps {
-    pub latitude: f64,
-    pub longitude: f64,
-    /// Metres above sea level (negative below).
-    pub altitude: Option<f64>,
-}
-
-/// Exif `Flash` value decoded.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Flash {
-    pub fired: bool,
-    /// The raw Exif `Flash` bit field.
-    pub raw: u16,
-}
-
 /// A named region of interest on a photo (MWG Region Guidelines, `mwg-rs:Regions`): most often a face,
 /// drawn by Lightroom, digiKam, Picasa or similar tools. Read-only for now — LightCraft does not write
 /// regions yet (see `docs/xmp-interop.md`).
@@ -86,17 +89,6 @@ pub struct Region {
     /// `mwg-rs:Name` (e.g. the person's name).
     pub name: Option<String>,
     pub description: Option<String>,
-}
-
-/// `mwg-rs:Type`. Unrecognised values are kept verbatim rather than dropped.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RegionKind {
-    Face,
-    Pet,
-    Focus,
-    BarCode,
-    /// `mwg-rs:Type` was missing, empty, or a value we don't recognise.
-    Other(String),
 }
 
 /// Everything LightCraft shows or searches about a photo. All fields are optional; unknown = `None`/empty.
@@ -333,8 +325,8 @@ pub fn extract(bytes: &[u8]) -> Metadata {
 /// Read metadata while reporting malformed PSD/PSB containers, embedded EXIF, or embedded XMP instead of treating
 /// them as empty. Other container formats retain [`extract`]'s best-effort behavior.
 pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
-    let e = container::try_embedded(bytes)?;
     let is_psd = bytes.starts_with(b"8BPS");
+    let e = if is_psd { psd::parse(bytes).ok_or(ExtractError::MalformedPsd)? } else { embedded(bytes) };
     let exif = match e.exif.as_deref() {
         Some(exif) if is_psd => try_read_exif(exif).map_err(|_| ExtractError::MalformedPsd)?,
         Some(exif) => read_exif(exif),
@@ -416,6 +408,7 @@ pub fn lens_spec_name(spec: [f64; 4]) -> Option<String> {
 }
 
 /// Lenient number parsing used by XMP/IPTC: `"28/10"`, `"2.8"`, `"+0.7"`.
+#[cfg(test)]
 pub(crate) fn parse_number(s: &str) -> Option<f64> {
     let s = s.trim();
     if let Some((n, d)) = s.split_once('/') {
@@ -630,7 +623,12 @@ mod tests {
                 j.extend(payload);
             };
             // orientation 6, 6000 × 4000 as stored
-            seg([b"Exif\0\0".as_slice(), &crate::exif::tests::sample_exif(craft_tiff::ByteOrder::Little)].concat());
+            let mut ifd0 = craft_tiff::IfdBuilder::new();
+            ifd0.set(craft_tiff::tags::IMAGE_WIDTH, craft_tiff::Value::Long(vec![6000]));
+            ifd0.set(craft_tiff::tags::IMAGE_LENGTH, craft_tiff::Value::Long(vec![4000]));
+            ifd0.set(craft_tiff::tags::ORIENTATION, craft_tiff::Value::Short(vec![6]));
+            let sample_exif = craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd0]).unwrap();
+            seg([b"Exif\0\0".as_slice(), &sample_exif].concat());
             seg([b"http://ns.adobe.com/xap/1.0/\0".as_slice(), packet.as_bytes()].concat());
             j.extend([0xff, 0xd9]);
             j
