@@ -564,6 +564,8 @@ fn immich_albums_are_collections_each_device_takes_as_it_chose() {
     offline_group(&mut a, &ap, &mut b, &bp);
     for s in [&mut a, &mut b] {
         s.execute("immich.collections", &json!({"on": true})).unwrap();
+        // (both connected on their own; shared, so the albums' records travel between them)
+        s.execute("immich.share", &json!({"on": true})).unwrap();
         s.execute("sync.immichRefresh", &json!({})).unwrap();
     }
     pump_both(&mut a, &ap, &mut b, &bp, "the album as a collection", |a, b| {
