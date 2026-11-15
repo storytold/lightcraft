@@ -40,17 +40,13 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
         },
         keep_orientation: false,
     };
-    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Avif, bytes, &options).map_err(err)?;
+    let (img, bit_depth) = craft_image_codecs::decode_avif_with_depth(bytes, &options).map_err(err)?;
     let (w, h) = (img.width(), img.height());
     check_size(F, w as u64, h as u64, opts)?;
-    let (buf, bit_depth) = match img.sample_type() {
-        craft_image_codecs::SampleType::U8 => (Buf::U8(img.as_u8().ok_or_else(|| Error::Malformed(F, "expected 8-bit samples".into()))?.to_vec()), 8),
-        craft_image_codecs::SampleType::U16 => {
-            (Buf::U16(img.to_u16_samples().ok_or_else(|| Error::Malformed(F, "expected 16-bit samples".into()))?), 16)
-        }
-        craft_image_codecs::SampleType::F32 => {
-            (Buf::F32(img.to_f32_samples().ok_or_else(|| Error::Malformed(F, "expected float samples".into()))?), 32)
-        }
+    let buf = match img.sample_type() {
+        craft_image_codecs::SampleType::U8 => Buf::U8(img.as_u8().ok_or_else(|| Error::Malformed(F, "expected 8-bit samples".into()))?.to_vec()),
+        craft_image_codecs::SampleType::U16 => Buf::U16(img.to_u16_samples().ok_or_else(|| Error::Malformed(F, "expected 16-bit samples".into()))?),
+        craft_image_codecs::SampleType::F32 => Buf::F32(img.to_f32_samples().ok_or_else(|| Error::Malformed(F, "expected float samples".into()))?),
         _ => return Err(Error::Unsupported(F, "unsupported AVIF sample type")),
     };
     let hint = img.cicp.and_then(|c| SourceSpace::from_cicp(c.primaries, c.transfer));
@@ -71,6 +67,7 @@ mod tests {
         assert_eq!((header.width, header.height, header.orientation), (33, 17, 1));
         let decoded = crate::decode(FIXTURE, DecodeOptions::default()).unwrap();
         assert_eq!((decoded.source_width, decoded.source_height), (33, 17));
+        assert_eq!(decoded.bit_depth, 8);
         let opts = DecodeOptions { max_pixels: 100, ..DecodeOptions::default() };
         assert!(matches!(crate::decode(FIXTURE, opts), Err(Error::TooLarge(..))));
     }
@@ -80,6 +77,7 @@ mod tests {
         for transfer in [crate::encode::HdrTransfer::Pq, crate::encode::HdrTransfer::Hlg] {
             let bytes = crate::encode::encode_avif_hdr(16, 16, &pixels, 95, 10, &crate::encode::EncodeMeta::default(), transfer).unwrap();
             let decoded = crate::decode(&bytes, DecodeOptions::default()).unwrap();
+            assert_eq!(decoded.bit_depth, 10);
             assert!(decoded.image.data.iter().any(|pixel| pixel[0] > 1.0), "HDR highlights were lost");
         }
     }
