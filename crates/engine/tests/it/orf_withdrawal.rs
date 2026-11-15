@@ -233,7 +233,8 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
     // the same format field must share cache keys regardless of path extension; the path
     // must not salt the decoder cache version.
     let mut probe = Session::new();
-    let mut probe_photo = Photo::new(PhotoId(1), Source::File { path: "same-original.dng".into() }, "same-original.dng", "DNG", 6000, 4000, "2026-01-01");
+    let mut probe_photo =
+        Photo::new(PhotoId(1), Source::File { path: "same-original.dng".into() }, "same-original.dng", "DNG", 6000, 4000, "2026-01-01");
     probe_photo.kind = MediaKind::Raw;
     probe_photo.content_hash = Some("unchanged-file-bytes".into());
     probe.catalog.apply(Op::AddPhoto { photo: Box::new(probe_photo) }).unwrap();
