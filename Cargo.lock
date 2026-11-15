@@ -1190,11 +1190,16 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=94777dcf7f8962476e96b049d08d22e25b9330c2#94777dcf7f8962476e96b049d08d22e25b9330c2"
 dependencies = [
  "md-5",
  "rayon",
 ]
+
+[[package]]
+name = "craft-codepage"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
 
 [[package]]
 name = "craft-crw"
@@ -1268,7 +1273,7 @@ name = "craft-image-codecs"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=42abc84c82cd573e2fb0277298caffecb7bee905#42abc84c82cd573e2fb0277298caffecb7bee905"
 dependencies = [
- "craft-jpeg",
+ "craft-jpeg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=42abc84c82cd573e2fb0277298caffecb7bee905)",
  "craft-metadata",
  "crc32fast",
  "exr",
@@ -1277,7 +1282,7 @@ dependencies = [
  "hayro-jpeg2000",
  "image",
  "image-webp",
- "jpeg-encoder",
+ "jpeg-encoder 0.6.1",
  "png",
  "rayon",
  "serde_json",
@@ -1293,6 +1298,15 @@ name = "craft-jpeg"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=42abc84c82cd573e2fb0277298caffecb7bee905#42abc84c82cd573e2fb0277298caffecb7bee905"
 dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-jpeg"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=478c50560d3c6fad3d613af2a30b35c3bc9f4c0f#478c50560d3c6fad3d613af2a30b35c3bc9f4c0f"
+dependencies = [
+ "rayon",
  "thiserror 2.0.21",
 ]
 
@@ -1316,6 +1330,16 @@ dependencies = [
  "craft-tiff",
  "quick-xml 0.41.0",
  "serde",
+]
+
+[[package]]
+name = "craft-mime"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+dependencies = [
+ "chrono",
+ "craft-codepage",
+ "encoding_rs",
 ]
 
 [[package]]
@@ -3471,6 +3495,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b454d911ac55068f53495488d8ccd0646eaa540c033a28ee15b07838afafb01f"
 
 [[package]]
+name = "jpeg-encoder"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
+
+[[package]]
 name = "js-sys"
 version = "0.3.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3843,11 +3873,13 @@ dependencies = [
  "craft-gif",
  "craft-heif",
  "craft-image-codecs",
+ "craft-jpeg 0.1.0 (git+https://github.com/storytold/craft-libs?rev=478c50560d3c6fad3d613af2a30b35c3bc9f4c0f)",
  "craft-jxl",
  "craft-metadata",
  "craft-psd",
  "craft-tiff",
  "dhat",
+ "jpeg-encoder 0.7.1",
  "jxl-oxide",
  "lightcraft-color",
  "lightcraft-geom",
@@ -3907,6 +3939,7 @@ dependencies = [
 name = "lightcraft-develop"
 version = "0.21.1"
 dependencies = [
+ "craft-mime",
  "lightcraft-color",
  "lightcraft-geom",
  "miniz_oxide 0.9.1",
@@ -3923,6 +3956,7 @@ dependencies = [
  "chrono",
  "craft-docpath",
  "craft-heif",
+ "craft-mime",
  "craft-tiff",
  "crc32fast",
  "fs4",
@@ -4051,6 +4085,7 @@ dependencies = [
 name = "lightcraft-mcp"
 version = "0.21.1"
 dependencies = [
+ "craft-mime",
  "lightcraft-codecs",
  "lightcraft-engine",
  "lightcraft-raster",
@@ -4082,6 +4117,7 @@ dependencies = [
  "craft-heif",
  "craft-metadata",
  "craft-psd",
+ "craft-raw",
  "craft-tiff",
  "lightcraft-geom",
  "proptest",
