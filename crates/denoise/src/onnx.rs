@@ -121,8 +121,14 @@ fn read_bytes(bytes: &[u8]) -> Result<Net, NetError> {
                         [AttributeProto { f: Some(f), kind: 0 | 1, .. }] => *f,
                         _ => return invalid("LeakyRelu alpha is not a single float"),
                     };
-                    fused_indices.insert(j);
                     let name = next.output.first().cloned().ok_or_else(|| NetError::Invalid("LeakyRelu without an output".into()))?;
+                    // Fusing gives the LeakyRelu's output the id of this op. If that output is the graph
+                    // output it must stay the last tensor, so decline the fusion when another node after
+                    // this one emits an operation: it would push the graph output before a later tensor.
+                    if name == output.name.as_str() && nodes[i..].iter().enumerate().any(|(k, n)| i + k != j && emits_op(n.op_type.as_str())) {
+                        continue;
+                    }
+                    fused_indices.insert(j);
                     return Ok((Some(alpha), name));
                 }
             }
@@ -306,6 +312,12 @@ fn attr<'a>(n: &'a NodeProto, name: &str) -> Option<&'a AttributeProto> {
 /// The integer list attribute `name`, or `default` when the node does not have it.
 fn ints_or(n: &NodeProto, name: &str, default: &[i64]) -> Vec<i64> {
     attr(n, name).map_or_else(|| default.to_vec(), |a| a.ints.clone())
+}
+
+/// Whether an ONNX operator node emits a denoise-layer operation. `Concat` does not: it only
+/// records a join for the convolution that follows it.
+fn emits_op(op_type: &str) -> bool {
+    matches!(op_type, "Conv" | "ConvTranspose" | "MaxPool" | "Add" | "LeakyRelu" | "DepthToSpace")
 }
 
 fn four(dims: &[i64]) -> Result<(usize, usize, usize, usize), NetError> {
@@ -516,7 +528,6 @@ mod tests {
 
     #[test]
     fn add_operator_model_is_accepted() {
-
         // the convolution output added back to the input, as a residual block does
         let mut graph = Vec::new();
         len_field(1, &node("Conv", &["data", "w1"], "c1", &[("group", 1)]), &mut graph);
@@ -616,7 +627,6 @@ mod tests {
 
     #[test]
     fn add_reading_concat_and_oversized_channels_are_unsupported() {
-
         let concat_model =
             model(&[node("Concat", &["data", "data"], "joined", &[("axis", 1)]), node("Add", &["joined", "data"], "a1", &[])], 4, "a1");
         assert!(matches!(read_bytes(&concat_model), Err(NetError::Unsupported(_))));
@@ -636,7 +646,6 @@ mod tests {
 
     #[test]
     fn many_adds_on_a_wide_input_are_accepted_up_to_max_ops() {
-
         // 32 Add nodes on 4096 channels should be accepted (32 < MAX_OPS=512, no weight allocation)
         let mut nodes = Vec::new();
         let mut prev = "data".to_string();
@@ -662,7 +671,6 @@ mod tests {
 
     #[test]
     fn leaky_relu_with_an_add_residual_branch_is_accepted() {
-
         // the convolution output is read by both the LeakyRelu and the Add residual branch
         let mut graph = Vec::new();
         len_field(1, &node("Conv", &["data", "w1"], "c1", &[("group", 1)]), &mut graph);
@@ -696,7 +704,6 @@ mod tests {
 
     #[test]
     fn leaky_relu_fuses_across_interleaved_nodes() {
-
         // Conv produces "c1", then an unrelated MaxPool (reading "data") comes between,
         // then a LeakyRelu consumes "c1". The fusion should still happen.
         let mut graph = Vec::new();
@@ -750,7 +757,6 @@ mod tests {
 
     #[test]
     fn add_with_initializer_operand_is_unsupported() {
-
         let mut graph = Vec::new();
         len_field(1, &node("Add", &["data", "w1"], "a1", &[]), &mut graph);
         len_field(5, &tensor("w1", &[4], &[0.1; 4]), &mut graph);
@@ -769,7 +775,6 @@ mod tests {
 
     #[test]
     fn leaky_relu_with_initializer_operand_is_unsupported() {
-
         let mut graph = Vec::new();
         len_field(1, &node("LeakyRelu", &["w1"], "l1", &[]), &mut graph);
         len_field(5, &tensor("w1", &[4], &[0.1; 4]), &mut graph);
@@ -788,7 +793,6 @@ mod tests {
 
     #[test]
     fn more_than_max_ops_small_adds_are_rejected_as_too_many_layers() {
-
         let mut nodes = Vec::new();
         let mut prev = "data".to_string();
         for i in 0..=MAX_OPS {
