@@ -37,7 +37,7 @@ pub(super) fn starting_colour_with(
     dark: impl FnOnce(&RawImage, &CameraTransform) -> Option<CameraLook>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
     let (xy, t, look) = colour::starting_colour_with(raw, fit, monochrome, dark);
-    fitted_white(raw, xy, t, look)
+    fitted_white(xy, t, look)
 }
 
 /// [`colour::starting_colour`] recomputed at the white the fitted camera-to-working matrix
@@ -53,7 +53,7 @@ pub(crate) fn starting_colour(
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> (Xy, CameraTransform, Option<CameraLook>) {
     let (xy, t, look) = colour::starting_colour(raw, bytes, lens, embedded);
-    fitted_white(raw, xy, t, look)
+    fitted_white(xy, t, look)
 }
 
 /// Recompute the white and transform once the look's fitted matrix is installed.
@@ -63,7 +63,7 @@ pub(crate) fn starting_colour(
 /// matrix, because the look matrix is a hue/saturation correction that preserves neutrals
 /// (like a DNG ProfileHueSatMap). The transform stores the camera model at that white;
 /// the loader and DNG writer apply the look's matrix on top, so it is applied exactly once.
-fn fitted_white(raw: &RawImage, xy: Xy, mut t: CameraTransform, look: Option<CameraLook>) -> (Xy, CameraTransform, Option<CameraLook>) {
+fn fitted_white(xy: Xy, mut t: CameraTransform, look: Option<CameraLook>) -> (Xy, CameraTransform, Option<CameraLook>) {
     let Some(mut look) = look else { return (xy, t, None) };
     if look.matrix == Mat3::IDENTITY {
         return (xy, t, Some(look));
