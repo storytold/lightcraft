@@ -75,10 +75,11 @@ pub fn parse_plist(bytes: &[u8]) -> Result<Plist, String> {
         max_depth: 62,
         ..craft_plist::Limits::default()
     };
-    let value = craft_plist::parse_xml_with_limits(bytes, limits).map_err(|error| match error {
-        craft_plist::FormatError::TooLarge(_) => format!("property list: nested too deeply or exceeds resource limits: {error}"),
-        _ => format!("property list: {error}"),
-    })?;
+    let value =
+        craft_plist::parse_xml_with_options(bytes, limits, craft_plist::XmlOptions { trim_date_text: false }).map_err(|error| match error {
+            craft_plist::FormatError::TooLarge(_) => format!("property list: nested too deeply or exceeds resource limits: {error}"),
+            _ => format!("property list: {error}"),
+        })?;
     map_plist(value)
 }
 
@@ -586,7 +587,7 @@ mod tests {
             b"<dict><key>date</key><date> 2026-01-01T00:00:00Z </date><key>integer</key><integer>-3</integer><key>data</key><data>AAEC</data></dict>",
         )
         .unwrap();
-        assert_eq!(p.get("date").and_then(Plist::str), Some("2026-01-01T00:00:00Z"));
+        assert_eq!(p.get("date").and_then(Plist::str), Some(" 2026-01-01T00:00:00Z "));
         assert_eq!(p.get("integer").and_then(Plist::num), Some(-3.0));
         assert_eq!(p.get("data"), Some(&Plist::Data));
     }

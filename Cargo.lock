@@ -1319,7 +1319,7 @@ dependencies = [
 [[package]]
 name = "craft-plist"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=c17840e099d7a4237770bca99efb2693f1692a8d#c17840e099d7a4237770bca99efb2693f1692a8d"
+source = "git+https://github.com/storytold/craft-libs?rev=0dab3133a2a58d321ade446f23592e7855b79e78#0dab3133a2a58d321ade446f23592e7855b79e78"
 dependencies = [
  "thiserror 2.0.21",
 ]
