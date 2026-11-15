@@ -831,16 +831,15 @@ pub fn quantizer(quality: u8) -> usize {
 /// the samples as they come out (in order: no frame reordering).
 pub struct Av1Encoder {
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    enc: Av1Backend,
+    enc: craft_video::av1::LargeEncoder,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    durations: Vec<u64>,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    returned: usize,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    failed: bool,
     width: usize,
     height: usize,
-    has_sample: bool,
-}
-
-#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-enum Av1Backend {
-    Single(Box<craft_video::av1::Encoder>),
-    Tiled(Box<craft_video::av1::LargeEncoder>),
 }
 
 impl Av1Encoder {
@@ -851,18 +850,12 @@ impl Av1Encoder {
         }
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            use craft_video::av1::{Encoder, EncoderConfig, RateControl};
+            use craft_video::av1::{EncoderConfig, RateControl};
             let mut ec = EncoderConfig::new(w as u32, h as u32, c.fps, 1);
             ec.rate = RateControl::ConstantQ(quantizer(c.quality).clamp(1, 255) as u8);
             ec.keyint = 120;
-            let sb_cols = w.div_ceil(64);
-            let sb_rows = h.div_ceil(64);
-            let enc = if w > 4096 || h > 4096 || sb_cols * sb_rows > 2304 {
-                Av1Backend::Tiled(Box::new(craft_video::av1::LargeEncoder::with_speed(&ec, c.speed).map_err(|e| bad(format!("AV1: {e}")))?))
-            } else {
-                Av1Backend::Single(Box::new(Encoder::new(ec).map_err(|e| bad(format!("AV1: {e}")))?))
-            };
-            Ok(Av1Encoder { enc, width: w, height: h, has_sample: false })
+            let enc = craft_video::av1::LargeEncoder::with_speed(&ec, c.speed).map_err(|e| bad(format!("AV1: {e}")))?;
+            Ok(Av1Encoder { enc, durations: Vec::new(), returned: 0, failed: false, width: w, height: h })
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
@@ -880,17 +873,10 @@ impl Av1Encoder {
     pub fn config_record(&self) -> Option<Vec<u8>> {
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            if !self.has_sample {
-                return None;
-            }
-            match &self.enc {
-                Av1Backend::Single(enc) => Some(enc.av1c()),
-                Av1Backend::Tiled(enc) => enc.av1c(),
-            }
+            self.enc.av1c()
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
-            let _ = self.has_sample;
             None
         }
     }
@@ -902,17 +888,19 @@ impl Av1Encoder {
         let (y, u, v) = yuv420(rgba, self.width, self.height)?;
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
+            if self.failed {
+                return Err(bad("AV1 encoder failed earlier"));
+            }
             let y16: Vec<u16> = y.into_iter().map(u16::from).collect();
             let u16_: Vec<u16> = u.into_iter().map(u16::from).collect();
             let v16: Vec<u16> = v.into_iter().map(u16::from).collect();
             let frame = craft_video::av1::Frame { y: &y16, u: &u16_, v: &v16, y_stride: self.width, uv_stride: self.width / 2 };
-            let pkt = match &mut self.enc {
-                Av1Backend::Single(enc) => enc.encode_with_key(&frame, key),
-                Av1Backend::Tiled(enc) => enc.encode_with_key(&frame, key),
-            }
-            .map_err(|e| bad(format!("AV1: {e}")))?;
-            self.has_sample = true;
-            Ok(vec![Sample { data: pkt.data, key: pkt.keyframe, duration: periods.max(1) }])
+            self.durations.push(periods.max(1));
+            let packets = self.enc.push(&frame, key).map_err(|e| {
+                self.failed = true;
+                bad(format!("AV1: {e}"))
+            })?;
+            self.samples(packets)
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
@@ -925,10 +913,38 @@ impl Av1Encoder {
     pub fn finish(&mut self) -> Result<Vec<Sample>> {
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            Ok(Vec::new())
+            if self.failed {
+                return Err(bad("AV1 encoder failed earlier"));
+            }
+            let packets = self.enc.finish().map_err(|e| {
+                self.failed = true;
+                bad(format!("AV1: {e}"))
+            })?;
+            let samples = self.samples(packets)?;
+            if self.returned != self.durations.len() {
+                self.failed = true;
+                return Err(bad("AV1 encoder did not return every input frame"));
+            }
+            Ok(samples)
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         Err(bad("AV1 video encoding is not available in this build"))
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    fn samples(&mut self, packets: Vec<craft_video::av1::BufferedPacket>) -> Result<Vec<Sample>> {
+        let mut samples = Vec::with_capacity(packets.len());
+        for packet in packets {
+            let index = usize::try_from(packet.input_frame_number).ok();
+            let duration = index.filter(|&i| i == self.returned).and_then(|i| self.durations.get(i)).copied();
+            let Some(duration) = duration else {
+                self.failed = true;
+                return Err(bad("AV1 encoder returned an unknown or out-of-order frame"));
+            };
+            self.returned += 1;
+            samples.push(Sample { data: packet.packet.data, key: packet.packet.keyframe, duration });
+        }
+        Ok(samples)
     }
 }
 
@@ -1122,7 +1138,8 @@ mod tests {
         out.extend(e.finish().unwrap());
         assert_eq!(out.len(), 4, "one sample per frame sent");
         assert!(out[0].key);
-        assert_eq!(out.iter().map(|s| s.duration).sum::<u64>(), 56);
+        assert!(out[3].key, "requested key frame");
+        assert_eq!(out.iter().map(|s| s.duration).collect::<Vec<_>>(), [24, 1, 1, 30]);
         for s in &out {
             assert!(obus(&s.data).unwrap().iter().all(|(k, _)| *k != OBU_TEMPORAL_DELIMITER));
         }
@@ -1135,5 +1152,32 @@ mod tests {
         }
         let d = m.finish().unwrap().into_inner();
         assert_eq!(boxes(&d, 0..d.len()).len(), 3);
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_buffers_a_large_frame_and_preserves_its_duration() {
+        let c = VideoConfig { width: 4112, height: 16, fps: 30, quality: 60, speed: 10 };
+        let mut encoder = Av1Encoder::new(&c).unwrap();
+        let mut samples = encoder.push(&vec![[80, 120, 180, 255]; 4112 * 16], 7, true).unwrap();
+        samples.extend(encoder.finish().unwrap());
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].duration, 7);
+        assert!(samples[0].key);
+        assert!(encoder.config_record().is_some());
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_speed_affects_normal_sized_frames() {
+        let image: Vec<[u8; 4]> = (0..64 * 48).map(|i| [(i * 13) as u8, (i * 41) as u8, (i * 73) as u8, 255]).collect();
+        let encode = |speed| {
+            let c = VideoConfig { width: 64, height: 48, fps: 24, quality: 60, speed };
+            let mut encoder = Av1Encoder::new(&c).unwrap();
+            let mut samples = encoder.push(&image, 1, true).unwrap();
+            samples.extend(encoder.finish().unwrap());
+            samples.remove(0).data
+        };
+        assert_ne!(encode(1), encode(10), "AV1 speed must reach the shared encoder");
     }
 }
