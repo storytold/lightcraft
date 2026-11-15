@@ -475,6 +475,21 @@ mod prepared_tests {
     use super::*;
     use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 
+    /// `lightcraft-cli calibrate` collects the extensions the profile fit reads
+    /// ([`crate::camera_profiles::CALIBRATION_EXTENSIONS`]): each must be an import extension too, so
+    /// a format the CLI calibrates can also be imported, and a typo cannot silently drop one.
+    #[test]
+    fn calibration_extensions_are_import_extensions() {
+        let calibration = crate::camera_profiles::CALIBRATION_EXTENSIONS;
+        for ext in calibration {
+            assert!(EXTENSIONS.contains(ext), "{ext} is not an import extension");
+            assert_eq!(*ext, ext.to_lowercase(), "{ext} must be lower case");
+        }
+        let unique: std::collections::HashSet<_> = calibration.iter().collect();
+        assert_eq!(calibration.len(), unique.len(), "a duplicate extension would be walked twice");
+        assert!(calibration.contains(&"rw2"), "Panasonic RW2 raws carry a usable camera JPEG (issue #4061)");
+    }
+
     fn temp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("lc-launch-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
