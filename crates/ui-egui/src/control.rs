@@ -731,7 +731,11 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
             let Some(events) = p.get("events").and_then(Value::as_array) else { return Err("missing `events`".into()) };
             // Check the whole batch first: a mistyped release must not leave a press queued.
             for event in events {
-                let kind = event.get("kind").and_then(Value::as_str).unwrap_or("move");
+                let event = event.as_object().ok_or("ui.pointer: every event must be an object")?;
+                let kind = match event.get("kind") {
+                    None => "move",
+                    Some(kind) => kind.as_str().ok_or("ui.pointer: `kind` must be a string")?,
+                };
                 if !matches!(kind, "down" | "drag" | "move" | "up") {
                     return Err(format!("ui.pointer: unknown event kind `{kind}` (down, drag, move or up)"));
                 }
@@ -924,16 +928,24 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn unknown_pointer_kind_rejects_the_whole_batch() {
+    fn invalid_pointer_events_reject_the_whole_batch() {
         let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
         app.image_rect = Some(egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0)));
         app.synthetic.push(egui::Event::Text("pending".into()));
-        let error = super::gesture_events(&mut app, &egui::Context::default(), "ui.pointer", &json!({"events": [{"kind": "down"}, {"kind": "upp"}]}))
-            .unwrap_err();
-        assert!(error.contains("unknown event kind"), "{error}");
-        assert!(error.contains("upp"), "{error}");
-        assert_eq!(app.synthetic.len(), 1);
-        assert!(matches!(app.synthetic.first(), Some(egui::Event::Text(text)) if text == "pending"));
+        let mut refuses = |event: serde_json::Value, reason: &str| {
+            let error =
+                super::gesture_events(&mut app, &egui::Context::default(), "ui.pointer", &json!({"events": [{"kind": "down"}, event]})).unwrap_err();
+            assert!(error.contains("ui.pointer"), "{error}");
+            assert!(error.contains(reason), "{error}");
+            assert_eq!(app.synthetic.len(), 1);
+            assert!(matches!(app.synthetic.first(), Some(egui::Event::Text(text)) if text == "pending"));
+        };
+        for kind in [json!("upp"), json!(null), json!(false), json!(0), json!([]), json!({})] {
+            refuses(json!({"kind": kind}), "kind");
+        }
+        for event in [json!(null), json!(false), json!(0), json!("up"), json!([])] {
+            refuses(event, "object");
+        }
     }
 
     #[test]
