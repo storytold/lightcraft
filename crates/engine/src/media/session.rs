@@ -4,10 +4,10 @@ use super::settings_hash::with_process;
 use super::source::{PreviewLoader, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
-/// The upper-case file extension of `p`'s source, or an empty string for non-file sources.
+/// The upper-case format of `p`'s source, or an empty string for non-file sources.
 fn source_format(p: &Photo) -> String {
     match &p.source {
-        Source::File { path } => path.split('.').last().map(|ext| ext.to_ascii_uppercase()).unwrap_or_default(),
+        Source::File { .. } => p.format.to_ascii_uppercase(),
         _ => String::new(),
     }
 }

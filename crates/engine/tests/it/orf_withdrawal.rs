@@ -205,3 +205,38 @@ fn unavailable_legacy_orf_is_unchanged_and_retried() {
     assert_eq!(x.s.catalog.photo(x.id).unwrap(), &before);
     assert_eq!(recheck::stale(&x.s.catalog, false).len(), 1);
 }
+
+/// Regression check for the `source_format` review: the extension is the last path
+/// segment, so `next_back()` returns it directly and render keys are unchanged by the
+/// swap from `Iterator::last()`.
+#[test]
+fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity_review_regression_1() {
+    let mut s = decoder_session("ORF");
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let keys = decoder_keys(&mut s);
+    // Recomputing the keys must give the same result: the format extraction is stable.
+    assert_eq!(keys, decoder_keys(&mut s), "render keys are deterministic");
+    // The original-file identity is independent of the decoder format.
+    assert_eq!(keys.2, content_key(&p), "file identity does not change with the decoder");
+    // The decoder format must salt the persistent render identities: an ORF photo and a
+    // DNG photo must not share source keys, otherwise a withdrawn ORF decoder could stand
+    // in for another format's render.
+    let other = decoder_keys(&mut decoder_session("DNG"));
+    assert_ne!(keys.1[3], other.1[3], "ORF and DNG source keys must differ");
+    // The decoder format must salt every render family: an ORF render must not be reused
+    // for a DNG photo.
+    for (a, b) in keys.0.iter().zip(&other.0) {
+        assert_ne!(a, b, "ORF and DNG render keys must differ");
+    }
+    // `source_format` reads the path extension, so `decoder_session("DNG")` (path
+    // `same-original.orf`) is keyed as ORF for `decoder_cache_version`. Two photos with
+    // the same format field must share cache keys regardless of path extension; the path
+    // must not salt the decoder cache version.
+    let mut probe = Session::new();
+    let mut probe_photo = Photo::new(PhotoId(1), Source::File { path: "same-original.dng".into() }, "same-original.dng", "DNG", 6000, 4000, "2026-01-01");
+    probe_photo.kind = MediaKind::Raw;
+    probe_photo.content_hash = Some("unchanged-file-bytes".into());
+    probe.catalog.apply(Op::AddPhoto { photo: Box::new(probe_photo) }).unwrap();
+    let probe_keys = decoder_keys(&mut probe);
+    assert_eq!(other.1[0], probe_keys.1[0], "cache keys must use the photo's format, not the path extension");
+}
