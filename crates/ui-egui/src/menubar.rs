@@ -481,9 +481,12 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
     let has = active.is_some();
     Some(match name {
         "Previews" => {
-            // (the background preparation's build gives way to one asked for here)
+            // (the background preparation's build gives way to one asked for here; a build asked
+            // for while another runs waits for its turn, so the builds stay offered — only the
+            // destructive discards wait, and Stop covers the waiting ones too)
             let running = app.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background);
-            let stoppable = app.session.preview_build.as_ref().is_some_and(|b| b.running());
+            let queued = !app.session.preview_queue.is_empty();
+            let stoppable = app.session.preview_build.as_ref().is_some_and(|b| b.running()) || queued;
             let scope = if app.session.selection.ids.len() > 1 { "Selected" } else { "Visible" };
             vec![
                 item(
@@ -491,7 +494,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     json!({"size": "standard", "edge": app.ui.settings.standard_preview_edge()}),
                     crate::i18n::tr_format!("Build Standard-Sized Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    !running,
+                    true,
                     None,
                 ),
                 item(
@@ -499,7 +502,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     json!({"size": "full"}),
                     crate::i18n::tr_format!("Build 1:1 Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    !running,
+                    true,
                     None,
                 ),
                 item("library.cancelPreviews", Value::Null, "Stop Building Previews", None, stoppable, None),
@@ -518,7 +521,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     json!({"background": true}),
                     crate::i18n::tr_format!("Build Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    app.session.media.smart_dir.is_some() && !running,
+                    app.session.media.smart_dir.is_some(),
                     None,
                 ),
                 item(
@@ -526,7 +529,7 @@ pub(crate) fn expanded(app: &LccApp, name: &str) -> Option<Vec<MenuNode>> {
                     json!({"discard": true, "background": true}),
                     crate::i18n::tr_format!("Discard Smart Previews ({scope})", scope = crate::i18n::tr(scope)),
                     None,
-                    app.session.media.smart_dir.is_some() && !running,
+                    app.session.media.smart_dir.is_some(),
                     None,
                 ),
                 MenuNode::Separator,

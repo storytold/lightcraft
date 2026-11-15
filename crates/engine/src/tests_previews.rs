@@ -219,3 +219,158 @@ fn preview_build_of_many_photos_counts_each_once() {
     assert_eq!(r["total"], json!(ids.len()));
     assert_eq!(r["failed"], json!(0));
 }
+
+// ---- a build asked for while another runs waits for its turn (the preview queue)
+
+/// Wait (at most 30 s) until build `b` is over.
+fn wait_done(b: &crate::cmd::previews::PreviewBuild) -> bool {
+    for _ in 0..1500 {
+        if !b.running() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
+/// A session of `n` synthetic photos whose every decode waits on `gate` (a failed test never
+/// leaves its lanes waiting: the gate gives up after a minute): a build's lanes hold in the
+/// loader, so a test can ask for a second build while the first truly runs.
+fn gated_photos(n: u64, gate: std::sync::Arc<std::sync::atomic::AtomicBool>) -> (Session, Vec<lcc_catalog::PhotoId>) {
+    use lcc_catalog::{Op, Photo, PhotoId, Source};
+    let mut s = Session::new();
+    let ids: Vec<PhotoId> = (1..=n).map(PhotoId).collect();
+    for &id in &ids {
+        let name = format!("{}.jpg", id.0);
+        let p = Photo::new(id, Source::File { path: format!("/nowhere/{name}") }, &name, "JPEG", 600, 400, "");
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    s.media.file_loader = Some(std::sync::Arc::new(move |_, _, _| {
+        let t0 = std::time::Instant::now();
+        while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < std::time::Duration::from_secs(60) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mut image = lcc_raster::Rgb32f::new(600, 400);
+        image.data.fill([0.3, 0.2, 0.1]);
+        Ok((image, Default::default()))
+    }));
+    (s, ids)
+}
+
+// Given a build running, a second one asked for waits for its turn, then runs: every photo is
+// built exactly once by each (the user queues a 1:1 build behind the standard one, as several
+// processes at once)
+#[test]
+fn a_build_asked_for_while_one_runs_waits_for_its_turn() {
+    let _keys = crate::sensor_maps::keep_generation();
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut s, ids) = gated_photos(6, gate.clone());
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    let r = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids})).unwrap();
+    assert_eq!(r["running"], true, "{r}");
+    // the same request again while one runs: not an error, not a second build — it waits
+    let q = s.execute("library.buildPreviews", &json!({"size": "full", "ids": ids})).unwrap();
+    assert_eq!((q["queued"].as_bool(), q["position"].as_u64()), (Some(true), Some(1)), "{q}");
+    assert_eq!(s.preview_queue.len(), 1);
+    // the first build ends, and the waiting one runs and completes, every photo once
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    let first = s.preview_build.clone().unwrap();
+    assert!(wait_done(&first), "the first build ended");
+    let started = crate::cmd::previews::drain_queue(&mut s).expect("the waiting build starts");
+    assert!(started.is_ok(), "{started:?}");
+    let second = s.preview_build.clone().unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &second), "a fresh build");
+    assert!(wait_done(&second), "the second build ended");
+    let r = second.json();
+    assert_eq!(r["done"], json!(ids.len()), "{r}");
+    assert_eq!(r["failed"], json!(0));
+    assert_eq!(r["skipped"], json!(0), "1:1 previews are their own build's work");
+    assert!(crate::cmd::previews::drain_queue(&mut s).is_none(), "nothing more waits");
+}
+
+// Given a request already waiting, the same one is not queued twice; a different one queues
+// behind it; and past a full queue the ask is refused
+#[test]
+fn identical_waiting_requests_are_not_queued_twice_and_the_queue_has_a_cap() {
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut s, ids) = gated_photos(4, gate.clone());
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids})).unwrap();
+    let same = json!({"size": "full", "ids": ids});
+    let q = s.execute("library.buildPreviews", &same).unwrap();
+    assert_eq!(q["position"], 1, "{q}");
+    let q = s.execute("library.buildPreviews", &same).unwrap();
+    assert_eq!(q["position"], 1, "still one waiting: {q}");
+    let q = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 256, "ids": ids})).unwrap();
+    assert_eq!(q["position"], 2, "a different one queues behind it: {q}");
+    assert_eq!(s.preview_queue.len(), 2);
+    for i in 0..14 {
+        let q = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 300 + i, "ids": ids})).unwrap();
+        assert_eq!(q["position"], 3 + i, "{q}");
+    }
+    let e = s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 4000, "ids": ids})).unwrap_err();
+    assert!(e.to_string().contains("waiting"), "{e}");
+    // Stop drops them all and cancels the running one
+    let r = s.execute("library.cancelPreviews", &json!({})).unwrap();
+    assert_eq!(r["queuedDropped"], json!(16), "{r}");
+    assert_eq!(r["cancelled"], true, "{r}");
+    assert!(s.preview_queue.is_empty());
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    let b = s.preview_build.clone().unwrap();
+    assert!(wait_done(&b));
+    assert!(crate::cmd::previews::drain_queue(&mut s).is_none(), "nothing more starts");
+}
+
+// Given Stop with builds waiting, the waiting ones are dropped and nothing starts after the
+// running one ends
+#[test]
+fn stop_drops_the_waiting_builds_and_cancels_the_running_one() {
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (mut s, ids) = gated_photos(4, gate.clone());
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids})).unwrap();
+    s.execute("library.buildPreviews", &json!({"size": "full", "ids": ids})).unwrap();
+    s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 256, "ids": ids})).unwrap();
+    let running = s.preview_build.clone().unwrap();
+    let r = s.execute("library.cancelPreviews", &json!({})).unwrap();
+    assert_eq!(r["queuedDropped"], json!(2), "{r}");
+    assert!(running.cancel.load(std::sync::atomic::Ordering::Relaxed), "the running one is stopped");
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    assert!(wait_done(&running));
+    assert!(crate::cmd::previews::drain_queue(&mut s).is_none(), "nothing was left to start");
+    assert!(std::sync::Arc::ptr_eq(&running, &s.preview_build.clone().unwrap()), "no build took its place");
+}
+
+// Given a plain build running, a smart previews request waits for its turn and then runs
+#[test]
+fn a_smart_previews_request_waits_for_the_running_build() {
+    let _keys = crate::sensor_maps::keep_generation();
+    let gate = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (root, mut s, ids) = crate::tests_preview_prep::library("queue-smart", 4);
+    let gate2 = gate.clone();
+    s.media.file_loader = Some(std::sync::Arc::new(move |_, _, _| {
+        let t0 = std::time::Instant::now();
+        while !gate2.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < std::time::Duration::from_secs(60) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let mut image = lcc_raster::Rgb32f::new(600, 400);
+        image.data.fill([0.3, 0.2, 0.1]);
+        Ok((image, Default::default()))
+    }));
+    let ids: Vec<u64> = ids.iter().map(|id| id.0).collect();
+    s.execute("library.buildPreviews", &json!({"size": "standard", "edge": 512, "ids": ids})).unwrap();
+    let q = s.execute("library.smartPreviews", &json!({"background": true, "ids": ids})).unwrap();
+    assert_eq!((q["queued"].as_bool(), q["position"].as_u64()), (Some(true), Some(1)), "{q}");
+    gate.store(true, std::sync::atomic::Ordering::Release);
+    let first = s.preview_build.clone().unwrap();
+    assert!(wait_done(&first), "the plain build ended");
+    let started = crate::cmd::previews::drain_queue(&mut s).expect("the smart build starts");
+    assert!(started.is_ok(), "{started:?}");
+    let smart = s.preview_build.clone().unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&first, &smart), "a fresh build");
+    assert!(wait_done(&smart), "the smart build ended");
+    let r = s.execute("library.previewProgress", &json!({})).unwrap();
+    assert_eq!(r["what"], "smart previews", "{r}");
+    assert_eq!(r["done"], json!(ids.len()), "{r}");
+    let _ = std::fs::remove_dir_all(root);
+}
