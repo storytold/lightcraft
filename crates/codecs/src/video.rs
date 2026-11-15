@@ -839,7 +839,7 @@ pub struct Av1Encoder {
 
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 enum Av1Backend {
-    Single(craft_video::av1::Encoder),
+    Single(Box<craft_video::av1::Encoder>),
     Tiled(Box<craft_video::av1::LargeEncoder>),
 }
 
@@ -860,7 +860,7 @@ impl Av1Encoder {
             let enc = if w > 4096 || h > 4096 || sb_cols * sb_rows > 2304 {
                 Av1Backend::Tiled(Box::new(craft_video::av1::LargeEncoder::with_speed(&ec, c.speed).map_err(|e| bad(format!("AV1: {e}")))?))
             } else {
-                Av1Backend::Single(Encoder::new(ec).map_err(|e| bad(format!("AV1: {e}")))?)
+                Av1Backend::Single(Box::new(Encoder::new(ec).map_err(|e| bad(format!("AV1: {e}")))?))
             };
             Ok(Av1Encoder { enc, width: w, height: h, has_sample: false })
         }
