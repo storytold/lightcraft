@@ -145,6 +145,55 @@ fn pixel_scale_zoomed_window_matches_the_whole_render() {
     assert!(d <= 2, "{d}");
 }
 
+/// Renders of one edit started together (the loupe, the preview, the grid's cell, an export) run a
+/// pixel-scale stack once between them: the others wait for that run instead of each running it,
+/// all slowed by the others.
+#[test]
+fn renders_started_together_run_the_native_stack_once() {
+    let src = Arc::new(source(0.37));
+    let (info, s) = (info(), settings());
+    let mine = crate::optics::fingerprint(&src);
+    let go = Arc::new(std::sync::Barrier::new(6));
+    let renders: Vec<_> = [192, 96, 48, 64, 128, 160]
+        .into_iter()
+        .map(|w| {
+            let (src, info, s, go) = (src.clone(), info.clone(), s.clone(), go.clone());
+            std::thread::spawn(move || {
+                go.wait();
+                render(&src, &info, &s, &RenderRequest::fit(w, w * 2 / 3))
+            })
+        })
+        .collect();
+    for r in renders {
+        let r = r.join().unwrap();
+        assert!(r.warnings.is_empty(), "{:?}", r.warnings);
+    }
+    let runs = crate::source_stage::NATIVE_RUNS.lock().unwrap().iter().filter(|f| **f == mine).count();
+    // (another test's photo may take the one-photo slot between a run and a waiter's look: two)
+    assert!((1..=2).contains(&runs), "the stack ran {runs} times for six renders");
+}
+
+/// A render a newer one replaced stops its plug-in filters at its cancel, says so, and keeps
+/// nothing: the next render of the same edit is the filtered picture, not the unfiltered one the
+/// cut render made.
+#[test]
+fn a_cancelled_render_stops_its_filters_and_keeps_nothing() {
+    let (src, info, s) = (Arc::new(source(0.38)), info(), settings());
+    let req = RenderRequest::fit(96, 64);
+    let cache = StageCache::default();
+    let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let (_, cut) = crate::with_cancel(Some(flag), || render_cached(&src, &info, &s, &req, &cache));
+    assert!(cut, "the render says it stopped short");
+    let (after, cut) = crate::with_cancel(None, || render_cached(&src, &info, &s, &req, &cache));
+    assert!(!cut);
+    let plain = render(&src, &info, &DevelopSettings { plugin_filters: vec![], ..s.clone() }, &req);
+    let fresh = render(&src, &info, &s, &req);
+    let diff =
+        |a: &Rgba8, b: &Rgba8| a.data.iter().zip(&b.data).flat_map(|(p, q)| (0..3).map(move |k| (p[k] as i32 - q[k] as i32).abs())).max().unwrap();
+    assert!(diff(&after.image, &fresh.image) <= 1, "the next render is the filtered picture");
+    assert!(diff(&plain.image, &fresh.image) > 4, "(the filter shows)");
+}
+
 #[test]
 fn pixel_scale_draft_reuses_the_native_result() {
     let (src, info, s) = (Arc::new(source(0.33)), info(), settings());

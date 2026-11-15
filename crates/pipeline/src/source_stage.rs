@@ -18,7 +18,7 @@
 //! analyse the whole photo before a render (Upright, the model-free auto masks, spot-source picking,
 //! a zoomed view's dehaze airlight), so they see e.g. the converted negative, not the scan.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use lcc_develop::{DevelopSettings, FilterStage};
 use lcc_raster::Rgb32f;
@@ -55,6 +55,53 @@ struct Native {
 /// The last native-resolution result (one photo's worth of memory at most).
 static NATIVE: Mutex<Option<Native>> = Mutex::new(None);
 
+/// Keys of native-resolution runs under way: a render that needs one of them waits for it instead
+/// of running the stack again beside it (the loupe, the preview, the grid's cell and an export of
+/// one edit would each run it, all at once, each slowed by the others).
+static RUNNING: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+static RAN: Condvar = Condvar::new();
+
+/// The sources (by [`crate::optics::fingerprint`]) native runs were made of, for tests to count.
+#[cfg(test)]
+pub(crate) static NATIVE_RUNS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+/// Takes `key`'s run: `None` while another render runs it (after waiting for that to end, the
+/// caller looks in [`NATIVE`] again).
+fn claim(key: u64) -> Option<Claim> {
+    let mut g = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
+    // (a render on one of rayon's own threads runs it itself: blocked there, it could hold up the
+    // very run it waits for)
+    if g.contains(&key) {
+        if rayon::current_thread_index().is_some() {
+            return Some(Claim(None));
+        }
+        while g.contains(&key) {
+            g = RAN.wait(g).unwrap_or_else(PoisonError::into_inner);
+        }
+        return None;
+    }
+    g.push(key);
+    Some(Claim(Some(key)))
+}
+
+/// A native run under way; ends (and wakes the renders waiting for it) when dropped, also when the
+/// run fails. (`None`: a second run of a key another render holds, which it doesn't end.)
+struct Claim(Option<u64>);
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        if let Some(key) = self.0 {
+            RUNNING.lock().unwrap_or_else(PoisonError::into_inner).retain(|k| *k != key);
+            RAN.notify_all();
+        }
+    }
+}
+
+fn native_hit(key: u64) -> Option<(Arc<Rgb32f>, Vec<String>)> {
+    let g = NATIVE.lock().unwrap_or_else(PoisonError::into_inner);
+    g.as_ref().filter(|n| n.key == key).map(|n| (n.img.clone(), n.warnings.clone()))
+}
+
 /// Drops the cached native-resolution result (with [`crate::StageCache::clear`], to free memory).
 pub fn clear() {
     *NATIVE.lock().unwrap_or_else(PoisonError::into_inner) = None;
@@ -76,10 +123,18 @@ pub(crate) fn run(
     if stack.pixel_scale() {
         let (nw, nh) = native_size(&plan.whole_frame, info);
         let key = hash_of((stack.key, crate::optics::fingerprint(src), src.width, src.height, format!("{:?}", plan.whole_frame), nw, nh));
-        let hit = {
-            let g = NATIVE.lock().unwrap_or_else(PoisonError::into_inner);
-            g.as_ref().filter(|n| n.key == key).map(|n| (n.img.clone(), n.warnings.clone()))
-        };
+        let mut hit = native_hit(key);
+        // another render running this very stack: its result, once it lands (and when that run
+        // failed, this one takes over)
+        let mut running = None;
+        while hit.is_none() && !draft {
+            let c = claim(key);
+            hit = native_hit(key);
+            if c.is_some() {
+                running = c;
+                break;
+            }
+        }
         let native = match hit {
             Some((img, w)) => {
                 warnings.extend(w);
@@ -97,10 +152,16 @@ pub(crate) fn run(
                     crate::film_dust::stage(&mut img, src, info, &plan.settings, &plan.whole_frame);
                 }
                 let mut w = Vec::new();
+                #[cfg(test)]
+                NATIVE_RUNS.lock().unwrap_or_else(PoisonError::into_inner).push(crate::optics::fingerprint(src));
                 plugin_filters::apply_source(stack, &mut img, lcc_filters::FrameInfo::whole(u32_of(nw), u32_of(nh)), false, &mut w);
                 let img = Arc::new(img);
                 warnings.extend(w.iter().cloned());
-                *NATIVE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Native { key, img: img.clone(), warnings: w });
+                // (stopped short at the render's cancel: not the stack's result, not kept)
+                if !crate::was_cut() {
+                    *NATIVE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Native { key, img: img.clone(), warnings: w });
+                }
+                drop(running);
                 Some(img)
             }
         };
@@ -171,6 +232,9 @@ pub fn aux_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Optio
         return Some(a.clone());
     }
     let img = Arc::new(plugin_filters::filtered_source(src, info, s, AUX_EDGE).into_owned());
+    if crate::was_cut() {
+        return Some(img);
+    }
     let mut c = AUX.lock().unwrap_or_else(PoisonError::into_inner);
     if c.len() >= 4 {
         c.remove(0);

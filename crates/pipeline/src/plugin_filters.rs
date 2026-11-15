@@ -130,9 +130,16 @@ impl Stack {
 
     /// Runs the stack on `img` (interleaved RGB as `encoding` says), in order; each filter that is
     /// missing or fails leaves the image as it was and adds a warning.
+    /// Stops at the render's cancel ([`crate::with_cancel`]): the filters still to run are skipped
+    /// and the render is marked cut short.
     pub fn apply(&self, img: &mut [[f32; 3]], w: usize, h: usize, frame: lcc_filters::FrameInfo, encoding: &str, warnings: &mut Vec<String>) {
-        let cancel = AtomicBool::new(false);
+        let own = Arc::new(AtomicBool::new(false));
+        let cancel = crate::cancel_flag().unwrap_or(own);
         for (f, r) in &self.entries {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                crate::note_cut();
+                return;
+            }
             let filter = match r {
                 Ok(x) => x,
                 Err(e) => {
@@ -149,8 +156,13 @@ impl Stack {
             };
             let params = filter_params(f, encoding);
             let r = crate::timed(&format!("plug-in {}", f.plugin), || filter.apply_rgb(img.as_flattened_mut(), w32, h32, frame, &params, &cancel));
-            if let Err(e) = r {
-                warnings.push(format!("{}skipped: {e}", warning_prefix(f)));
+            match r {
+                Err(lcc_filters::Error::Cancelled) => {
+                    crate::note_cut();
+                    return;
+                }
+                Err(e) => warnings.push(format!("{}skipped: {e}", warning_prefix(f))),
+                Ok(()) => {}
             }
         }
     }
