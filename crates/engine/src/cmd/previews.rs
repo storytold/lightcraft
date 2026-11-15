@@ -637,7 +637,8 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
             std::thread::Builder::new().name("lc-build-previews".into()).spawn(move || run_all(jobs, &run.state, run.task.as_ref(), lanes, force))
         };
         #[cfg(not(test))]
-        let started = std::thread::Builder::new().name("lc-build-previews".into()).spawn(move || run_all(jobs, &run.state, run.task.as_ref(), lanes, force));
+        let started =
+            std::thread::Builder::new().name("lc-build-previews".into()).spawn(move || run_all(jobs, &run.state, run.task.as_ref(), lanes, force));
         // never started: nothing was made the session's build (which would hold every later build back), and the
         // background build it was to replace carries on
         if let Err(e) = started {
