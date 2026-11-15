@@ -9,6 +9,7 @@ description = "LightCraft metadata: EXIF, XMP, IPTC (L1)"
 workspace = true
 
 [dependencies]
+craft-raw = { workspace = true }
 craft-tiff = { workspace = true }
 craft-metadata = { workspace = true }
 craft-psd = { workspace = true }
