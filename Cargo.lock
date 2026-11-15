@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff#149e74d739443d22fabb877745dad665f51c5eff"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1342,12 +1342,12 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff#149e74d739443d22fabb877745dad665f51c5eff"
 dependencies = [
  "chrono",
  "craft-crw",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -3856,7 +3856,7 @@ dependencies = [
  "craft-jxl",
  "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "craft-psd",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "dhat",
  "jxl-oxide",
  "lightcraft-color",
@@ -3933,7 +3933,7 @@ dependencies = [
  "chrono",
  "craft-docpath",
  "craft-heif",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "crc32fast",
  "fs4",
  "harfrust 0.13.3",
@@ -4092,7 +4092,7 @@ dependencies = [
  "craft-heif",
  "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "craft-psd",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "lightcraft-geom",
  "proptest",
  "serde",
@@ -4147,7 +4147,7 @@ dependencies = [
  "chrono",
  "craft-image-codecs",
  "craft-raw",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "dhat",
  "lightcraft-color",
  "lightcraft-geom",
