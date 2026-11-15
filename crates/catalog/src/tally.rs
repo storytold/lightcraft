@@ -407,4 +407,87 @@ mod tests {
         assert_eq!(far.len(), 2);
         assert!(FilterTally::from_matching(7, &[]).is_empty());
     }
+
+    /// A catalog of photos with the given ids, none rated.
+    fn catalog_of(ids: &[u64]) -> Catalog {
+        let mut cat = Catalog::new();
+        for id in ids {
+            let p = crate::Photo::new(PhotoId(*id), crate::Source::File { path: format!("/p/{id}.jpg") }, &format!("{id}.jpg"), "JPEG", 60, 40, "2026-01-01");
+            cat.apply(crate::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        cat
+    }
+
+    /// The photos rated three stars or more.
+    fn rated() -> Filter {
+        Filter { rating: 3, ..Default::default() }
+    }
+
+    fn rate(cat: &mut Catalog, id: u64, rating: u8) {
+        cat.apply(crate::Op::SetRating { id: PhotoId(id), rating }).unwrap();
+    }
+
+    #[test]
+    fn a_filter_tally_follows_photos_added_changed_and_removed() {
+        let mut cat = catalog_of(&[1, 2, 3, 4]);
+        let mut tally = FilterTally::of(&cat, &rated());
+        assert_eq!((tally.len(), tally.revision()), (0, cat.revision));
+        rate(&mut cat, 1, 5);
+        rate(&mut cat, 2, 4);
+        let added = crate::Photo::new(PhotoId(5), crate::Source::File { path: "/p/5.jpg".into() }, "5.jpg", "JPEG", 60, 40, "2026-01-01");
+        cat.apply(crate::Op::AddPhoto { photo: Box::new(crate::Photo { rating: 5, ..added }) }).unwrap();
+        assert!(tally.update(&cat, &rated()));
+        assert_eq!((tally.len(), tally.revision()), (3, cat.revision));
+        assert!(tally.members.holds(PhotoId(1)) && tally.members.holds(PhotoId(2)) && tally.members.holds(PhotoId(5)));
+        // one stops matching, one is removed: both leave
+        rate(&mut cat, 1, 0);
+        cat.apply(crate::Op::RemovePhoto { id: PhotoId(5) }).unwrap();
+        assert!(tally.update(&cat, &rated()));
+        assert_eq!((tally.len(), tally.revision()), (1, cat.revision));
+        assert!(tally.members.holds(PhotoId(2)) && !tally.members.holds(PhotoId(1)) && !tally.members.holds(PhotoId(5)));
+        // nothing changed: true, nothing asked
+        assert!(tally.update(&cat, &rated()));
+        assert_eq!(tally.len(), 1);
+    }
+
+    /// An edit that touched more than [`MAX_FOLLOWED`] photos, or one that is not remembered, leaves the tally as it
+    /// was (and says so), to be counted again with [`FilterTally::of`].
+    #[test]
+    fn a_filter_tally_that_cannot_follow_an_edit_is_left_untouched() {
+        let ids: Vec<u64> = (1..=300).collect();
+        let mut cat = catalog_of(&ids);
+        let mut tally = FilterTally::of(&cat, &rated());
+        let counted_at = tally.revision();
+        for id in 1..=(MAX_FOLLOWED as u64 + 1) {
+            rate(&mut cat, id, 5);
+        }
+        assert!(!tally.update(&cat, &rated()), "more than {MAX_FOLLOWED} photos touched");
+        assert_eq!((tally.len(), tally.revision()), (0, counted_at));
+        assert_eq!(FilterTally::of(&cat, &rated()).len(), MAX_FOLLOWED + 1, "counted again, it is right");
+
+        // an op that changes more than photos of its own is not followed photo by photo
+        let mut tally = FilterTally::of(&cat, &rated());
+        let counted_at = tally.revision();
+        let album = cat.alloc_album_id();
+        cat.apply(crate::Op::AddAlbum { album: Album::new(album, "Trip") }).unwrap();
+        rate(&mut cat, 300, 5);
+        assert!(!tally.update(&cat, &rated()), "touched_since is not known across an album change");
+        assert_eq!((tally.len(), tally.revision()), (MAX_FOLLOWED + 1, counted_at));
+    }
+
+    /// A tally made by [`FilterTally::from_matching`] over close ids is bits; a photo far away that starts matching
+    /// turns it into a set, and is held.
+    #[test]
+    fn a_filter_tally_of_bits_becomes_a_set_when_a_far_photo_matches() {
+        let mut cat = catalog_of(&[1, 2, 3]);
+        rate(&mut cat, 1, 5);
+        let mut tally = FilterTally::from_matching(cat.revision, &[PhotoId(1)]);
+        assert!(matches!(tally.members, Members::Bits { .. }));
+        let far = crate::Photo::new(PhotoId(9_000_000_000), crate::Source::File { path: "/p/far.jpg".into() }, "far.jpg", "JPEG", 60, 40, "2026-01-01");
+        cat.apply(crate::Op::AddPhoto { photo: Box::new(crate::Photo { rating: 5, ..far }) }).unwrap();
+        assert!(tally.update(&cat, &rated()));
+        assert!(matches!(tally.members, Members::Set(_)), "ids too far apart for bits");
+        assert_eq!((tally.len(), tally.revision()), (2, cat.revision));
+        assert!(tally.members.holds(PhotoId(1)) && tally.members.holds(PhotoId(9_000_000_000)) && !tally.members.holds(PhotoId(2)));
+    }
 }

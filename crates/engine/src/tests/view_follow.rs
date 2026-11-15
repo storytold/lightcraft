@@ -249,6 +249,7 @@ fn relative_clock_source_total_expires_before_or_after_visible_refresh() {
         s.execute("library.filter", &json!({"text": "synthetic"})).unwrap();
         assert_eq!(s.source_total(), Some(1), "the initial total is computed without asking for visible photos");
         let revision = s.catalog.revision;
+        let (counted, followed) = (s.total_counted, s.total_followed);
 
         *now.lock().unwrap() = "2026-10-24T12:01:00".to_string();
         if refresh_visible {
@@ -256,6 +257,8 @@ fn relative_clock_source_total_expires_before_or_after_visible_refresh() {
             assert!(s.visible_cloned().is_empty());
         }
         assert_eq!(s.source_total(), Some(0), "refresh_visible={refresh_visible}");
+        // a rule that reads the clock is counted again once the minute moved, never followed
+        assert_eq!((s.total_counted, s.total_followed), (counted + 1, followed), "refresh_visible={refresh_visible}");
         assert_eq!(s.catalog.revision, revision, "refresh_visible={refresh_visible}");
     }
 }
@@ -469,8 +472,11 @@ fn the_total_followed_through_edits_is_the_count_of_every_photo() {
     ];
     let filters = [json!({"rating": 0, "text": ""}), json!({"rating": 3, "text": ""}), json!({"rating": 0, "text": "travel"})];
     let mut checked = 0;
+    // per source and filter: (source, filter, edits checked, followed, counted)
+    let mut table: Vec<(String, String, usize, u64, u64)> = Vec::new();
     for (i, source) in sources.iter().enumerate() {
         for (j, filter) in filters.iter().enumerate() {
+            let (followed_before, counted_before, checked_before) = (s.total_followed, s.total_counted, checked);
             s.execute("library.source", source).unwrap();
             s.execute("library.filter", filter).unwrap();
             s.execute("library.holdView", &json!({"on": (i + j) % 2 == 1})).unwrap();
@@ -487,17 +493,25 @@ fn the_total_followed_through_edits_is_the_count_of_every_photo() {
                 assert_eq!(s.source_total(), Some(whole), "source {source}, filter {filter}, hold {}, edit {step}", s.hold_view);
                 checked += 1;
             }
+            table.push((source.to_string(), filter.to_string(), checked - checked_before, s.total_followed - followed_before, s.total_counted - counted_before));
         }
     }
     assert!(checked > 600, "checked {checked}");
-    // and it was following that was checked: most edits touch a photo or two
-    assert!(
-        s.total_followed > 150,
-        "followed {} times, counted {} times, from the view {} times",
-        s.total_followed,
-        s.total_counted,
-        s.total_from_view
-    );
+    // and it was following that was checked, source by source: most edits touch a photo or two, so a source whose
+    // filter narrows it (the view's own pass is no answer) follows, and counts only when an edit is large or not
+    // photos'. Recently Added reaches over the library (its cut-off moves with the newest photo): always counted
+    for (source, filter, edits, followed, counted) in &table {
+        let row = format!("{source} with {filter}: {edits} checked, followed {followed}, counted {counted}\n{table:#?}");
+        let narrowed = !filter.contains("\"rating\":0") || !filter.contains("\"text\":\"\"");
+        if !narrowed {
+            // (nothing narrows the source: the view's own pass or length answers, and nothing is followed or counted)
+        } else if source.contains("recentlyAdded") {
+            assert!(*followed == 0 && *counted > 0, "{row}");
+        } else {
+            assert!(*followed > 0, "never followed: {row}");
+            assert!(*counted * 2 <= *edits as u64 + 1, "counted from every photo too often: {row}");
+        }
+    }
 }
 
 #[test]
@@ -525,24 +539,37 @@ fn a_one_photo_edit_does_not_count_the_whole_library_again_for_the_source_total(
     let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
     assert_eq!(s.source_total(), Some(whole));
     assert_eq!((s.total_counted, s.total_followed), (2, 2));
-    // another source is counted for itself
+    // another source is counted for itself, and its total is the count of its photos
     s.execute("library.source", &json!({"kind": "album", "id": smart})).unwrap();
-    let _ = s.source_total();
-    assert_eq!(s.total_counted, 3);
+    let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+    assert_eq!(s.source_total(), Some(whole));
+    assert_eq!((s.total_counted, s.total_followed), (3, 2));
+    // and an edit after that is followed again: a keyword given to a photo takes it out of the smart album
+    s.execute("library.select", &json!({"ids": [ids[7].0]})).unwrap();
+    s.execute("photo.setMeta", &json!({"addKeywords": ["fresh"]})).unwrap();
+    let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+    assert_eq!(s.source_total(), Some(whole));
+    assert_eq!((s.total_counted, s.total_followed), (3, 3), "following resumed after the recount");
 }
 
 #[test]
 fn a_view_just_built_for_the_source_gives_its_pass_as_the_total() {
     let (mut s, ids, album, smart) = library(600);
-    for (source, hold) in
-        [(json!({"kind": "all"}), false), (json!({"kind": "album", "id": smart}), true), (json!({"kind": "album", "id": album}), true)]
-    {
+    // (source, hold the view, what a small edit after it does to the total: the total is followed from the view's pass
+    // for a smart album whose held view may show photos that stopped matching; for the others the view's own
+    // length answers, and nothing is followed or counted)
+    let sources = [(json!({"kind": "all"}), false, 0), (json!({"kind": "album", "id": smart}), true, 1), (json!({"kind": "album", "id": album}), true, 0)];
+    for (source, hold, follows) in sources {
+        // (taken before the commands: they may build the view themselves, which is when its pass is kept)
+        let (counted, from_view) = (s.total_counted, s.total_from_view);
         s.execute("library.holdView", &json!({"on": hold})).unwrap();
         s.execute("library.source", &source).unwrap();
-        let counted = s.total_counted;
         // (the view folds a stack into one photo: its length is not the source's, the pass before that is)
         let _ = s.visible_cloned();
         let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+        assert!(s.total_from_view > from_view, "{source}: the view's pass was kept as the total");
+        let kept = s.total.as_ref().unwrap_or_else(|| panic!("{source}: no total kept"));
+        assert_eq!((kept.tally.len(), kept.tally.revision()), (whole, s.catalog.revision), "{source}: the tally is the view's pass");
         assert_eq!(s.source_total(), Some(whole), "{source}");
         assert_eq!(s.total_counted, counted, "{source}: no second pass over the library");
         // and a small edit after it is followed from that pass
@@ -552,6 +579,23 @@ fn a_view_just_built_for_the_source_gives_its_pass_as_the_total() {
         let followed = s.total_followed;
         assert_eq!(s.source_total(), Some(whole), "{source}");
         assert_eq!(s.total_counted, counted, "{source}: followed, not counted");
-        assert!(s.total_followed >= followed, "{source}");
+        assert_eq!(s.total_followed, followed + follows, "{source}");
     }
+}
+
+/// Recently Added reaches over the library (its cut-off moves with the newest photo), so its total is never followed
+/// from the photos an edit touched: counted again after each edit, and right.
+#[test]
+fn the_total_of_recently_added_is_counted_again_after_an_edit_never_followed() {
+    let (mut s, ids, _, _) = library(100);
+    s.execute("library.source", &json!({"kind": "recentlyAdded"})).unwrap();
+    s.execute("library.filter", &json!({"rating": 3, "text": ""})).unwrap();
+    let first = s.source_total();
+    assert_eq!(first, Some(s.catalog.count(&s.view_filter(s.source, &Filter::default()))));
+    let (counted, followed) = (s.total_counted, s.total_followed);
+    s.execute("library.select", &json!({"ids": [ids[4].0]})).unwrap();
+    s.execute("photo.rate", &json!({"rating": 2})).unwrap();
+    let whole = s.catalog.count(&s.view_filter(s.source, &Filter::default()));
+    assert_eq!(s.source_total(), Some(whole));
+    assert_eq!((s.total_counted, s.total_followed), (counted + 1, followed));
 }
