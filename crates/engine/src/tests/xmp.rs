@@ -519,7 +519,8 @@ fn digests_report_as_skipped_metadata_next_to_real_adjustments() {
         src.join("quiet.xmp"),
         r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
       <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
-        crs:Exposure2012="0.50" crs:AutoToneDigest="FEDCBA9876543210FEDCBA9876543210"/>
+        crs:Exposure2012="0.50" crs:AutoToneDigest="FEDCBA9876543210FEDCBA9876543210"
+        crs:AutoToneDigestNoSat="0123456789ABCDEF0123456789ABCDEF"/>
     </rdf:RDF></x:xmpmeta>"#,
     )
     .unwrap();

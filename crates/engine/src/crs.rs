@@ -116,11 +116,13 @@ pub fn has_adjustments(props: &Props) -> bool {
 }
 
 /// An unmapped `crs:` field that cannot change how the photo renders: a digest of state
-/// LightCraft does not reuse rather than an adjustment (#3050). Warnings split these out, so
+/// LightCraft does not reuse rather than an adjustment (#3050). Lightroom writes several
+/// variants beside each other (`AutoToneDigestNoSat`, `InputDigestVersion`), so any field named
+/// around a digest counts: a checksum carries no rendering data. Warnings split these out, so
 /// skipped bookkeeping never reads like an adjustment that may make the photo differ. A dropped
 /// mask or spot changes the render whatever its component is called, so its label never counts.
 pub fn non_rendering(name: &str) -> bool {
-    !name.starts_with("Mask:") && !name.starts_with("Spot:") && name.ends_with("Digest")
+    !name.starts_with("Mask:") && !name.starts_with("Spot:") && name.contains("Digest")
 }
 
 thread_local! {
