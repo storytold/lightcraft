@@ -57,12 +57,7 @@ pub(crate) fn ask_key(command: &str, account: &str) -> String {
 /// a worker under an activity row (`label`), and its result waits under `key` until
 /// `immich.answer {key}` takes it. One call per key at a time. The window never waits for the
 /// network: these calls block for up to the connection timeouts when a server is slow or gone.
-pub(crate) fn ask(
-    s: &mut Session,
-    key: String,
-    label: &str,
-    work: impl FnOnce(&crate::activity::TaskGuard) -> Value + Send + 'static,
-) -> Value {
+pub(crate) fn ask(s: &mut Session, key: String, label: &str, work: impl FnOnce(&crate::activity::TaskGuard) -> Value + Send + 'static) -> Value {
     if !s.remote.asking.insert(key.clone()) {
         return json!({"started": false, "key": key, "reason": "already running"});
     }

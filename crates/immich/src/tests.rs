@@ -992,7 +992,8 @@ fn hostile_activity_answers_are_bounded_and_never_panic() {
 /// results decide. A `duplicate` add and a `not_found` remove leave the album as asked.
 #[test]
 fn album_add_and_remove_read_the_per_asset_results() {
-    let (url, _) = serve(|req| match (req.method.as_str(), req.target.as_str()) {
+    let (url, _) = serve(|req| {
+        match (req.method.as_str(), req.target.as_str()) {
         ("PUT", "/api/albums/al-1/assets") => response(
             "200 OK",
             br#"[{"id":"as-1","success":true},{"id":"as-2","success":false,"error":"duplicate"},{"id":"as-3","success":false,"error":"no_permission"},{"id":"other","success":false,"error":"unknown"}]"#,
@@ -1003,6 +1004,7 @@ fn album_add_and_remove_read_the_per_asset_results() {
         // a server that answers with something else than the list: the status decides
         ("PUT", "/api/albums/al-2/assets") => response("200 OK", br#"{"id":"al-2","albumName":"x"}"#),
         _ => response("404 Not Found", br#"{"message":"Not found"}"#),
+    }
     });
     let c = client(&url, KEY);
     let ids: Vec<String> = ["as-1", "as-2", "as-3"].iter().map(|s| s.to_string()).collect();

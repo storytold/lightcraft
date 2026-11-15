@@ -226,7 +226,9 @@ fn start(s: &mut Session, account: &str, dry_run: bool, full: bool, background: 
         let st = state_of(s, account);
         snaps
             .iter()
-            .filter(|(_, asset, local, ..)| st.items.get(asset).is_some_and(|i| i.local_changed_at.is_none() && i.base.as_ref().is_some_and(|b| b != local)))
+            .filter(|(_, asset, local, ..)| {
+                st.items.get(asset).is_some_and(|i| i.local_changed_at.is_none() && i.base.as_ref().is_some_and(|b| b != local))
+            })
             .map(|(photo, ..)| *photo)
             .collect()
     };
@@ -668,10 +670,8 @@ pub(crate) fn finish(s: &mut Session, d: SyncDone) -> Value {
                 // not (fully) sent: the old base stays, so the next run sends the change again.
                 // A pair the next run would not look at by itself (the catalog still equals the
                 // base, nothing decided or in conflict) is found again through the listing
-                unsent |= st
-                    .items
-                    .get(&p.asset)
-                    .is_some_and(|i| i.base.as_ref() == Some(&p.local_used) && i.forced.is_empty() && i.conflicts.is_empty());
+                unsent |=
+                    st.items.get(&p.asset).is_some_and(|i| i.base.as_ref() == Some(&p.local_used) && i.forced.is_empty() && i.conflicts.is_empty());
                 continue;
             }
             let Some(photo) = s.catalog.photo(p.photo) else { continue };
@@ -1072,7 +1072,8 @@ fn resolve_deletion(s: &mut Session, p: &Value) -> Result<Value> {
                 None => {}
             }
         }
-        let local: Vec<u64> = go.iter().filter(|d| d.side == "immich").map(|d| d.photo).filter(|ph| s.catalog.photo(PhotoId(*ph)).is_some()).collect();
+        let local: Vec<u64> =
+            go.iter().filter(|d| d.side == "immich").map(|d| d.photo).filter(|ph| s.catalog.photo(PhotoId(*ph)).is_some()).collect();
         if !local.is_empty() {
             s.execute("photo.delete", &json!({"ids": local}))?;
         }
