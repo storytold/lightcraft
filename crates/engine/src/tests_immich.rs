@@ -450,11 +450,8 @@ fn import_copies_maps_metadata_and_skips_duplicates() {
     assert!(album.photos.contains(&had.id));
     assert_eq!(s.catalog.albums().filter(|al| al.name == "From Immich").count(), 1);
     // importing an album whose assets are all here already still makes the album and fills it
-    s.execute(
-        "immich.import",
-        &json!({"assets": ["a-1", "c-3"], "mode": "copy", "destination": dest.to_string_lossy(), "albumName": "Again"}),
-    )
-    .unwrap();
+    s.execute("immich.import", &json!({"assets": ["a-1", "c-3"], "mode": "copy", "destination": dest.to_string_lossy(), "albumName": "Again"}))
+        .unwrap();
     let v = pump_until(&mut s, |_, v| v["import"]["active"] == false);
     assert_eq!((v["import"]["imported"].as_u64(), v["import"]["present"].as_u64()), (Some(0), Some(2)), "{v}");
     assert_eq!(s.catalog.albums().find(|al| al.name == "Again").map(|al| al.photos.len()), Some(2));

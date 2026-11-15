@@ -728,8 +728,7 @@ impl Replica {
             self.touch_member(&coll, new, None);
         }
         for c in self.cursors.values_mut() {
-            let stale: Vec<Ref> =
-                c.resend.iter().filter(|r| matches!(r, Ref::Photo(k) | Ref::Member(_, k) if k == old)).cloned().collect();
+            let stale: Vec<Ref> = c.resend.iter().filter(|r| matches!(r, Ref::Photo(k) | Ref::Member(_, k) if k == old)).cloned().collect();
             for r in stale {
                 c.resend.remove(&r);
                 c.resend.insert(match r {

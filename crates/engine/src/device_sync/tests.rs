@@ -361,7 +361,8 @@ fn a_link_only_immich_photo_and_the_file_are_one_photo() {
     write_png(&src, 7);
     let (mut phone, pp) = offline(&dir, "phone");
     let (mut desk, dp) = offline(&dir, "desk");
-    let ip = lcc_catalog::PhotoId(phone.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap());
+    let ip =
+        lcc_catalog::PhotoId(phone.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap());
     let idk = link_only(&mut desk, &src, "http://immich#u1");
     assert_eq!(key_of(&phone, ip.0), key_of(&desk, idk.0), "the same key from the file and from Immich's checksum");
     assert!(key_of(&desk, idk.0).is_some_and(|k| k.starts_with("sha1:")));

@@ -67,10 +67,7 @@ pub(crate) fn key_of(p: &Photo, cat: &Catalog) -> Option<String> {
     }
     if p.preview_only.as_deref() == Some(crate::remote::LINK_ONLY) {
         // the file here is Immich's preview: only the checksum of the original names it
-        return cat
-            .remote_of(p.id)
-            .filter(|r| r.service == lcc_immich::link::SERVICE)
-            .find_map(|r| r.remote_checksum.as_deref().and_then(sha1_key));
+        return cat.remote_of(p.id).filter(|r| r.service == lcc_immich::link::SERVICE).find_map(|r| r.remote_checksum.as_deref().and_then(sha1_key));
     }
     if let Some(k) = p.sha1.as_deref().and_then(sha1_key) {
         return Some(k);

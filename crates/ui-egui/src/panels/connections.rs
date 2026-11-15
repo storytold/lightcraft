@@ -350,8 +350,7 @@ fn report(app: &mut LccApp, ctx: &egui::Context, r: Result<Value, String>) -> bo
 /// The question of a pending [`Confirm`] of this account and place, with its button and Cancel.
 /// → true when the action was carried out.
 fn confirm_box(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &str, place: &str) -> bool {
-    let Some((text, button)) = app.immich.confirm.as_ref().filter(|c| c.account == id && c.place == place).map(|c| (c.text.clone(), c.button))
-    else {
+    let Some((text, button)) = app.immich.confirm.as_ref().filter(|c| c.account == id && c.place == place).map(|c| (c.text.clone(), c.button)) else {
         return false;
     };
     let (mut go, mut cancel) = (false, false);
@@ -1797,11 +1796,8 @@ fn preview_list(app: &LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, pv: &Valu
     };
     egui::ScrollArea::vertical().id_salt(("immich-preview", i)).max_height(140.0).show(ui, |ui| {
         for c in &changes {
-            let name = c["photo"]
-                .as_u64()
-                .and_then(|p| app.session.catalog.photo(lcc_catalog::PhotoId(p)))
-                .map(|p| p.file_name.clone())
-                .unwrap_or_default();
+            let name =
+                c["photo"].as_u64().and_then(|p| app.session.catalog.photo(lcc_catalog::PhotoId(p))).map(|p| p.file_name.clone()).unwrap_or_default();
             let mut parts = vec![name];
             for (key, label) in [("toImmich", "To Immich"), ("toCatalog", "From Immich")] {
                 let f = fields(&c[key]);

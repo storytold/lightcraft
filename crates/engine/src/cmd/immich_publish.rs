@@ -376,18 +376,16 @@ fn album_work(c: &lcc_immich::Client, job: AlbumJob) -> AlbumsDone {
         let mut not_added: HashMap<String, BTreeSet<String>> = HashMap::new();
         let mut not_removed: HashMap<String, BTreeSet<String>> = HashMap::new();
         // the assets of `asked` a checked add/remove left undone (all of them when the call failed)
-        let undone = |r: std::result::Result<Vec<(String, String)>, lcc_immich::ImmichError>, asked: &[String], errors: &mut Vec<String>| {
-            match r {
-                Ok(refused) => {
-                    if let Some((_, why)) = refused.first() {
-                        errors.push(format!("Immich album: {} of {} photos were refused ({why})", refused.len(), asked.len()));
-                    }
-                    refused.into_iter().map(|(id, _)| id).collect::<BTreeSet<String>>()
+        let undone = |r: std::result::Result<Vec<(String, String)>, lcc_immich::ImmichError>, asked: &[String], errors: &mut Vec<String>| match r {
+            Ok(refused) => {
+                if let Some((_, why)) = refused.first() {
+                    errors.push(format!("Immich album: {} of {} photos were refused ({why})", refused.len(), asked.len()));
                 }
-                Err(e) => {
-                    errors.push(format!("Immich album: {e}"));
-                    asked.iter().cloned().collect()
-                }
+                refused.into_iter().map(|(id, _)| id).collect::<BTreeSet<String>>()
+            }
+            Err(e) => {
+                errors.push(format!("Immich album: {e}"));
+                asked.iter().cloned().collect()
             }
         };
         for op in &plan.remote {
@@ -487,7 +485,8 @@ pub(crate) fn finish_albums(s: &mut Session, d: AlbumsDone) -> Value {
                                 s.execute("album.addPhotos", &json!({"id": id, "ids": ph}))?;
                             }
                             // the base: only the assets whose photos are in the new album
-                            plan.links.insert(id, AlbumLink { immich: immich.clone(), base: Some(ids.into_iter().collect()), name: Some(name.clone()) });
+                            plan.links
+                                .insert(id, AlbumLink { immich: immich.clone(), base: Some(ids.into_iter().collect()), name: Some(name.clone()) });
                             Ok(Value::Null)
                         })
                     }

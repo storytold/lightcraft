@@ -403,27 +403,27 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
             Item::Photo { key, info, fields, .. } => {
                 let key = &incoming_key(s, lib, key, info);
                 match lib.keys.get(key).copied() {
-                Some(id) if lib.replica.photos.get(key).is_none_or(|e| e.ghost.is_none()) => {
-                    for (name, lww) in fields.iter().take(32) {
-                        if !record::FIELDS.contains(&name.as_str()) || !lib.replica.incoming_wins(key, name, lww) {
-                            continue;
+                    Some(id) if lib.replica.photos.get(key).is_none_or(|e| e.ghost.is_none()) => {
+                        for (name, lww) in fields.iter().take(32) {
+                            if !record::FIELDS.contains(&name.as_str()) || !lib.replica.incoming_wins(key, name, lww) {
+                                continue;
+                            }
+                            if name == "develop" && lib.replica.owes(from, key) {
+                                record::keep_version(s, id, &peer.name);
+                            }
+                            if let Err(e) = record::apply(s, id, name, &lww.v) {
+                                // this field stays as it is here (and is not confirmed as taken over)
+                                log::warn!("sync: {e}");
+                                continue;
+                            }
+                            let d = s.catalog.photo(id).map_or(0, |p| record::digest(p, &s.catalog, name));
+                            lib.replica.accept_field(key, name, d, lww.s, from);
                         }
-                        if name == "develop" && lib.replica.owes(from, key) {
-                            record::keep_version(s, id, &peer.name);
-                        }
-                        if let Err(e) = record::apply(s, id, name, &lww.v) {
-                            // this field stays as it is here (and is not confirmed as taken over)
-                            log::warn!("sync: {e}");
-                            continue;
-                        }
-                        let d = s.catalog.photo(id).map_or(0, |p| record::digest(p, &s.catalog, name));
-                        lib.replica.accept_field(key, name, d, lww.s, from);
+                    }
+                    _ => {
+                        lib.replica.merge_ghost(key, info, fields, from);
                     }
                 }
-                _ => {
-                    lib.replica.merge_ghost(key, info, fields, from);
-                }
-            }
             }
         }
     }
@@ -619,7 +619,9 @@ pub(super) fn wants(s: &Session, lib: &mut Lib, peer: &str) -> Vec<Want> {
         let Source::File { path } = &p.source else { continue };
         match lib.replica.depth_wanted(key) {
             // (a link-only photo's original comes from Immich, and its file here is the preview)
-            Depth::Full if !path.is_empty() && p.preview_only.as_deref() != Some(crate::remote::LINK_ONLY) => out.push(Want { key: key.clone(), depth: Depth::Full, dest: PathBuf::from(path) }),
+            Depth::Full if !path.is_empty() && p.preview_only.as_deref() != Some(crate::remote::LINK_ONLY) => {
+                out.push(Want { key: key.clone(), depth: Depth::Full, dest: PathBuf::from(path) })
+            }
             Depth::Preview => {
                 if let Some(dir) = &smart_dir {
                     out.push(Want { key: key.clone(), depth: Depth::Preview, dest: crate::smart::sharded_file_path(dir, p) });
