@@ -468,7 +468,11 @@ mod tests {
         let mut core = WorkerCore::default();
         assert_eq!(core.needs_original(&wire), None, "demo scenes are generated");
         let a = core.render(&wire, None).unwrap();
-        let b = job.run().rendered.unwrap();
+        // The worker uses the CPU. A native thumbnail job may use an already initialized GPU,
+        // so exact serialization parity must use the engine's CPU reference (#3778), regardless
+        // of test order. The window test above separately checks native CPU/GPU equivalence.
+        let source = job.source.load_source().unwrap();
+        let b = lightcraft_engine::pipeline::render(&source.image, &source.info_or(job.info), &job.settings, &job.request);
         assert_eq!((a.image.width, a.image.height), (b.image.width, b.image.height));
         assert_eq!(a.image.data, b.image.data);
         assert_eq!(a.histogram, b.histogram);

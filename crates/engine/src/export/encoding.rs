@@ -334,7 +334,11 @@ pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_c
         out.gps = m.gps.map(|(latitude, longitude)| Gps { latitude, longitude, altitude: None });
     }
     if o.metadata == MetadataPolicy::All {
-        out.model = text(&m.camera);
+        // `camera` is maker and model together: Exif keeps them apart, and a photo from before
+        // the maker was read keeps the whole string as its Model
+        out.make = text(&m.make);
+        out.model = text(m.camera.strip_prefix(m.make.as_str()).and_then(|rest| rest.strip_prefix(' ')).unwrap_or(&m.camera));
+        out.lens_make = text(&m.lens_make);
         out.lens_model = text(&m.lens);
         out.focal_length = m.focal_mm.map(f64::from);
         out.f_number = m.aperture.map(f64::from);

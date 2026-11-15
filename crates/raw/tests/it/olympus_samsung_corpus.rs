@@ -8,7 +8,7 @@
 //! pinned only (its small JPEG gives r 0.59); its render was inspected by eye.
 //! Missing files are reported as skipped.
 
-use lightcraft_raw::{RawData, decode, embedded_preview, probe_info};
+use lightcraft_raw::{RawData, RawError, RawFormat, decode, embedded_preview, probe, probe_info};
 use std::path::{Path, PathBuf};
 
 fn corpus() -> PathBuf {
@@ -67,8 +67,6 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
         ("orf-olympus-e-330.orf", (3280, 2450), 0xc938_38fa_9822_c81a, true),
         ("orf-olympus-e-500.orf", (3360, 2504), 0x5e22_2ac8_17ed_89d9, true),
         ("orf-olympus-e-m5-mark-ii.orf", (9280, 6932), 0xa222_be38_c767_7782, true),
-        ("orf-olympus-em1.orf", (4640, 3472), 0xc61b_0bb3_5170_4735, true),
-        ("orf-olympus-em10iii.orf", (4640, 3472), 0xedc1_ec6d_15a8_a303, true),
         ("orf-olympus-pen-f.orf", (10400, 7796), 0x415e_bf27_092e_9897, true),
         ("orf-olympus-sh-2.orf", (4624, 3470), 0xb25b_8d24_4ade_1f3d, true),
         ("orf-olympus-sp510uz.orf", (3088, 2309), 0xa885_b7ca_83ba_02f1, true),
@@ -113,4 +111,22 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
         seen += 1;
     }
     eprintln!("Olympus / Samsung bodies checked on {seen} files");
+}
+
+/// The withdrawn compressed decoder must stay out of both sensor-decode and import-probe paths.
+/// Camera JPEG extraction is independent of sensor decoding and remains available for preview-only imports.
+#[test]
+fn compressed_olympus_bodies_are_unsupported_with_embedded_previews() {
+    for name in ["orf-olympus-em1.orf", "orf-olympus-em10iii.orf"] {
+        let path = corpus().join("raw").join(name);
+        let Ok(bytes) = std::fs::read(&path) else {
+            lightcraft_testkit::skip!(Corpus, "{} absent", path.display());
+            continue;
+        };
+        assert_eq!(probe(&bytes), Some(RawFormat::Orf), "{name}");
+        assert!(matches!(decode(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"), "{name}");
+        assert!(matches!(probe_info(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"), "{name}");
+        let jpeg = embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
+        assert!(jpeg.starts_with(&[0xff, 0xd8]) && jpeg.ends_with(&[0xff, 0xd9]), "{name}: invalid camera JPEG");
+    }
 }

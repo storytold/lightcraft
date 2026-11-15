@@ -1,4 +1,4 @@
-//! Olympus ORF — uncompressed and compressed variants.
+//! Olympus ORF — uncompressed variants; compressed sensor data is unsupported.
 //!
 //! Sources: TIFF 6.0 (the `IIRO`/`MMOR` container is a TIFF with a different magic number), Exif 2.3 (`CFAPattern`,
 //! tag `0xa302`), the ExifTool Olympus tag-name documentation (maker-note sub-directories `0x2020` CameraSettings —
@@ -28,9 +28,8 @@
 //!   (last), the bit order and the pixel order were fixed by measurement on the CC0 files 2878 (E-300), 3540 (E-500)
 //!   and 3624 (E-330), as was the sensor-origin RGGB anchoring (the maker-note crop offsets are odd). The E-M5 Mark II
 //!   and PEN-F files were only checked for smoothness, not for CFA anchoring or black level.
-//! - Olympus's compressed ORF (interchangeable-lens bodies and compacts using the 12/14-bit entropy coding stream):
-//!   decoded clean-room in `orfc.rs` from Olympus patents US7333035B2 and US7715639B2 (Takashi Ishikawa) and black-box
-//!   CC0 samples (OM-D E-M1, E-M10 Mark III). No GPL/LibRaw code was consulted. See `docs/orf-compression.md`.
+//! - Compressed ORF sensor data is unsupported. The previous decoder was removed pending provenance
+//!   resolution; embedded previews remain available. See `docs/orf-compression.md`.
 //! - The colour-filter layout is the file's Exif `CFAPattern`: GRBG on the E-1 and E-400, RGGB on the XZ-2, where
 //!   the colours of the decoded mosaic follow the embedded JPEG best with exactly that layout
 //!   (`corpus_orf_cfa_patterns`). The samples' active areas start at even offsets, so they can't tell whether the
@@ -200,7 +199,7 @@ fn field_rows(strips: &[(u64, u64)], w: usize, h: usize, file_len: usize) -> Opt
     Some(rows)
 }
 
-/// Decode an Olympus ORF container into a mosaic raw image, supporting uncompressed 16-bit, packed 12-bit, and compressed formats.
+/// Decode the supported uncompressed Olympus ORF layouts into a mosaic raw image.
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let tiff = Tiff::parse(bytes)?;
     let ifd0 = &tiff.ifds[0];
@@ -232,20 +231,10 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
             Vec::new()
         };
         (RawData::U16(d), 12, false)
-    } else if let Some((params, stream)) = (|| {
-        let params = super::orfc::CompressionParameters::from_ifd(ip.as_ref()?, mn.as_ref())?;
-        let chunk = chunks.first()?;
-        let src = chunk_bytes(bytes, chunk)?;
-        if !super::orfc::validate_stream_header(src, params.header_prefix_len) {
-            return None;
-        }
-        let stream = src.get(params.header_prefix_len.saturating_add(2)..)?;
-        Some((params, stream))
-    })() {
-        let d = if mode == Mode::Full || stated.is_none() { super::orfc::decompress_stream(stream, w, h, &params)? } else { Vec::new() };
-        (RawData::U16(d), params.valid_bits, false)
-    } else if total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
+    } else if info.bits() == 12 && total * 8 >= (n as u64) * 12 && total * 8 < (n as u64) * 13 && chunks.len() == 1 {
         let src = chunk_bytes(bytes, &chunks[0]).ok_or_else(|| RawError::Corrupt("ORF strip outside file".into()))?;
+        // Only the declared 12-bit layout is supported here. A compressed stream in a 16-bit
+        // ORF container must not fall through to packed decoding just because its length fits.
         // the strip as it is in the file (clipped at its end), not as its tag states it: one too short
         // for the samples is a truncated file, refused before they are allocated
         if (src.len() as u64).saturating_mul(8) < (n as u64).saturating_mul(12) {
@@ -411,6 +400,17 @@ mod tests {
         b[2] = b'R';
         b[3] = b'O';
         b
+    }
+
+    /// A 16-bit container with a short sensor stream is not the supported 12-bit packed layout.
+    /// Both entry points must report unsupported rather than returning fabricated sensor pixels.
+    #[test]
+    fn compressed_sensor_data_is_unsupported_in_probe_and_decode() {
+        for strip_len in [8, 24, 25] {
+            let bytes = orf_with(4, 4, 16, vec![0; strip_len], Some(&[2, 0, 2, 0, 0, 1, 1, 2]));
+            assert!(matches!(crate::decode(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"));
+            assert!(matches!(crate::probe_info(&bytes), Err(RawError::Unsupported(why)) if why == "Olympus compressed ORF"));
+        }
     }
 
     /// Strip byte counts that add up past `u64::MAX` (LONG8 `[u64::MAX, 1]`) are an error or a picture, not an overflow.

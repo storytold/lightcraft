@@ -945,6 +945,30 @@ fn metadata_none_in_any_case_exports_no_metadata() {
     assert!(m.gps.is_none() && m.city.is_none(), "{m:?}");
 }
 
+/// A raw's Exif Make, Model and LensMake reach an exported JPEG apart, as stitching tools read them.
+#[test]
+fn export_writes_camera_make_and_lens_make_to_exif() {
+    let dir = temp_dir("export-raw-exif");
+    let src = dir.join("Canon.dng");
+    let meta = lightcraft_meta::Metadata {
+        make: Some("Canon".into()),
+        model: Some("EOS R5".into()),
+        lens_make: Some("Sigma".into()),
+        lens_model: Some("RF 24-105mm f/4L IS USM".into()),
+        ..Default::default()
+    };
+    std::fs::write(&src, synthetic_dng_with(None, meta)).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let e = export_photo(&mut s, id, &ExportOptions::from_json(&json!({"format": "jpeg", "longEdge": 64, "metadata": "all"})), 1).unwrap();
+    let back = lightcraft_meta::extract(&e.bytes);
+    assert_eq!(back.make.as_deref(), Some("Canon"), "EXIF Make is missing: {back:?}");
+    assert_eq!(back.model.as_deref(), Some("EOS R5"), "EXIF Model holds the model alone: {back:?}");
+    assert_eq!(back.lens_make.as_deref(), Some("Sigma"), "EXIF LensMake is missing: {back:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An original raw whose own metadata holds GPS is refused under "Remove location info".
 #[test]
 fn remove_location_refuses_a_raw_that_embeds_gps() {
