@@ -90,7 +90,7 @@ Beta-blocking gaps (B) total **~230–430 h**; with the stability and platform w
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-15 | patch | Gap 5: successive AI-mask paste clicks queue independently in order, capturing targets/settings, with separate cancellable Activity rows and undo steps. Bounds and overlapping-target refusal documented; gap remains open |
+| 2026-11-15 | patch | Gap 5: successive AI-mask paste clicks queue independently in order, capturing targets/settings, with separate cancellable Activity rows and undo steps; immediate refusal feedback is shared and Paste Selected Settings retains choices. Bounds and overlapping-target refusal documented; gap remains open |
 | 2026-11-14 | minor | Gap 5: Paste and Paste from Previous recompute Object/Describe masks on each destination with SAM 3, without blocking the UI; local adjustments and manual components retained. Sync/Auto Sync/presets and standalone Update remain; no gap closes or headline number changes (#2219) |
 | 2026-11-01 | minor | Gap 13: Lightroom catalog backup zips import directly, and a backup of an imported catalog adds no collection twice (#2592); the gap stays open |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |

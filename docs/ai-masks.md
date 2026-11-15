@@ -89,6 +89,11 @@ do not block the paste.
 A description with no match produces an empty selection. SAM 3 must already be installed
 (or a remote worker configured); nothing downloads automatically.
 
+Immediate refusals are shown as errors from every paste entry point. Paste Selected Settings
+keeps the chosen groups open on refusal so they can be corrected and retried. A queued paste
+shows progress in Activity, not a premature “Settings pasted” message; that message is only
+shown when a synchronous paste has actually changed settings.
+
 Subject, Sky and Background already evaluate on each photo during rendering; their current
 heuristic/model limitations are unchanged. Sync Settings, Auto Sync and presets are not covered
 by this paste-specific recomputation yet.

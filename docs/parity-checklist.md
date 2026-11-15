@@ -524,7 +524,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-EDIT-REDO | Redo | P0 | ✅ | `cmd:edit.redo` | |
 | MENU-EDIT-COPYPASTE | Copy / paste (edit settings) | P0 | ✅ | `cmd:develop.copy`, `cmd:develop.paste` | |
 | MENU-EDIT-CHOOSECOPY | Choose Edit Settings to Copy… | P0 | ✅ | `cmd:dialog.copySettings` | Return copies, Esc cancels |
-| MENU-EDIT-PASTESELECTED | Paste Selected Settings | P0 | ✅ | `cmd:dialog.pasteSettings`, `cmd:develop.paste` (`groups`) | checklist prefilled with the copied groups; only copied groups can be pasted; Return pastes, Esc cancels; Paste Settings from Previous (⌥⌘V) follows it |
+| MENU-EDIT-PASTESELECTED | Paste Selected Settings | P0 | ✅ | `cmd:dialog.pasteSettings`, `cmd:develop.paste` (`groups`) | checklist prefilled with the copied groups; only copied groups can be pasted; immediate refusal shows the error and retains choices for retry; Return pastes, Esc cancels; Paste Settings from Previous (⌥⌘V) follows it |
 | MENU-EDIT-SELECTALL | Select All | P0 | ✅ | `cmd:library.selectAll` | |
 | MENU-EDIT-SELECTNONE | Select None | P0 | ✅ | `cmd:library.selectNone` | Select Only Active Photo (⇧⌘D) follows it |
 | MENU-EDIT-SELECTBY | Select by flag / rating | P1 | ✅ | `cmd:library.selectBy` | Edit → Select by: picks, rejects, unflagged, ★…★★★★★ and higher, unrated, colour labels; `add` extends the selection |
@@ -802,7 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-15 | patch | LR-SYNC-PASTE: successive AI-mask pastes queue captured targets/settings in order with separate cancellation/undo; status unchanged |
+| 2026-11-15 | patch | LR-SYNC-PASTE: successive AI-mask pastes queue captured targets/settings in order with separate cancellation/undo. MENU-EDIT-PASTESELECTED: errors retain chosen groups. All paste entry points share refusal feedback and no longer announce success on pending/no-change responses; statuses unchanged |
 | 2026-11-14 | minor | LR-MASK-UPDATE ⬜ → 🟡: Paste and Paste from Previous recompute Object/Describe components on each destination, preserving adjustments/manual components, with cancellable Activity progress and atomic one-step undo. LR-MASK-SYNC ✅ → 🟡: Sync/Auto Sync/presets still copy cached AI shapes; no net checklist score change |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | patch | LRC-LIB-CATALOG-LOCK: a library is written only to the folder it was opened from (on Unix, where the system gives a folder an identity, it is checked before every write of the catalog, settings, lock note and thumbnails; a share mounted over it, or a replaced folder, is refused and nothing is written; a folder that holds this session's lock note counts as the opened one, so a drive mounted again keeps saving; on Windows only that the path is still a folder is checked, so a replaced folder or a share mounted at the same path is not caught), a Move import removes its originals only once the catalog log is on disk, and dropping the lock removes only the owner note it wrote itself (#3240); status unchanged |
