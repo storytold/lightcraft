@@ -509,6 +509,14 @@ pub(crate) fn clear_pairing(s: &mut Session) -> Result<Value> {
     status(s)
 }
 
+/// Ends the pairing in progress at any stage (the other device is told) → status.
+pub(crate) fn cancel_pairing(s: &mut Session) -> Result<Value> {
+    if let Some(svc) = &s.device_sync.service {
+        svc.cancel_pairing();
+    }
+    status(s)
+}
+
 /// Removes a paired device: it also leaves the group of the open catalogue (the others learn it).
 pub(crate) fn unpair(s: &mut Session, device: &str) -> Result<Value> {
     ensure_lib(s);

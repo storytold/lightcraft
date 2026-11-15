@@ -186,3 +186,15 @@ fn a_shared_collection_brings_photos_files_and_edits_both_ways() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Cancelling with no pairing under way (or no service at all) is harmless and answers the status.
+#[test]
+fn cancel_pairing_without_a_pairing_is_harmless() {
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-cancel");
+    let mut a = session(&dir, "a", 31000 + (std::process::id() % 2000) as u16);
+    let v = a.execute("sync.cancelPairing", &json!({})).unwrap();
+    assert!(v["pairing"].is_null());
+    a.execute("sync.find", &json!({"on": true})).unwrap();
+    let v = a.execute("sync.cancelPairing", &json!({})).unwrap();
+    assert!(v["pairing"].is_null());
+}

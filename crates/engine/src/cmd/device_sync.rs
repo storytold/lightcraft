@@ -32,6 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             sync::confirm(s, accept)
         }),
         cmd!(query "sync.clearPairing", "Dismiss Pairing", [], None, "{}: forget a finished or failed pairing → sync.status", always, |s, _p| sync::clear_pairing(s)),
+        cmd!(query "sync.cancelPairing", "Cancel Pairing", [], None, "{}: end the pairing in progress at any stage; the other device is told → sync.status", always, |s, _p| sync::cancel_pairing(s)),
         cmd!(query "sync.unpair", "Remove Paired Device", [], None, "{device}: it is no longer paired, and leaves the open catalogue's sync → sync.status", always, |s, p| {
             let d = device(p, "sync.unpair")?;
             sync::unpair(s, &d)
