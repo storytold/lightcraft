@@ -572,6 +572,29 @@ mod tests {
         assert_eq!(category_counts(&cats, 12), [0, 0, 12]);
     }
 
+    /// Issue #1050: the category row names the three categories, in the UI's language, with their counts; the ids the
+    /// control channel and the widget names use are the ones `PeopleCategory` parses.
+    #[test]
+    fn every_category_has_a_name_a_count_and_an_id_a_script_can_ask_for() {
+        let names = [PeopleCategory::Unknown, PeopleCategory::Suggested, PeopleCategory::Confirmed];
+        for category in names {
+            assert_eq!(PeopleCategory::parse(category.id()), Some(category), "{}", category.id());
+            assert!(!crate::i18n::tr(category.title()).is_empty(), "{}", category.id());
+            for language in crate::i18n::Locale::ALL.iter().filter(|l| **l != crate::i18n::Locale::En) {
+                assert_ne!(language.tr(category.title()), category.title(), "{} in {}", category.id(), language.code());
+            }
+        }
+        // a name a script makes up is no category (it would show nothing and leave the view where it was)
+        assert_eq!(PeopleCategory::parse(""), None);
+        assert_eq!(PeopleCategory::parse("Unknown"), None, "the ids, not the titles");
+        assert_eq!(PeopleCategory::parse("nobody"), None);
+        // the counts are one number per category, whatever the listing holds
+        let l = listing(vec![face(1, 0, None), face(1, 1, Some("Jane Doe"))]);
+        assert_eq!(category_counts(&category_faces(&l, &Default::default(), &Default::default()), 7), [1, 1, 7]);
+        let confirmed: std::collections::HashSet<(u64, usize)> = [(1, 0)].into_iter().collect();
+        assert_eq!(category_counts(&category_faces(&l, &Default::default(), &confirmed), 0), [0, 1, 0], "the confirmed face is named by now");
+    }
+
     /// Issue #1050: a grid puts every face in its own cell, whatever the width or the count, and never runs outside it.
     #[test]
     fn a_grid_puts_every_face_in_its_own_cell() {
