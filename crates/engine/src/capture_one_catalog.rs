@@ -8,7 +8,9 @@
 //!
 //! What is read: originals (inside the catalog or referenced), variants (the first one is the photo,
 //! the others become virtual copies), star ratings, colour tags, IPTC fields, keywords, and user albums
-//! with the projects and groups around them. Develop settings are not read yet.
+//! with the projects and groups around them, and the variants' develop settings the app has an equivalent for so far
+//! ([`crate::capture_one_develop`]: exposure, orientation and straighten, crop, flips, white balance); the report
+//! names every other setting the photos use.
 //!
 //! Sources: own design, from the database's own table and column names (`sqlite_schema`) observed in
 //! catalogs written by Capture One 16.9; no Capture One code or documentation was used.
@@ -277,9 +279,12 @@ fn tree_path(name: &str, tree: &HashMap<i64, Row>, by_name: &HashMap<String, Vec
 /// Read a Capture One catalog for import, counting the tables read in `total` / `done` and stopping
 /// when `cancel` is set.
 pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize, done: &AtomicUsize) -> Result<CatalogImport, String> {
-    total.store(11, Ordering::Relaxed);
+    total.store(12, Ordering::Relaxed);
     done.store(0, Ordering::Relaxed);
     let db_path = database_file(path).ok_or_else(|| format!("{}: no Capture One catalog database (.cocatalogdb) found", path.display()))?;
+    // absolute: originals inside the catalog are found relative to its folder, and resolving that folder's path
+    // against the catalog again (`doc_path::resolve`) would join a relative one twice
+    let db_path = std::path::absolute(&db_path).unwrap_or(db_path);
     let catalog_dir = db_path.parent().map(Path::to_path_buf).unwrap_or_default();
     let (reader, guard) = open_catalog(&db_path, cancel).map_err(|e| e.replace("Lightroom", "Capture One"))?;
     let table = |name: &str, required: bool| -> Result<Vec<Row>, String> {
@@ -301,6 +306,10 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     let variant_members = table("ZVARIANTINCOLLECTION", false)?;
     let positions = table("ZIMAGEINCOLLECTIONPROPERTIES", false)?;
     let documents = table("ZDOCUMENTCONTENT", false)?;
+    active(cancel)?;
+    let layers = crate::capture_one_develop::read_layers(&reader, &entities, cancel).map_err(|e| e.replace("Lightroom", "Capture One"))?;
+    done.fetch_add(1, Ordering::Relaxed);
+    let mut not_imported: BTreeMap<String, usize> = BTreeMap::new();
     let mut keyword_names: HashMap<String, Vec<i64>> = HashMap::new();
     for (pk, k) in &keyword_tree {
         keyword_names.entry(text(k, "ZNAME").trim().to_lowercase()).or_default().push(*pk);
@@ -395,6 +404,8 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
                 "cameraMake": camera_make,
                 "cameraModel": camera_model,
                 "lens": text(image, "ZCAMERA_LENS").trim(),
+                // when the settings last changed (Core Data seconds since 2001, as Lightroom's touch time): the edit date
+                "touchTime": image.get("ZSETTINGSMODIFICATIONDATE").and_then(Value::as_f64),
             });
             if master != 0
                 && let Some(obj) = row.as_object_mut()
@@ -407,6 +418,14 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
                 keywords_cut = keywords_cut.saturating_add(1);
             }
             let uuid = text(variant, "ZVARIANTUUID");
+            let develop = layers
+                .get(&variant_pk)
+                .map(|l| crate::capture_one_develop::develop_of(l, [width as f64, height as f64], (camera_make, camera_model)))
+                .filter(|d| !d.is_empty() || !d.not_imported.is_empty());
+            for tool in develop.iter().flat_map(|d| &d.not_imported) {
+                let count = not_imported.entry(tool.clone()).or_default();
+                *count = count.saturating_add(1);
+            }
             photos.push(CatalogPhoto {
                 source_id: variant_pk,
                 uuid: if uuid.is_empty() { String::new() } else { format!("c1:{uuid}") },
@@ -419,6 +438,7 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
                 snapshots: Vec::new(),
                 original: original.clone(),
                 as_shot_white: None,
+                capture_one: develop.map(Box::new),
             });
             if master == 0 {
                 master = variant_pk;
@@ -436,6 +456,12 @@ pub fn read_with_progress(path: &Path, cancel: &AtomicBool, total: &AtomicUsize,
     }
     for (colour, count) in unlabelled {
         warnings.push(format!("{count} photo(s) had Capture One's {colour} colour tag, which has no label here; imported without a label"));
+    }
+    // most used first
+    let mut not_imported: Vec<(String, usize)> = not_imported.into_iter().collect();
+    not_imported.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    for (tool, count) in not_imported {
+        warnings.push(format!("Capture One {tool}: used on {count} photo(s), not imported yet (the photos keep the rest of their settings)"));
     }
 
     // ---- albums, with the projects and groups that hold them
@@ -717,6 +743,103 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The layer entities as a catalog names them, and a photo's tables with its develop layers.
+    fn develop_catalog(layers: Vec<Value>) -> Vec<u8> {
+        sqlite(&[
+            ("ZPATHLOCATION", vec![json!({"Z_PK": 1, "ZWINROOT": "Q:\\", "ZMACROOT": "/Volumes/Gone", "ZRELATIVEPATH": "Photos"})]),
+            (
+                "ZIMAGE",
+                vec![
+                    json!({"Z_PK": 1, "ZIMAGEFILENAME": "a.NEF", "ZIMAGELOCATION": 1, "ZWIDTH": 6000, "ZHEIGHT": 4000, "ZSETTINGSMODIFICATIONDATE": 700_000_000.0,
+                        "ZCAMERA_MAKE": "EXAMPLE CORP", "ZCAMERA_MODEL": "EXAMPLE X1"}),
+                    json!({"Z_PK": 2, "ZIMAGEFILENAME": "b.NEF", "ZIMAGELOCATION": 1, "ZWIDTH": 6000, "ZHEIGHT": 4000}),
+                ],
+            ),
+            ("ZVARIANT", vec![json!({"Z_PK": 7, "ZIMAGE": 1, "ZVARIANTUUID": "a"}), json!({"Z_PK": 8, "ZIMAGE": 2, "ZVARIANTUUID": "b"})]),
+            (
+                "ZENTITIES",
+                vec![
+                    json!({"Z_ENT": 17, "ZNAME": "VariantAdjustmentLayer"}),
+                    json!({"Z_ENT": 18, "ZNAME": "VariantDefaultLayer"}),
+                    json!({"Z_ENT": 19, "ZNAME": "VariantStyleLayer"}),
+                    json!({"Z_ENT": 23, "ZNAME": "LocalAdjustmentsLayer"}),
+                ],
+            ),
+            ("ZVARIANTLAYER", layers),
+        ])
+    }
+
+    /// A layer row with every column the fixture uses, so the table has them all.
+    fn layer(pk: i64, ent: i64, variant: i64, values: Value) -> Value {
+        let mut l = json!({"Z_PK": pk, "Z_ENT": ent, "ZVARIANT": variant, "ZINDEX": 0, "ZENABLED": null, "ZEXPOSURE": null,
+            "ZROTATION": null, "ZCROP": null, "ZCROPASPECTRATIONAME": null, "ZBRIGHTNESS": null, "ZLENSLCC": null, "ZFLIP": null,
+            "ZWHITEBALANCE": null});
+        if let (Some(l), Some(v)) = (l.as_object_mut(), values.as_object()) {
+            l.extend(v.clone());
+        }
+        l
+    }
+
+    /// End to end through the import job: a variant's exposure, crop and quarter turn land in its settings, dated at
+    /// Capture One's last change, and what it uses beyond them is named in the report; a variant the user never
+    /// touched keeps the settings any photo gets.
+    #[test]
+    fn develop_settings_import_and_the_rest_is_reported() {
+        let dir = std::env::temp_dir().join(format!("c1-develop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("Test.cocatalogdb");
+        let defaults = json!({"ZEXPOSURE": 0, "ZROTATION": 0, "ZBRIGHTNESS": 0, "ZFLIP": 0, "ZWHITEBALANCE": "2.000;1.000;1.400"});
+        std::fs::write(
+            &db,
+            develop_catalog(vec![
+                layer(1, 18, 7, defaults.clone()),
+                layer(
+                    2,
+                    17,
+                    7,
+                    json!({"ZEXPOSURE": 0.75, "ZROTATION": 90.0, "ZCROP": "3000;2000;2000;3000", "ZCROPASPECTRATIONAME": "2x3", "ZBRIGHTNESS": 12.5,
+                        "ZWHITEBALANCE": "2.200;1.000;1.200"}),
+                ),
+                layer(3, 19, 7, json!({"ZINDEX": 1, "ZLENSLCC": "0123abcd"})),
+                layer(4, 23, 7, json!({"ZEXPOSURE": 1.0})),
+                layer(5, 18, 8, defaults),
+                layer(6, 17, 8, json!({"ZEXPOSURE": 0})),
+            ]),
+        )
+        .unwrap();
+        let cancel = AtomicBool::new(false);
+        let read = read_with_progress(&db, &cancel, &AtomicUsize::new(0), &AtomicUsize::new(0)).unwrap();
+        let c1 = read.photos[0].capture_one.as_deref().expect("variant 7 has settings");
+        assert_eq!(c1.not_imported, vec!["Brightness", "LCC", "Local adjustment layers"]);
+        assert!(read.photos[1].capture_one.is_none(), "an untouched variant has nothing to import");
+        let warnings = read.warnings.join("\n");
+        assert!(warnings.contains("Capture One Brightness: used on 1 photo(s), not imported yet"), "{warnings}");
+        let mut s = crate::Session::new();
+        let report = crate::lightroom_catalog::import(&mut s, &db, false).unwrap();
+        let photo = |name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().clone();
+        let a = photo("a.NEF");
+        assert_eq!(a.develop.light.exposure, 0.75);
+        assert_eq!(a.develop.orientation, lcc_geom::Orientation::from_parts(false, 1));
+        let g = a.develop.crop.geometry.rect;
+        // the centre (3000, 2000) of the 6000 × 4000 stored image is the centre shown; 2000 × 3000 of 4000 × 6000
+        assert!((g.x0 - 0.25).abs() < 1e-9 && (g.x1 - 0.75).abs() < 1e-9 && (g.y0 - 0.25).abs() < 1e-9 && (g.y1 - 0.75).abs() < 1e-9, "{g:?}");
+        assert_eq!(a.develop.crop.aspect, Some((2, 3)));
+        assert!(a.edited.as_deref().is_some_and(|e| e.starts_with("2023-")), "dated at Capture One's change: {:?}", a.edited);
+        // a camera the app edits on the relative white balance scale: the white balance is applied
+        // there and the result window says it is approximate, with the photo count
+        assert_eq!(a.develop.wb.mode, lcc_develop::WbMode::Custom);
+        assert!(a.develop.wb.temp > 6500.0, "a warmer white balance on the relative scale: {:?}", a.develop.wb);
+        let warnings: Vec<&str> = report["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(warnings.iter().any(|w| w.starts_with("Capture One White Balance: approximate on 1 photo(s)")), "{warnings:?}");
+        let unmapped = report["unmapped"]["7"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>());
+        assert_eq!(unmapped, Some(vec!["Brightness", "LCC", "Local adjustment layers"]), "{}", report["unmapped"]);
+        let b = photo("b.NEF");
+        assert_eq!((b.develop.light.exposure, b.develop.orientation), (0.0, lcc_geom::Orientation::Normal));
+        assert!(report["unmapped"].get("8").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_format_named_in_place_of_a_camera_is_no_camera() {
         let row = |make: &str, model: &str, format: &str| -> Row {
@@ -938,6 +1061,28 @@ mod tests {
                 Want::Photos(1),
             ),
             (
+                "hostile develop layers",
+                with(
+                    base(),
+                    vec![
+                        (
+                            "ZENTITIES",
+                            vec![json!({"Z_ENT": 17, "ZNAME": "VariantAdjustmentLayer"}), json!({"Z_ENT": 18, "ZNAME": "VariantDefaultLayer"})],
+                        ),
+                        (
+                            "ZVARIANTLAYER",
+                            vec![
+                                json!({"Z_PK": 1, "Z_ENT": 18, "ZVARIANT": 7, "ZROTATION": "ninety", "ZEXPOSURE": 0, "ZCROP": null, "ZWHITEBALANCE": "1;1;1"}),
+                                json!({"Z_PK": 2, "Z_ENT": 17, "ZVARIANT": 7, "ZROTATION": 1.0e300, "ZEXPOSURE": 1.0e300, "ZCROP": "1e308;-1e308;1e308;1e308", "ZWHITEBALANCE": "nan;0;-1"}),
+                                json!({"Z_PK": 3, "Z_ENT": 17, "ZVARIANT": "seven", "ZROTATION": null, "ZEXPOSURE": "x", "ZCROP": ";;;;", "ZWHITEBALANCE": null}),
+                                json!({"Z_PK": 4, "Z_ENT": "17", "ZVARIANT": i64::MAX, "ZROTATION": -1.0e300, "ZEXPOSURE": null, "ZCROP": "1;1;1;1", "ZWHITEBALANCE": 5}),
+                            ],
+                        ),
+                    ],
+                ),
+                Want::Photos(1),
+            ),
+            (
                 "locations with hostile paths",
                 with(
                     base(),
@@ -998,5 +1143,121 @@ mod tests {
         let mut names: HashMap<String, Vec<i64>> = HashMap::new();
         names.insert("n1000".into(), vec![1000]);
         assert_eq!(keyword_paths("n1000", &tree, &names).0[0].matches('|').count(), MAX_DEPTH - 1);
+    }
+
+    /// The synthetic catalog the manual's import-result screenshot imports (`docs/manual-site/scripts/fixtures/capture-one`,
+    /// shot `capture-one-import-result`): invented names, three small placeholder JPEGs next to it and five raws on a drive
+    /// that doesn't exist, with settings that are imported and some that aren't. Its files and their bytes.
+    fn manual_shot_fixture() -> Vec<(&'static str, Vec<u8>)> {
+        use lcc_codecs::{ChromaSubsampling, EncodeImage, EncodeMeta, Samples, encode_jpeg};
+        let placeholder = |rgb: [u8; 3]| {
+            let pixels: Vec<u8> = (0..64 * 48).flat_map(|_| rgb).collect();
+            encode_jpeg(&EncodeImage::new(64, 48, 3, Samples::U8(&pixels)), 85, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap()
+        };
+        let edited = 750_000_000.0; // Core Data seconds since 2001: in 2024
+        let mut images = Vec::new();
+        for (pk, name) in [(1, "meadow-01.jpg"), (2, "meadow-02.jpg"), (3, "harbour-03.jpg")] {
+            images.push(
+                json!({"Z_PK": pk, "ZIMAGEFILENAME": name, "ZIMAGELOCATION": 1, "ZWIDTH": 64, "ZHEIGHT": 48, "ZSETTINGSMODIFICATIONDATE": edited}),
+            );
+        }
+        for pk in 4..=8 {
+            images.push(json!({"Z_PK": pk, "ZIMAGEFILENAME": format!("example-{pk:04}.NEF"), "ZIMAGELOCATION": 2, "ZWIDTH": 6000, "ZHEIGHT": 4000,
+                "ZSETTINGSMODIFICATIONDATE": edited, "ZCAMERA_MAKE": "EXAMPLE CORP", "ZCAMERA_MODEL": "EXAMPLE X1"}));
+        }
+        let variants: Vec<Value> = (1..=8).map(|pk| json!({"Z_PK": 100 + pk, "ZIMAGE": pk, "ZVARIANTUUID": format!("example-{pk}")})).collect();
+        let mut layers = Vec::new();
+        let mut next = 0;
+        let mut add = |ent: i64, variant: i64, values: Value| {
+            next += 1;
+            layers.push(layer(next, ent, 100 + variant, values));
+        };
+        for v in 1..=3 {
+            add(18, v, json!({"ZEXPOSURE": 0, "ZROTATION": 0, "ZBRIGHTNESS": 0, "ZLEVELSHIGHLIGHT": "1.000;1.000;1.000;1.000"}));
+        }
+        add(17, 1, json!({"ZEXPOSURE": 0.3, "ZBRIGHTNESS": 10}));
+        add(17, 2, json!({"ZROTATION": 1.5, "ZCROP": "32;24;56;40", "ZBRIGHTNESS": 6}));
+        add(17, 3, json!({"ZEXPOSURE": -0.2, "ZLEVELSHIGHLIGHT": "1.000;1.000;1.000;0.950"}));
+        for v in 4..=8 {
+            add(18, v, json!({"ZEXPOSURE": 0, "ZROTATION": 0, "ZBRIGHTNESS": 0, "ZHIGHLIGHTRECOVERY": 0, "ZWHITEBALANCE": "2.000;1.000;1.400"}));
+            let mut own = json!({"ZWHITEBALANCE": "2.200;1.000;1.200", "ZEXPOSURE": 0.4});
+            if v <= 5 {
+                own["ZBRIGHTNESS"] = json!(12);
+            }
+            if v >= 6 {
+                own["ZHIGHLIGHTRECOVERY"] = json!(40);
+            }
+            add(17, v, own);
+        }
+        add(19, 4, json!({"ZINDEX": 1, "ZLENSLCC": "example-lcc"}));
+        add(19, 5, json!({"ZINDEX": 1, "ZLENSLCC": "example-lcc"}));
+        add(23, 6, json!({"ZEXPOSURE": 0.5}));
+        let catalog = sqlite(&[
+            (
+                "ZPATHLOCATION",
+                vec![
+                    json!({"Z_PK": 1, "ZRELATIVEPATH": "./Originals", "ZISRELATIVE": 1}),
+                    json!({"Z_PK": 2, "ZWINROOT": "Q:\\", "ZMACROOT": "/Volumes/Example Archive", "ZRELATIVEPATH": "Example Shoot", "ZISRELATIVE": 0}),
+                ],
+            ),
+            ("ZIMAGE", images),
+            ("ZVARIANT", variants),
+            (
+                "ZENTITIES",
+                vec![
+                    json!({"Z_ENT": 17, "ZNAME": "VariantAdjustmentLayer"}),
+                    json!({"Z_ENT": 18, "ZNAME": "VariantDefaultLayer"}),
+                    json!({"Z_ENT": 19, "ZNAME": "VariantStyleLayer"}),
+                    json!({"Z_ENT": 23, "ZNAME": "LocalAdjustmentsLayer"}),
+                ],
+            ),
+            ("ZVARIANTLAYER", layers),
+        ]);
+        vec![
+            ("Example.cocatalogdb", catalog),
+            ("Originals/meadow-01.jpg", placeholder([96, 140, 72])),
+            ("Originals/meadow-02.jpg", placeholder([120, 156, 88])),
+            ("Originals/harbour-03.jpg", placeholder([70, 110, 150])),
+        ]
+    }
+
+    /// The manual's screenshot fixture is what [`manual_shot_fixture`] makes, and its import shows what the shot is
+    /// for: the settings not imported yet with their photo counts, and the white balance marked approximate. When the
+    /// generator changes, the test writes the new files to the temp folder and says where, to copy over.
+    #[test]
+    fn the_manual_shot_fixture_is_synthetic_and_current() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/manual-site/scripts/fixtures/capture-one");
+        let files = manual_shot_fixture();
+        let stale: Vec<&str> =
+            files.iter().filter(|(name, bytes)| std::fs::read(fixture.join(name)).ok().as_ref() != Some(bytes)).map(|(n, _)| *n).collect();
+        if !stale.is_empty() {
+            let out = std::env::temp_dir().join("c1-manual-shot-fixture");
+            for (name, bytes) in &files {
+                std::fs::create_dir_all(out.join(name).parent().unwrap()).unwrap();
+                std::fs::write(out.join(name), bytes).unwrap();
+            }
+            panic!("{stale:?} differ from the generator: copy {} to {}", out.display(), fixture.display());
+        }
+        // read by a path relative to the working folder, as the screenshot runner gives it (from the repository root):
+        // the originals inside the catalog's folder are found, the five on the missing drive aren't
+        let relative = Path::new("../../docs/manual-site/scripts/fixtures/capture-one/Example.cocatalogdb");
+        let read = read_with_progress(relative, &AtomicBool::new(false), &AtomicUsize::new(0), &AtomicUsize::new(0)).unwrap();
+        let here: Vec<bool> = read.photos.iter().map(CatalogPhoto::original_is_file).collect();
+        assert_eq!(here, [true, true, true, false, false, false, false, false], "{:?}", read.photos.iter().map(|p| &p.path).collect::<Vec<_>>());
+        let mut s = crate::Session::new();
+        let report = crate::lightroom_catalog::import(&mut s, &fixture.join("Example.cocatalogdb"), false).unwrap();
+        let warnings: Vec<&str> = report["warnings"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        // all of them fit the result window's eight warnings
+        assert!(warnings.len() <= 8, "{warnings:?}");
+        for line in [
+            "Capture One Brightness: used on 4 photo(s)",
+            "Capture One High Dynamic Range: used on 3 photo(s)",
+            "Capture One LCC: used on 2 photo(s)",
+            "Capture One Levels: used on 1 photo(s)",
+            "Capture One Local adjustment layers: used on 1 photo(s)",
+            "Capture One White Balance: approximate on 5 photo(s)",
+        ] {
+            assert!(warnings.iter().any(|w| w.starts_with(line)), "{line}: {warnings:?}");
+        }
     }
 }
