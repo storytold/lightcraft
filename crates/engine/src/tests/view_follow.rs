@@ -493,7 +493,13 @@ fn the_total_followed_through_edits_is_the_count_of_every_photo() {
                 assert_eq!(s.source_total(), Some(whole), "source {source}, filter {filter}, hold {}, edit {step}", s.hold_view);
                 checked += 1;
             }
-            table.push((source.to_string(), filter.to_string(), checked - checked_before, s.total_followed - followed_before, s.total_counted - counted_before));
+            table.push((
+                source.to_string(),
+                filter.to_string(),
+                checked - checked_before,
+                s.total_followed - followed_before,
+                s.total_counted - counted_before,
+            ));
         }
     }
     assert!(checked > 600, "checked {checked}");
@@ -558,7 +564,8 @@ fn a_view_just_built_for_the_source_gives_its_pass_as_the_total() {
     // (source, hold the view, what a small edit after it does to the total: the total is followed from the view's pass
     // for a smart album whose held view may show photos that stopped matching; for the others the view's own
     // length answers, and nothing is followed or counted)
-    let sources = [(json!({"kind": "all"}), false, 0), (json!({"kind": "album", "id": smart}), true, 1), (json!({"kind": "album", "id": album}), true, 0)];
+    let sources =
+        [(json!({"kind": "all"}), false, 0), (json!({"kind": "album", "id": smart}), true, 1), (json!({"kind": "album", "id": album}), true, 0)];
     for (source, hold, follows) in sources {
         // (taken before the commands: they may build the view themselves, which is when its pass is kept)
         let (counted, from_view) = (s.total_counted, s.total_from_view);

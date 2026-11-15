@@ -412,7 +412,15 @@ mod tests {
     fn catalog_of(ids: &[u64]) -> Catalog {
         let mut cat = Catalog::new();
         for id in ids {
-            let p = crate::Photo::new(PhotoId(*id), crate::Source::File { path: format!("/p/{id}.jpg") }, &format!("{id}.jpg"), "JPEG", 60, 40, "2026-01-01");
+            let p = crate::Photo::new(
+                PhotoId(*id),
+                crate::Source::File { path: format!("/p/{id}.jpg") },
+                &format!("{id}.jpg"),
+                "JPEG",
+                60,
+                40,
+                "2026-01-01",
+            );
             cat.apply(crate::Op::AddPhoto { photo: Box::new(p) }).unwrap();
         }
         cat
@@ -483,7 +491,8 @@ mod tests {
         rate(&mut cat, 1, 5);
         let mut tally = FilterTally::from_matching(cat.revision, &[PhotoId(1)]);
         assert!(matches!(tally.members, Members::Bits { .. }));
-        let far = crate::Photo::new(PhotoId(9_000_000_000), crate::Source::File { path: "/p/far.jpg".into() }, "far.jpg", "JPEG", 60, 40, "2026-01-01");
+        let far =
+            crate::Photo::new(PhotoId(9_000_000_000), crate::Source::File { path: "/p/far.jpg".into() }, "far.jpg", "JPEG", 60, 40, "2026-01-01");
         cat.apply(crate::Op::AddPhoto { photo: Box::new(crate::Photo { rating: 5, ..far }) }).unwrap();
         assert!(tally.update(&cat, &rated()));
         assert!(matches!(tally.members, Members::Set(_)), "ids too far apart for bits");
