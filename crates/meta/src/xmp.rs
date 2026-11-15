@@ -41,27 +41,7 @@ const NAMESPACES: &[(&str, &str)] = &[
     ("stDim", "http://ns.adobe.com/xap/1.0/sType/Dimensions#"),
 ];
 
-/// The camera-raw-settings namespace URI (prefix `crs`), read for interchange only.
-pub const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
-
-/// XMP read failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum XmpError {
-    Xml(String),
-    /// Nesting / size limits exceeded.
-    TooComplex,
-}
-
-impl std::fmt::Display for XmpError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            XmpError::Xml(e) => write!(f, "XMP is not well-formed XML: {e}"),
-            XmpError::TooComplex => write!(f, "XMP packet too deeply nested or too large"),
-        }
-    }
-}
-
-impl std::error::Error for XmpError {}
+pub use craft_metadata::{CRS_NS, XmpError, XmpValue};
 
 /// Result of [`parse_xmp`].
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -183,38 +163,6 @@ impl XmpData {
     }
 }
 
-/// A structured XMP value.
-#[derive(Clone, Debug, PartialEq)]
-pub enum XmpValue {
-    Text(String),
-    Array(Vec<XmpValue>),
-    Struct(BTreeMap<String, XmpValue>),
-}
-
-impl XmpValue {
-    /// A struct field (`prefix:name`).
-    pub fn field(&self, k: &str) -> Option<&XmpValue> {
-        match self {
-            XmpValue::Struct(m) => m.get(k),
-            _ => None,
-        }
-    }
-    pub fn text(&self) -> Option<&str> {
-        match self {
-            XmpValue::Text(s) => Some(s.trim()),
-            XmpValue::Array(a) => a.first().and_then(XmpValue::text),
-            XmpValue::Struct(_) => None,
-        }
-    }
-    /// Array items (a lone value is a one-item array).
-    pub fn items(&self) -> &[XmpValue] {
-        match self {
-            XmpValue::Array(a) => a,
-            other => std::slice::from_ref(other),
-        }
-    }
-}
-
 /// Whether a structured value holds any non-blank text. A tree larger than the parser's node
 /// budget counts as text-bearing (the conservative answer for a privacy check): parsed trees are
 /// capped at MAX_NODES, so only a caller-built `XmpData` can reach it, and the walk stays bounded.
@@ -325,7 +273,20 @@ pub(crate) const MAX_OPAQUE_NAME_BYTES: usize = 8 * 1024 * 1024;
 /// retains its prefix once per property: node limits alone cannot bound that duplication.
 const MAX_KEY_BYTES: usize = 1 << 20;
 
+/// Most namespace declarations in scope at once. Prefix lookup scans them, so declarations times the names of a
+/// start tag is the work; real packets declare a few dozen.
+const MAX_NS_DECLS: usize = 512;
+
+/// Refuses a scope stack holding more than [`MAX_NS_DECLS`] declarations (one count per start tag over a stack at most [`MAX_DEPTH`] deep).
+pub(crate) fn check_scopes(scopes: &[Vec<(String, String)>]) -> Result<(), XmpError> {
+    if scopes.iter().map(Vec::len).sum::<usize>() > MAX_NS_DECLS {
+        return Err(XmpError::TooComplex);
+    }
+    Ok(())
+}
+
 /// Names canonicalised by namespace URI (see [`NAMESPACES`]); conflicting foreign prefixes are opaque.
+#[allow(dead_code)]
 pub(crate) fn canonical_name(qname: &str, scopes: &[Vec<(String, String)>], opaque_budget: &mut usize) -> Result<String, XmpError> {
     canonical(qname, scopes, opaque_budget)
 }
@@ -453,6 +414,7 @@ fn parse_tree(s: &str) -> Result<Node, XmpError> {
                     }
                 }
                 scopes.push(scope);
+                check_scopes(&scopes)?;
                 let name = canonical(&String::from_utf8_lossy(e.name().as_ref()), &scopes, &mut opaque_budget)?;
                 let attrs =
                     raw_attrs.into_iter().map(|(k, v)| Ok((canonical(&k, &scopes, &mut opaque_budget)?, v))).collect::<Result<_, XmpError>>()?;
@@ -889,12 +851,12 @@ fn frac(v: f64) -> String {
             return format!("1/{}", inv.round() as u64);
         }
     }
-    let (n, d) = lightcraft_tiff::writer::rational(v);
+    let (n, d) = craft_tiff::writer::rational(v);
     format!("{n}/{d}")
 }
 
 fn sfrac(v: f64) -> String {
-    let (n, d) = lightcraft_tiff::writer::srational(v);
+    let (n, d) = craft_tiff::writer::srational(v);
     format!("{n}/{d}")
 }
 
