@@ -3,6 +3,7 @@
 
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::{DecodeOptions, Decoded, Error, Format, Result, Thumbnail, ThumbnailSource, exif};
+use craft_image_codecs::jpeg_sef::{reaches_eoi, repair as without_sef_trailer};
 
 const F: Format = Format::Jpeg;
 
@@ -40,88 +41,6 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     }
     let orientation = m.exif.as_deref().map(exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
     Ok((m.width, m.height, orientation))
-}
-
-/// Whether the markers after SOI, followed through every segment and scan, reach an EOI marker
-/// (the first one: the primary image's, ahead of any MPF images appended to the file). Segments
-/// are skipped by their length; in scan data `FF 00` (stuffing), `FF FF` (fill) and RSTn are not
-/// markers that end it.
-fn reaches_eoi(b: &[u8]) -> bool {
-    let mut p = 2usize;
-    loop {
-        // entropy-coded data (or garbage between segments, as `parse_markers` tolerates it)
-        let Some(skip) = b.get(p..).and_then(find_ff) else { return false };
-        p = p.saturating_add(skip);
-        let Some(&marker) = b.get(p.saturating_add(1)) else { return false };
-        p = match marker {
-            0xD9 => return true,
-            0xFF => p.saturating_add(1),
-            0x00 | 0x01 | 0xD0..=0xD8 => p.saturating_add(2),
-            _ => {
-                let Some(len) = b.get(p.saturating_add(2)..p.saturating_add(4)).map(|l| u16::from_be_bytes([l[0], l[1]]) as usize) else {
-                    return false;
-                };
-                if len < 2 {
-                    return false;
-                }
-                p.saturating_add(2).saturating_add(len)
-            }
-        };
-    }
-}
-
-/// A Samsung panorama whose scan runs straight into its SEF trailer, with no EOI marker (issue
-/// #3350), as the file it stands for: the bytes before the trailer's earliest data block plus an
-/// EOI. Every other file, a genuinely truncated one included, is borrowed unchanged.
-fn without_sef_trailer(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    use std::borrow::Cow;
-    // The trailer is checked first: it reads only the file's last bytes, not the scan data.
-    let Some(image) = sef_image_end(bytes).and_then(|end| bytes.get(..end)) else { return Cow::Borrowed(bytes) };
-    // the image before the trailer: an FF D9 inside the SEF data doesn't end the scan
-    if reaches_eoi(image) {
-        return Cow::Borrowed(bytes);
-    }
-    let mut fixed = Vec::with_capacity(image.len().saturating_add(2));
-    fixed.extend_from_slice(image);
-    fixed.extend_from_slice(&[0xFF, 0xD9]);
-    // The cut must leave the scan data, not a segment or anything before the first scan, open.
-    let in_scan = parse_markers(&fixed).is_some_and(|m| m.first_scan_components > 0) && reaches_eoi(&fixed);
-    if in_scan { Cow::Owned(fixed) } else { Cow::Borrowed(bytes) }
-}
-
-/// Where the image ends in a file carrying a Samsung SEF trailer: the start of its earliest data
-/// block. The trailer is the file's last bytes: `SEFH`, a u32 LE version and entry count, 12-byte
-/// entries (u16 padding, u16 type, u32 LE offset of the block back from `SEFH`, u32 LE length),
-/// then the u32 LE length of that directory and `SEFT`. Each block starts with the same padding
-/// and type as its entry. `None` unless every entry's block is nonempty, starts with its entry's
-/// type and lies inside the file, before `SEFH`.
-fn sef_image_end(b: &[u8]) -> Option<usize> {
-    let le32 = |at: usize| b.get(at..at.checked_add(4)?)?.try_into().ok().map(|v| u32::from_le_bytes(v) as usize);
-    let tail = b.len().checked_sub(8)?;
-    if b.get(tail.checked_add(4)?..)? != b"SEFT" {
-        return None;
-    }
-    let dir = tail.checked_sub(le32(tail)?)?;
-    if b.get(dir..dir.checked_add(4)?)? != b"SEFH" {
-        return None;
-    }
-    let count = le32(dir.checked_add(8)?)?;
-    let entries = dir.checked_add(12)?;
-    if count == 0 || count > tail.checked_sub(entries)? / 12 {
-        return None;
-    }
-    let mut start = dir;
-    for i in 0..count {
-        let entry = entries.checked_add(i.checked_mul(12)?)?;
-        let block = dir.checked_sub(le32(entry.checked_add(4)?)?)?;
-        let len = le32(entry.checked_add(8)?)?;
-        let kind = |at: usize| b.get(at.checked_add(2)?..at.checked_add(4)?);
-        if len < 4 || block.checked_add(len)? > dir || kind(block)? != kind(entry)? {
-            return None;
-        }
-        start = start.min(block);
-    }
-    Some(start)
 }
 
 pub(crate) fn decode_with_fallback(bytes: &[u8], opts: &DecodeOptions, fallback: Option<crate::NamedSpace>) -> Result<Decoded> {
@@ -177,21 +96,6 @@ fn decode_via_craft_codecs(bytes: &[u8], budget: &DecodeOptions) -> Result<Raw> 
         _ => (Buf::U8(img.as_u8().ok_or_else(|| Error::Malformed(F, "expected 8-bit samples".into()))?.to_vec()), 8),
     };
     Ok(Raw { width: w, height: h, model, alpha: false, premultiplied: false, buf, bit_depth })
-}
-
-/// The first `0xFF` byte, eight bytes at a time (scan data has one every few hundred bytes: this
-/// is most of [`header`]'s time).
-fn find_ff(b: &[u8]) -> Option<usize> {
-    const ONES: u64 = 0x0101_0101_0101_0101;
-    let (words, tail) = b.as_chunks::<8>();
-    for (i, w) in words.iter().enumerate() {
-        // a zero byte in !w is an 0xFF byte in w
-        let x = !u64::from_ne_bytes(*w);
-        if x.wrapping_sub(ONES) & !x & (ONES << 7) != 0 {
-            return w.iter().position(|&v| v == 0xFF).map(|j| i * 8 + j);
-        }
-    }
-    tail.iter().position(|&v| v == 0xFF).map(|j| words.len() * 8 + j)
 }
 
 /// Fast path: an embedded JPEG preview (EXIF IFD1 thumbnail, or the largest MPF preview) whose long
@@ -274,6 +178,42 @@ pub(crate) fn decode_codes8(bytes: &[u8]) -> Result<(usize, usize, usize, Vec<u8
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_eoi_walk_matches_previous_on_mutated_streams() {
+        fn previous(b: &[u8]) -> bool {
+            let mut p = 2usize;
+            loop {
+                let Some(skip) = b.get(p..).and_then(|s| s.iter().position(|&v| v == 0xff)) else { return false };
+                p = p.saturating_add(skip);
+                let Some(&marker) = b.get(p.saturating_add(1)) else { return false };
+                p = match marker {
+                    0xd9 => return true,
+                    0xff => p.saturating_add(1),
+                    0x00 | 0x01 | 0xd0..=0xd8 => p.saturating_add(2),
+                    _ => {
+                        let Some(len) = b.get(p.saturating_add(2)..p.saturating_add(4)).map(|s| u16::from_be_bytes([s[0], s[1]]) as usize) else {
+                            return false;
+                        };
+                        if len < 2 {
+                            return false;
+                        }
+                        p.saturating_add(2).saturating_add(len)
+                    }
+                };
+            }
+        }
+        let base = [0xff, 0xd8, 0xff, 0xe1, 0, 4, 1, 2, 0xff, 0xda, 0, 3, 1, 1, 0xff, 0, 3, 0xff, 0xd0, 4, 0xff, 0xd9];
+        for end in 0..=base.len() {
+            for at in 0..end {
+                for value in [0, 1, 0xff, 0xd9] {
+                    let mut bytes = base[..end].to_vec();
+                    bytes[at] = value;
+                    assert_eq!(reaches_eoi(&bytes), previous(&bytes), "end {end}, at {at}, value {value}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn mpf_shared_matches_previous_reader_on_mutated_indices() {
@@ -451,20 +391,6 @@ mod tests {
         let markers = parse_markers(&jpeg).unwrap();
         assert!(markers.icc.is_none());
         assert!(markers.icc_invalid);
-    }
-
-    #[test]
-    fn find_ff_matches_a_plain_search() {
-        let mut b: Vec<u8> = (0..300u32).map(|i| (i * 7 % 255) as u8).collect();
-        for at in [None, Some(0), Some(7), Some(8), Some(15), Some(203), Some(296), Some(299)] {
-            if let Some(i) = at {
-                b[i] = 0xFF;
-            }
-            for start in [0, 1, 5, 9, 290, 299, 300] {
-                let s = &b[start..];
-                assert_eq!(find_ff(s), s.iter().position(|&v| v == 0xFF), "{at:?} from {start}");
-            }
-        }
     }
 
     #[test]
