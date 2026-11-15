@@ -1,8 +1,7 @@
-//! GIF (first frame) and BMP via the `image` crate's pure-Rust decoders.
+//! GIF through `craft-gif` and BMP through `craft-image-codecs`.
 
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::{DecodeOptions, Decoded, Error, Format, Result};
-use image::{DynamicImage, ImageDecoder};
 
 /// Canvases up to this many pixels are still decoded by [`header`] (at most 16 MB), so a truncated
 /// small file is refused at import as before.
@@ -13,11 +12,29 @@ const HEADER_DECODE_MAX_PIXELS: u64 = 4_000_000;
 /// header and must be one the file's bytes can fill; only a canvas small enough to be cheap is
 /// decoded (to catch truncation). Orientation is always 1: neither format carries EXIF here.
 pub(crate) fn header(bytes: &[u8], format: Format) -> Result<(u32, u32, u16)> {
-    let err = |e: image::ImageError| Error::Malformed(format, e.to_string());
-    let cursor = std::io::Cursor::new(bytes);
+    if format == Format::Gif {
+        let info = craft_gif::scan(bytes, 1).ok_or_else(|| Error::Malformed(format, "invalid GIF header".into()))?;
+        let (w, h) = (u32::from(info.width), u32::from(info.height));
+        check_size(format, u64::from(w), u64::from(h), &DecodeOptions::default())?;
+        check_fillable(format, bytes, w, h)?;
+        if craft_gif::palette(bytes).is_none() {
+            return Err(Error::Malformed(format, "GIF has no readable colour table".into()));
+        }
+        if u64::from(w).saturating_mul(u64::from(h)) <= HEADER_DECODE_MAX_PIXELS {
+            let decoded = decode(bytes, format, &DecodeOptions::fit(64, 64))?;
+            return Ok((decoded.source_width, decoded.source_height, decoded.orientation));
+        }
+        return Ok((w, h, 1));
+    }
+    if format == Format::Bmp {
+        let (w, h) = bmp_dims(bytes).ok_or_else(|| Error::Malformed(format, "invalid BMP header".into()))?;
+        if w == 0 || h == 0 {
+            return Err(Error::Malformed(format, "zero dimension".into()));
+        }
+        check_fillable(format, bytes, w, h)?;
+    }
     let (w, h) = match format {
-        Format::Gif => image::codecs::gif::GifDecoder::new(cursor).map_err(err)?.dimensions(),
-        Format::Bmp => image::codecs::bmp::BmpDecoder::new(cursor).map_err(err)?.dimensions(),
+        Format::Bmp => craft_image_codecs::probe_size(bytes).map_err(|e| Error::Malformed(format, e.to_string()))?,
         _ => return Err(Error::Unsupported(format, "not handled by this decoder")),
     };
     if w == 0 || h == 0 {
@@ -29,16 +46,6 @@ pub(crate) fn header(bytes: &[u8], format: Format) -> Result<(u32, u32, u16)> {
         return Ok((d.source_width, d.source_height, d.orientation));
     }
     Ok((w, h, 1))
-}
-
-/// The decoder's allocation limit: the RGBA buffer of the largest image `opts` allows. It bounds the
-/// decoders' own frame buffers only: `DynamicImage::from_decoder` allocates the canvas without
-/// consulting it, so the canvas is bounded by `check_size` and [`check_fillable`] beforehand (a
-/// mostly blank one by [`SPARSE_MAX_PIXELS`]).
-fn limits(opts: &DecodeOptions) -> image::Limits {
-    let mut l = image::Limits::default();
-    l.max_alloc = Some(opts.max_pixels.saturating_mul(4));
-    l
 }
 
 /// The largest canvas allowed that the file's pixel data leaves mostly blank: a GIF screen its
@@ -55,10 +62,9 @@ const SPARSE_MAX_PIXELS: u64 = 4_000_000;
 ///   allocated, and is refused here instead.
 /// - An RLE BMP covers the pixels its runs and absolute blocks draw, as the decoder paints them; an
 ///   end-of-row, end-of-bitmap or delta code leaves the rest blank.
-/// - A GIF covers the pixels its first frame's LZW codes draw up to the end code. A code expands to
-///   at most 4096 pixels and takes 12 bits once the table holds that many (fewer bits only while its
-///   strings are shorter), so a frame larger than 2731 pixels per byte of LZW data is refused
-///   outright. The screen around the frame may be larger, and is blank there.
+/// - A GIF covers the pixels its first frame's LZW codes draw up to the end code. The shared GIF
+///   reader counts code-string lengths without allocating decoded pixels; the screen around the
+///   frame may be larger, and is blank there.
 ///
 /// Canvases the data leaves mostly blank are limited to [`SPARSE_MAX_PIXELS`].
 fn check_fillable(format: Format, bytes: &[u8], w: u32, h: u32) -> Result<()> {
@@ -67,15 +73,23 @@ fn check_fillable(format: Format, bytes: &[u8], w: u32, h: u32) -> Result<()> {
     // the pixels the file's data can cover
     let covered = match format {
         Format::Gif => {
-            // without a frame there is nothing to decode, and nothing to bound the canvas by
-            let Some(frame) = gif_first_frame(bytes) else {
+            // A frame's compressed data must cover its declared raster before it can justify the
+            // logical screen. This retains the old "can hold" refusal for truncated/empty frames.
+            let info = craft_gif::scan(bytes, 1).ok_or_else(|| Error::Malformed(format, "no readable first frame".into()))?;
+            let Some(frame) = info.frames.first() else {
                 return Err(Error::Malformed(format, "no readable first frame".into()));
             };
-            let (fw, fh, len) = (frame.width, frame.height, frame.data_len);
-            if area(fw, fh) > (len as u64).saturating_mul(2_731) {
-                return Err(Error::Malformed(format, format!("a {fw} × {fh} frame is far larger than its {len} bytes of pixel data can hold")));
+            let frame_width = u32::from(frame.width);
+            let frame_height = u32::from(frame.height);
+            let compressed_bytes =
+                craft_gif::first_frame_compressed_bytes(bytes).ok_or_else(|| Error::Malformed(format, "no readable first frame".into()))?;
+            if area(frame_width, frame_height) > (compressed_bytes as u64).saturating_mul(2_731) {
+                return Err(Error::Malformed(
+                    format,
+                    format!("a {frame_width} × {frame_height} frame is far larger than its {compressed_bytes} bytes of pixel data can hold"),
+                ));
             }
-            gif_frame_pixels(bytes, frame.codes, area(fw, fh))
+            craft_gif::first_frame_decoded_pixels(bytes).unwrap_or(0)
         }
         _ => match bmp_layout(bytes) {
             BmpLayout::Rle { offset, rle4 } => bmp_rle_pixels(bytes, offset, rle4, w, h),
@@ -177,202 +191,87 @@ fn bmp_rle_pixels(bytes: &[u8], offset: usize, rle4: bool, w: u32, h: u32) -> u6
     covered
 }
 
-/// A GIF's first frame, from its image descriptor.
-struct GifFrame {
-    width: u32,
-    height: u32,
-    /// Bytes of LZW data present (its palettes, comments and other extensions describe no pixels).
-    data_len: usize,
-    /// Position of its LZW minimum code size, which its data sub-blocks follow.
-    codes: usize,
-}
-
-/// A GIF's first frame. `None` when the blocks before the frame can't be walked.
-fn gif_first_frame(bytes: &[u8]) -> Option<GifFrame> {
-    let u16_at = |i: usize| bytes.get(i..i.checked_add(2)?).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes);
-    let table = |flags: u8| if flags & 0x80 != 0 { 3usize << ((flags & 7) + 1) } else { 0 };
-    let mut pos = 13 + table(*bytes.get(10)?);
-    loop {
-        match *bytes.get(pos)? {
-            // extension: introducer, label, sub-blocks
-            0x21 => pos = sub_blocks(bytes, pos.saturating_add(2)).1,
-            // image descriptor (separator, left, top, width, height, flags), local colour table,
-            // LZW minimum code size, data sub-blocks
-            0x2C => {
-                let (fw, fh) = (u16_at(pos.saturating_add(5))?, u16_at(pos.saturating_add(7))?);
-                let codes = pos.saturating_add(10).saturating_add(table(*bytes.get(pos.saturating_add(9))?));
-                let data_len = sub_blocks(bytes, codes.saturating_add(1)).0;
-                return Some(GifFrame { width: u32::from(fw), height: u32::from(fh), data_len, codes });
-            }
-            _ => return None,
-        }
+/// Reads BMP `(width, height)` from the DIB header without allocating.
+fn bmp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.get(0..2) != Some(b"BM") {
+        return None;
     }
-}
-
-/// The pixels a GIF frame's LZW codes draw, at most `max` (the frame's size): the codes are walked
-/// up to the end code, an invalid code or the end of the data, keeping only the length of each
-/// table string, never the pixels. Data after the end code draws nothing. Codes are packed
-/// least-significant bit first across the data sub-blocks and start one bit wider than the minimum
-/// code size; a code is one bit wider each time the table fills its width, up to 12 bits, and a
-/// clear code starts the table again (GIF89a, appendix F).
-fn gif_frame_pixels(bytes: &[u8], codes: usize, max: u64) -> u64 {
-    // the `gif` decoder accepts minimum code sizes of 1 to 11
-    let Some(min_size) = bytes.get(codes).copied().filter(|s| (1..=11).contains(s)) else {
-        return 0;
+    let dib = u32::from_le_bytes(bytes.get(14..18)?.try_into().ok()?);
+    let (w, h) = if dib == 12 {
+        (u16::from_le_bytes(bytes.get(18..20)?.try_into().ok()?) as u32, u16::from_le_bytes(bytes.get(20..22)?.try_into().ok()?) as u32)
+    } else {
+        let w = i32::from_le_bytes(bytes.get(18..22)?.try_into().ok()?);
+        let h = i32::from_le_bytes(bytes.get(22..26)?.try_into().ok()?);
+        (u32::try_from(w).ok()?, h.unsigned_abs())
     };
-    let clear = 1usize << min_size;
-    let end = clear + 1;
-    let mut lens = [1u16; 4096]; // string length of each code; literals (below `clear`) are 1
-    let (mut width, mut next, mut prev) = (u32::from(min_size) + 1, end + 1, None::<usize>);
-    let (mut bits, mut held, mut covered) = (0u32, 0u32, 0u64);
-    let mut pos = codes.saturating_add(1);
-    while let Some(&n) = bytes.get(pos) {
-        let start = pos.saturating_add(1);
-        pos = start.saturating_add(usize::from(n));
-        if n == 0 {
-            break;
-        }
-        for &byte in bytes.get(start..pos.min(bytes.len())).unwrap_or_default() {
-            bits |= u32::from(byte) << held;
-            held += 8;
-            while held >= width {
-                let code = (bits & ((1 << width) - 1)) as usize;
-                bits >>= width;
-                held -= width;
-                if code == clear {
-                    (width, next, prev) = (u32::from(min_size) + 1, end + 1, None);
-                    continue;
-                }
-                let len_of = |c: usize| lens.get(c).copied().unwrap_or(1);
-                let len = match prev {
-                    _ if code == end => return covered,
-                    None if code < clear => 1,
-                    Some(_) if code < next => len_of(code),
-                    // the string just being defined: the previous one and its first pixel
-                    Some(p) if code == next => len_of(p).saturating_add(1),
-                    _ => return covered,
-                };
-                // each code after the first defines the next string: the previous one and a pixel
-                let defined = prev.map(|p| len_of(p).saturating_add(1));
-                if let Some(defined) = defined
-                    && let Some(slot) = lens.get_mut(next)
-                {
-                    *slot = defined;
-                    next += 1;
-                    if next == 1 << width && width < 12 {
-                        width += 1;
-                    }
-                }
-                prev = Some(code);
-                covered = covered.saturating_add(u64::from(len));
-                if covered >= max {
-                    return max;
-                }
-            }
-        }
-    }
-    covered
-}
-
-/// The GIF sub-blocks starting at `pos`: the data bytes present, and the position after them.
-fn sub_blocks(bytes: &[u8], mut pos: usize) -> (usize, usize) {
-    let mut data = 0usize;
-    while let Some(&n) = bytes.get(pos) {
-        let start = pos.saturating_add(1);
-        if n == 0 {
-            return (data, start);
-        }
-        let end = start.saturating_add(usize::from(n));
-        data = data.saturating_add(end.min(bytes.len()).saturating_sub(start));
-        pos = end;
-    }
-    (data, pos)
+    Some((w, h))
 }
 
 pub(crate) fn decode(bytes: &[u8], format: Format, opts: &DecodeOptions) -> Result<Decoded> {
     if format == Format::Gif {
-        gated_first_frame(bytes, opts)?;
+        return decode_gif(bytes, opts);
     }
-    let err = |e: image::ImageError| Error::Malformed(format, e.to_string());
-    let cursor = std::io::Cursor::new(bytes);
-    let (img, icc) = match format {
-        Format::Gif => {
-            let mut d = image::codecs::gif::GifDecoder::new(cursor).map_err(err)?;
-            let (w, h) = d.dimensions();
-            check_size(format, w as u64, h as u64, opts)?;
-            check_fillable(format, bytes, w, h)?;
-            d.set_limits(limits(opts)).map_err(err)?;
-            let icc = d.icc_profile().ok().flatten();
-            (DynamicImage::from_decoder(d).map_err(err)?, icc)
-        }
-        Format::Bmp => {
-            let mut d = image::codecs::bmp::BmpDecoder::new(cursor).map_err(err)?;
-            let (w, h) = d.dimensions();
-            check_size(format, w as u64, h as u64, opts)?;
-            check_fillable(format, bytes, w, h)?;
-            d.set_limits(limits(opts)).map_err(err)?;
-            let icc = d.icc_profile().ok().flatten();
-            (DynamicImage::from_decoder(d).map_err(err)?, icc)
-        }
-        _ => return Err(Error::Unsupported(format, "not handled by this decoder")),
+    if format != Format::Bmp {
+        return Err(Error::Unsupported(format, "not handled by this decoder"));
+    }
+    let (w, h) = bmp_dims(bytes).ok_or_else(|| Error::Malformed(format, "invalid BMP header".into()))?;
+    check_size(format, w as u64, h as u64, opts)?;
+    check_fillable(format, bytes, w, h)?;
+    let (w, h) = craft_image_codecs::probe_size(bytes).map_err(|e| Error::Malformed(format, e.to_string()))?;
+    let ic_opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits {
+            max_width: u32::MAX,
+            max_height: u32::MAX,
+            max_pixels: opts.max_pixels,
+            max_alloc: opts.max_pixels.saturating_mul(4),
+        },
+        keep_orientation: true,
     };
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Bmp, bytes, &ic_opts).map_err(|e| match e {
+        craft_image_codecs::CodecError::LimitExceeded(_) => Error::TooLarge(w as u64, h as u64),
+        other => Error::Malformed(format, other.to_string()),
+    })?;
     let (w, h) = (img.width(), img.height());
-    let alpha = img.color().has_alpha();
-    let gray = !img.color().has_color();
-    let (model, alpha, buf) = match (gray, alpha) {
-        (true, false) => (Model::Gray, false, img.into_luma8().into_raw()),
-        (true, true) => (Model::Gray, true, img.into_luma_alpha8().into_raw()),
-        (false, false) => (Model::Rgb, false, img.into_rgb8().into_raw()),
-        (false, true) => (Model::Rgb, true, img.into_rgba8().into_raw()),
-    };
+    let alpha = img.layout().has_alpha();
+    let model = if img.layout().is_gray() { Model::Gray } else { Model::Rgb };
+    let buf = img.as_u8().ok_or_else(|| Error::Malformed(format, "expected 8-bit BMP samples".into()))?.to_vec();
     let raw = Raw { width: w as usize, height: h as usize, model, alpha, premultiplied: false, buf: Buf::U8(buf), bit_depth: 8 };
-    finish(format, raw, Meta { icc, ..Default::default() }, (w, h), opts)
+    finish(format, raw, Meta { icc: img.icc, ..Default::default() }, (w, h), opts)
 }
 
-/// Bounds a GIF's first image descriptor: the decoder composites frames into the logical screen
-/// (bounded by [`check_size`] on the canvas) but allocates its own frame buffers at the frame's
-/// declared size, which a small file can inflate far past the canvas. The canvas check cannot
-/// see that size, so it is read from the block headers here.
-fn gated_first_frame(bytes: &[u8], opts: &DecodeOptions) -> Result<()> {
-    // The constants of the header grammar: signature, logical screen descriptor (with its global
-    // colour table), extension blocks (0x21, skipped by their sub-block chains) and image
-    // descriptors (0x2C).
-    const SCREEN: usize = 13;
-    if bytes.len() < SCREEN {
-        return Ok(()); // too broken for a frame; the decoder reports the damage itself
-    }
-    let gct_entries = 1usize << (u32::from(bytes[10] & 0x07) + 1); // at most 256
-    let gct_bytes = if (bytes[10] & 0x80) != 0 { gct_entries * 3 } else { 0 };
-    let mut p = SCREEN.saturating_add(gct_bytes);
-    while let Some(&kind) = bytes.get(p) {
-        match kind {
-            0x2C => {
-                // Image descriptor: two LE coordinates then two LE edges, after the separator.
-                let end = p.checked_add(10).filter(|&e| e <= bytes.len());
-                let Some(d) = end.and_then(|e| bytes.get(p + 1..e)) else {
-                    break; // cut short mid-descriptor: the decoder reports that
-                };
-                let (w, h) = (u16::from_le_bytes([d[4], d[5]]) as u64, u16::from_le_bytes([d[6], d[7]]) as u64);
-                return check_size(Format::Gif, w, h, opts);
-            }
-            0x21 => {
-                // Extension: a label byte, then <len,data> sub-blocks ended by a zero length.
-                p = p.saturating_add(2);
-                loop {
-                    let Some(&len) = bytes.get(p) else {
-                        return Ok(()); // ran past the data: decode reports the truncation
-                    };
-                    p = p.saturating_add(1);
-                    if len == 0 {
-                        break;
-                    }
-                    p = p.saturating_add(len as usize);
-                }
-            }
-            _ => p = p.saturating_add(1),
-        }
-    }
-    Ok(())
+fn decode_gif(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
+    let format = Format::Gif;
+    let Some(info) = craft_gif::scan(bytes, 1) else {
+        return Err(Error::Malformed(format, "invalid GIF header".into()));
+    };
+    let (width, height) = (u32::from(info.width), u32::from(info.height));
+    check_size(format, u64::from(width), u64::from(height), opts)?;
+    let Some(frame) = info.frames.first() else {
+        return Err(Error::Malformed(format, "no readable first frame".into()));
+    };
+    check_size(format, u64::from(frame.width), u64::from(frame.height), opts)?;
+    check_fillable(format, bytes, width, height)?;
+    let max_bytes = opts.max_pixels.saturating_mul(4);
+    let mut limits = craft_gif::frames::FrameLimits::default();
+    limits.max_frames = 1;
+    limits.max_bytes = max_bytes;
+    limits.max_canvas_bytes = max_bytes;
+    limits.max_decode_bytes = Some(max_bytes);
+    let animation = craft_gif::frames::read_frames(bytes, &limits).map_err(|e| Error::Malformed(format, e.to_string()))?;
+    let Some(decoded) = animation.frames.into_iter().next() else {
+        return Err(Error::Malformed(format, "no decoded frame".into()));
+    };
+    let raw = Raw {
+        width: animation.width as usize,
+        height: animation.height as usize,
+        model: Model::Rgb,
+        alpha: true,
+        premultiplied: false,
+        buf: Buf::U8(decoded.rgba),
+        bit_depth: 8,
+    };
+    let icc = craft_gif::frames::icc_profile(bytes);
+    finish(format, raw, Meta { icc, ..Default::default() }, (animation.width, animation.height), opts)
 }
 
 #[cfg(test)]
@@ -387,7 +286,7 @@ mod tests {
         b
     }
 
-    /// `image`'s GIF decoder allocates its frame buffer at the image descriptor's declared
+    /// A GIF decoder allocates its frame buffer at the image descriptor's declared
     /// size, which the canvas bound ([`crate::decode`]'s `max_pixels` on the logical screen)
     /// does not cover. A 20-byte file used to buy a 4 GB allocation before the gate.
     #[test]
@@ -437,17 +336,57 @@ mod tests {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             (seed >> 24) as u8
         };
-        let frames = [
-            ("solid", image::RgbaImage::from_pixel(w, h, image::Rgba([90, 90, 90, 255]))),
-            ("gradient", image::RgbaImage::from_fn(w, h, |x, y| image::Rgba([(x / 40 * 16) as u8, (y / 30 * 16) as u8, 0, 255]))),
-            ("noise", image::RgbaImage::from_fn(w, h, |_, _| image::Rgba([noise(), noise(), noise(), 255]))),
-        ];
-        for (name, frame) in frames {
-            let mut gif = Vec::new();
-            image::codecs::gif::GifEncoder::new_with_speed(&mut gif, 30).encode_frame(image::Frame::new(frame)).unwrap();
-            let first = gif_first_frame(&gif).unwrap();
-            assert_eq!((first.width, first.height), (w, h), "{name}");
-            assert_eq!(gif_frame_pixels(&gif, first.codes, u64::MAX), u64::from(w * h), "{name}");
+        let encode_gif = |rgba: Vec<u8>| -> Vec<u8> {
+            let img = craft_image_codecs::Image::from_u8(w, h, craft_image_codecs::ChannelLayout::Rgba, rgba).unwrap();
+            craft_image_codecs::encode(&img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap()
+        };
+        let solid = [90, 90, 90, 255].repeat((w * h) as usize);
+        let mut gradient = Vec::with_capacity((w * h * 4) as usize);
+        let mut noise_buf = Vec::with_capacity((w * h * 4) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                gradient.extend_from_slice(&[((x / 40 * 16) as u8), ((y / 30 * 16) as u8), 0, 255]);
+                noise_buf.extend_from_slice(&[noise(), noise(), noise(), 255]);
+            }
         }
+        for (name, rgba) in [("solid", solid), ("gradient", gradient), ("noise", noise_buf)] {
+            let gif = encode_gif(rgba);
+            let first = craft_gif::scan(&gif, 1).unwrap().frames.remove(0);
+            assert_eq!((u32::from(first.width), u32::from(first.height)), (w, h), "{name}");
+            assert_eq!(craft_gif::first_frame_decoded_pixels(&gif), Some(u64::from(w * h)), "{name}");
+        }
+    }
+
+    #[test]
+    fn gif_icc_profile_is_preserved_by_the_codec_adapter() {
+        let img = craft_image_codecs::Image::from_u8(2, 2, craft_image_codecs::ChannelLayout::Rgba, [80, 120, 160, 255].repeat(4)).unwrap();
+        let mut bytes = craft_image_codecs::encode(&img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let frame = craft_gif::scan(&bytes, 1).unwrap().frames[0];
+        let profile = [1, 2, 3, 4, 5];
+        let mut extension = vec![0x21, 0xff, 0x0b];
+        extension.extend_from_slice(b"ICCRGBG1012");
+        extension.push(profile.len() as u8);
+        extension.extend_from_slice(&profile);
+        extension.push(0);
+        bytes.splice(frame.offset..frame.offset, extension);
+
+        let decoded = crate::decode(&bytes, DecodeOptions::default()).unwrap();
+        assert_eq!(decoded.icc.as_deref(), Some(profile.as_slice()));
+    }
+
+    #[test]
+    fn gif_first_frame_pixels_match_the_previous_image_decoder() {
+        let mut pixels = Vec::with_capacity(16 * 12 * 4);
+        for y in 0..12 {
+            for x in 0..16 {
+                pixels.extend_from_slice(&[(x * 13) as u8, (y * 17) as u8, 91, if (x + y) % 3 == 0 { 127 } else { 255 }]);
+            }
+        }
+        let img = craft_image_codecs::Image::from_u8(16, 12, craft_image_codecs::ChannelLayout::Rgba, pixels).unwrap();
+        let bytes = craft_image_codecs::encode(&img, craft_image_codecs::Format::Gif, &craft_image_codecs::EncodeOptions::default()).unwrap();
+
+        let decoded = craft_image_codecs::decode_as(craft_image_codecs::Format::Gif, &bytes).unwrap();
+        let shared = craft_gif::frames::read_frames(&bytes, &craft_gif::frames::FrameLimits::default()).unwrap();
+        assert_eq!(shared.frames[0].rgba, decoded.as_u8().unwrap());
     }
 }
