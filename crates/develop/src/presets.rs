@@ -684,7 +684,7 @@ mod tests {
         a.grain.seed = 777;
         a.vignette.style = crate::VignetteStyle::ColorPriority;
         a.vignette.amount = -25.0;
-        a.lens_blur = crate::LensBlur { enabled: true, amount: 60.0, focal_distance: 30.0, focal_range: 20.0 };
+        a.lens_blur = crate::LensBlur { enabled: true, amount: 60.0, focal_distance: 30.0, focal_range: 20.0, ..Default::default() };
         a.optics.remove_ca = true;
         let p = Preset::from_settings("p", "P", "User", &a, &SettingsGroup::default_copy());
         let mut original = DevelopSettings::default();
@@ -709,7 +709,8 @@ mod tests {
             }
             let want = (-0.4 + 1.2 * t).min(5.0);
             assert!((out.light.exposure - want).abs() < 1e-9, "{t}: exposure {}", out.light.exposure);
-            let (profile, blur) = if t < 0.5 { (original.profile.amount, original.lens_blur.amount) } else { ((140.0 * t).min(200.0), 60.0 * t) };
+            let (profile, blur) =
+                if t < 0.5 { (original.profile.amount, original.lens_blur.amount) } else { ((140.0 * t).min(200.0), (60.0 * t).min(100.0)) };
             assert!((out.profile.amount - profile).abs() < 1e-9, "{t}: profile amount {}", out.profile.amount);
             assert!((out.lens_blur.amount - blur).abs() < 1e-9, "{t}: lens blur amount {}", out.lens_blur.amount);
             let y = eval(&out.curve.master, 0.3);
