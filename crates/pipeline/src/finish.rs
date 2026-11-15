@@ -57,6 +57,20 @@ fn eval_curves(l: &[Lut1; 3], e: [f32; 3], hdr: bool) -> [f32; 3] {
     }
 }
 
+/// The masks' local Curves (`local`: each mask with its tables, in mask order) on encoded values `e` at pixel `i`,
+/// each weighted by its mask (feather, Amount, invert and combined components are all in the alpha).
+#[inline]
+fn apply_local_curves(local: &[(&crate::masks::Evaluated, &[Lut1; 3])], i: usize, mut e: [f32; 3], hdr: bool) -> [f32; 3] {
+    for (m, l) in local {
+        let a = m.alpha.data[i];
+        if a > 0.0 {
+            let c = eval_curves(l, e, hdr);
+            e = std::array::from_fn(|k| e[k] + (c[k] - e[k]) * a);
+        }
+    }
+    e
+}
+
 /// How much of the sharpening a pixel gets (0..1) under Masking `masking` (0..1), from its fine
 /// detail `det` (log luminance minus its texture blur): 1 everywhere at 0, only stronger edges
 /// as it rises. The GPU kernel (`finish.wgsl`) computes the same; Alt-drag on Masking shows it
@@ -684,15 +698,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     e = refine_saturation(e0, e, fp.refine_sat);
                 }
             }
-            // --- the masks' local Curves, in mask order, each weighted by its mask (feather, Amount, invert and
-            // combined components are all in the alpha)
-            for (m, l) in &local_curves {
-                let a = m.alpha.data[i];
-                if a > 0.0 {
-                    let c = eval_curves(l, e, hdr);
-                    e = std::array::from_fn(|k| e[k] + (c[k] - e[k]) * a);
-                }
-            }
+            // --- the masks' local Curves, in mask order, each weighted by its mask
+            e = apply_local_curves(&local_curves, i, e, hdr);
             match grain {
                 Some(GrainModel::Value(g)) => {
                     // V1/V2 (frozen): exactly the arithmetic those processes always had
