@@ -88,7 +88,7 @@ impl Stack {
                 (f.clone(), r)
             })
             .collect();
-        let key = crate::hash_of(
+        let key = crate::hash_of((
             entries
                 .iter()
                 .map(|(f, r)| {
@@ -97,7 +97,12 @@ impl Stack {
                     (f.plugin.clone(), build, Value::Object(f.params.clone()).to_string(), analysis)
                 })
                 .collect::<Vec<_>>(),
-        );
+            // the stack runs on the source with its film dust filled in: a change there is a new input
+            info.infrared
+                .as_ref()
+                .filter(|_| s.film_dust.on())
+                .map(|ir| (ir.width, ir.height, s.film_dust.sensitivity.to_bits(), s.film_dust.expand.to_bits())),
+        ));
         Stack { entries, key }
     }
 

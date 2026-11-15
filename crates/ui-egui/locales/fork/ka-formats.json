@@ -91,6 +91,7 @@
   "Go Back to Version {version}": "ვერსიაზე {version} დაბრუნება",
   "Goes into the group “{group}” that exists already.": "მოხვდება არსებულ ჯგუფში „{group}“.",
   "Healed {n} blemishes": "აღდგენილია ლაქა: {n}",
+  "Healed {n} mark{} from the infrared pass": "ინფრაწითელი გავლიდან გასწორებული კვალი: {n}{:.0}",
   "Import {n} Selected": "{n} მონიშნულის იმპორტი",
   "Import {n} into {library}": "{n}-ის იმპორტი {library}-ში",
   "Imported into the profile “{name}”": "იმპორტირებულია პროფილში „{name}“",

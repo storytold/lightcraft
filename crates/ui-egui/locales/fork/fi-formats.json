@@ -75,6 +75,7 @@
   "Go Back to Version {version}": "Palaa versioon {version}",
   "Goes into the group “{group}” that exists already.": "Menee olemassa olevaan ryhmään ”{group}”.",
   "Healed {n} blemishes": "Korjattu {n} näppylää",
+  "Healed {n} mark{} from the infrared pass": "Infrapunakuvasta korjattuja jälkiä: {n}{:.0}",
   "Import {n} Selected": "Tuo {n} valittua",
   "Import {n} into {library}": "Tuo {n} kohteeseen {library}",
   "Imported {n} export preset{}": "Tuotuja vientiesiasetuksia: {n}{:.0}",

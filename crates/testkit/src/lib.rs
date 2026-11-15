@@ -290,6 +290,61 @@ fn escape(s: &str) -> String {
     out
 }
 
+/// A little-endian, uncompressed, 16-bit TIFF of `w`×`h` pixels with `spp` samples each (`px`
+/// gives a pixel's samples), a `Software` tag of `software`, and `ExtraSamples` only when given.
+pub fn tiff16(w: u32, h: u32, spp: u16, software: &str, extra_samples: Option<u16>, px: impl Fn(u32, u32) -> Vec<u16>) -> Vec<u8> {
+    let mut soft = software.as_bytes().to_vec();
+    soft.push(0);
+    let mut entries: Vec<(u16, u16, u32, u32)> = vec![
+        (256, 4, 1, w),
+        (257, 4, 1, h),
+        (258, 3, u32::from(spp), 0),
+        (259, 3, 1, 1),
+        (262, 3, 1, 2),
+        (273, 4, 1, 0),
+        (277, 3, 1, u32::from(spp)),
+        (278, 4, 1, h),
+        (279, 4, 1, w * h * u32::from(spp) * 2),
+        (284, 3, 1, 1),
+        (305, 2, soft.len() as u32, 0),
+    ];
+    if let Some(e) = extra_samples {
+        entries.push((338, 3, 1, u32::from(e)));
+    }
+    entries.sort_by_key(|e| e.0);
+    let ifd_len = 2 + entries.len() * 12 + 4;
+    let bps_at = 8 + ifd_len as u32;
+    let soft_at = bps_at + 2 * u32::from(spp);
+    let strip_at = soft_at + soft.len() as u32;
+    let mut b = b"II*\0\x08\0\0\0".to_vec();
+    b.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, kind, count, value) in entries {
+        let value = match tag {
+            258 => bps_at,
+            273 => strip_at,
+            305 => soft_at,
+            _ => value,
+        };
+        b.extend_from_slice(&tag.to_le_bytes());
+        b.extend_from_slice(&kind.to_le_bytes());
+        b.extend_from_slice(&count.to_le_bytes());
+        b.extend_from_slice(&value.to_le_bytes());
+    }
+    b.extend_from_slice(&[0; 4]);
+    for _ in 0..spp {
+        b.extend_from_slice(&16u16.to_le_bytes());
+    }
+    b.extend_from_slice(&soft);
+    for y in 0..h {
+        for x in 0..w {
+            for v in px(x, y).iter().take(spp as usize) {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+    b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

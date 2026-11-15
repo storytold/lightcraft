@@ -92,6 +92,10 @@ pub(crate) fn run(
                 let f = plan.filter_frame;
                 let same = (f.x, f.y, f.full_w as usize, f.full_h as usize, sampled.width, sampled.height) == (0, 0, nw, nh, nw, nh);
                 let mut img = if same { sampled.clone() } else { plan.whole_frame.sample(src, nw, nh) };
+                if !same {
+                    // (`sampled` had its film dust filled in by the render; a fresh sample needs it too)
+                    crate::film_dust::stage(&mut img, src, info, &plan.settings, &plan.whole_frame);
+                }
                 let mut w = Vec::new();
                 plugin_filters::apply_source(stack, &mut img, lcc_filters::FrameInfo::whole(u32_of(nw), u32_of(nh)), false, &mut w);
                 let img = Arc::new(img);

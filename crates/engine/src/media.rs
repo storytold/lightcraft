@@ -431,13 +431,11 @@ impl SourceRef {
                 // the output's resolution limit and aliases what is finer
                 let image = lcc_raster::resample::fit(&from.image, *max_edge, *max_edge, lcc_raster::resample::Filter::Lanczos3);
                 // the transparency is fitted with the pixels (the same size and filter)
-                let info = from.info.clone().map(|i| SourceInfo {
-                    alpha: i.alpha.as_ref().map(|a| {
-                        let a = lcc_raster::resample::resize(a, image.width, image.height, lcc_raster::resample::Filter::Lanczos3);
-                        Arc::new(a)
-                    }),
-                    ..i
-                });
+                let fitted = |p: &Arc<lcc_raster::Plane>| {
+                    Arc::new(lcc_raster::resample::resize(p, image.width, image.height, lcc_raster::resample::Filter::Lanczos3))
+                };
+                let info =
+                    from.info.clone().map(|i| SourceInfo { alpha: i.alpha.as_ref().map(fitted), infrared: i.infrared.as_ref().map(fitted), ..i });
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, info, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,

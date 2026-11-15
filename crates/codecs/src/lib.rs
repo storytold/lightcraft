@@ -125,6 +125,11 @@ pub struct Decoded {
     pub image: Rgb32f,
     /// Straight (unassociated) alpha 0..1, when the source has transparency.
     pub alpha: Option<Plane>,
+    /// A film scanner's infrared pass (a VueScan or SilverFast "RGBI" TIFF: four 16-bit samples
+    /// a pixel, the fourth lit by the scanner's infrared lamp), 0..1 at `image`'s size: bright
+    /// where the film is clear, dark under dust, hairs and scratches, which block infrared while
+    /// the dyes pass it. Not transparency: such a file decodes as an opaque RGB image.
+    pub infrared: Option<Plane>,
     pub space: SourceSpace,
     /// Bits per sample in the file (8, 16, 32, …).
     pub bit_depth: u8,

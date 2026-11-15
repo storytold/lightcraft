@@ -68,6 +68,7 @@
   "Go Back to Version {version}": "バージョン {version} に戻す",
   "Goes into the group “{group}” that exists already.": "既存のグループ「{group}」に入ります。",
   "Healed {n} blemishes": "{n} か所のシミを修復しました",
+  "Healed {n} mark{} from the infrared pass": "赤外線パスから修復した跡: {n}{:.0}",
   "Import {n} Selected": "選択した {n} 枚を読み込み",
   "Import {n} into {library}": "{n} 枚を {library} に読み込み",
   "Imported {n} export preset{}": "書き出しプリセットを {n} 件読み込みました{:.0}",

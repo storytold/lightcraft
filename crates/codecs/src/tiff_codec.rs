@@ -30,7 +30,17 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
 
     let (model, n_color, n_samples, bits) = layout(ct, compression, planar)?;
     check_samples(w, h, n_samples, bits, opts)?;
-    let has_alpha = n_samples > n_color && !matches!(ct, ColorType::Palette(_));
+    // A film scanner's RGBI file: RGB plus the infrared pass as a fourth 16-bit sample, declared
+    // as nothing (no ExtraSamples), by VueScan or SilverFast. Read as alpha it would make the
+    // photo see-through and every dust speck a hole; it is kept as [`crate::Decoded::infrared`].
+    let software = tag_bytes(&mut d, Tag::Software).map(|v| String::from_utf8_lossy(&v).trim_end_matches('\0').trim().to_string());
+    let infrared_layout = model == Model::Rgb
+        && n_color == 3
+        && n_samples == 4
+        && extra.is_empty()
+        && bits == 16
+        && software.as_deref().is_some_and(|s| s.starts_with("VueScan") || s.starts_with("SilverFast"));
+    let has_alpha = !infrared_layout && n_samples > n_color && !matches!(ct, ColorType::Palette(_));
     let premultiplied = has_alpha && extra.first() == Some(&1);
 
     // `read_image` reads only the first plane of a planar image (#2462); this reads them all, or
@@ -89,13 +99,14 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     // WhiteIsZero needs nothing here: the `tiff` crate inverts those samples as it reads them (and
     // refuses WhiteIsZero layouts it can't invert), so inverting again would show a negative.
 
+    let infrared = if infrared_layout { channel_plane(&buf, wu, hu, n_samples, 3) } else { None };
     // Drop extra samples beyond colour + one alpha.
     let keep = n_color + has_alpha as usize;
     if n_samples != keep {
         buf = select_channels(buf, n, n_samples, keep);
     }
     let raw = Raw { width: wu, height: hu, model, alpha: has_alpha, premultiplied, buf, bit_depth };
-    let meta = Meta { icc, xmp, orientation, ..Default::default() };
+    let meta = Meta { icc, xmp, orientation, infrared, ..Default::default() };
     finish(F, raw, meta, (w, h), opts)
 }
 
@@ -251,6 +262,20 @@ fn interleave(buf: Buf, n: usize, s: usize) -> Buf {
         Buf::U16(v) => Buf::U16(go(v, n, s)),
         Buf::F32(v) => Buf::F32(go(v, n, s)),
     }
+}
+
+/// Sample `idx` of every pixel of an interleaved `s`-sample buffer as a plane (0..1), or `None`
+/// when the buffer is short or the plane can't be allocated.
+fn channel_plane(buf: &Buf, w: usize, h: usize, s: usize, idx: usize) -> Option<lcc_raster::Plane> {
+    let n = w.checked_mul(h)?;
+    if idx >= s || buf.len() < n.checked_mul(s)? {
+        return None;
+    }
+    let mut p = lcc_raster::Plane::try_new(w, h).ok()?;
+    for (i, o) in p.data.iter_mut().enumerate() {
+        *o = buf.norm(i * s + idx).clamp(0.0, 1.0);
+    }
+    Some(p)
 }
 
 fn select_channels(buf: Buf, n: usize, s: usize, keep: usize) -> Buf {

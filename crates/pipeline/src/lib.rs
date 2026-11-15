@@ -31,6 +31,7 @@ pub mod cull;
 pub mod curve;
 pub mod depth_model;
 pub mod dust;
+pub mod film_dust;
 pub mod finish;
 pub mod genpatch;
 pub mod geometry;
@@ -146,6 +147,10 @@ pub struct SourceInfo {
     /// their colour (`lcc_codecs::unflatten`) and carries this plane through the geometry
     /// beside the render ([`render_alpha`], issue #2976).
     pub alpha: Option<Arc<Plane>>,
+    /// A film scanner's infrared pass ([`lcc_codecs::Decoded::infrared`]), the source's size and
+    /// orientation: dark under dust, hairs and scratches. Never rendered; Find Film Dust reads it
+    /// through the geometry ([`render_plane`]).
+    pub infrared: Option<Arc<Plane>>,
     /// The photo's generative fill patches ([`genpatch`]), read from the library by the engine.
     pub generated: Option<genpatch::GenStore>,
     /// Areas content-aware fill never copies from (faces): `[x0, y0, x1, y1]` normalized to the
@@ -205,6 +210,7 @@ impl Default for SourceInfo {
             colorimetric: false,
             rendered_rgb: false,
             alpha: None,
+            infrared: None,
             generated: None,
             avoid: None,
             pixels: None,
@@ -723,6 +729,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         src_long,
         // the Source plug-in filters run before this stage
         source_filters.key,
+        // and film dust removal before them
+        film_dust_key(info, s),
     ));
     // a generated patch whose file appears (or goes) changes the image
     let shown: Vec<bool> = genpatch::shown(&s.spots, info.generated.as_ref()).iter().map(Option::is_some).collect();
@@ -738,6 +746,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         local_tone::enabled(info, s),
         src_long,
         source_filters.key,
+        film_dust_key(info, s),
         &shown,
         format!("{:?}", info.avoid),
     ));
@@ -985,16 +994,33 @@ pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, 
 /// output size. Develop settings never touch it; areas the warp brings in from outside the source
 /// are transparent. `None` when the source has no alpha or a plane that does not match `src`.
 pub fn render_alpha(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Option<Plane> {
-    let alpha = info.alpha.as_deref().filter(|a| a.width == src.width && a.height == src.height)?;
+    render_plane(src, info.alpha.as_deref()?, info, s, req)
+}
+
+/// A plane of the source's size (its alpha, a scanner's infrared pass) through the same geometry
+/// as [`render`] of the same arguments (see [`render_alpha`]). `None` when the plane is not the
+/// size of `src`.
+pub fn render_plane(src: &Rgb32f, plane: &Plane, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Option<Plane> {
+    if plane.width != src.width || plane.height != src.height {
+        return None;
+    }
     let effective = s.effective();
     let rendition = settings_for(&effective, req);
     let plan = plan(src, info, &rendition, req);
-    let a = plan.frame.sample_alpha(alpha, plan.w, plan.h);
+    let a = plan.frame.sample_alpha(plane, plan.w, plan.h);
     // (a grown window is cut back to the request, as in `render_impl`)
     Some(match plan.keep {
         Some(k) => a.crop(k.x, k.y, k.w, k.h),
         None => a,
     })
+}
+
+/// What film dust removal does to a render: nothing without the pass or while off, else its settings.
+fn film_dust_key(info: &SourceInfo, s: &DevelopSettings) -> u64 {
+    match info.infrared.as_ref().filter(|_| s.film_dust.on()) {
+        Some(ir) => hash_of((Arc::as_ptr(ir) as usize, ir.width, ir.height, s.film_dust.sensitivity.to_bits(), s.film_dust.expand.to_bits())),
+        None => 0,
+    }
 }
 
 enum Src<'a> {
@@ -1035,6 +1061,15 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         None => Arc::new(frame.sample(src_img, w, h)),
     };
     lap("sample", &mut t);
+    // film dust: the infrared pass's marks filled in before anything reads the pixels
+    let sampled = if s.film_dust.on() && info.infrared.is_some() {
+        let mut img = (*sampled).clone();
+        film_dust::stage(&mut img, src_img, info, s, frame);
+        lap("film dust", &mut t);
+        Arc::new(img)
+    } else {
+        sampled
+    };
 
     // Source plug-in filters: cached by their stack; a draft that can't reuse a result runs them
     // on a reduced copy (its key marked, so a full render never takes it, nor what follows it)
@@ -1136,9 +1171,18 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     };
     lap("histogram", &mut t);
     let mut image = image;
-    let mask = overlay_alpha(req.overlay, &plan, &prep);
+    let mask = if matches!(req.overlay, Overlay::FilmDust | Overlay::Infrared) {
+        film_dust::mask_for(info, src_img, s, frame, w, h)
+    } else {
+        overlay_alpha(req.overlay, &plan, &prep)
+    };
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
+    if req.overlay == Overlay::Infrared
+        && let Some(ir) = film_dust::infrared_for(info, frame, w, h)
+    {
+        film_dust::paint_infrared(&mut image, &ir, mask.as_ref());
+    }
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
