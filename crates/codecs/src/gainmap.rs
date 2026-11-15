@@ -199,6 +199,51 @@ mod tests {
         assert!(matches!(r, Err(Error::Encode(m)) if m.contains("65535")));
     }
 
+    fn encode_fixture(base: &EncodeImage<'_>, gain: &GainImage, meta: &GainMapMeta, sub: ChromaSubsampling) -> Result<Vec<u8>> {
+        encode_jpeg(base, gain, meta, 90, sub, &EncodeMeta::default())
+    }
+
+    #[test]
+    fn gain_map_encoder_rejects_malformed_buffers_and_metadata() {
+        let base = [0u8; 3];
+        let rgb = EncodeImage::new(1, 1, 3, Samples::U8(&base));
+        let gain = GainImage { width: 1, height: 1, channels: 1, data: vec![128] };
+
+        let short_base = EncodeImage::new(1, 1, 4, Samples::U8(&base));
+        assert!(
+            matches!(encode_fixture(&short_base, &gain, &GainMapMeta::default(), ChromaSubsampling::S444), Err(Error::Encode(m)) if m.contains("RGB base"))
+        );
+
+        let short_gain = GainImage { data: Vec::new(), ..gain.clone() };
+        assert!(
+            matches!(encode_fixture(&rgb, &short_gain, &GainMapMeta::default(), ChromaSubsampling::S444), Err(Error::Encode(m)) if m.contains("malformed"))
+        );
+
+        let wrong_metadata = GainMapMeta { multichannel: true, ..GainMapMeta::default() };
+        assert!(matches!(encode_fixture(&rgb, &gain, &wrong_metadata, ChromaSubsampling::S444), Err(Error::Encode(m)) if m.contains("metadata")));
+    }
+
+    #[test]
+    fn gain_map_jpeg_writer_preserves_supported_base_layouts_and_subsampling() {
+        let gain = GainImage { width: 1, height: 1, channels: 1, data: vec![128] };
+        let meta = GainMapMeta::default();
+        let rgb = [10u8, 20, 30];
+        let rgba = [10u8, 20, 30, 255];
+
+        for (base, sub) in [
+            (EncodeImage::new(1, 1, 3, Samples::U8(&rgb)), ChromaSubsampling::S444),
+            (EncodeImage::new(1, 1, 3, Samples::U8(&rgb)), ChromaSubsampling::S422),
+            (EncodeImage::new(1, 1, 3, Samples::U8(&rgb)), ChromaSubsampling::S420),
+            (EncodeImage::new(1, 1, 4, Samples::U8(&rgba)), ChromaSubsampling::S420),
+        ] {
+            let encoded = encode_fixture(&base, &gain, &meta, sub).unwrap();
+            assert!(is_gain_map_jpeg(&encoded));
+            let decoded = crate::decode(&encoded, crate::DecodeOptions::default()).unwrap();
+            assert_eq!((decoded.width, decoded.height), (1, 1));
+            assert!(read_jpeg(&encoded).is_some());
+        }
+    }
+
     #[test]
     fn jpeg_round_trip_and_container_structure() {
         let (w, h) = (96, 64);
