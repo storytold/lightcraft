@@ -25,6 +25,16 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     let (w, h) = craft_image_codecs::probe_size(bytes).map_err(err)?;
     Ok((w, h, 1))
 }
+// Match craft-video's AV1 store: 128-sample superblocks plus 160 samples of edge padding,
+// three u16 planes, eight references, the current picture, and at most eight workers + two
+// in-flight pictures. Keep a hard byte ceiling even when the caller permits many pixels.
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+fn picture_store_budget(width: u32, height: u32) -> u64 {
+    let padded = |n: u32| u64::from(n).div_ceil(128) * 128 + 160;
+    let cap = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 1 << 30 };
+    padded(width).saturating_mul(padded(height)).saturating_mul(3 * 2 * (8 + 1 + 8 + 2)).min(cap)
+}
+
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
@@ -36,7 +46,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
             max_width: u32::MAX,
             max_height: u32::MAX,
             max_pixels: opts.max_pixels,
-            max_alloc: opts.max_pixels.saturating_mul(32),
+            max_alloc: picture_store_budget(w, h),
         },
         keep_orientation: false,
     };
@@ -52,7 +62,10 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let hint = img.cicp.and_then(|c| SourceSpace::from_cicp(c.primaries, c.transfer));
     let raw = Raw { width: w as usize, height: h as usize, model: Model::Rgb, alpha: img.layout().has_alpha(), premultiplied: false, buf, bit_depth };
     let meta = Meta { icc: img.icc, exif: img.meta.exif, xmp: img.meta.xmp, orientation: Some(1), hint, ..Default::default() };
-    finish(F, raw, meta, (w, h), opts)
+    let mut decoded = finish(F, raw, meta, (w, h), opts)?;
+    // AV1 stores integer samples even when HDR transfer decoding produces linear float pixels.
+    decoded.float = false;
+    Ok(decoded)
 }
 
 #[cfg(all(test, feature = "avif", not(target_arch = "wasm32")))]
@@ -68,8 +81,18 @@ mod tests {
         let decoded = crate::decode(FIXTURE, DecodeOptions::default()).unwrap();
         assert_eq!((decoded.source_width, decoded.source_height), (33, 17));
         assert_eq!(decoded.bit_depth, 8);
-        let opts = DecodeOptions { max_pixels: 100, ..DecodeOptions::default() };
+        let exact = DecodeOptions { max_pixels: 33 * 17, ..DecodeOptions::default() };
+        let decoded = crate::decode(FIXTURE, exact).unwrap();
+        assert_eq!((decoded.source_width, decoded.source_height), (33, 17));
+        assert!(!decoded.float);
+        let opts = DecodeOptions { max_pixels: 33 * 17 - 1, ..DecodeOptions::default() };
         assert!(matches!(crate::decode(FIXTURE, opts), Err(Error::TooLarge(..))));
+    }
+    #[test]
+    fn picture_store_budget_accounts_for_padding_and_stays_bounded() {
+        assert_eq!(picture_store_budget(33, 17), 288 * 288 * 6 * 19);
+        let cap = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 1 << 30 };
+        assert_eq!(picture_store_budget(u32::MAX, u32::MAX), cap);
     }
     #[test]
     fn hdr_avif_round_trips_highlights_through_public_decoder() {
@@ -78,6 +101,7 @@ mod tests {
             let bytes = crate::encode::encode_avif_hdr(16, 16, &pixels, 95, 10, &crate::encode::EncodeMeta::default(), transfer).unwrap();
             let decoded = crate::decode(&bytes, DecodeOptions::default()).unwrap();
             assert_eq!(decoded.bit_depth, 10);
+            assert!(!decoded.float, "AV1 source samples are integer for {transfer:?}");
             assert!(decoded.image.data.iter().any(|pixel| pixel[0] > 1.0), "HDR highlights were lost");
         }
     }
