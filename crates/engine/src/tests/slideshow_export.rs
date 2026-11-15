@@ -239,8 +239,22 @@ fn video_in_webm_with_a_fade_colour() {
     assert_eq!(seg + 12 + size as usize, d.len());
 }
 
+fn wait_timeout_for_instrumentation(instrumented: bool) -> Duration {
+    Duration::from_secs(if instrumented { 600 } else { 120 })
+}
+
+fn wait_timeout() -> Duration {
+    wait_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+}
+
+#[test]
+fn slideshow_export_wait_budget_only_expands_for_llvm_coverage_runs() {
+    assert_eq!(wait_timeout_for_instrumentation(false), Duration::from_secs(120));
+    assert_eq!(wait_timeout_for_instrumentation(true), Duration::from_secs(600));
+}
+
 fn wait_for(s: &Session) -> Value {
-    let deadline = Instant::now() + Duration::from_secs(120);
+    let deadline = Instant::now() + wait_timeout();
     loop {
         let run = s.slideshow_export.clone().unwrap();
         if !run.running() {

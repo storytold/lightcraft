@@ -8,8 +8,7 @@
 
 use lightcraft_geom::Orientation;
 
-use crate::datetime::DateTime;
-use crate::{Gps, Metadata};
+use crate::{DateTime, Gps, Metadata};
 
 /// Maximum box nesting depth to avoid recursion attacks.
 const MAX_DEPTH: usize = 8;

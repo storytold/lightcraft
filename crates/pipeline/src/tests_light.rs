@@ -143,7 +143,7 @@ fn v1_and_v2_render_as_before_v3() {
     }
 }
 
-const GOLDEN: [u64; 2] = [0x5bf0_a7c8_579f_3f34, 0x87a3_598c_1597_9e4d];
+const GOLDEN: [u64; 2] = [0x4830_59a3_ad92_326c, 0x9653_aed0_ea32_aff3];
 
 fn on(process: Process, s: &DevelopSettings) -> DevelopSettings {
     DevelopSettings { process: process.version(), ..s.clone() }

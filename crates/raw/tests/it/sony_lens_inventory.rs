@@ -292,7 +292,7 @@ impl Drop for Scratch {
 /// A small Sony CFA file with a distortion setting (a lens record), or, `unsupported`, the packed 12-bit ARW variant
 /// the decoder refuses as unsupported.
 fn synthetic_arw(unsupported: bool) -> Vec<u8> {
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags as t};
     let mut raw = IfdBuilder::new();
     raw.set(t::MAKE, Value::Ascii("SONY".into()));
     raw.set(t::MODEL, Value::Ascii("ILCE-7CR".into()));

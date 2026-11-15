@@ -531,6 +531,7 @@ fn flattened_keys_stay_within_the_cumulative_budget() {
     assert!(d.properties_truncated, "the map says it is not a complete inventory");
 }
 
+/// A small packet keeps every property and is not marked truncated.
 #[test]
 fn a_packet_within_the_budget_keeps_a_complete_inventory() {
     let d = parse_xmp(r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:title="A"/></rdf:RDF>"#).unwrap();
@@ -547,6 +548,84 @@ fn a_later_empty_location_keeps_an_earlier_city() {
         r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
         r#"<place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationShown></rdf:Description>"#,
         r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li></rdf:li></rdf:Bag></place:LocationShown></rdf:Description>"#,
+        r#"</rdf:RDF>"#
+    );
+    let parsed = parse_xmp(packet).expect("valid XMP");
+    assert!(parsed.has_location_metadata(), "the earlier city is still in the packet");
+    let city = parsed
+        .values
+        .get("Iptc4xmpExt:LocationShown")
+        .and_then(|value| value.items().first())
+        .and_then(|item| item.field("Iptc4xmpExt:City"))
+        .and_then(XmpValue::text);
+    assert_eq!(city, Some("Rome"));
+}
+
+/// GPS nested in a struct array item flattens to the item's (empty) text; the tree inventory still
+/// names it.
+#[test]
+fn gps_inside_a_bag_item_counts_as_location() {
+    let packet = concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:exif="http://ns.adobe.com/exif/1.0/" xmlns:o="urn:other">"#,
+        r#"<rdf:Description><o:Shots><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<exif:GPSLatitude>37,46.494N</exif:GPSLatitude></rdf:li></rdf:Bag></o:Shots></rdf:Description></rdf:RDF>"#
+    );
+    let parsed = parse_xmp(packet).expect("valid XMP");
+    assert!(parsed.properties.keys().all(|key| !key.contains("GPS")), "flattening drops the item's fields");
+    assert!(parsed.names_location);
+    assert!(parsed.has_location_metadata());
+}
+
+/// A location struct nested in another struct is judged by its own fields, not by unrelated text
+/// next to it.
+#[test]
+fn a_nested_location_is_judged_by_its_own_fields() {
+    let packet = |city: &str| {
+        format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" xmlns:o="urn:other"><rdf:Description><o:Work rdf:parseType="Resource"><o:Title>Bridge</o:Title><place:LocationCreated><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City>{city}</place:City></rdf:li></rdf:Bag></place:LocationCreated></o:Work></rdf:Description></rdf:RDF>"#
+        )
+    };
+    assert!(!parse_xmp(&packet("")).expect("valid XMP").has_location_metadata(), "a blank place beside a title");
+    assert!(parse_xmp(&packet("Rome")).expect("valid XMP").has_location_metadata());
+}
+
+/// A place inside a struct array item has no flattened key of its own; the tree inventory finds
+/// it, and a blank one there still doesn't count.
+#[test]
+fn a_location_inside_an_array_item_counts_unless_blank() {
+    let packet = |city: &str| {
+        format!(
+            r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" xmlns:o="urn:other"><rdf:Description><o:Shots><rdf:Bag><rdf:li rdf:parseType="Resource"><place:LocationCreated><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City>{city}</place:City></rdf:li></rdf:Bag></place:LocationCreated></rdf:li></rdf:Bag></o:Shots></rdf:Description></rdf:RDF>"#
+        )
+    };
+    let with_city = parse_xmp(&packet("Rome")).expect("valid XMP");
+    assert!(with_city.properties.keys().all(|key| !key.contains("Location")), "flattening drops the item's fields");
+    assert!(with_city.has_location_metadata());
+    assert!(!parse_xmp(&packet(" ")).expect("valid XMP").has_location_metadata(), "a blank place is no location");
+}
+
+/// A struct repeated in one description keeps its first copy in `values` when that copy has text
+/// elsewhere; a place only the later copy names must still be found.
+#[test]
+fn a_place_in_a_later_repeated_struct_counts() {
+    let packet = concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" xmlns:o="urn:other"><rdf:Description>"#,
+        r#"<o:Work rdf:parseType="Resource"><o:Title>Bridge</o:Title><place:LocationCreated><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City></place:City></rdf:li></rdf:Bag></place:LocationCreated></o:Work>"#,
+        r#"<o:Work rdf:parseType="Resource"><place:LocationCreated><rdf:Bag><rdf:li rdf:parseType="Resource"><place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationCreated></o:Work>"#,
+        r#"</rdf:Description></rdf:RDF>"#
+    );
+    assert!(parse_xmp(packet).expect("valid XMP").has_location_metadata());
+}
+
+/// The same `rdf:Description` can repeat `LocationShown`; a later blank item must not replace the
+/// city of the earlier one (its `rdf:li` flattens to empty text, so only the structured value has it).
+#[test]
+fn a_repeated_empty_location_in_one_description_keeps_the_city() {
+    let packet = concat!(
+        r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:place="http://iptc.org/std/Iptc4xmpExt/2008-02-29/">"#,
+        r#"<rdf:Description><place:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource">"#,
+        r#"<place:City>Rome</place:City></rdf:li></rdf:Bag></place:LocationShown>"#,
+        r#"<place:LocationShown><rdf:Bag><rdf:li></rdf:li></rdf:Bag></place:LocationShown></rdf:Description>"#,
         r#"</rdf:RDF>"#
     );
     let parsed = parse_xmp(packet).expect("valid XMP");
@@ -591,6 +670,15 @@ fn malformed_capture_time_without_fallback_is_not_projected() {
     let parsed = parse_xmp(packet).unwrap();
     assert_eq!(parsed.metadata.capture_time, None);
     assert_eq!(parsed.properties["exif:DateTimeOriginal"], vec!["2026-01-01T".to_string()]);
+}
+
+#[test]
+fn a_start_tag_with_thousands_of_namespace_declarations_is_refused() {
+    let decls: String = (0..2000).map(|i| format!(" xmlns:p{i}=\"urn:x{i}\"")).collect();
+    let xmp = format!(
+        "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"><rdf:Description{decls} p1:a=\"1\"/></rdf:RDF></x:xmpmeta>"
+    );
+    assert!(matches!(parse_xmp(&xmp), Err(XmpError::TooComplex)));
 }
 
 #[test]
