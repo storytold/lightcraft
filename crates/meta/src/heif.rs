@@ -245,3 +245,268 @@ mod upstream_tests {
         assert_eq!(crate::extract(&file).capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-18T13:00:00-05:00"));
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::arithmetic_side_effects, clippy::indexing_slicing, dead_code)]
+mod location_tests {
+    use craft_heif::items::MAX_ITEM;
+    fn bx(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+        let mut v = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(kind);
+        v.extend_from_slice(payload);
+        v
+    }
+
+    fn full(kind: &[u8; 4], version: u8, payload: &[u8]) -> Vec<u8> {
+        bx(kind, &[&[version, 0, 0, 0][..], payload].concat())
+    }
+
+    fn put(v: &mut Vec<u8>, x: u64, size: u8) {
+        match size {
+            0 => assert_eq!(x, 0, "a value needs a field"),
+            2 => v.extend_from_slice(&(x as u16).to_be_bytes()),
+            4 => v.extend_from_slice(&(x as u32).to_be_bytes()),
+            8 => v.extend_from_slice(&x.to_be_bytes()),
+            _ => panic!("no {size}-byte fields"),
+        }
+    }
+
+    /// An EXIF item as HEIF stores it: the 4-byte offset, `skip` (which the offset jumps), the TIFF.
+    fn exif_item(skip: &[u8], tiff: &[u8]) -> Vec<u8> {
+        [&(skip.len() as u32).to_be_bytes()[..], skip, tiff].concat()
+    }
+
+    fn tiff_with(model: &str) -> Vec<u8> {
+        crate::write_exif(&crate::Metadata { model: Some(model.into()), ..Default::default() })
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Store {
+        File,
+        Idat,
+    }
+
+    struct Item {
+        id: u32,
+        kind: &'static [u8; 4],
+        /// `mime` items: content type and content encoding.
+        mime: (&'static str, &'static str),
+        data: Vec<u8>,
+        store: Store,
+        /// Extents the data is split into.
+        extents: usize,
+    }
+
+    /// A HEIF file for the tests: `ftyp`, `meta` (`hdlr`, `pitm`, `iinf`, `iref`, `iloc`, `idat`)
+    /// and `mdat`.
+    struct Heif {
+        ftyp: Vec<u8>,
+        primary: u32,
+        items: Vec<Item>,
+        /// `iref` references: type, from, to.
+        refs: Vec<(&'static [u8; 4], u32, Vec<u32>)>,
+        /// `iloc` version and its offset, length, base-offset and index field sizes.
+        iloc: (u8, [u8; 4]),
+        /// 32-bit item ids: `infe` version 3, `pitm` and `iref` version 1 (`iloc` must be version 2).
+        wide: bool,
+    }
+
+    impl Heif {
+        /// A primary HEVC picture, item 1 (its bytes don't matter here).
+        fn new() -> Heif {
+            let picture = Item { id: 1, kind: b"hvc1", mime: ("", ""), data: b"coded picture".to_vec(), store: Store::File, extents: 1 };
+            Heif { ftyp: b"heic\0\0\0\0mif1heic".to_vec(), primary: 1, items: vec![picture], refs: Vec::new(), iloc: (1, [4, 4, 0, 0]), wide: false }
+        }
+
+        fn item(mut self, id: u32, kind: &'static [u8; 4], data: Vec<u8>, store: Store, extents: usize) -> Heif {
+            self.items.push(Item { id, kind, mime: ("", ""), data, store, extents });
+            self
+        }
+
+        fn xmp(mut self, id: u32, mime: (&'static str, &'static str), data: Vec<u8>) -> Heif {
+            self.items.push(Item { id, kind: b"mime", mime, data, store: Store::File, extents: 1 });
+            self
+        }
+
+        fn cdsc(self, from: u32, to: &[u32]) -> Heif {
+            self.iref(b"cdsc", from, to)
+        }
+
+        fn iref(mut self, kind: &'static [u8; 4], from: u32, to: &[u32]) -> Heif {
+            self.refs.push((kind, from, to.to_vec()));
+            self
+        }
+
+        fn meta(&self, mdat_at: usize) -> Vec<u8> {
+            let id = |v: &mut Vec<u8>, id: u32| put(v, u64::from(id), if self.wide { 4 } else { 2 });
+            let mut hdlr = vec![0u8; 4];
+            hdlr.extend_from_slice(b"pict");
+            hdlr.extend_from_slice(&[0; 13]);
+            let mut pitm = Vec::new();
+            id(&mut pitm, self.primary);
+            let mut iinf = Vec::new();
+            put(&mut iinf, self.items.len() as u64, if self.wide { 4 } else { 2 });
+            for it in &self.items {
+                let mut e = Vec::new();
+                id(&mut e, it.id);
+                e.extend_from_slice(&[0, 0]); // not protected
+                e.extend_from_slice(it.kind);
+                e.push(0); // no name
+                if it.kind == b"mime" {
+                    e.extend_from_slice(it.mime.0.as_bytes());
+                    e.push(0);
+                    e.extend_from_slice(it.mime.1.as_bytes());
+                    e.push(0);
+                }
+                iinf.extend(full(b"infe", if self.wide { 3 } else { 2 }, &e));
+            }
+            let mut iref = Vec::new();
+            for (kind, from, to) in &self.refs {
+                let mut r = Vec::new();
+                id(&mut r, *from);
+                put(&mut r, to.len() as u64, 2);
+                to.iter().for_each(|t| id(&mut r, *t));
+                iref.extend(bx(kind, &r));
+            }
+            let (version, [o, l, b, i]) = self.iloc;
+            let mut iloc = vec![o << 4 | l, b << 4 | i];
+            put(&mut iloc, self.items.len() as u64, if version == 2 { 4 } else { 2 });
+            let (mut in_file, mut in_idat) = (mdat_at as u64, 0u64);
+            let mut idat = Vec::new();
+            for it in &self.items {
+                put(&mut iloc, u64::from(it.id), if version == 2 { 4 } else { 2 });
+                let at = match it.store {
+                    Store::File => &mut in_file,
+                    Store::Idat => &mut in_idat,
+                };
+                if version > 0 {
+                    put(&mut iloc, if it.store == Store::Idat { 1 } else { 0 }, 2);
+                }
+                put(&mut iloc, 0, 2); // this file
+                let base = if b > 0 { *at } else { 0 };
+                put(&mut iloc, base, b);
+                let chunk = it.data.len().div_ceil(it.extents.max(1)).max(1);
+                let pieces: Vec<&[u8]> = it.data.chunks(chunk).collect();
+                put(&mut iloc, pieces.len() as u64, 2);
+                for piece in pieces {
+                    if version > 0 {
+                        put(&mut iloc, 0, i);
+                    }
+                    put(&mut iloc, *at - base, o);
+                    put(&mut iloc, piece.len() as u64, l);
+                    *at += piece.len() as u64;
+                }
+                if it.store == Store::Idat {
+                    idat.extend_from_slice(&it.data);
+                }
+            }
+            let ref_version = if self.wide { 1 } else { 0 };
+            let boxes = [
+                full(b"hdlr", 0, &hdlr),
+                full(b"pitm", ref_version, &pitm),
+                full(b"iinf", ref_version, &iinf),
+                full(b"iref", ref_version, &iref),
+                full(b"iloc", version, &iloc),
+                bx(b"idat", &idat),
+            ];
+            full(b"meta", 0, &boxes.concat())
+        }
+
+        fn build(&self) -> Vec<u8> {
+            let ftyp = bx(b"ftyp", &self.ftyp);
+            let mdat_at = ftyp.len() + self.meta(0).len() + 8;
+            let mdat: Vec<u8> = self.items.iter().filter(|i| i.store == Store::File).flat_map(|i| i.data.iter().copied()).collect();
+            [ftyp, self.meta(mdat_at), bx(b"mdat", &mdat)].concat()
+        }
+    }
+    fn tiff_at(latitude: f64) -> Vec<u8> {
+        crate::write_exif(&crate::Metadata { gps: Some(crate::Gps { latitude, longitude: 2.0, altitude: None }), ..Default::default() })
+    }
+
+    /// Export's "remove location" check sees GPS anywhere in a HEIF's metadata, not only in the
+    /// photo's own first EXIF (#693 review): a thumbnail's EXIF, the primary image's second EXIF
+    /// item, an XMP item. What it can't read counts as a location, so the original isn't copied
+    /// out on a guess.
+    #[test]
+    fn a_location_anywhere_in_the_metadata_is_seen() {
+        let plain = tiff_with("Primary");
+        let thumb = |h: Heif| h.item(2, b"hvc1", b"thumbnail".to_vec(), Store::File, 1);
+        // only the thumbnail's EXIF has GPS
+        let f = thumb(Heif::new())
+            .item(10, b"Exif", exif_item(&[], &plain), Store::File, 1)
+            .item(11, b"Exif", exif_item(&[], &tiff_at(1.0)), Store::File, 1)
+            .cdsc(10, &[1])
+            .cdsc(11, &[2])
+            .build();
+        assert_eq!(crate::extract(&f).gps, None, "the photo's own EXIF has none");
+        assert!(crate::embeds_location(&f), "thumbnail");
+        // the primary image's second EXIF item has it
+        let f = Heif::new()
+            .item(10, b"Exif", exif_item(&[], &plain), Store::File, 1)
+            .item(11, b"Exif", exif_item(&[], &tiff_at(1.0)), Store::File, 1)
+            .cdsc(10, &[1])
+            .cdsc(11, &[1])
+            .build();
+        assert_eq!(crate::extract(&f).gps, None);
+        assert!(crate::embeds_location(&f), "second EXIF item");
+        // a thumbnail's XMP has it
+        let rdf = ("application/rdf+xml", "");
+        let xmp = crate::write_xmp(
+            &crate::Metadata { gps: Some(crate::Gps { latitude: 1.0, longitude: 2.0, altitude: None }), ..Default::default() },
+            None,
+        );
+        let f = thumb(Heif::new())
+            .item(10, b"Exif", exif_item(&[], &plain), Store::File, 1)
+            .cdsc(10, &[1])
+            .xmp(20, rdf, xmp.into_bytes())
+            .cdsc(20, &[2])
+            .build();
+        assert!(crate::embeds_location(&f), "thumbnail XMP");
+        // no location anywhere
+        let f = thumb(Heif::new())
+            .item(10, b"Exif", exif_item(&[], &plain), Store::File, 1)
+            .item(11, b"Exif", exif_item(&[], &tiff_with("Thumbnail")), Store::File, 1)
+            .cdsc(10, &[1])
+            .cdsc(11, &[2])
+            .build();
+        assert!(!crate::embeds_location(&f));
+        // unsure counts as yes: a compressed XMP item, an EXIF item cut off by the end of the file,
+        // one larger than the reader takes, more items than it looks at
+        let f = Heif::new().xmp(20, ("application/rdf+xml", "deflate"), b"compressed".to_vec()).build();
+        assert!(crate::embeds_location(&f), "compressed XMP");
+        let mut f = Heif::new().item(10, b"Exif", exif_item(&[], &plain), Store::File, 1).build();
+        f.truncate(f.len() - 1);
+        assert!(crate::embeds_location(&f), "cut off");
+        let f = Heif::new().item(10, b"Exif", exif_item(&[], &vec![0; MAX_ITEM]), Store::File, 1).build();
+        assert!(crate::embeds_location(&f), "too large");
+        let mut h = Heif::new();
+        for id in 0..2000 {
+            h = h.item(10 + id, b"Exif", exif_item(&[], &plain), Store::File, 1);
+        }
+        assert!(crate::embeds_location(&h.build()), "too many items");
+        // other files: what `extract` reads
+        assert!(crate::embeds_location(&tiff_at(1.0)));
+        assert!(!crate::embeds_location(&plain));
+    }
+    /// Original export checks place names in every metadata item, like GPS coordinates.
+    #[test]
+    fn place_names_in_a_thumbnail_are_seen_for_original_export() {
+        for (metadata, located) in [
+            (crate::Metadata { sublocation: Some("Test place".into()), ..Default::default() }, true),
+            (crate::Metadata { city: Some("Test city".into()), ..Default::default() }, true),
+            (crate::Metadata { state: Some("Test state".into()), ..Default::default() }, true),
+            (crate::Metadata { country: Some("Test country".into()), ..Default::default() }, true),
+            (crate::Metadata { title: Some("A title without location".into()), ..Default::default() }, false),
+        ] {
+            let xmp = crate::write_xmp(&metadata, None);
+            assert!(crate::parse_xmp(&xmp).is_ok());
+            let f = Heif::new()
+                .item(2, b"hvc1", b"thumbnail".to_vec(), Store::File, 1)
+                .xmp(3, ("application/rdf+xml", ""), xmp.into_bytes())
+                .cdsc(3, &[2])
+                .build();
+            assert!(crate::embedded(&f).xmp.is_none(), "the thumbnail's packet is not the primary image's");
+            assert_eq!(crate::embeds_location(&f), located, "{metadata:?}");
+        }
+    }
+}
