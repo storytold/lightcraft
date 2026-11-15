@@ -691,3 +691,114 @@ fn rename_person_covers_more_than_the_person_query_and_rejects_bad_input() {
     assert_eq!(s.catalog.photo(a).unwrap().meta.regions[0].name.as_deref(), Some("Bea"));
     assert_eq!(s.catalog.photo(local).unwrap().meta.regions[0].name.as_deref(), Some("Ada"));
 }
+
+/// `faces.add` appends one named face region with the given box and returns where it went; the new
+/// region is in `photo.meta.regions` and `photo.inspect`, and undo takes it back out.
+#[test]
+fn face_add_appends_a_named_box_and_undoes() {
+    let mut s = Session::with_demo();
+    let (a, _) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
+    let undo = s.undo.len();
+    let r = s.execute("faces.add", &json!({"id": a.0, "rect": [0.5, 0.3, 0.2, 0.25], "name": "  Bob  "})).unwrap();
+    assert_eq!((r["id"].clone(), r["index"].clone(), r["name"].clone()), (json!(a.0), json!(1), json!("Bob")));
+    assert_eq!(s.undo.len(), undo + 1, "one undo step");
+    assert_eq!(s.undo.last().map(|u| u.label.as_str()), Some("Add Face"));
+    let regions = &s.catalog.photo(a).unwrap().meta.regions;
+    assert_eq!(regions.len(), 2);
+    let added = &regions[1];
+    assert_eq!(added.kind, RegionKind::Face);
+    assert_eq!(added.name.as_deref(), Some("Bob"), "the name is trimmed");
+    assert!(added.description.is_none(), "a drawn face is not marked as detected");
+    for (got, want) in [(added.rect.x0, 0.5), (added.rect.y0, 0.3), (added.rect.x1, 0.7), (added.rect.y1, 0.55)] {
+        assert!((got - want).abs() < 1e-12, "{got} vs {want}");
+    }
+    let info = s.execute("photo.inspect", &json!({"id": a.0})).unwrap();
+    let inspected = info["meta"]["regions"].as_array().unwrap();
+    assert_eq!(inspected.len(), 2);
+    assert_eq!(inspected[1]["name"], "Bob");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions.len(), 1, "undo removes it");
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.catalog.photo(a).unwrap().meta.regions.len(), 2, "redo brings it back");
+}
+
+/// Without an `id` the active photo is drawn on, and without a `name` the face is unnamed.
+#[test]
+fn face_add_uses_the_active_photo_and_leaves_the_face_unnamed() {
+    let mut s = Session::with_demo();
+    let active = s.active().unwrap();
+    let before = s.catalog.photo(active).unwrap().meta.regions.len();
+    let r = s.execute("faces.add", &json!({"rect": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+    assert_eq!((r["id"].clone(), r["index"].clone(), r["name"].clone()), (json!(active.0), json!(before), json!(null)));
+    assert!(s.catalog.photo(active).unwrap().meta.regions[before].name.is_none());
+}
+
+/// A bad box (missing, the wrong shape, not numbers, empty, outside 0..1), a bad name or an
+/// unknown photo is an error that leaves the catalog exactly as it was.
+#[test]
+fn face_add_rejects_bad_boxes_and_unknown_photos() {
+    let mut s = Session::with_demo();
+    let (a, _) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann"))]);
+    let snapshot = s.catalog.to_snapshot();
+    let undo = s.undo.len();
+    for p in [
+        json!({"id": a.0}),
+        json!({"id": a.0, "rect": [0.1, 0.2, 0.3]}),
+        json!({"id": a.0, "rect": [0.1, 0.2, 0.3, 0.2, 0.5]}),
+        json!({"id": a.0, "rect": "box"}),
+        json!({"id": a.0, "rect": [0.1, 0.2, 0.3, "tall"]}),
+        json!({"id": a.0, "rect": [0.1, 0.2, 0.3, null]}),
+        json!({"id": a.0, "rect": [0.2, 0.2, 0.0, 0.3]}),
+        json!({"id": a.0, "rect": [0.2, 0.2, 0.3, 0.0]}),
+        json!({"id": a.0, "rect": [-0.1, 0.2, 0.3, 0.3]}),
+        json!({"id": a.0, "rect": [0.9, 0.1, 0.2, 0.2]}),
+        json!({"id": a.0, "rect": [0.1, 0.9, 0.2, 0.2]}),
+        json!({"id": a.0, "rect": [0.1, 0.1, 0.8, 0.8], "name": "bad\u{7}name"}),
+        json!({"id": a.0, "rect": [0.1, 0.1, 0.8, 0.8], "name": "x".repeat(201)}),
+        json!({"id": 999_999, "rect": [0.1, 0.1, 0.8, 0.8]}),
+    ] {
+        assert!(s.execute("faces.add", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.catalog.to_snapshot(), snapshot, "a refusal changes nothing");
+    assert_eq!(s.undo.len(), undo);
+}
+
+/// `faces.remove` deletes the face at `index`; undo restores it with its name.
+#[test]
+fn face_remove_deletes_a_face_and_undoes() {
+    let mut s = Session::with_demo();
+    let (a, _) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
+    let undo = s.undo.len();
+    let r = s.execute("faces.remove", &json!({"id": a.0, "index": 0})).unwrap();
+    assert_eq!((r["id"].clone(), r["index"].clone(), r["removed"].clone()), (json!(a.0), json!(0), json!(true)));
+    assert_eq!(s.undo.len(), undo + 1, "one undo step");
+    assert_eq!(s.undo.last().map(|u| u.label.as_str()), Some("Remove Face"));
+    let regions = &s.catalog.photo(a).unwrap().meta.regions;
+    assert_eq!(regions.len(), 1);
+    assert!(regions[0].name.is_none(), "the other face is left");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let regions = &s.catalog.photo(a).unwrap().meta.regions;
+    assert_eq!(regions.len(), 2);
+    assert_eq!(regions[0].name.as_deref(), Some("Ann"), "undo restores it with its name");
+}
+
+/// Anything but a face region (a missing index, an out-of-range one, a pet, an unknown photo)
+/// is an error that changes nothing.
+#[test]
+fn face_remove_rejects_anything_but_a_face() {
+    let mut s = Session::with_demo();
+    let (a, _) = two_photos(&s);
+    let mut pet = region(0.5, Some("Rex"));
+    pet.kind = RegionKind::Pet;
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), pet]);
+    let snapshot = s.catalog.to_snapshot();
+    let undo = s.undo.len();
+    for p in [json!({"id": a.0}), json!({"id": a.0, "index": 9}), json!({"id": a.0, "index": 1}), json!({"id": 999_999, "index": 0})] {
+        assert!(s.execute("faces.remove", &p).is_err(), "{p}");
+    }
+    assert_eq!(s.catalog.to_snapshot(), snapshot, "a refusal changes nothing");
+    assert_eq!(s.undo.len(), undo);
+}

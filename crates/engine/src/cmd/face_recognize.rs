@@ -1,6 +1,7 @@
 //! Recognition commands: `faces.index` (embed the faces in the library), `faces.suggest` (who might an unnamed
 //! face be?), `faces.person` (one person's faces, and the unnamed faces that look like them), `faces.unnamed` (every
-//! unnamed face, look-alikes together) and `faces.setName` / `faces.nameFaces` (name one face, or many at once, which is
+//! unnamed face, look-alikes together), `faces.add` / `faces.remove` (draw or delete one face region by hand) and
+//! `faces.setName` / `faces.nameFaces` (name one face, or many at once, which is
 //! what teaches the suggestions). `faces.renamePerson` renames every in-library face of one person, or merges two
 //! people when asked.
 //!
@@ -91,6 +92,54 @@ fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     s.commit(if name.is_some() { "Name Face" } else { "Clear Face Name" }, Op::SetMeta { id, meta: Box::new(meta) })?;
     s.skip_auto_write = true;
     Ok(json!({"id": id.0, "index": index, "name": name}))
+}
+
+/// `faces.add {id?, rect: [x, y, w, h], name?}`: draw one face region by hand, as one undo step. The box is
+/// normalized 0..1 in the photo's upright frame and must lie wholly inside it: a box outside the photo is refused,
+/// never clamped. `name` is optional (see [`name_param`]); a drawn face carries no detected marker.
+fn add_face(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.add";
+    let id = super::photo_id(p, C)?.or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
+    let rect = p.get("rect").and_then(Value::as_array).ok_or_else(|| bad(C, "`rect` must be `[x, y, w, h]`"))?;
+    if rect.len() != 4 {
+        return Err(bad(C, "`rect` must be `[x, y, w, h]`"));
+    }
+    let mut xywh = [0.0f64; 4];
+    for (slot, v) in xywh.iter_mut().zip(rect.iter()) {
+        *slot = v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad(C, "`rect` must be four finite numbers `[x, y, w, h]`"))?;
+    }
+    let [x, y, w, h] = xywh;
+    if w <= 0.0 || h <= 0.0 || x < 0.0 || y < 0.0 || x + w > 1.0 || y + h > 1.0 {
+        return Err(bad(C, "`rect` must be a non-empty box wholly inside the photo (0..1)"));
+    }
+    let name = name_param(p, C)?;
+    let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
+    let index = meta.regions.len();
+    meta.regions.push(lightcraft_meta::Region {
+        rect: lightcraft_geom::Rect::new(x, y, x + w, y + h),
+        kind: lightcraft_meta::RegionKind::Face,
+        name: name.clone(),
+        description: None,
+    });
+    s.commit("Add Face", Op::SetMeta { id, meta: Box::new(meta) })?;
+    s.skip_auto_write = true;
+    Ok(json!({"id": id.0, "index": index, "name": name}))
+}
+
+/// `faces.remove {id?, index}`: delete the face region at `index`, as one undo step. A photo without that face (a
+/// missing photo, a missing index, or a region that is not a face) is refused and changes nothing.
+fn remove_face(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.remove";
+    let id = super::photo_id(p, C)?.or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
+    let index = p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "missing or invalid `index`"))?;
+    let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
+    if meta.regions.get(index).is_none_or(|r| r.kind != lightcraft_meta::RegionKind::Face) {
+        return Err(bad(C, "no such face"));
+    }
+    meta.regions.remove(index);
+    s.commit("Remove Face", Op::SetMeta { id, meta: Box::new(meta) })?;
+    s.skip_auto_write = true;
+    Ok(json!({"id": id.0, "index": index, "removed": true}))
 }
 
 /// `faces.renamePerson {from, to, merge?}`: give every in-library face of `from` the exact name `to`, as one undo
@@ -1202,6 +1251,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?, index, name} — name a face region (null or empty clears it); undoable; the sidecar is not touched",
             super::always,
             set_name
+        ),
+        cmd!(
+            "faces.add",
+            "Add Face",
+            [],
+            None,
+            "{id?, rect: [x, y, w, h], name?} → {id, index, name} — draw one face region by hand (normalized 0..1 in the photo's upright frame, wholly inside the photo; a box outside it is refused, never clamped); undoable; the sidecar is not touched",
+            super::always,
+            add_face
+        ),
+        cmd!(
+            "faces.remove",
+            "Remove Face",
+            [],
+            None,
+            "{id?, index} → {id, index, removed} — delete the face region at `index`; refused when the photo, the index or the region kind is not a face, and then nothing changes; undoable; the sidecar is not touched",
+            super::always,
+            remove_face
         ),
         cmd!(
             "faces.renamePerson",
