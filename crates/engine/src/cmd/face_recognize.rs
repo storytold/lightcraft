@@ -386,7 +386,7 @@ mod imp {
 
     use super::super::bad;
     use super::super::face_detect::{LABEL, MARK};
-    use super::super::face_models::{finish_downloads, installed_models, read_settings, top_faces_value};
+    use super::super::face_models::{finish_downloads, installed_models, read_settings, set_paused, switches, top_faces_value};
     use super::Similar;
     use crate::faces_worker::{Done, EDGE, PREFETCH, Pace, Prepared, Worker, max_workers, process, target_workers};
     use crate::{Result, Session};
@@ -738,10 +738,10 @@ mod imp {
         }))
     }
 
-    /// The scan's row in the activity stack: there while `pending` photos are left, its whole the most that were left at
-    /// once since the scan last finished (which it returns; 0 when none are left). It can't be stopped from there: the
-    /// scan is switched off in Settings.
-    fn track(s: &mut Session, pending: u64) -> u64 {
+    /// The scan's row in the activity stack: there while `pending` photos are left (also while paused), its whole the
+    /// most that were left at once since the scan last finished (which it returns; 0 when none are left). It has no ✕:
+    /// its pause button pauses it (resume while `paused`), and its gear opens Settings ▸ Faces, where it is switched off.
+    fn track(s: &mut Session, pending: u64, paused: bool) -> u64 {
         if pending == 0 {
             s.faces.task = None;
             s.faces.peak = 0;
@@ -750,7 +750,115 @@ mod imp {
         s.faces.peak = s.faces.peak.max(pending);
         let task = s.faces.task.get_or_insert_with(|| s.activity.start("faces", "Finding faces", crate::activity::Cancel::No));
         task.progress(s.faces.peak.saturating_sub(pending), s.faces.peak);
+        task.detail(if paused { "Paused" } else { "" });
+        task.set_controls(Some(crate::activity::Controls {
+            paused,
+            pause: "faces.pause",
+            resume: "faces.resume",
+            settings_tab: "faces",
+            settings_section: None,
+        }));
         s.faces.peak
+    }
+
+    /// Whether recognition is on and the scan paused, looked up at most once a second.
+    fn switches_cached(s: &mut Session) -> (bool, bool) {
+        let Some(dir) = s.face_models_dir.clone() else { return (false, false) };
+        if let Some((t, on, paused)) = s.faces.switches_seen
+            && t.elapsed() < RECHECK
+        {
+            return (on, paused);
+        }
+        let (on, paused) = switches(&dir);
+        s.faces.switches_seen = Some((Instant::now(), on, paused));
+        (on, paused)
+    }
+
+    /// Where the scan stands: `off` (recognition switched off), `paused`, `indexing` (photos left), `complete` (none
+    /// left) or `idle` (on, but not started yet: no model chosen, or not looked at yet).
+    fn state(s: &mut Session) -> (&'static str, bool, bool) {
+        let (on, paused) = switches_cached(s);
+        let pending = s.faces.queue.len() + s.faces.in_flight.len();
+        let state = if !on {
+            "off"
+        } else if paused {
+            "paused"
+        } else if pending > 0 {
+            "indexing"
+        } else if s.faces.queue_stamp.is_some() {
+            "complete"
+        } else {
+            "idle"
+        };
+        (state, on, paused)
+    }
+
+    /// `faces.status`: how far the background face scan is.
+    pub fn status(s: &mut Session, _: &Value) -> Result<Value> {
+        let (state, enabled, paused) = state(s);
+        let pending = (s.faces.queue.len() + s.faces.in_flight.len()) as u64;
+        let total = s.faces.peak.max(pending);
+        Ok(json!({
+            "enabled": enabled,
+            "paused": paused,
+            "state": state,
+            "done": total.saturating_sub(pending),
+            "total": total,
+            "pendingPhotos": pending,
+            "indexedFaces": s.faces.index.len(),
+            "searchedPhotos": s.faces.scanned.len(),
+        }))
+    }
+
+    /// Drop what the scan has learned for this library: every face embedding (of every recognition model) and the list
+    /// of photos already searched, in memory and on disk. Faces already in the catalog (named, or found by an earlier
+    /// scan) stay. What a worker is still making is dropped when it comes back.
+    fn drop_index(s: &mut Session, cmd: &str) {
+        // the chosen model's index is loaded first, so its file is the one written fresh (none chosen: only the files go)
+        let _ = current_manifest(s, cmd, true);
+        s.faces.epoch = s.faces.epoch.wrapping_add(1);
+        s.faces.index.clear();
+        s.faces.scanned.clear();
+        s.faces.scan_failed.clear();
+        s.faces.queue.clear();
+        s.faces.queue_stamp = None;
+        s.faces.in_flight.clear();
+        s.faces.task = None;
+        s.faces.peak = 0;
+        if let Some(dir) = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone())
+            && let Ok(entries) = std::fs::read_dir(&dir)
+        {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if name == "face-scanned.bin" || (name.starts_with("face-embeddings-") && name.ends_with(".bin")) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        // the chosen model's file and the searched list come back empty, so what is learned next is appended to them
+        if let Err(e) = s.faces.index.save() {
+            log::warn!("could not save the face embeddings: {e}");
+        }
+        if let Err(e) = s.faces.scanned.save() {
+            log::warn!("could not save the list of searched photos: {e}");
+        }
+    }
+
+    /// `faces.clearIndex`: drop the face index (see [`drop_index`]) and pause the scan, so it does not start over at once.
+    pub fn clear(s: &mut Session, _: &Value) -> Result<Value> {
+        const C: &str = "faces.clearIndex";
+        set_paused(s, C, true)?;
+        drop_index(s, C);
+        status(s, &Value::Null)
+    }
+
+    /// `faces.restart`: drop the face index and scan the library again from the start.
+    pub fn restart(s: &mut Session, _: &Value) -> Result<Value> {
+        const C: &str = "faces.restart";
+        set_paused(s, C, false)?;
+        drop_index(s, C);
+        status(s, &Value::Null)
     }
 
     /// `faces.pump`: cheap to call every frame. Takes in what the background worker has finished and, when it is idle,
@@ -760,13 +868,14 @@ mod imp {
         const C: &str = "faces.pump";
         // how hard the scan may work now, from what the user is doing (the app says); nothing new is started while paused,
         // and what is already running finishes
-        let pace = Pace::parse(p.get("pace").and_then(Value::as_str));
+        // paused by the user (`faces.pause`): nothing new is started until `faces.resume`
+        let (enabled, paused) = switches_cached(s);
+        let pace = if paused { Pace::Pause } else { Pace::parse(p.get("pace").and_then(Value::as_str)) };
         let target = target_workers(pace);
-        // a model that has finished downloading is installed and switched on here, whether or not recognition was on
+        // a model that has finished downloading is installed and chosen here, whether or not recognition was on
         finish_downloads(s);
-        let enabled = s.face_models_dir.clone().is_some_and(|d| enabled_cached(s, &d));
         if !enabled {
-            track(s, 0);
+            track(s, 0, false);
             if let Some(w) = &s.faces.worker {
                 w.allow(0, Pace::Pause);
             }
@@ -783,6 +892,8 @@ mod imp {
             }
             return Ok(json!({
                 "active": false,
+                "paused": paused,
+                "state": "off",
                 "inFlight": 0,
                 "pendingPhotos": 0,
                 "peak": 0,
@@ -790,14 +901,14 @@ mod imp {
             }));
         }
         if s.faces.retry_at.is_some_and(|t| Instant::now() < t) {
-            track(s, 0);
-            return Ok(json!({"active": false}));
+            track(s, 0, paused);
+            return Ok(json!({"active": false, "paused": paused, "state": "idle"}));
         }
         let Ok(embedder) = current_with(s, C, false) else {
             // the chosen model is gone or broken: look again in a few seconds, not every frame
             s.faces.retry_at = Some(Instant::now() + Duration::from_secs(3));
-            track(s, 0);
-            return Ok(json!({"active": false}));
+            track(s, 0, paused);
+            return Ok(json!({"active": false, "paused": paused, "state": "idle"}));
         };
         s.faces.retry_at = None;
         // the card the model ran on stopped working mid-scan: the rest goes to the other card, or the CPU
@@ -845,9 +956,12 @@ mod imp {
             }
         }
         let pending = s.faces.queue.len() + s.faces.in_flight.len();
-        let peak = track(s, pending as u64);
+        let peak = track(s, pending as u64, paused);
+        let (state, _, _) = state(s);
         Ok(json!({
             "active": true,
+            "paused": paused,
+            "state": state,
             "inFlight": s.faces.in_flight.len(),
             "pendingPhotos": pending,
             "peak": peak,
@@ -1029,18 +1143,6 @@ mod imp {
             None => None,
         };
         Ok(asked.unwrap_or_else(|| top_faces(s)))
-    }
-
-    /// Whether face recognition is switched on, looked up at most once a second.
-    fn enabled_cached(s: &mut Session, dir: &std::path::Path) -> bool {
-        if let Some((t, on)) = s.faces.enabled_seen
-            && t.elapsed() < RECHECK
-        {
-            return on;
-        }
-        let on = read_settings(dir).enabled;
-        s.faces.enabled_seen = Some((Instant::now(), on));
-        on
     }
 
     pub fn suggest(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1316,6 +1418,20 @@ mod imp {
         Ok(serde_json::json!({"active": false}))
     }
 
+    pub fn status(_: &mut Session, _: &Value) -> Result<Value> {
+        Ok(
+            serde_json::json!({"enabled": false, "paused": false, "state": "off", "done": 0, "total": 0, "pendingPhotos": 0, "indexedFaces": 0, "searchedPhotos": 0}),
+        )
+    }
+
+    pub fn clear(_: &mut Session, _: &Value) -> Result<Value> {
+        Err(bad("faces.clearIndex", "this build cannot run face recognition"))
+    }
+
+    pub fn restart(_: &mut Session, _: &Value) -> Result<Value> {
+        Err(bad("faces.restart", "this build cannot run face recognition"))
+    }
+
     pub fn similar(_: &mut Session, _: &str, _: usize, _: &super::Scope) -> super::Similar {
         super::Similar { items: Vec::new(), ready: false, pending: 0 }
     }
@@ -1364,6 +1480,51 @@ pub fn specs() -> Vec<CommandSpec> {
             "{pace?: pause | light | normal | full} → {active, inFlight, pendingPhotos, indexedFaces, searchedPhotos, workers}: cheap to call every frame: takes in what the background workers have finished and gives them the next photos, as many at once as the pace allows (none when paused, one when light, half the machine's threads when normal, four fifths when full); inactive until face recognition is on in Settings with a model chosen",
             super::always,
             imp::pump
+        ),
+        cmd!(
+            query "faces.status",
+            "Face Scan Status",
+            [],
+            None,
+            "{} → {enabled, paused, state: off | idle | indexing | paused | complete, done, total, pendingPhotos, indexedFaces, searchedPhotos}: how far the background face scan is (`done` of `total`: photos since it last had nothing to do)",
+            super::always,
+            imp::status
+        ),
+        cmd!(
+            "faces.pause",
+            "Pause Face Scan",
+            [],
+            None,
+            "{} → {enabled, paused}: pause the background face scan (what is running finishes, nothing new starts); it stays paused across restarts until `faces.resume`",
+            super::always,
+            |s, _| super::face_models::set_paused(s, "faces.pause", true)
+        ),
+        cmd!(
+            "faces.resume",
+            "Resume Face Scan",
+            [],
+            None,
+            "{} → {enabled, paused}: resume a paused background face scan",
+            super::always,
+            |s, _| super::face_models::set_paused(s, "faces.resume", false)
+        ),
+        cmd!(
+            "faces.clearIndex",
+            "Clear Face Index",
+            [],
+            None,
+            "{} → as faces.status: drop what the face scan learned for this library (every face embedding, and which photos were searched) and pause the scan. Faces already in the catalog, named or found, stay. Destructive: frontends ask first",
+            super::always,
+            imp::clear
+        ),
+        cmd!(
+            "faces.restart",
+            "Restart Face Scan",
+            [],
+            None,
+            "{} → as faces.status: drop the face index (as faces.clearIndex) and scan the library again from the start (resumes a paused scan)",
+            super::always,
+            imp::restart
         ),
         cmd!(
             "faces.evaluate",

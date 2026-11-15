@@ -521,6 +521,14 @@ pub struct AppSettings {
     /// to the screen when the window opens; OneSlips, LR-PREF-WINDOW).
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub settings_size: Option<[f32; 2]>,
+    /// Where the Settings window lists its categories in the Classic layout (Settings ▸ General ▸
+    /// Settings Categories; `None`: [`SettingsCategories::Left`]). The Modern layout always lists
+    /// them down the left of a full-window sheet.
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub settings_categories_classic: Option<SettingsCategories>,
+    /// The same in the Compact layout (`None`: [`SettingsCategories::Top`]).
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub settings_categories_compact: Option<SettingsCategories>,
     /// GPU rendering allowed (`app.gpu`).
     pub gpu: bool,
     /// The graphics interface GPU rendering uses (Settings ▸ Performance; applies at next launch).
@@ -636,6 +644,9 @@ pub struct AppSettings {
     /// the same photo; a value this version doesn't know reads as the default.
     #[serde(deserialize_with = "lenient")]
     pub grading_mode: GradingMode,
+    /// The Develop tool profiles (Settings ▸ Develop, `view.toolProfile`): which of the Edit panel's
+    /// groups and sliders show. Read leniently: unknown ids in a stored profile are dropped.
+    pub tool_profiles: crate::tool_profiles::ToolProfiles,
     /// Auto Sync (Edit ▸ Auto Sync, `develop.autoSync`), remembered app-wide: it stays as left
     /// whichever library is open and after a restart.
     pub auto_sync: bool,
@@ -779,6 +790,8 @@ impl Default for AppSettings {
             import_tab: Default::default(),
             settings_tab: String::new(),
             settings_size: None,
+            settings_categories_classic: None,
+            settings_categories_compact: None,
             gpu: true,
             gpu_backend: GpuBackend::Auto,
             gpu_card: String::new(),
@@ -820,6 +833,7 @@ impl Default for AppSettings {
             slider_layout: Default::default(),
             compact_layout: false,
             grading_mode: GradingMode::Witchcraft,
+            tool_profiles: Default::default(),
             auto_sync: false,
             slider_text: Default::default(),
             slider_control: Default::default(),
@@ -1172,6 +1186,17 @@ impl BrushPreset {
     }
 }
 
+/// Where the Settings window of the Classic and Compact layouts lists its categories (Settings ▸
+/// General ▸ Settings Categories).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SettingsCategories {
+    /// A list down the window's left side, as the Modern layout's (in a window of normal size).
+    Left,
+    /// One row of tabs along the window's top.
+    Top,
+}
+
 /// How the Keywording box lays out the selection's keywords.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1265,8 +1290,9 @@ pub struct UiState {
     /// The view showed a browsed folder last frame ([`crate::import_tab::keep_in_step`]).
     #[serde(skip)]
     pub import_was_browsing: bool,
-    /// Developing a browsed photo without importing it: the Library tab shows the Develop module
-    /// on the folder's active photo while the browse stays on ([`crate::import_tab::keep_in_step`]).
+    /// Working on browsed photos without importing them: the Library tab shows Develop, Print,
+    /// Export or Slideshow on the folder's photos while the browse stays on
+    /// ([`crate::import_tab::open_without_import`], [`crate::import_tab::keep_in_step`]).
     #[serde(skip)]
     pub import_develop: bool,
     /// The library filter the Import tab put aside on entering it (the tab has no filter bar and a

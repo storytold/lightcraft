@@ -224,6 +224,7 @@ fn top_bar(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
                 crate::surface_plugin::auto_setup(app);
             }
         }
+        crate::help_link::icon(ui, "controls");
         ui.add_space(12.0);
         ui.label(RichText::new(tr("Profile")).color(t.text_label));
         let names: Vec<String> = app.surface.settings().profiles.iter().map(|p| p.name.clone()).collect();

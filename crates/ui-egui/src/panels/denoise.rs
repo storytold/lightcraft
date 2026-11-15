@@ -236,7 +236,7 @@ pub fn detail_status(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, amount: f
 /// The Settings ▸ Denoise tab.
 pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
-    heading(ui, t, "AI Denoise");
+    super::settings::heading_help(ui, t, "AI Denoise", "denoise");
     if list["dir"].is_null() {
         hint(
             ui,
@@ -283,7 +283,7 @@ pub fn other_models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         .execute("denoise.models.downloads", &json!({}))
         .map(|v| v["downloads"].as_array().cloned().unwrap_or_default())
         .unwrap_or_default();
-    heading(ui, t, "Other models (optional)");
+    super::settings::heading_help(ui, t, "Other models (optional)", "denoiseModels");
     if all.is_empty() {
         hint(ui, t, "Only if you were given a {app} denoise model (a folder with a .onnx file and denoise-model.json):");
     }

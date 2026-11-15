@@ -594,6 +594,16 @@ fn accounts_file_round_trips_without_secrets() {
     std::fs::write(&path, b"{not json").unwrap();
     assert!(crate::Accounts::load(&path).is_err());
     assert_eq!(crate::Accounts::load(&dir.join("missing.json")).unwrap(), crate::Accounts::default());
+    // the old name-matching album rule: on → albums as collections; off → nothing; never written again
+    std::fs::write(
+        &path,
+        br#"{"immich":[{"id":"a#1","url":"http://a","userId":"1","sync":{"albums":{"direction":"twoWay","policy":"ask"}}},{"id":"b#2","url":"http://b","userId":"2","sync":{"albums":{"direction":"off","policy":"ask"}}}]}"#,
+    )
+    .unwrap();
+    let m = crate::Accounts::load(&path).unwrap();
+    assert!(m.immich[0].collections && !m.immich[1].collections);
+    m.save(&path).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("albums"));
 }
 
 // Regression: Immich doesn't hash external-library files (checksum = SHA-1 of `path:` + path),
@@ -759,6 +769,8 @@ fn damaged_connections_file_never_panics() {
         pinned: None,
         path_maps: vec![PathMap { container: "/usr/src/app/upload".into(), local: "/pics".into() }],
         linked_until: None,
+        collections: true,
+        shared: true,
         sync: Default::default(),
     });
     a.save(&path).unwrap();
@@ -986,4 +998,34 @@ fn hostile_activity_answers_are_bounded_and_never_panic() {
     for id in ["", "r:", "r:../x", "o:a b+r:", "garbage"] {
         let _ = comments_of(&url, "Old", id);
     }
+}
+
+/// The album add/remove endpoints answer 200 whether or not each asset was taken: the per-asset
+/// results decide. A `duplicate` add and a `not_found` remove leave the album as asked.
+#[test]
+fn album_add_and_remove_read_the_per_asset_results() {
+    let (url, _) = serve(|req| {
+        match (req.method.as_str(), req.target.as_str()) {
+        ("PUT", "/api/albums/al-1/assets") => response(
+            "200 OK",
+            br#"[{"id":"as-1","success":true},{"id":"as-2","success":false,"error":"duplicate"},{"id":"as-3","success":false,"error":"no_permission"},{"id":"other","success":false,"error":"unknown"}]"#,
+        ),
+        ("DELETE", "/api/albums/al-1/assets") => {
+            response("200 OK", br#"[{"id":"as-1","success":false,"error":"not_found"},{"id":"as-2","success":false,"error":"no_permission"}]"#)
+        }
+        // a server that answers with something else than the list: the status decides
+        ("PUT", "/api/albums/al-2/assets") => response("200 OK", br#"{"id":"al-2","albumName":"x"}"#),
+        _ => response("404 Not Found", br#"{"message":"Not found"}"#),
+    }
+    });
+    let c = client(&url, KEY);
+    let ids: Vec<String> = ["as-1", "as-2", "as-3"].iter().map(|s| s.to_string()).collect();
+    assert_eq!(c.album_add_checked("al-1", &ids).unwrap(), vec![("as-3".to_string(), "no_permission".to_string())]);
+    assert_eq!(c.album_remove_checked("al-1", &ids[..2]).unwrap(), vec![("as-2".to_string(), "no_permission".to_string())]);
+    // the plain calls fail when an asset was refused, and say how many
+    let e = c.album_add("al-1", &ids).unwrap_err();
+    assert!(matches!(&e, ImmichError::Status(_, m) if m.contains("1 of 3") && m.contains("no_permission")), "{e:?}");
+    assert!(c.album_remove("al-1", &ids[..1]).is_ok());
+    assert!(c.album_add("al-2", &ids).is_ok());
+    assert!(matches!(c.album_add("nope", &ids), Err(ImmichError::NotFound(_))));
 }

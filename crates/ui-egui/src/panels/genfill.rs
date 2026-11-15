@@ -642,6 +642,7 @@ fn provider_card(ui: &mut egui::Ui, t: &Tokens, p: &Value) {
 
 /// Settings → Generative Fill: a card per service, your own API keys and consent.
 pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
+    super::settings::heading_help(ui, t, "Generative Fill", "genfill");
     super::settings::hint(
         ui,
         t,

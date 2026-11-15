@@ -11,7 +11,7 @@ use crate::widgets::{register, text_button};
 pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let m = app.session.execute("profiles.manager", &json!({})).unwrap_or_default();
     // first: a long list of bodies or camera profiles below never pushes it out of view
-    heading(ui, t, "Profiles");
+    super::settings::heading_help(ui, t, "Profiles", "profiles");
     hint(
         ui,
         t,

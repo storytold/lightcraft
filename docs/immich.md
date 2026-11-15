@@ -40,7 +40,8 @@ session is unlocked again (`immich.authStatus {account}` reports `{isElevated, p
 ## Link (IMM-LINK)
 
 `immich.link` starts a background pass that lists the server's images page by page (incremental by `updatedAt` after
-the first complete pass; `{full: true}` starts over) and links each asset to a catalog photo:
+the first complete pass; `{full: true}`, the card's *Full Link Pass*, lists everything again) and links each asset to
+a catalog photo:
 
 1. by **SHA-1**: Immich's checksum is the SHA-1 of the original; the app computes it in the import read pass and a
    background job (`remote.pump`) back-fills it for photos imported before;
@@ -51,6 +52,15 @@ Links are catalog remote identities (service `immich`, account `<url>#<user id>`
 Results: the grid badge "Immich", the filter bar's Immich picker (`library.filter {immich: linked|notLinked|probable}`),
 Info's *Open in Immich* link (`immich.links`), and the smart-collection rule field `immich`. `immich.unlink` removes
 links.
+
+The pass's cursor (the newest `updatedAt` a complete pass has seen) belongs to the catalog and is kept with it, in
+`<library>/Immich/link/<account>.json`: a second catalog's first pass lists everything. A cancelled or failed pass
+does not move it. Because an incremental pass only lists assets that changed, it never finds an asset whose file
+reaches the catalog later; so photos that were just imported, or just got their SHA-1 from the back-fill, are looked
+up by checksum on the server (`POST /assets/bulk-upload-check`, on a worker started by `remote.pump`) and linked when
+it has them. If the server could not be reached then, *Full Link Pass* catches up. The scheduled sync
+(`intervalMinutes`) runs an incremental link pass too. The pass and the lookup hold an activity row; the pass can be
+cancelled.
 
 ## Import (IMM-IMPORT)
 
@@ -63,7 +73,22 @@ select, and import (`immich.import`):
 
 Rating (1–5; −1 = reject), favourite (pick), description (caption), tags (hierarchical keywords), GPS and place names
 are taken over, one way. Importing from an album puts the photos into a catalog album of the same name. Assets already
-in the catalog (same checksum, or already linked) are skipped before downloading.
+in the catalog (same checksum, or already linked) are not downloaded again, but they are part of what was asked for:
+each is linked to its photo (by checksum) and added to the album with the new ones (`remote.pump` → `import.present`
+counts them). The import and the download of a link-only original hold an activity row with progress and can be
+cancelled (what was downloaded before the stop is still imported); a failed original download is reported, and
+opening the photo in Develop again tries again.
+
+A file imported from disk whose SHA-1 is the checksum of a link-only photo's asset doesn't stay a second
+photo: the link-only photo takes the file as `immich.fetchOriginal` would (`cmd::immich::merge_into_link_only`,
+called from `library.import`), the new entry is removed, and it joins the import's collection in its place.
+
+## Albums as device-sync collections
+
+`immich.collections {account, on}` shows an account's albums as collections in device sync; each device picks
+None, Previews or Full Quality per album. Design and rules: [sync.md](sync.md) ▸ Immich collections. The
+listing, imports and uploads run on workers with activity rows ("Listing Immich albums", "Adding photos to Immich
+albums"); `cmd::immich::collections`.
 
 ## External libraries (IMM-EXTLIB)
 
@@ -148,6 +173,34 @@ synced on their own: they wait in a queue (`immich.syncStatus` → `deletions`, 
 log live in `<library>/Immich/sync/<account>.json`; offline / bad-key failures change nothing and a scheduled sync
 retries with backoff.
 
+What a run records as "both sides had this" (the base) is only what both sides really hold afterwards:
+
+- **A run cut short** (the server went away, a tag could not be set): a photo whose update or tag changes were not
+  sent keeps its old base, so the next run sends them. Nothing counts as synced because the run got as far as
+  planning it.
+- **A photo edited while a run was out** is not written over, and the fields Immich had changed are not recorded as
+  taken: the next run takes them. The same holds when the catalog write fails.
+- **A location or capture time cleared in the catalog** can't be cleared in Immich (its update has no "none"). The
+  cleared value stays in the catalog as a standing local choice: nothing is sent, nothing is pulled back, and it is
+  not a conflict. If the value later changes in Immich, that is a change on both sides and the field's policy decides.
+- **Newest wins** compares Immich's `updatedAt` with when the catalog was edited: the time the photo's metadata was
+  last written to its XMP sidecar, when that sidecar is in step with the catalog (automatic XMP writing keeps it so);
+  otherwise the time a sync first saw the change. The catalog keeps no per-field edit time, so without a sidecar an
+  edit made days before the sync still counts as made at the sync.
+- **The sync state is one catalog's.** Opening another catalog loads that catalog's own state; a run that comes back
+  after the library changed is dropped.
+- **The deletion queue only holds deletions that are still true.** Every run looks at the queued assets again and
+  drops one whose asset is back out of Immich's trash (or whose photo is back out of Recently Deleted);
+  `immich.resolveDeletion {action: apply}` checks each one first and reports those as `restored` instead of deleting.
+
+*Preview Changes* (`immich.sync {dryRun: true, background: true}`) runs on a worker and lists what would change in the
+Sync section (`immich.syncStatus` → `preview`).
+
+**Background calls.** The Connections screen never waits for a server. `immich.libraries`, `immich.authStatus`,
+`immich.unlockSession`, `immich.scanLibraries`, `immich.importPeople` and `immich.pushPeople` take `background: true`:
+they return `{started, key}`, hold an activity row while they are out, and their result is taken with
+`immich.answer {key}` (`remote.pump` lists the keys that wait in `answers`).
+
 ## People and smart search (IMM-PEOPLE, IMM-SEARCH)
 
 `immich.importPeople` reads Immich's faces into face regions marked `immich:<personId>` (the People view shows their
@@ -195,21 +248,6 @@ server by checksum first, so an upload whose answer was lost is never stored twi
 the next run (photos already sent are found by checksum). In the app, Publish Services ▸ Set Up / Edit Settings…
 has the Immich form: account, what to send (rendered / original / both) and "trash removed renders".
 
-`immich.linkAlbum {album}` links a catalog album with an Immich album; `immich.syncAlbums` then keeps the same linked
-photos in both (added or removed on one side since the last sync: the same on the other).
-
-**Album rule.** Settings → Connections → Sync… → *Albums ↔ albums* (`immich.setSync {config: {albums: {direction,
-policy}}}`) maps every plain catalog album to the Immich album of the same name:
-
-- *Off* (default): only albums linked by hand sync, as above.
-- *To Immich* / *From Immich*: one way; the other side's changes are not followed (an album deleted on the source-only
-  side is put back).
-- *Two-way*: creates, renames, photos added or removed, and album deletes travel both ways.
-
-Deleting an album never deletes photos, only the album on the other side, and only as the policy says: *Catalog wins*
-/ *Immich wins* decide, *Newest wins* deletes unless the other side changed the album since the last sync, *Ask* (the
-default) leaves it in the Sync… panel's *Albums deleted on one side* list (`immich.resolveAlbumDeletion {album,
-action: apply|keep}`). A name changed differently on both sides follows the policy, or is left alone. Published
-collections, smart albums, folders and the Quick Collection never map. Sync Now and the background schedule run the
-album rule too; runs show in the activity stack. The key needs `album.create`, `album.update`, `album.delete`,
-`albumAsset.create` and `albumAsset.delete` for this.
+Immich albums meet the catalog as device-sync collections (above, *Albums as device-sync collections*). The
+earlier name-matching album rule (`immich.linkAlbum`, `immich.syncAlbums`, `immich.resolveAlbumDeletion`) was removed:
+an account that had it on shows its albums as collections instead (migrated when `connections.json` is read).

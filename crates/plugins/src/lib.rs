@@ -44,7 +44,8 @@ pub use about::About;
 pub use context::{HostApi, JobReporter, JobUnit, NoHost, PIXELS_DEFAULT_EDGE, PIXELS_MAX_EDGE, PIXELS_MIN_EDGE, Unwatched};
 pub use manager::{Begun, Denial, Failed, Installed, Manager, PendingCall, Prepared, RequestState, SettingsView, duplicate_error, read_module};
 pub use manifest::{
-    CommandDecl, DestinationDecl, Field, FieldKind, HOST_FEATURES, Header, Hooks, MAX_PICTURE_BYTES, Manifest, MetadataField, PublishDecl,
+    CommandDecl, DestinationDecl, Field, FieldKind, HOST_FEATURES, Header, Hooks, MAX_PICTURE_BYTES, MAX_QUICK_ACTIONS, Manifest, MetadataField,
+    PublishDecl,
 };
 pub use permissions::{FsRoot, Group, Permissions, Request, refused_root};
 pub use programs::{EndStatus, Exit, Found, ProgramDecl, Reservation, RunDir, Running, StartRequest};

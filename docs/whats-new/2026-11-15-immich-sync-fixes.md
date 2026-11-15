@@ -1,0 +1,14 @@
+### Immich sync: safer and never in the way
+- A sync that the server cut short no longer loses edits: what was not sent is sent by the next sync instead of being overwritten with Immich's older values.
+- A photo you edit while a sync is running keeps your edit, and the change from Immich arrives with the next sync.
+- An album that could not be filled in Immich no longer removes its photos from your collection.
+- A collection that also holds photos Immich does not have is never deleted because its Immich album was deleted: it is kept and no longer synced.
+- Each catalog has its own sync state and its own link progress; a second catalog no longer picks up the first one's.
+- Photos you import later are linked to Immich by themselves, and Settings ▸ Connections has a Full Link Pass.
+- Importing from an Immich album also links and adds the photos you already had.
+- A location or capture time you clear stays cleared.
+- A deletion that was undone in Immich leaves the queue and is never applied.
+- "Newest wins" goes by when you edited the photo (when its XMP sidecar is up to date), not by when the sync ran.
+- Settings ▸ Connections no longer freezes while a server answers; Preview Changes lists its result in the Sync section.
+- Linking, importing and downloading an original show in the activity list and can be stopped; a failed download says why.
+- Disconnect and the delete buttons ask before they act.

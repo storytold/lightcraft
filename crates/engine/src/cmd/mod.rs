@@ -24,6 +24,8 @@ pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
 pub(crate) mod develop;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod device_sync;
 pub mod duplicates;
 mod edit;
 pub mod edit_in;
@@ -59,8 +61,6 @@ pub mod metadata_files;
 pub mod missing;
 mod ml;
 pub(crate) mod organize;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod peers;
 mod people_recognize;
 mod people_roles;
 pub mod profile_manager;
@@ -289,7 +289,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(catalog::specs());
         #[cfg(not(target_arch = "wasm32"))]
-        v.extend(peers::specs());
+        v.extend(device_sync::specs());
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(slideshow::specs());

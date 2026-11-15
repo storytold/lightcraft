@@ -29,7 +29,20 @@ pub(crate) enum Msg {
     LinkDone {
         account: String,
         result: Result<Option<String>, ImmichError>,
+        /// The cursor file of the library the pass was started in (the cursor is the catalog's).
+        home: Option<PathBuf>,
     },
+    /// The checksum lookup of newly imported / hashed photos finished ([`State::link_queue`]).
+    LinkChecked,
+    /// A server call made with `background: true` finished: its result, kept under `key` until
+    /// `immich.answer` takes it.
+    Answer {
+        key: String,
+        value: serde_json::Value,
+    },
+    /// `immich.importPeople {background}`: the faces were read; the catalog is written on the
+    /// session thread.
+    People(Box<crate::cmd::immich::sync::PeopleDone>),
     Downloaded(Box<Downloaded>),
     Original {
         photo: PhotoId,
@@ -47,10 +60,13 @@ pub(crate) enum Msg {
     Version(Box<crate::cmd::immich::versions::VersionDone>),
     /// `immich.sync {background}`: a sync run finished.
     Synced(Box<crate::cmd::immich::sync::SyncDone>),
-    /// `immich.syncAlbums {background}`: an album run finished.
-    AlbumsSynced(Box<crate::cmd::immich::publish::AlbumsDone>),
     /// `immich.pullSidecars` / `immich.pushSidecars` {background}: a sidecar run finished.
     Sidecars(Box<SidecarsDone>),
+    /// The Immich albums shown as collections were listed (device sync).
+    ImmichAlbums(Box<crate::cmd::immich::collections::Listing>),
+    /// Photos added to Immich collections here were uploaded (or found) and put into the albums.
+    ImmichPushed(Box<crate::cmd::immich::collections::Pushed>),
+    ImmichPushDone,
     /// `credentials.unlock {background}`: the encrypted file opened (or not).
     FileUnlocked(Result<lcc_credentials::FileStore, CredError>),
     /// `credentials.unlockSystem`: the keychain's own unlock prompt was answered.
@@ -206,6 +222,10 @@ pub(crate) struct Downloaded {
     /// (asset, where it was saved) or the error.
     pub items: Vec<(Asset, Result<PathBuf, ImmichError>)>,
     pub skipped: usize,
+    /// Asked-for assets that are linked to a catalog photo already (not downloaded).
+    pub already_linked: Vec<String>,
+    /// Asked-for assets whose checksum the catalog already has (not downloaded): to be linked.
+    pub present: Vec<Asset>,
 }
 
 /// Progress of one account's link pass.
@@ -232,6 +252,8 @@ pub struct ImportProgress {
     pub requested: usize,
     pub imported: usize,
     pub skipped: usize,
+    /// Of the skipped: assets whose photo the catalog already had (now linked, and in the album).
+    pub present: usize,
     pub failed: Vec<(String, String)>,
 }
 
@@ -241,6 +263,8 @@ pub struct State {
     /// The SHA-1 back-fill: a batch in flight; files that could not be read (not retried this session).
     pub(crate) sha1_busy: bool,
     pub(crate) sha1_failed: HashSet<PhotoId>,
+    /// Photos to hash before the rest (device sync was told their SHA-1 and checks it here).
+    pub(crate) sha1_first: std::collections::BTreeSet<PhotoId>,
     pub(crate) sha1_done: u64,
     /// Catalog revision when nothing was left to hash (skip the scan until it changes).
     pub(crate) sha1_idle_at: Option<u64>,
@@ -252,6 +276,17 @@ pub struct State {
     /// Where link-only previews and fetched originals go when the library is not a folder.
     pub cache_dir: Option<PathBuf>,
     pub(crate) links: HashMap<String, LinkProgress>,
+    /// Photos that were just imported or got their SHA-1: `remote.pump` asks each connected
+    /// server (on a worker) whether it has their checksums and links the ones it has. The link
+    /// pass alone would never find them: it lists only assets changed since its last run, and
+    /// these assets may have been on the server for years.
+    pub(crate) link_queue: Vec<PhotoId>,
+    /// That lookup is on a worker.
+    pub(crate) link_checking: bool,
+    /// Server calls running on workers for a command's `background: true` (their keys), and the
+    /// finished ones' results until `immich.answer` takes them.
+    pub(crate) asking: HashSet<String>,
+    pub(crate) answers: HashMap<String, serde_json::Value>,
     pub(crate) import: ImportProgress,
     pub(crate) fetching: HashSet<PhotoId>,
     pub(crate) fetch_errors: HashMap<PhotoId, String>,
@@ -279,6 +314,8 @@ pub struct State {
     pub(crate) sidecars: SidecarProgress,
     /// Finished Edit In version uploads not yet shown (`immich.versionResults`).
     pub(crate) versions: Vec<serde_json::Value>,
+    /// Immich albums as device-sync collections: workers and schedule.
+    pub(crate) coll: crate::cmd::immich::collections::CollState,
 }
 
 impl Default for State {
@@ -289,6 +326,8 @@ impl Default for State {
             rx,
             sha1_busy: false,
             sha1_failed: HashSet::new(),
+            sha1_first: Default::default(),
+            coll: Default::default(),
             sha1_done: 0,
             sha1_idle_at: None,
             connections_path: None,
@@ -296,6 +335,10 @@ impl Default for State {
             store: None,
             cache_dir: None,
             links: HashMap::new(),
+            link_queue: Vec::new(),
+            link_checking: false,
+            asking: HashSet::new(),
+            answers: HashMap::new(),
             import: ImportProgress::default(),
             fetching: HashSet::new(),
             fetch_errors: HashMap::new(),
@@ -329,8 +372,11 @@ impl State {
 /// their master's file and are skipped), minus those that failed this session; at most `limit`
 /// (one batch: a large library is not copied path by path for every batch).
 pub(crate) fn sha1_pending(s: &crate::Session, limit: usize) -> Vec<(PhotoId, String)> {
-    s.catalog
-        .photos()
+    let first = s.remote.sha1_first.iter().filter_map(|id| s.catalog.photo(*id));
+    let mut seen = std::collections::HashSet::new();
+    first
+        .chain(s.catalog.photos())
+        .filter(|p| seen.insert(p.id))
         .filter(|p| p.sha1.is_none() && p.copy_of.is_none() && !p.local && !s.remote.sha1_failed.contains(&p.id))
         .filter(|p| p.preview_only.as_deref() != Some(LINK_ONLY))
         .filter_map(|p| match &p.source {

@@ -102,26 +102,38 @@ pub fn models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     let status = cached_status(app, &ctx);
     let downloads = cached_downloads(app, &ctx);
-    crate::dialog_frame::group_begin(ui, Some("Semantic search"));
-    ui.label(tr(
+    crate::dialog_frame::group_begin_help(ui, Some("Semantic search"), Some("semanticSearch"));
+    let r = ui.label(tr(
         "Searches the catalog by description (for example “moody studio portraits”) using image-text embeddings computed in the background.",
     ));
+    // `app.settings {section: "semanticSearch"}` (the indexing row's gear) brings this group into view
+    register(ui.ctx(), "section:semanticSearch", r.rect);
+    if app.ui.settings_section.as_deref() == Some("semanticSearch") {
+        r.scroll_to_me(Some(egui::Align::TOP));
+        app.ui.settings_section = None;
+    }
     let mut enabled = status["enabled"].as_bool() == Some(true);
-    if check(ui, "mlEnable", &mut enabled, "Index photos in the background for natural-language search") {
+    if check(ui, "mlEnable", &mut enabled, "Semantic search: search photos by description") {
         let _ = app.run("ml.enable", json!({"enabled": enabled}));
         invalidate_ml_caches(&ctx);
     }
+    super::settings::hint(ui, t, "Off: photos are not indexed and the AI search button is hidden.");
     ml_device_selector(app, ui, t, &status);
     if enabled && list["selected"].is_string() {
-        let indexed = status["indexedPhotos"].as_u64().unwrap_or(0);
-        let unindexed = status["unindexedPhotos"].as_u64().unwrap_or(0);
-        // named as arguments: a translated arm can't capture the caller's variables
-        let text = if unindexed == 0 {
-            tr_format!("{indexed} indexed", indexed = indexed)
-        } else {
-            tr_format!("{indexed} indexed, {unindexed} remaining", indexed = indexed, unindexed = unindexed)
+        let progress = app.session.execute("ml.indexStatus", &json!({})).unwrap_or(Value::Null);
+        let indexer = super::index_controls::Indexer {
+            key: "ml",
+            pause: "ml.pause",
+            resume: "ml.resume",
+            clear: "ml.clearIndex",
+            restart: "ml.restart",
+            clear_question: "Delete the search index? Indexing stays paused until you resume it.",
+            restart_question: "Delete the search index and index every photo again?",
         };
-        ui.label(RichText::new(text).font(t.font(11.5)).color(t.text_dim));
+        if super::index_controls::show(app, ui, t, &indexer, &progress) {
+            invalidate_ml_caches(&ctx);
+            app.caches.ml_next_pump = 0.0;
+        }
     }
     for m in &models {
         let dl = downloads.iter().find(|d| d["id"] == m["id"]);

@@ -167,8 +167,16 @@ fn watermark_preview(app: &mut LccApp, ui: &mut egui::Ui, wm: &lcc_engine::expor
     crate::widgets::register(ui.ctx(), "image:exportWatermarkPreview", r.rect);
 }
 
-/// About dialog tabs: (widget id suffix, label). The credits come from `crate::credits`.
-pub const ABOUT_TABS: &[(&str, &str)] = &[("about", "About"), ("contributors", "Contributors"), ("models", "Models")];
+/// The width most dialogs open at (points).
+const DIALOG_W: f32 = 380.0;
+
+/// Help ▸ What's New's width on a window `screen_w` points wide: three times a dialog's
+/// ([`DIALOG_W`]), so its long lines read as paragraphs, unless the window is narrower than that
+/// (then the window's width, less [`crate::dialog_frame::SCREEN_MARGIN`] each side).
+pub(crate) fn whats_new_width(screen_w: f32) -> f32 {
+    let room = if screen_w.is_finite() { screen_w - 2.0 * crate::dialog_frame::SCREEN_MARGIN } else { 0.0 };
+    (3.0 * DIALOG_W).min(room).max(1.0)
+}
 
 /// Help ▸ What's New: upstream's docs/whats-new.md and our docs/whats-new/ entries, joined by build.rs.
 pub const WHATS_NEW: &str = include_str!(concat!(env!("OUT_DIR"), "/whats-new.md"));
@@ -392,6 +400,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             sheet_w(screen, insets)
         } else if presets {
             crate::panels::presets_manager::MIN_SIZE[0].min(presets_max.x)
+        } else if matches!(dlg, Dialog::WhatsNew) {
+            whats_new_width(screen.width())
         } else {
             widest
         })
@@ -412,6 +422,8 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             Dialog::ChartProfile { .. } => 900.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Update => 500.0,
+            Dialog::About => 480.0,
+            Dialog::WhatsNew => whats_new_width(screen.width()),
             Dialog::Print => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
@@ -422,7 +434,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             Dialog::Export { .. } => 900.0_f32.min(screen.width() - 2.0 * crate::dialog_frame::SCREEN_MARGIN),
             Dialog::Rename { .. } | Dialog::ContactSheet { .. } | Dialog::Timelapse { .. } | Dialog::SlideshowExport { .. } | Dialog::EmailPhoto { .. } => 480.0,
             Dialog::CaptureTime { .. } | Dialog::LabelNames { .. } | Dialog::CreatePreset { .. } | Dialog::CreatePresetFolder { .. } => 440.0,
-            _ => 380.0,
+            _ => DIALOG_W,
         } })
         .show(ctx, |ui| {
             ui.spacing_mut().item_spacing.y = 8.0;
@@ -440,9 +452,6 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             } else {
                 crate::dialog_frame::ModalLayout::begin(ui, window_id)
             };
-            if matches!(dlg, Dialog::About) {
-                about_tabs(ui);
-            }
             // (Settings keeps its category list in place and scrolls its content itself)
             let settings_height = layout.body_max_height(ui);
             // dialogs laid out as a form (a label column beside the controls)
@@ -1388,32 +1397,25 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                     );
                 }
                 Dialog::About => {
-                    ui.set_min_width(680.0);
-                    let tab = ui.data_mut(|d| d.get_temp::<u8>(egui::Id::new(ABOUT_TAB_ID))).unwrap_or(0);
-                    match tab {
-                        1 => crate::credits::contributors_ui(app, ui),
-                        2 => crate::credits::models_ui(ui),
-                        _ => {
-                            ui.label(egui::RichText::new(lcc_brand::DISPLAY_NAME).font(t.semibold(20.0)).color(t.text));
-                            ui.label(crate::i18n::tr_format!("Version {}. A clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
-                            ui.label(crate::i18n::tr_format!(
-                                "MIT AND Apache-2.0. Fonts: {} (OFL). Icons: original.",
-                                crate::theme::font_credits(app.chinese_font.is_some())
-                            ));
-                            ui.add_space(10.0);
-                            for (label, url) in [
-                                ("{app} website", crate::links::APP_PAGE),
-                                ("Source code", crate::links::GITHUB),
-                                ("Join the Discord", crate::links::DISCORD),
-                            ]
-                            .into_iter()
-                            .filter(|(_, url)| !url.is_empty())
-                            {
-                                let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
-                                if r.clicked() {
-                                    let _ = crate::links::open(app, url);
-                                }
-                            }
+                    ui.label(egui::RichText::new(lcc_brand::DISPLAY_NAME).font(t.semibold(20.0)).color(t.text));
+                    ui.label(crate::i18n::tr_format!("Version {}. A clean-room, pure-Rust photo library and raw developer.", env!("CARGO_PKG_VERSION")));
+                    ui.label(crate::i18n::tr_format!(
+                        "MIT AND Apache-2.0. Fonts: {} (OFL). Icons: original.",
+                        crate::theme::font_credits(app.chinese_font.is_some())
+                    ));
+                    ui.add_space(10.0);
+                    for (id, label, url) in [
+                        ("website", "{app} website", crate::links::APP_PAGE),
+                        ("source", "Source code", crate::links::GITHUB),
+                        ("discord", "Join the Discord", crate::links::DISCORD),
+                    ]
+                    .into_iter()
+                    .filter(|(_, _, url)| !url.is_empty())
+                    {
+                        let r = ui.link(crate::i18n::tr(label)).on_hover_text(url);
+                        crate::widgets::register(ui.ctx(), format!("link:about-{id}"), r.rect);
+                        if r.clicked() {
+                            let _ = crate::links::open(app, url);
                         }
                     }
                 }
@@ -1994,24 +1996,6 @@ pub fn cull_params(
 }
 
 /// `90` → `1 min 30 s`.
-/// The About dialog's tabs: the header above its scrolling body.
-const ABOUT_TAB_ID: &str = "about_tab";
-fn about_tabs(ui: &mut egui::Ui) {
-    ui.set_min_width(680.0);
-    let tab_id = egui::Id::new(ABOUT_TAB_ID);
-    let mut tab = ui.data_mut(|d| d.get_temp::<u8>(tab_id)).unwrap_or(0);
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for (i, (id, label)) in ABOUT_TABS.iter().enumerate() {
-            if crate::widgets::text_button(ui, &format!("aboutTab-{id}"), label, usize::from(tab) == i).clicked() {
-                tab = u8::try_from(i).unwrap_or(0);
-            }
-        }
-    });
-    ui.data_mut(|d| d.insert_temp(tab_id, tab));
-    ui.separator();
-}
-
 pub fn fmt_gap(v: f64) -> String {
     let v = v.round() as u64;
     match v {

@@ -661,7 +661,7 @@ fn commands(_: &mut Session, _: &Value) -> Result<Value> {
                 pm.commands.iter().map(move |c| {
                     let values = m.command_values(&pm.id, &c.id, &c.dialog);
                     json!({"plugin": pm.id, "pluginName": pm.name, "command": c.id, "label": c.label, "menu": c.menu, "dialog": c.dialog,
-                        "prepare": c.prepare, "values": values})
+                        "prepare": c.prepare, "quickAction": c.quick_action, "values": values})
                 })
             })
             .collect();
@@ -1376,7 +1376,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "plugin.revoke", "Revoke Plug-in Permission", [], None, "{id, group: catalog|metadataWrite|libraryAdd|pixels|crop|virtualCopy|network|fs|programs, value?: the host, folder or program id (none: all of the group)}: takes back one permission; the plug-in may ask for it again → granted", always, revoke),
         cmd!(query "plugin.picture", "Plug-in Picture", [], None, "{id, picture?: header|icon (header), theme?: dark|light (dark)}: a plug-in's or pixel filter's own picture: its header for that interface theme, or its icon (the manifest's `header` and `icon`) → {svg: SVG text | null}", always, picture),
         cmd!(query "plugin.log", "Plug-in Log", [], None, "{id} → [lines]", always, log),
-        cmd!(query "plugin.commands", "Plug-in Commands", [], None, "{} → [{plugin, pluginName, command, label, menu, dialog, prepare, values: what the dialog opens with (the last-run values of fields that remember, else defaults)}] of enabled plug-ins", always, commands),
+        cmd!(query "plugin.commands", "Plug-in Commands", [], None, "{} → [{plugin, pluginName, command, label, menu, dialog, prepare, quickAction, values: what the dialog opens with (the last-run values of fields that remember, else defaults)}] of enabled plug-ins", always, commands),
         cmd!(query "plugin.prepare", "Prepare Plug-in Command", [], None, "{plugin, command, ids?, source?: {kind: album|smartAlbum|folder|allPhotos|other, id?, name?, path?} (default: the Library source shown)}: asks a command with `prepare` how to run on ids / the selection (others: their dialog as declared) → {dialog: [field + value], error: why the plug-in's own options are missing | null} | {run: args} | {message}; runs nothing", always, prepare),
         cmd!(query "plugin.run", "Run Plug-in Command", [], None, "{plugin, command, args?: dialog values, ids?, source?: as plugin.prepare, wait?: a job runs to its end}: runs a plug-in menu command on ids / the selection, telling it the Library source it was started from (`source`, default: the one shown) → its result; args given are remembered for its dialog. A command with `prepare` is asked first: a message → {message, ran: false} and nothing runs; its own args are used when `args` is missing; args are checked against its dialog as prepared. A job (a command with `job`) runs on a worker with a row in the activity stack and returns at once → {job: its activity id (activity.list, activity.cancel), running: true, plugin, command}; with `wait: true` it runs here to its end → its result (a cancelled job is an error). Headless sessions answer a job's catalog reads only with `wait`", always, run),
         cmd!(query "plugin.settings", "Plug-in Settings", [], None, "{id} → {id, fields: [field + value], values: {key: value}, error: why the plug-in's own options are missing | null}; kept for the whole app, defaults for what was never set", always, settings),

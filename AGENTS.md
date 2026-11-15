@@ -196,7 +196,7 @@ One rule (2026-11-10): **use only material you may legally derive from.**
   skips in `target/ci/report.json` + `summary.md`.
 
 ## Map of the code
-`geom`, `color`, `raster`, `tiff` (L0) → `raw`, `codecs`, `meta`, `develop` (L1) → `pipeline` → `catalog` → `engine`
+`geom`, `color`, `raster`, `tiff`, `sync` (device-sync model) (L0) → `raw`, `codecs`, `meta`, `develop` (L1) → `pipeline` → `catalog` → `engine`
 → `ui-egui`, `mcp` (L5) → apps `lcc-app` (desktop), `lcc-cli` (render/commands/MCP), `lcc-web`; `brand` carries
 `brand.toml`; `scenes` = demo photos; `xtask` = tooling (`ci`, `layers`, `assets`, `parity`, `wasm`, `corpus`,
 `stats`, `brand check`, `docs`, `run`, `package`, `install`); `testkit` = test helpers (dev-dep only).
@@ -204,8 +204,8 @@ Nix: `nix build` (binaries + fonts + desktop metadata; community-maintained, CI 
 `nix develop` = dev shell.
 
 ## Contributor credits
-- About ▸ Contributors/Models compile from `contributors/contributors.json` (generated, never hand-edit) and
-  `contributors/people.toml`. See `docs/contributors.md`.
+- Credits live in `contributors/contributors.json` (generated, never hand-edit) and `contributors/people.toml`
+  (the app no longer shows them). See `docs/contributors.md`.
 - Agents: if your human's username lacks a `[people.<username>]` entry, ask them once whether they want a real/
   display/synced-GitHub name; if yes, add **only their own** entry (template at the file top) in their PR, committed
   as them. Never add or edit anyone else's entry; never touch `contributors.json`.

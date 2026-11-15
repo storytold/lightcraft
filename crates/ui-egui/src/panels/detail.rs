@@ -1791,10 +1791,18 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         all_masks_pill(app, ui, canvas, img_rect);
     }
     info_overlay(app, &p, canvas, &photo, pill);
-    if app.ui.shot_info {
+    // In the full-screen preview the shot-info strip follows the info overlay: with I set to Off
+    // the photo carries no text at all, and it stays that way from photo to photo.
+    if app.ui.shot_info && (!fullscreen || app.ui.info_overlay != crate::state::InfoOverlay::Off) {
         // zoomed in, it sits over the photo's bottom edge: not while a tool works on the pixels
         let busy = super::surface_osd::on_photo_tool(app, ui.ctx());
-        shot_info_strip(ui, canvas, img_rect, &shot_info(&photo.meta, native), busy);
+        // the Modern layout's floating dock covers the photo's bottom edge, and an open group's
+        // card grows above it: the strip keeps clear of the dock, and hides while a card is open
+        let modern = crate::modern::on(app);
+        let clear = if modern { crate::modern_dock::bottom_clearance(app) } else { 0.0 };
+        if !(modern && app.ui.modern.group.is_some()) {
+            shot_info_strip(ui, canvas, img_rect, &shot_info(&photo.meta, native), busy, clear);
+        }
     }
     if super::faces::face_boxes_shown(app) {
         // a name box left open on another photo is dropped
@@ -6189,7 +6197,7 @@ fn lens_range_text(lens: &str, (a, b): (f32, f32)) -> Option<String> {
 /// dropped from the end when it doesn't fit (widget `loupe:shotInfo`). `hide_over`: an on-photo
 /// tool is in use, so the pill over the photo is left out (under the photo it stays: it covers
 /// nothing).
-fn shot_info_strip(ui: &egui::Ui, canvas: Rect, img: Rect, parts: &[String], hide_over: bool) {
+fn shot_info_strip(ui: &egui::Ui, canvas: Rect, img: Rect, parts: &[String], hide_over: bool, clear_bottom: f32) {
     // the part of the photo on screen (zoomed in, the photo is far bigger than the canvas)
     let img = img.intersect(canvas);
     if parts.is_empty() || !img.is_positive() {
@@ -6203,9 +6211,13 @@ fn shot_info_strip(ui: &egui::Ui, canvas: Rect, img: Rect, parts: &[String], hid
     if !below && hide_over {
         return;
     }
-    let top = if below { img.bottom() + 3.0 } else { img.bottom() - h - 6.0 };
+    // `clear_bottom` is the height something floating over the canvas' bottom edge takes (the
+    // Modern layout's dock): the strip sits above that rather than under it
+    let top = (if below { img.bottom() + 3.0 } else { img.bottom() - h - 6.0 }).min(canvas.bottom() - clear_bottom - h);
+    // on the photo it needs its own backing; under it, the page shows through
+    let on_photo = top < img.bottom() - 1.0;
+    let colour = if on_photo { Color32::from_gray(230) } else { t.text_dim };
     let max_w = (img.width() - 16.0).max(40.0);
-    let colour = if below { t.text_dim } else { Color32::from_gray(230) };
     let width = |s: &str| p.layout_no_wrap(s.to_string(), font.clone(), colour).size().x;
     let mut shown: Vec<String> = parts.to_vec();
     // least important last: the size, then the lens give way first; the last part left is cut
@@ -6228,7 +6240,7 @@ fn shot_info_strip(ui: &egui::Ui, canvas: Rect, img: Rect, parts: &[String], hid
     let galleys: Vec<_> = shown.into_iter().map(|s| p.layout_no_wrap(s, font.clone(), colour)).collect();
     let total = strip_width(&galleys.iter().map(|g| g.size().x).collect::<Vec<_>>());
     let r = Rect::from_center_size(pos2(img.center().x, top + h / 2.0), vec2(total + 2.0 * STRIP_PAD, h));
-    if !below {
+    if on_photo {
         p.rect_filled(r, 9.0, Color32::from_black_alpha(140));
     }
     let mut x = r.left() + STRIP_PAD;

@@ -1,0 +1,4 @@
+## Develop
+
+- **Tool profiles:** Settings ▸ Develop customises the Develop panel's sliders. The built-in Default (every group) and Witchcraft (Primaries and HSL Curves, Eboda's Color Grading hidden) profiles can't be changed; your own can be added, duplicated, renamed and deleted, switch any group off, hide single sliders and options, and hold one Custom group of chosen sliders in a chosen order. A low row at the top of the panel picks the profile, with a gear to Settings ▸ Develop; `view.toolProfile` and `view.toolProfileEdit` do the same for scripts and agents. Stored profiles naming sliders a later build doesn't know keep the rest.
+- **Tidier panel head:** Browse Profiles joined Edit, Crop and Remove in the tool row; the profile row and the Edit title line are gone, and Auto · B&W | HDR open the Basic group.

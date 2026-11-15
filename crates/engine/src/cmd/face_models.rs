@@ -24,7 +24,12 @@ use crate::{EngineError, Result, Session};
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(super) struct FaceSettings {
+    /// Recognition (the background face scan) is on. Off until the user switches it on: a missing file or field reads
+    /// as off, and a file that says on (someone switched it on before) stays on.
     pub(super) enabled: bool,
+    /// The background scan is paused (`faces.pause`): it stays paused across restarts until `faces.resume`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) paused: bool,
     /// The installed recogniser in use.
     pub(super) embedder: Option<String>,
     /// Keep every face model on the CPU, even when the GPU would be faster.
@@ -279,6 +284,7 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({
         "dir": dir.as_ref().map(|d| d.display().to_string()),
         "enabled": settings.enabled,
+        "paused": settings.paused,
         "embedder": settings.embedder,
         // how many of a person's best matching faces a match is based on (`faces.matching`)
         "topFaces": settings.top_faces(),
@@ -330,16 +336,28 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
     let acknowledged = p.get("acknowledged").and_then(Value::as_bool).unwrap_or(false);
     let activate = p.get("activate").and_then(Value::as_bool).unwrap_or(true);
+    let enable = p.get("enable").and_then(Value::as_bool).unwrap_or(false);
     refresh_catalog(s);
     let ins = inspect_file(path, C, None, &catalog_manifests(s))?;
-    install_file(s, C, Path::new(path), ins, acknowledged, activate, false)
+    install_file(s, C, Path::new(path), ins, acknowledged, activate, enable && activate, false)
 }
 
-/// Install the inspected model file `src`. A recognition model that passes its self-test becomes the one in use and
-/// recognition is switched on (`activate`, the default): installing a model is how someone says they want it.
+/// Install the inspected model file `src`. A recognition model that passes its self-test becomes the one in use
+/// (`activate`, the default); recognition itself is switched on only with `enable` (the face scan can take a long time,
+/// so it is off until the user turns it on).
 /// `verified` is for a download that was already checked against its recorded hash: it is moved into place instead
 /// of being copied and read again.
-fn install_file(s: &mut Session, c: &str, src: &Path, ins: Inspection, acknowledged: bool, activate: bool, verified: bool) -> Result<Value> {
+#[allow(clippy::too_many_arguments)]
+fn install_file(
+    s: &mut Session,
+    c: &str,
+    src: &Path,
+    ins: Inspection,
+    acknowledged: bool,
+    activate: bool,
+    enable: bool,
+    verified: bool,
+) -> Result<Value> {
     let dir = models_dir(s, c)?;
     let m = match ins.suggestion {
         Suggestion::Known(m) | Suggestion::Draft { manifest: m, .. } => m,
@@ -397,11 +415,17 @@ fn install_file(s: &mut Session, c: &str, src: &Path, ins: Inspection, acknowled
         s.face_downloads.staged_file_used(src);
     }
     // the newest model is the one in use (the earlier one stays installed, and `faces.models.select` switches back)
+    // recognition is not switched on by an install (it is off until the user turns it on, since the scan can take a
+    // long time), unless the caller asks (`enable: true`)
     if activate && m.role == Role::Embedder {
         let mut st = read_settings(&dir);
         st.embedder = Some(m.id.clone());
-        st.enabled = true;
+        st.enabled |= enable;
         write_settings(&dir, &st)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            s.faces.switches_seen = None;
+        }
     }
     let now = read_settings(&dir);
     let selected = now.embedder.as_deref() == Some(m.id.as_str());
@@ -422,7 +446,8 @@ pub(super) fn finish_downloads(s: &mut Session) {
     const C: &str = "faces.models.download";
     let extra = catalog_manifests(s);
     for (id, path, sha) in s.face_downloads.finished() {
-        let outcome = inspect_file(&path.to_string_lossy(), C, Some(&sha), &extra).and_then(|ins| install_file(s, C, &path, ins, true, true, true));
+        let outcome =
+            inspect_file(&path.to_string_lossy(), C, Some(&sha), &extra).and_then(|ins| install_file(s, C, &path, ins, true, true, false, true));
         match outcome {
             Ok(_) => s.face_downloads.set_outcome(&id, State::Installed),
             Err(e) => {
@@ -605,17 +630,37 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     // the background scan notices at once, not within the second it trusts its last look
     #[cfg(not(target_arch = "wasm32"))]
     {
-        s.faces.enabled_seen = None;
+        s.faces.switches_seen = None;
     }
     Ok(json!({"enabled": st.enabled}))
+}
+
+/// Pause (or resume) the background face scan, remembered in the settings file so it stays paused across restarts.
+pub(super) fn set_paused(s: &mut Session, cmd: &str, paused: bool) -> Result<Value> {
+    let dir = models_dir(s, cmd)?;
+    let mut st = read_settings(&dir);
+    st.paused = paused;
+    write_settings(&dir, &st)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        s.faces.switches_seen = None;
+    }
+    Ok(json!({"enabled": st.enabled, "paused": st.paused}))
+}
+
+/// Whether the face scan is switched on and whether it is paused, as saved.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(super) fn switches(dir: &Path) -> (bool, bool) {
+    let st = read_settings(dir);
+    (st.enabled, st.paused)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, enabled, embedder, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, installed, selected}]}", always, list),
         cmd!(query "faces.models.inspect", "Inspect Face Model File", [], None, "{path} → what a .onnx file is: {kind: known | draft | unsupported, model, assumptions, reason, alreadyInstalled}; installs nothing", always, inspect),
-        cmd!(query "faces.models.install", "Install Face Model", [], None, "{path, acknowledged: true, activate?: true} → {installed, active: {embedder, enabled}}: copy a .onnx face recognition model into the models folder. `acknowledged` must be true: the user has been shown its licence (see inspect) and accepted it. Unless `activate` is false the model becomes the one in use and recognition is switched on; an earlier model stays installed", always, install),
-        cmd!(query "faces.models.download", "Download Face Model", [], None, "{id, acknowledged: true} → {started, from}: fetch a recognition model the app has a pinned address for (see `downloadHost` in the list), in the background over pure-Rust https (lcc-fetch). `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, then installed, chosen and switched on by itself; `faces.models.downloads` shows how far it is", always, download),
+        cmd!(query "faces.models.install", "Install Face Model", [], None, "{path, acknowledged: true, activate?: true, enable?: false} → {installed, active: {embedder, enabled}}: copy a .onnx face recognition model into the models folder. `acknowledged` must be true: the user has been shown its licence (see inspect) and accepted it. Unless `activate` is false the model becomes the one in use; recognition stays as it was (off until switched on with `faces.enable`) unless `enable` is true; an earlier model stays installed", always, install),
+        cmd!(query "faces.models.download", "Download Face Model", [], None, "{id, acknowledged: true} → {started, from}: fetch a recognition model the app has a pinned address for (see `downloadHost` in the list), in the background over pure-Rust https (lcc-fetch). `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, then installed and chosen by itself (recognition is switched on with `faces.enable`); `faces.models.downloads` shows how far it is", always, download),
         cmd!(query "faces.models.downloads", "Face Model Downloads", [], None, "{} → {running, downloads: [{id, state: running | done | installed | failed | cancelled, bytes, total, error, from}]}: also installs any download that has arrived; `installed` stays listed until `faces.models.downloadCancel` clears it", always, downloads),
         cmd!(query "faces.models.downloadCancel", "Cancel Face Model Download", [], None, "{id} → {discarded}: stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "faces.models.test", "Test Face Model", [], None, "{id} → {ok, result: {loadMs, embedMs, dimension, checks}}: load an installed recognition model and check it gives sensible faces; needs the recognition runtime", always, test),

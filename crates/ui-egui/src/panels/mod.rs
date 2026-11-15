@@ -24,6 +24,7 @@ pub mod folders;
 pub mod genfill;
 pub mod grid;
 pub mod histogram;
+pub mod index_controls;
 pub mod keymap;
 pub mod keyword_list;
 pub mod keywording;
@@ -61,6 +62,7 @@ pub mod rules_editor;
 pub mod rules_move;
 pub mod second;
 pub mod settings;
+pub mod settings_develop;
 pub mod settings_folders;
 pub mod settings_profiles;
 pub mod slide_layout;
@@ -70,6 +72,8 @@ pub mod slide_titles;
 pub mod slideshow;
 pub mod strip;
 pub mod surface_osd;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sync_pill;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod tether_bar;
 pub mod topbar;

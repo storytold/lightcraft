@@ -75,6 +75,14 @@ jobs:
           # installer finishes silently.
           grep -qF '<DialogRef Id="ExitDialog" />' "$OUT/windows/app.wxs" \
             || { echo "::error::ExitDialog is not referenced; installs and removes end without a completion dialog"; exit 1; }
+          # The Start-menu shortcut must be a plain link to the installed exe, not an advertised
+          # one: an advertised shortcut resolves through its product's ProductCode, which every
+          # MajorUpgrade replaces, so Start-menu entries and taskbar pins stop working after an
+          # update (windows-arm64.yml checks the real thing on Windows).
+          grep -qF 'Advertise="no"' "$OUT/windows/app.wxs" \
+            || { echo "::error::the Start-menu shortcut must not be advertised (Advertise=\"no\")"; exit 1; }
+          grep -qF 'Target="[INSTALLDIR]' "$OUT/windows/app.wxs" \
+            || { echo "::error::the Start-menu shortcut needs an explicit Target=\"[INSTALLDIR]...\""; exit 1; }
           desktop-file-validate "$OUT/linux/$APP_ID.desktop"
           appstreamcli validate --no-net --explain "$OUT/linux/$APP_ID.metainfo.xml"
           python3 - <<'EOF'

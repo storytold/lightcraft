@@ -19,9 +19,54 @@ pub fn specs() -> Vec<CommandSpec> {
             "Enable Background AI Indexing",
             [],
             None,
-            "{enabled: bool} → {enabled}: turn background AI photo indexing on or off for this session",
+            "{enabled: bool} → {enabled}: turn semantic search and its background photo indexing on or off (saved in the models folder; on unless switched off). Off: nothing is indexed, `search.semantic` and `library.filter {semantic}` are refused, and a description filter on the grid is cleared; the index already made is kept",
             super::always,
             |s, p| s.ml_enable(p)
+        ),
+        cmd!(
+            query "ml.indexStatus",
+            "Search Indexing Status",
+            [],
+            None,
+            "{} → {enabled, paused, state: off | idle | indexing | paused | complete, done, total, indexedPhotos, unindexedPhotos}: how far background indexing for semantic search is",
+            super::always,
+            |s, _| s.ml_progress()
+        ),
+        cmd!(
+            "ml.pause",
+            "Pause Search Indexing",
+            [],
+            None,
+            "{} → {enabled, paused}: pause background indexing for semantic search (the photo being embedded waits, nothing new starts); it stays paused across restarts until `ml.resume`",
+            super::always,
+            |s, _| s.ml_set_paused("ml.pause", true)
+        ),
+        cmd!(
+            "ml.resume",
+            "Resume Search Indexing",
+            [],
+            None,
+            "{} → {enabled, paused}: resume paused background indexing for semantic search",
+            super::always,
+            |s, _| s.ml_set_paused("ml.resume", false)
+        ),
+        cmd!(
+            "ml.clearIndex",
+            "Clear Search Index",
+            [],
+            None,
+            "{} → as ml.indexStatus: drop this library's semantic search index (every photo's embedding, of every model) and pause indexing. Destructive: frontends ask first",
+            super::always,
+            |s, p| s.ml_clear_index(p)
+        ),
+        cmd!(
+            "ml.restart",
+            "Restart Search Indexing",
+            [],
+            None,
+            "{} → as ml.indexStatus: drop the semantic search index (as ml.clearIndex) and index the library again from the start (resumes paused indexing)",
+            super::always,
+            |s, p| s.ml_restart(p)
         ),
         cmd!(
             query "ml.models.list",

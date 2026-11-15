@@ -94,7 +94,8 @@ fn keep_copy_inner(dir: &Path, from: u32, to: u32, files: &[&str]) -> io::Result
     Ok(done)
 }
 
-/// Copy and verify every file into `to_dir`, then write the README.
+/// Copy and verify every file into `to_dir`, then write the README. Byte progress goes to
+/// [`crate::progress`] while a catalog operation that shows it is running.
 fn fill(dir: &Path, to_dir: &Path, from: u32, to: u32, files: &[&str]) -> io::Result<()> {
     let mut names: Vec<String> = files.iter().map(|f| (*f).to_string()).collect();
     if let Some(entry) = find_entry(dir).and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())) {
@@ -102,12 +103,13 @@ fn fill(dir: &Path, to_dir: &Path, from: u32, to: u32, files: &[&str]) -> io::Re
     }
     names.push(SETTINGS_FILE.to_string());
     let mut written = 0u64;
+    let total = names.iter().map(|n| dir.join(n)).filter(|p| p.is_file()).map(|p| p.metadata().map(|m| m.len()).unwrap_or(0)).sum();
     for (i, name) in names.iter().enumerate() {
         let src = dir.join(name);
         if !src.is_file() {
             continue;
         }
-        copy_verified(&src, &to_dir.join(name), &mut written)?;
+        copy_verified(&src, &to_dir.join(name), written, total, &mut written)?;
         #[cfg(test)]
         if i == 0 && fault() == Some(Fault::Crash) {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "simulated crash"));
@@ -127,8 +129,11 @@ fn fill(dir: &Path, to_dir: &Path, from: u32, to: u32, files: &[&str]) -> io::Re
     Ok(())
 }
 
-/// Copy `src` to `dst`, sync it, then read both back and compare.
-fn copy_verified(src: &Path, dst: &Path, written: &mut u64) -> io::Result<()> {
+/// Copy `src` to `dst`, sync it, then read both back and compare. `written`/`total` say how many
+/// of the copy's bytes are done (reported to [`crate::progress`] while something is running, so
+/// the interface can show a moving bar over a store of gigabytes).
+fn copy_verified(src: &Path, dst: &Path, done: u64, total: u64, written: &mut u64) -> io::Result<()> {
+    let report = crate::progress::active();
     let mut input = File::open(src)?;
     let mut out = File::create(dst)?;
     let mut buf = vec![0u8; CHUNK];
@@ -148,6 +153,9 @@ fn copy_verified(src: &Path, dst: &Path, written: &mut u64) -> io::Result<()> {
         }
         out.write_all(chunk)?;
         *written = written.saturating_add(n as u64);
+        if report {
+            crate::progress::bytes(done.saturating_add(*written), total);
+        }
     }
     out.sync_all()?;
     drop(out);

@@ -49,6 +49,7 @@ pub fn compare_pair(app: &mut LccApp) -> Option<(PhotoId, PhotoId)> {
 pub fn enter_compare(app: &mut LccApp) -> Result<Value, String> {
     app.ui.compare = None;
     let (a, b) = compare_pair(app).ok_or("Compare needs at least two photos")?;
+    app.leave_fullscreen_preview();
     app.ui.view = ViewMode::Compare;
     // the candidate is active: rating/flag keys judge it against the select
     select_pair(app, a, b, b);

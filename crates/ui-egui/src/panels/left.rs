@@ -1415,6 +1415,13 @@ fn albums_tree(app: &mut LccApp, ui: &mut egui::Ui, all: &AlbumKids, parent: Opt
                 app.ui.dragging_album = Some(a.id.0);
             }
             album_drag_over(app, ui, &resp, a, None, indent);
+            // the device-sync pill, left of the photo count
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(pill) = app.session.sync_collection_pill(a.id) {
+                let size = super::sync_pill::size(ui, &pill);
+                let at = egui::pos2(resp.rect.right() - 44.0 - size.x, resp.rect.center().y - size.y / 2.0);
+                super::sync_pill::paint(ui, at, &pill, &format!("badge:syncCollection:{}", a.id.0));
+            }
             if !a.is_smart() {
                 drop_target(app, ui, &resp, a);
             }
@@ -1886,6 +1893,16 @@ fn folder_menu(app: &mut LccApp, resp: &egui::Response, a: &Album) {
             app.session.catalog.albums().filter(|f| f.folder && !is_within(app, f.id, a.id)).map(|f| (f.id.0, f.name.clone())).collect();
         folders.sort_by_key(|(_, n)| n.to_lowercase());
         super::collections::export_item(app, ui, a.id.0, &a.name);
+        // how this collection syncs with other devices: Settings ▸ Sync
+        #[cfg(not(target_arch = "wasm32"))]
+        if a.smart.is_none() && !a.quick {
+            let b = ui.button(crate::i18n::tr("Sync…"));
+            crate::widgets::register(ui.ctx(), format!("menu:albumSync:{}", a.id.0), b.rect);
+            if b.clicked() {
+                let _ = app.run("app.settings", json!({"tab": "sync"}));
+                ui.close();
+            }
+        }
         if a.folder {
             super::collections::import_item(app, ui, Some(a.id.0));
         }

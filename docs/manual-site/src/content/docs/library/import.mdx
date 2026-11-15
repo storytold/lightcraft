@@ -18,8 +18,6 @@ import Shot from '../../../components/Shot.astro';
 - **Organise** copies by day, month, one folder or a custom template such as `{date:%Y}/{date:%Y%m%d}`; the example destination is shown.
 - **Rename** with a template and live example; the **Tags** picker inserts `{name}`, `{seq:4}`, `{date:…}`, `{camera}`, `{lens}`, `{iso}` and more.
 - **Apply on import**: develop preset, metadata preset (copyright, creator), keywords, a collection, and **Batch edits** sliders (Light, Vibrance, Clarity, Sharpening, Grain, Vignette) as one History step.
-- **Import as a tab** (**Settings ▸ Import**, on by default): the **Import** tab is a *Browse* view. Cull a card or folder in Grid, Square Grid or Loupe, pick **Show All** or **Show Not Imported**, then import picks, the selection or all. **Develop without Import** edits a browsed photo into its XMP sidecar, catalog untouched.
-- **Local** (left panel): browse Pictures, Desktop, Downloads, Home or any folder without importing; **Add N to My Photos** imports. Browsed photos are never deleted by Delete or Delete Rejected.
 - **Drag and drop**: files or folders dropped on the window open the review (or import at once with **Settings ▸ Import ▸ Import dropped photos without review**). A card says what the drop will do.
 - **Import presets**: save and reuse the dialog's settings (**Save as Preset**).
 - **Raw defaults** (**Settings**): built-in, a preset, or per camera model; applied to new photos.
@@ -27,6 +25,12 @@ import Shot from '../../../components/Shot.astro';
 - Import runs on a worker thread with a progress row and **Cancel** in the activity stack; the whole import is one undo step.
 
 <NeedsImage what="The Import Photos review: source on the left, thumbnail grid with checkboxes, and Transfer, Destination, Rename, Apply on Import settings on the right." />
+
+## Browse without importing
+
+- **Import as a tab** (**Settings ▸ Import**, on by default): the **Import** tab is a *Browse* view. Cull a card or folder in Grid, Square Grid or Loupe, pick **Show All** or **Show Not Imported**, turn **Include subfolders** on or off (a folder browsed for the first time includes them; the choice is kept when the same folder is browsed again), then **Import** takes the picks, the selection or all (the bottom bar switches the view). **Develop** opens the selected photo without importing it, edits to its XMP sidecar, catalog untouched; **Print**, **Export** and **Slideshow** (module picker, shortcuts) do the same, and moving between them stays on that photo until you go back to Library. A file already in the library opens as its library photo.
+- **Local** (left panel): browse Pictures, Desktop, Downloads, Home or any folder without importing; **Add N to My Photos** imports. Browsed photos are never deleted by Delete or Delete Rejected.
+- **Eye focus strip while browsing**: Settings ▸ Interface ▸ Detail View ▸ **Show the eye focus strip while browsing a folder** (see [Settings](../../reference/settings/#detail-view-and-eye-focus-strip)); **Settings ▸ Performance ▸ Background preparation ▸ Culling** sets how far ahead browsed photos are prepared.
 
 <Aside type="note" title="Modern layout">
   The **+** button (top right) opens Import. More sources: **File ▸ Import Photos…**, **File ▸ More Imports**. See [Three layouts](../../start/layouts/).

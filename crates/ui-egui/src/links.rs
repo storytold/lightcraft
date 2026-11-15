@@ -1,11 +1,11 @@
 //! Project links (Help menu, About dialog), from the brand (`lcc_brand`).
 
-/// This app's web page.
-pub const APP_PAGE: &str = lcc_brand::HOMEPAGE;
+/// This app's web site (brand.toml `website`, else `homepage`).
+pub const APP_PAGE: &str = lcc_brand::WEBSITE;
 /// This app's source repository.
 pub const GITHUB: &str = lcc_brand::REPOSITORY;
-/// The user documentation (docs/ in the repository).
-pub const HELP: &str = lcc_brand::REPOSITORY;
+/// The user guide (brand.toml `docs`, else the repository).
+pub const HELP: &str = lcc_brand::DOCS;
 /// The community chat (empty when the brand has none: no link is shown).
 pub const DISCORD: &str = lcc_brand::DISCORD;
 /// Where feedback and bug reports go.

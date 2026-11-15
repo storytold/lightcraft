@@ -47,7 +47,6 @@ pub mod comments_ui {
 }
 pub mod control;
 pub mod creations_ui;
-pub mod credits;
 pub mod cull_toast;
 pub mod date_picker;
 pub mod dialog_frame;
@@ -68,6 +67,7 @@ mod focus_scan;
 pub mod folder_poll;
 mod frame_rate;
 pub mod headless;
+pub mod help_link;
 pub mod help_overlay;
 pub mod i18n;
 mod i18n_fork;
@@ -107,6 +107,7 @@ mod pointer_repair;
 pub mod print_ui;
 pub mod print_view;
 pub mod progress;
+pub mod quick_bar;
 pub mod rating;
 pub mod recheck;
 pub mod region;
@@ -134,6 +135,7 @@ pub mod text_field;
 pub mod theme;
 pub mod timelapse_ui;
 pub mod titlebar;
+pub mod tool_profiles;
 pub mod video_ui;
 pub mod video_view;
 pub mod view_state;
@@ -267,6 +269,8 @@ mod tests_guided_guides;
 #[cfg(test)]
 mod tests_hdr_zoom_cache;
 #[cfg(test)]
+mod tests_help_links;
+#[cfg(test)]
 mod tests_histogram_drag;
 #[cfg(test)]
 mod tests_histogram_modes;
@@ -387,15 +391,17 @@ mod tests_presets_manager;
 #[cfg(test)]
 mod tests_preview_limit;
 #[cfg(test)]
+mod tests_preview_queue;
+#[cfg(test)]
 mod tests_print;
 #[cfg(test)]
 mod tests_profile_manager;
 #[cfg(test)]
-mod tests_profile_menu;
-#[cfg(test)]
 mod tests_profiles_layout;
 #[cfg(test)]
 mod tests_progress;
+#[cfg(test)]
+mod tests_quick_bar;
 #[cfg(test)]
 mod tests_quit_unsaved;
 #[cfg(test)]
@@ -418,6 +424,8 @@ mod tests_sam_setup;
 mod tests_scroll;
 #[cfg(test)]
 mod tests_settings_back;
+#[cfg(test)]
+mod tests_settings_categories;
 #[cfg(test)]
 mod tests_settings_profiles;
 #[cfg(test)]
@@ -456,6 +464,8 @@ mod tests_titlebar;
 mod tests_tool_overlay;
 #[cfg(test)]
 mod tests_tool_pan;
+#[cfg(test)]
+mod tests_tool_profiles;
 #[cfg(test)]
 mod tests_tool_row;
 #[cfg(test)]
@@ -947,6 +957,8 @@ pub struct LccApp {
     pub(crate) hq_drag: region::HqDrag,
     /// The eye focus strip's results and crops (`view.eyeFocus`).
     pub(crate) eye_strip: eye_strip::EyeStrip,
+    /// The quick settings bar in the module bar (`quick_bar`): its fade and the entry it flashes.
+    pub(crate) quick_bar: quick_bar::QuickBar,
     /// Where the activity stack ended last frame (None: not shown), so overlays under it keep clear.
     pub(crate) activity_bottom: Option<f32>,
     /// The eye job key of the photo the strip shows (for `ui.inspect`).
@@ -1295,6 +1307,7 @@ impl LccApp {
             still_refine: Default::default(),
             hq_drag: Default::default(),
             eye_strip: Default::default(),
+            quick_bar: Default::default(),
             activity_bottom: None,
             eye_key: None,
             whole_since: None,
@@ -1595,6 +1608,11 @@ impl LccApp {
                 "catalog.checkIntegrity" => Some(i18n::tr("The catalog failed the integrity test: back it up and optimize it").to_string()),
                 "catalog.optimize" => Some(i18n::tr("Catalog optimized").to_string()),
                 "library.clearPreviews" => Some(format!("✓ {}", i18n::tr("Discard Preview Cache"))),
+                // a build asked for while another runs waits for its turn (the menu stays open
+                // for the next one); the row of the running build is already on the stack
+                "library.buildPreviews" | "library.smartPreviews" if r.as_ref().is_ok_and(|v| v["queued"] == true) => {
+                    Some(i18n::tr("Queued: it starts when the running preview build finishes").to_string())
+                }
                 "develop.autoSync" => Some(format!("{}: {}", i18n::tr("Auto Sync"), i18n::tr(if self.session.auto_sync { "On" } else { "Off" }))),
                 // a vignetting calibration left off photos without a fitting reference (Apply, Sync, Paste)
                 "vignettingCalibration.apply" | "develop.sync" | "develop.paste" => {
@@ -1754,10 +1772,32 @@ impl LccApp {
         panels::slideshow::tick(self, ctx);
     }
 
+    /// Leave the full-screen preview: a view or module switch asks for the app's chrome back (Esc
+    /// and F keep their own paths). A running slide show ends with the preview, as Esc ends it
+    /// (releasing its rendered slides).
+    pub(crate) fn leave_fullscreen_preview(&mut self) {
+        if self.ui.slideshow.is_some() {
+            panels::slideshow::end(self);
+        }
+        self.ui.fullscreen = false;
+    }
+
     /// Announce the end of a Build Previews run.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
-        let Some(b) = self.session.preview_build.clone() else { return };
+        let b = self.session.preview_build.clone();
+        // a queued preview build starts once no build that was asked for is running — it preempts
+        // the background preparation's, as a build asked for from the menu does — but never on
+        // the frame that says the last one is done: starting a build is the 1.3 s job-making of
+        // a big library, and that frame has just painted
+        let announcing = b
+            .as_ref()
+            .is_some_and(|b| b.finished.load(Ordering::Relaxed) && self.ui.preview_build_seen != Some((std::sync::Arc::as_ptr(b) as usize, true)));
+        if !announcing && !self.session.preview_queue.is_empty() && !self.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background)
+        {
+            self.preview_queue_next();
+        }
+        let Some(b) = b else { return };
         let key = std::sync::Arc::as_ptr(&b) as usize;
         if b.finished.load(Ordering::Relaxed) {
             if self.ui.preview_build_seen != Some((key, true)) {
@@ -1775,10 +1815,22 @@ impl LccApp {
                     msg.push_str(&crate::i18n::tr_format!(" · {failed} couldn't be rendered", failed = failed));
                 }
                 self.toast(ctx, msg);
+                // the frame after this one starts the next queued build, if any
+                if !self.session.preview_queue.is_empty() {
+                    ctx.request_repaint();
+                }
             }
         } else {
             // The activity stack shows the run while it works; poll for the end.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
+    }
+
+    /// Start the next preview build queued behind one that has ended ([`Session::preview_queue`]);
+    /// one that no longer can start says so in the status line, as its requester would have seen.
+    fn preview_queue_next(&mut self) {
+        if let Some(Err(e)) = lcc_engine::cmd::previews::drain_queue(&mut self.session) {
+            self.ui.status = e.to_string();
         }
     }
 
@@ -2401,6 +2453,8 @@ impl LccApp {
         panels::connections::pump(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         panels::peer_sync::pump(self, ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        panels::peer_sync::dialogs(self, ctx);
         // back from an external editor: pick up the files it saved
         let focused = ctx.input(|i| i.focused);
         if focused && !self.ui.was_focused && !self.ui.external_edits.is_empty() {
@@ -3059,16 +3113,21 @@ impl LccApp {
         crate::panels::genfill::frame(self, &ctx);
         self.place_names_outcome(&ctx);
         if self.ui.fullscreen {
-            // full-screen preview: the photo alone on black
+            // full-screen preview: the photo alone on black (the running tasks still say so,
+            // quietly, top right — a slideshow plays undisturbed)
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
                 .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
+            if self.ui.slideshow.is_none() {
+                panels::activity::fullscreen(self, &ctx);
+            }
             panels::second::show(self, &ctx);
             panels::notices::show(self, &ctx);
             panels::dialogs::show(self, &ctx);
             catalog_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx);
             pick::poll(self, &ctx);
+            help_link::poll(self, &ctx);
             panels::surface_osd::show(self, &ctx);
             panels::presets::picker_frame(self, &ctx);
             panels::toast(self, &ctx);
@@ -3139,6 +3198,7 @@ impl LccApp {
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
+        help_link::poll(self, &ctx);
         camera_roll::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
         panels::left::album_drag_feedback(self, &ctx);

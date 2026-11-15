@@ -29,7 +29,7 @@ fn png_n(p: &Path, n: usize) {
 
 /// A library on disk with `n` photos (600 × 400 PNGs) imported, in name order.
 /// (The folder comes first: bound as `let (root, s, ...)`, the session drops before the folder goes.)
-fn library(tag: &str, n: usize) -> (lcc_testkit::TempDir, Session, Vec<PhotoId>) {
+pub(crate) fn library(tag: &str, n: usize) -> (lcc_testkit::TempDir, Session, Vec<PhotoId>) {
     let root = temp_dir(tag);
     let paths: Vec<String> = (0..n)
         .map(|i| {

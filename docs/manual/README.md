@@ -14,6 +14,7 @@ modules, and every action a command you can also run from the command line, a sc
 5. [Publish services](publish.md): keep a folder (or an Immich server) in step with a collection.
 6. [Tethered capture](tethering.md): studio capture from a watched folder and native PTP tethering.
 7. [Immich](../immich.md): link, sync and import with an Immich server.
+   [Device sync](../sync.md): pair your devices and sync a catalog or chosen collections between them.
 8. [Plug-ins](../plugins.md): WebAssembly plug-ins, their permissions and how to write one.
 9. [Edit In and Actions](edit-in-and-actions.md): round trips to other editors, recorded command sequences.
 10. [Duplicate Finder](../duplicates.md): find and clean up copies across the library.

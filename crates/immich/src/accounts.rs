@@ -26,9 +26,19 @@ pub struct Account {
     /// External library folder mapping (IMM-EXTLIB).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub path_maps: Vec<PathMap>,
-    /// The newest `updatedAt` the link pass has seen (incremental listing).
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// No longer used or written. The link pass's cursor was kept here, per machine: every
+    /// catalog on the machine then shared it, so a second catalog's first pass skipped everything
+    /// the first catalog's pass had seen. It now lives with each catalog
+    /// (`<library>/Immich/link/<account>.json`); old files still parse.
+    #[serde(skip_serializing)]
     pub linked_until: Option<String>,
+    /// Its albums show as collections in device sync (under a collection set "Immich").
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub collections: bool,
+    /// The connection is shared with the devices this catalog syncs with (its key travels to
+    /// them over the encrypted peer channel); otherwise it stays on this device.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
     /// Two-way metadata sync settings (IMM-SYNC).
     #[serde(skip_serializing_if = "is_default_sync")]
     pub sync: crate::sync::SyncConfig,
@@ -75,6 +85,9 @@ impl Accounts {
             if is_default_sync(&a.sync) {
                 a.sync = std::mem::take(&mut old.sync);
             }
+            // (connecting again keeps how the account is shown and shared)
+            a.collections |= old.collections;
+            a.shared |= old.shared;
             *old = a;
         } else {
             self.immich.push(a);
@@ -89,7 +102,17 @@ impl Accounts {
     /// Read from `path`; a missing file is empty, a corrupt one an error the caller shows.
     pub fn load(path: &std::path::Path) -> Result<Accounts, String> {
         match std::fs::read(path) {
-            Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display())),
+            Ok(b) => {
+                let mut a: Accounts = serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display()))?;
+                // the old name-matching album rule: an account that had it on shows its albums as
+                // collections in device sync instead
+                for x in &mut a.immich {
+                    if x.sync.albums.take().is_some_and(|r| r.direction != crate::sync::Direction::Off) {
+                        x.collections = true;
+                    }
+                }
+                Ok(a)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Accounts::default()),
             Err(e) => Err(format!("{}: {e}", path.display())),
         }

@@ -9,6 +9,8 @@ actions are commands, so the CLI, control channel and MCP can do everything the 
 ## Library
 
 Photo Grid and Square Grid (View menu), loupe (`E`), compare (`C`) and survey (`N`) views of the folder, collection or filter in view.
+Press `F` for the full-screen preview of the active photo: arrows step, `I` cycles the info overlay (at Off the photo is clear of all
+text, the shot-info strip with the pixel size included), `G` returns to the grid, `Esc` goes back.
 
 - **Organise:** folders, collections and smart collections (Library → New Collection… `Cmd+N`, New Smart Collection…), collection sets,
   stacks (`Cmd+G`), virtual copies (`Cmd+'`), people (face regions from XMP or the opt-in face detector).
@@ -39,6 +41,31 @@ is on screen. Calibration's primary Saturation is fixed in process V9 (older pho
 Profile accepts a ColorChecker 24 or SpyderCHECKR 24 photo.
 Copy and paste settings with `Cmd+C`/`Cmd+V` (`Cmd+Shift+C` to choose which). Photo → Photo Merge makes HDR and
 panorama DNGs. Every slider is a develop control: `<cli> controls` lists ids and ranges.
+
+The row of tools under the histogram is Edit, Crop, Remove, Red Eye, Masking and Browse Profiles (the profile
+browser in the panels' place; a second click puts it away). Basic starts with Auto · B&W | HDR, then the profile's
+Amount and white balance.
+
+### Tool profiles
+
+A tool profile picks which groups and sliders the Develop panel shows. The low row at the top of the panel names the
+profile in use: its menu switches profile, and the gear beside it opens **Settings ▸ Develop**, where profiles are
+made.
+
+- **Default** shows every group and slider, as the panel always did. **Witchcraft** shows the colourist's Primaries
+  and HSL Curves (in either grading mode) and hides Eboda's Color Grading. Both are built in and can't be changed.
+- **New** makes a profile showing everything; **Duplicate** copies the profile in use (a built-in one too) to start
+  from it. Your own profiles can be renamed and deleted (deleting the one in use goes back to Default).
+- **Custom** — one group per profile of the sliders you pick, in the order you set (↑ ↓), shown first in the panel. A
+  slider in it moves there: it isn't drawn again in its own group.
+- **Groups** — switch any group off, or open it to hide single sliders and options (the Auto · B&W | HDR row, the
+  white balance selector, Contrast Mode, AI Denoise, Remove Hot Pixels, the vignette style…).
+
+Profiles are saved with the app's settings. A profile that names a slider a later version no longer has keeps the
+rest. For scripts and agents: `view.toolProfile {id}` picks one (without an id it lists them), and
+`view.toolProfileEdit {op: new | duplicate | rename | delete | group | item | custom | witchcraft, …}` changes your
+own — for example `{"op": "custom", "add": "light.exposure"}` or `{"op": "group", "group": "curve", "on": false}`.
+The Modern layout's cards show their sections whole.
 
 ## Map
 

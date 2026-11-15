@@ -9,6 +9,7 @@ plug-ins are not supported.
 | Contribution | Manifest | Request it receives |
 |---|---|---|
 | Menu commands, optionally with a dialog | `commands: [{id, label, menu, dialog, prepare?, job?}]` (`job: true`: see [Jobs](#jobs-long-commands-with-progress)) | `{"hook":"command","command","args","selection","source"}`; with `prepare: true`, first `{"hook":"command.prepare","command","selection","source"}` (`source`: see [Adding files to the library](#adding-files-to-the-library); see [Settings, remembered values and prepare steps](#settings-remembered-values-and-prepare-steps)) |
+| Quick settings bar buttons | `quickAction: true` on a command (at most 4 a plug-in; host feature `quickActions`) | the command's own `{"hook":"command",…}` request, exactly as from its menu item (see [Quick actions](#quick-actions)) |
 | Settings (the plug-in's page in the Plug-in Manager) | `settings: [{key, label, type, …, prepare?}]` | none, or `{"hook":"settings.prepare"}` when a field has `prepare: true`; the plug-in reads them with `settings.get` |
 | Export post-processing | `hooks.export: true` | `{"hook":"export","files":[{path, photo}]}`; the exported files are lent to the call for reading and writing |
 | Metadata and keyword suggestions | `hooks.metadata: true` | `{"hook":"metadata","photos":[photo.inspect JSON]}` → `{"suggestions":[{photo, fields?, keywords?}]}` |
@@ -46,6 +47,29 @@ link`), and so do the install dialog and `plugin.inspectFile` (`dropped`). `plug
 license?, issues?}`, `issues` being Report a Problem's page. The host feature `about` names them.
 The SDK can fill them from the plug-in crate's `Cargo.toml` ([Writing one in
 Rust](#2-declare-a-manifest-and-handle-requests)).
+
+### Quick actions
+
+A command with `"quickAction": true` also gets a button in the **quick settings bar**, the row of
+switches that fades in when the pointer is in the blank stretch of the module bar between the
+identity plate and the module names. Its buttons come after the app's own (info overlay,
+on-screen overlay, eye focus strip, …), in install order, drawn with the plug-in's icon (its
+`icon` picture, else the identicon the Plug-in Manager draws) and named by the command's `label`
+on hover. A click runs the command as its File ▸ Plug-in Extras item does (`plugins.runItem
+{plugin, command}`): a `prepare` step, a dialog and a job all work as from the menu. A plug-in
+may flag at most 4 commands (`lcc_plugins::MAX_QUICK_ACTIONS`); more is a manifest error. Only
+enabled plug-ins show; a bar too narrow for every button drops plug-ins' buttons first.
+`view.quickSettings` lists the bar's entries, plug-ins' included (`plugin:<id>/<command>`), and
+`plugin.commands` gives each command's `quickAction`.
+
+The field is additive (ABI v1 is unchanged): a host without the bar ignores it as an unknown field,
+and the command stays in the menu. A plug-in that needs the button to be useful says
+`"requires": ["quickActions"]`.
+
+```json
+{"id": "org.example.tools", "name": "Tools", "version": "1.0.0",
+ "commands": [{"id": "stamp", "label": "Stamp Copyright", "quickAction": true}]}
+```
 
 Commands appear under File ▸ Plug-ins and run as the engine command `plugin.run {plugin, command, args?, ids?, source?, wait?}`. The UI, CLI,
 control channel and MCP all use this command. `plugin.commands` lists the commands so front
@@ -413,7 +437,7 @@ hook that's never called, a host call that fails as an unknown method).
 
 - **The host's list** is `lcc_plugins::HOST_FEATURES`, and `plugin.list` returns it as
   `host: {abi, features}`. Everything the host had when `requires` arrived is the baseline and
-  has no name. Names so far: `programs` ([Programs](#programs)), `settings` ([below](#settings-remembered-values-and-prepare-steps)), `libraryAdd` ([Adding files to the library](#adding-files-to-the-library)), `jobs` ([Jobs](#jobs-long-commands-with-progress)), `pixels`, `crop` and `virtualCopy` ([Pixels and crop](#pixels-and-crop)), `pictures` (`icon` and `header`) and `about` (`homepage`, `repository`, `changelog`, `license`; both in [What a plug-in can add](#what-a-plug-in-can-add)). Every manifest field, permission group or host call added
+  has no name. Names so far: `programs` ([Programs](#programs)), `settings` ([below](#settings-remembered-values-and-prepare-steps)), `libraryAdd` ([Adding files to the library](#adding-files-to-the-library)), `jobs` ([Jobs](#jobs-long-commands-with-progress)), `pixels`, `crop` and `virtualCopy` ([Pixels and crop](#pixels-and-crop)), `pictures` (`icon` and `header`) and `about` (`homepage`, `repository`, `changelog`, `license`; both in [What a plug-in can add](#what-a-plug-in-can-add)), and `quickActions` (`quickAction` on a command, [Quick actions](#quick-actions)). Every manifest field, permission group or host call added
   from then on gets a name there in the change that adds it, and its documentation here says
   which name to require.
 - **Names** are `[A-Za-z0-9._-]{1,64}`, at most 64, none repeated; anything else is a manifest
@@ -494,6 +518,12 @@ Imports (module `host`):
   which is `{"ok": value}` or `{"error": "message"}`;
 - `response(ptr)`: copies that reply into a buffer of that length;
 - `log(ptr, len)`: adds one line to the plug-in's log, shown in the Plug-in Manager.
+
+A module may also carry its manifest in a custom section named `photo-plugin.manifest`: the exact
+bytes `lcc_manifest` returns, written by the SDK's stamp tool so a tool can read what a plug-in is
+and asks for without running it (Stamping your plug-in, below). The section is optional and only a
+copy: `lcc_manifest` stays the authority, a module without the section (absent means it wasn't
+stamped) works as before, and the ABI version doesn't change.
 
 ## Writing one in Rust
 
@@ -589,7 +619,7 @@ The manifest fields:
 | `homepage`, `repository`, `changelog`, `license` | optional, shown on the About tab: `https://` links and the licence as text (see [Where it comes from](#what-a-plug-in-can-add)); host feature `about` |
 | `icon`, `header` | optional SVG pictures (see [Its own pictures](#what-a-plug-in-can-add)); host feature `pictures` |
 | `permissions` | what the plug-in asks for (see [Permissions](#permissions)); ask for as little as possible |
-| `commands` | `[{id, label, menu?, dialog?, prepare?}]`, File ▸ Plug-ins ▸ `name` ▸ `menu` ▸ `label`; dialog fields may say `remember: false` |
+| `commands` | `[{id, label, menu?, dialog?, prepare?, job?, quickAction?}]`, File ▸ Plug-ins ▸ `name` ▸ `menu` ▸ `label`; dialog fields may say `remember: false`; `quickAction: true` adds a quick settings bar button ([Quick actions](#quick-actions)) |
 | `settings` | `[{key, label, type, …, prepare?}]`, at most 32; needs `requires: ["settings"]` |
 | `hooks` | `{export?: true, metadata?: true}` |
 | `publish` | `{id, name}`: one publish service |
@@ -657,8 +687,46 @@ The manifest fields:
   the CLI, the control channel or MCP.
 - Raise `version` with every release you hand out, and list in `requires` each host feature you
   use beyond the baseline.
-- Distribute the `.wasm` file. There is no store and no signing yet: tell users what each
-  permission is for.
+- Stamp the release build (Stamping your plug-in, below) and distribute the stamped `.wasm` file.
+  There is no store and no signing yet: tell users what each permission is for.
+
+## Stamping your plug-in
+
+`plugin-stamp` (`sdk/stamp`, a small program of its own) copies your plug-in's manifest into its
+`.wasm` as a custom section, `photo-plugin.manifest`. It runs the module once in a sandbox of its
+own (every import traps, fuel and memory are capped), calls `lcc_manifest` and writes what it
+returns, byte for byte. So the section matches however you build the manifest: a literal, a string
+filled in at run time, or `export_plugin!(package: …)`. It needs no Chromaforge install (its only
+dependencies are `wasmi` and `serde_json`) and runs in any CI. Get it at the same `rev` as your
+`lcc-plugin-sdk` dependency, so the tool and the SDK always match:
+
+```sh
+cargo install --locked --git <this repository's URL> --rev <the SDK's rev> plugin-stamp
+```
+
+1. **Build** as usual: `cargo build --release --target wasm32-unknown-unknown`. Nothing in your
+   code or `Cargo.toml` changes, and a plug-in that is never stamped keeps working.
+2. **Stamp** the built file:
+   `plugin-stamp target/wasm32-unknown-unknown/release/my_plugin.wasm -o my_plugin.wasm` (in place
+   without `-o`). It refuses a module the app wouldn't load (an import other than the host's three, a
+   missing ABI export) or that can't answer (a trap, a call to a host import, out of fuel, an answer
+   over 64 KiB or not a UTF-8 JSON object), and then leaves both files as they were. Stamp after
+   every build that changes the manifest or the version; stamping again replaces the section, and
+   the same input always gives the same bytes. Stamp after any `wasm-opt`
+   or strip step, which may drop custom sections (the release profile's `strip = true` runs during
+   the build, so it can't).
+3. **Publish the stamped file**, not the raw build: it is the file you checksum, sign (later) and
+   attach to the release.
+4. **Check it in CI**: `plugin-stamp --check my_plugin.wasm` exits 0 when the file has exactly one
+   section and it equals what `lcc_manifest` returns, and 1 when the section is missing, stale
+   (naming the fields that differ) or duplicated. It writes nothing. Run it after the stamp, so a
+   release can't go out unstamped.
+5. **Install** it as before. Today the app ignores the section; a coming release checks it against
+   `lcc_manifest` when it loads the plug-in and refuses a stale stamp, naming the fields that
+   differ.
+
+Plug-in updates from a feed (not done yet) will be offered only for stamped plug-ins, which is the
+reason to add step 2 to your release build now.
 
 ## Engine commands
 

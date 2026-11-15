@@ -56,7 +56,7 @@ fn settings_on_a_phone_is_a_section_with_an_icon_rail_and_back_shows_the_list() 
     // a section open beside the icons of the others
     assert!(rail_w(&h) > 0.0 && rail_w(&h) < 80.0, "icons only: {}", rail_w(&h));
     assert!(has(&h, "settings:section:folders") && has(&h, "settings:back"));
-    assert!(has(&h, "button:settingsLayout-0") && has(&h, "button:settingsLayout-1"), "the Layout row");
+    assert!(has(&h, "button:settingsLayout-0") && has(&h, "button:settingsLayout-2"), "the Layout row");
     // the same setting Classic changes
     crate::settings_screen::reveal(&mut h, "button:settingsStartup-1");
     assert_eq!(click(&mut h, "button:settingsStartup-1")["ok"], true);
@@ -114,7 +114,7 @@ fn the_layout_row_switches_both_ways_and_is_saved() {
     // Classic shows the same Settings, with the same row: the way back
     h.settle(SETTLE);
     assert!(has(&h, "settings:section:general"), "Settings in Classic");
-    assert_eq!(click(&mut h, "button:settingsLayout-1")["ok"], true);
+    assert_eq!(click(&mut h, "button:settingsLayout-2")["ok"], true);
     assert!(h.app.ui.modern.enabled, "Modern chosen");
     let back: crate::state::UiState = serde_json::from_str(&serde_json::to_string(&h.app.ui).unwrap()).unwrap();
     assert!(back.modern.enabled);
