@@ -73,6 +73,8 @@ pub mod slideshow;
 pub mod strip;
 pub mod surface_osd;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod sync_pill;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod tether_bar;
 pub mod topbar;
 pub mod unnamed;

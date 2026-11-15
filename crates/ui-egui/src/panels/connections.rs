@@ -479,28 +479,6 @@ pub fn pump(app: &mut LccApp, ctx: &egui::Context) {
     }
 }
 
-// --------------------------------------------------------------------------------- grid badge
-
-/// A small "Immich" pill at the top left of a grid cell for photos linked to Immich (dashed
-/// outline when the link is only probable).
-pub fn grid_badge(app: &LccApp, ui: &egui::Ui, id: lcc_catalog::PhotoId, img: Rect) {
-    let state = app.session.catalog.remote_links().link_state(id, lcc_immich::link::SERVICE);
-    if state == "none" {
-        return;
-    }
-    let t = Tokens::get(ui.ctx());
-    let p = ui.painter();
-    let g = p.layout_no_wrap(crate::i18n::tr("Immich").into(), t.semibold(9.0), Color32::WHITE);
-    let r = Rect::from_min_size(pos2(img.left() + 5.0, img.top() + 5.0), vec2(g.size().x + 10.0, 14.0));
-    let fill = if state == "linked" { t.accent.gamma_multiply(0.85) } else { Color32::from_black_alpha(160) };
-    p.rect_filled(r, 7.0, fill);
-    if state == "probable" {
-        p.rect_stroke(r, 7.0, egui::Stroke::new(1.0, t.caution), egui::StrokeKind::Inside);
-    }
-    p.galley(pos2(r.left() + 5.0, r.center().y - g.size().y / 2.0), g, Color32::WHITE);
-    register(ui.ctx(), format!("badge:immich:{}", id.0), r);
-}
-
 // ----------------------------------------------------------------------------- Info panel
 
 /// "Immich" rows in Info: the link state and an Open in Immich link per account; Confirm for a

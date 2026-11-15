@@ -29,7 +29,7 @@ sidebar:
 - **Folder-watch URL scheme** is not registered with the operating system.
 
 ## Platforms and quality
-- **Android and peer sync** are tested on an emulator and one machine only.
+- **Android and device sync** are tested on an emulator and one machine only.
 - **Accessibility**: screen-reader audit and keyboard-only masking pins are open.
 - **Translations**: 17 languages; What's New is mostly English.
 - **HDR** on X11 is a platform limit; video has no sound output yet.

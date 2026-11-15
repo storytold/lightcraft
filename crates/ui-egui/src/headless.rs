@@ -4246,29 +4246,107 @@ mod tests {
         }
     }
 
-    /// Settings ▸ Sync draws a shared library, an offer and exchange states without panicking, and
-    /// the offer's buttons and the share checkbox are on screen.
+    /// Settings ▸ Sync draws each state (nothing paired, a pairing code, an invitation that needs an
+    /// empty catalog, a catalog syncing with its collections) without panicking, with the controls
+    /// of each state on screen and errors next to the device they belong to.
     #[test]
-    fn sync_tab_shows_offers_and_exchanges() {
-        let mut h = demo([1300.0, 900.0]);
+    fn sync_tab_draws_every_state() {
+        let mut h = demo([1300.0, 1000.0]);
         let t = Duration::from_secs(10);
         let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "sync"}}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.settle(SETTLE);
+        let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
-        h.app.peer_sync.set_status_for_test(json!({
-            "running": false, "name": "Here",
-            "paired": [{"deviceId": "a", "name": "Laptop", "online": true}, {"deviceId": "b", "name": "Desk", "online": false},
-                       {"deviceId": "c", "name": "Old", "online": false}],
-            "library": {"name": "Main", "syncId": "x", "sharedWith": ["a", "b"]},
-            "offers": [{"deviceId": "b", "name": "Desk", "library": "Trips"}],
-            "exchanges": {"a": {"running": true}, "b": {"running": false, "last": now - 7200, "error": "connection lost", "taken": 3, "copies": 1},
-                          "c": {"running": false, "last": 1, "error": null, "taken": 0, "copies": 0}}
-        }));
-        h.settle(SETTLE);
-        for id in ["check:syncShare-a", "check:syncShare-b", "button:syncOfferAccept-b", "button:syncOfferDecline-b"] {
-            assert!(h.app.widgets.iter().any(|(w, _)| w == id), "{id} on screen");
+        let pill = json!({"location": "remote", "depth": "full", "status": "remoteAhead", "syncing": true});
+        let states = [
+            // nothing paired, nothing found for a while: the troubleshooting hint
+            (
+                json!({"running": true, "name": "Here", "found": [], "paired": [], "pairing": null, "catalogue": null}),
+                vec!["field:syncDeviceName", "text:syncNothingFound"],
+            ),
+            // a device found, another of an older version
+            (
+                json!({"running": true, "name": "Here", "paired": [], "pairing": null, "catalogue": null,
+                       "found": [{"deviceId": "a", "name": "Laptop", "paired": false, "compatible": true}, {"deviceId": "b", "name": "Old", "paired": false, "compatible": false}]}),
+                vec!["button:syncPair-a", "button:syncPair-b"],
+            ),
+            // the code to compare
+            (
+                json!({"running": true, "name": "Here", "paired": [], "catalogue": null,
+                       "pairing": {"deviceId": "a", "name": "Laptop", "code": "123456", "stage": "confirm", "incoming": true}}),
+                vec!["syncCode", "button:syncCodesMatch", "button:syncCancelPairing"],
+            ),
+            // paired, not syncing, an invitation to a shared catalog while this one has photos
+            (
+                json!({"running": true, "name": "Here", "pairing": null, "found": [],
+                       "paired": [{"deviceId": "a", "name": "Laptop", "online": true, "notPairedThere": false}, {"deviceId": "b", "name": "Desk", "online": false, "notPairedThere": true}],
+                       "offers": [{"deviceId": "b", "name": "Desk", "catalogue": "Trips", "mode": "catalogue", "keeper": "b", "needsEmptyCatalogue": true}],
+                       "catalogue": {"name": "Main", "photos": 12, "unkeyed": 3, "group": null, "collections": [], "undecided": []}}),
+                vec!["button:syncWith-a", "button:syncOfferJoin-b", "button:syncNewCatalog-offer:b", "button:syncUnpair-a", "text:syncUnkeyed"],
+            ),
+            // syncing collections only: members, a failed exchange, the collections table
+            (
+                json!({"running": true, "name": "Here", "pairing": null, "found": [],
+                       "paired": [{"deviceId": "a", "name": "Laptop", "online": true}],
+                       "links": {"a": {"running": false, "last": now - 120, "error": "connection lost", "sent": 2, "received": 1, "files": 1}},
+                       "catalogue": {"name": "Main", "photos": 12, "unkeyed": 0,
+                           "group": {"id": "g", "mode": "collections", "keeper": null, "invited": [],
+                                     "devices": [{"deviceId": "me", "name": "Here", "me": true, "online": true, "paired": false, "left": false},
+                                                 {"deviceId": "a", "name": "Laptop", "me": false, "online": true, "paired": true, "left": false}]},
+                           "collections": [
+                               {"id": "c1", "album": null, "name": "Trip", "kind": "album", "owner": "a", "ownerName": "Laptop", "mine": false,
+                                "grant": "serve", "take": "previews", "most": "fullQuality", "photos": 4, "letters": "RP", "pill": pill},
+                               {"id": "c2", "album": 1, "name": "Mine", "kind": "album", "owner": "me", "ownerName": "Here", "mine": true,
+                                "grant": "sync", "take": "none", "most": "fullSync", "photos": 2, "letters": "EF", "pill": null}],
+                           "undecided": []}}),
+                vec![
+                    "text:syncMode",
+                    "text:syncMember-a",
+                    "error:sync-link-a",
+                    "button:syncNow",
+                    "button:syncLeave",
+                    "combo:syncPick-c1",
+                    "combo:syncPick-c2",
+                    "combo:syncPick-unfiled",
+                ],
+            ),
+        ];
+        for (status, ids) in states {
+            h.app.peer_sync.set_status_for_test(status.clone());
+            h.settle(SETTLE);
+            for id in ids {
+                assert!(has(&h, id), "{id} on screen for {status}");
+            }
         }
+    }
+
+    /// The question about a new collection appears only while one waits for an answer, and the
+    /// top bar's cloud counts it.
+    #[test]
+    fn the_new_collection_question_appears_only_when_needed() {
+        let mut h = demo([1300.0, 900.0]);
+        h.settle(SETTLE);
+        let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+        assert!(!has(&h, "dialog:syncUndecided"), "no question without a syncing catalog");
+        let group = json!({"id": "g", "mode": "catalogue", "keeper": "me", "invited": [], "devices": []});
+        h.app.peer_sync.set_status_for_test(json!({"running": false, "paired": [],
+            "catalogue": {"name": "Main", "photos": 0, "unkeyed": 0, "group": group, "collections": [], "undecided": []}}));
+        h.settle(SETTLE);
+        assert!(!has(&h, "dialog:syncUndecided"), "nothing undecided, nothing asked");
+        assert!(!has(&h, "indicator:syncWaiting"));
+        h.app.peer_sync.set_status_for_test(json!({"running": false, "paired": [],
+            "catalogue": {"name": "Main", "photos": 0, "unkeyed": 0, "group": group, "collections": [], "undecided": [{"album": 7, "name": "New"}]}}));
+        h.settle(SETTLE);
+        assert!(has(&h, "dialog:syncUndecided"), "a new collection is asked about");
+        assert!(has(&h, "indicator:syncWaiting"), "the cloud shows it waits");
+        assert_eq!(crate::panels::peer_sync::waiting(&h.app), 1);
+        // put off: not asked again this run
+        let r = h.request("ui.clickWidget", json!({"id": "button:syncUndecidedLater"}), Duration::from_secs(10));
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        assert!(!has(&h, "dialog:syncUndecided"));
+        assert_eq!(crate::panels::peer_sync::waiting(&h.app), 0);
     }
 
     /// Settings → Import → "Show the import review when a camera or card is connected": a card that

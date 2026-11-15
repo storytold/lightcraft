@@ -196,7 +196,7 @@ One rule (2026-11-10): **use only material you may legally derive from.**
   skips in `target/ci/report.json` + `summary.md`.
 
 ## Map of the code
-`geom`, `color`, `raster`, `tiff` (L0) → `raw`, `codecs`, `meta`, `develop` (L1) → `pipeline` → `catalog` → `engine`
+`geom`, `color`, `raster`, `tiff`, `sync` (device-sync model) (L0) → `raw`, `codecs`, `meta`, `develop` (L1) → `pipeline` → `catalog` → `engine`
 → `ui-egui`, `mcp` (L5) → apps `lcc-app` (desktop), `lcc-cli` (render/commands/MCP), `lcc-web`; `brand` carries
 `brand.toml`; `scenes` = demo photos; `xtask` = tooling (`ci`, `layers`, `assets`, `parity`, `wasm`, `corpus`,
 `stats`, `brand check`, `docs`, `run`, `package`, `install`); `testkit` = test helpers (dev-dep only).

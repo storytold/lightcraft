@@ -4861,6 +4861,7 @@ dependencies = [
  "lcc-scenes",
  "lcc-segment",
  "lcc-slideshow",
+ "lcc-sync",
  "lcc-sysmem",
  "lcc-testkit",
  "lcc-tether",
@@ -5210,6 +5211,7 @@ dependencies = [
  "lcc-brand",
  "lcc-testkit",
  "log",
+ "nix",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5410,6 +5412,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lcc-sync"
+version = "26.46.3"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lcc-sysmem"
 version = "26.46.3"
 dependencies = [
@@ -5508,6 +5518,7 @@ dependencies = [
  "lcc-raw",
  "lcc-slideshow",
  "lcc-surface",
+ "lcc-sync",
  "lcc-testkit",
  "lcc-text",
  "lcc-updater",
@@ -6140,6 +6151,7 @@ dependencies = [
  "cfg-if",
  "cfg_aliases",
  "libc",
+ "memoffset",
 ]
 
 [[package]]

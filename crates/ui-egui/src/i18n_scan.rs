@@ -421,10 +421,9 @@ fn the_scan_reads_calls_helpers_and_buttons() {
     {
         assert!(texts.contains_key(text), "{why}: {text:?} not found");
     }
-    // a file's own macro that translates its literal (`trf!` in the Connections and Peer Sync panels)
-    for (text, file) in [("Immich: {}", "panels/connections.rs"), ("Last synced {} min ago", "panels/peer_sync.rs")] {
-        assert!(texts.get(text).is_some_and(|files| files.contains(file)), "trf! in {file}: {text:?} not found");
-    }
+    // a file's own macro that translates its literal (`trf!` in the Connections panel)
+    let (text, file) = ("Immich: {}", "panels/connections.rs");
+    assert!(texts.get(text).is_some_and(|files| files.contains(file)), "trf! in {file}: {text:?} not found");
     // `super::row(…, "previousExport", …)` in a panel is the panels' own row, whose id isn't text
     assert!(!texts.contains_key("previousExport"), "a path call resolves to its own module's helper");
 }
