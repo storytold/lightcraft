@@ -158,7 +158,7 @@ pub fn helper_tools(has_ui: bool) -> Vec<Value> {
             "Query photos",
             "List photos (id, file name, size, rating, flag, edited…). Without filter/sort: the current library view.",
             json!({
-                "filter": {"type": "object", "description": "Catalog Filter JSON (e.g. {\"minRating\": 3})", "additionalProperties": true},
+                "filter": {"type": "object", "description": "Catalog Filter JSON, camelCase as `library.filter` takes it (e.g. {\"rating\": 3, \"ratingOp\": \"atLeast\"} for at least three stars, \"exactly\"/\"atMost\" for the other comparisons; \"labels\": [\"red\", …] any of these colour labels, \"labelsNone\": true photos without one)", "additionalProperties": true},
                 "sort": {"type": "object", "additionalProperties": true},
                 "offset": {"type": "integer"},
                 "limit": {"type": "integer", "description": "Default 200"}

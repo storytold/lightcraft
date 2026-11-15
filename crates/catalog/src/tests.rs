@@ -1239,6 +1239,37 @@ fn rating_filter_ops_and_unrated_photos() {
     assert!(text("rating:>=x").is_empty(), "not a number: nothing matches, no panic");
 }
 
+/// The label filter's "no label" (issue #1192): `labelsNone` alone shows only the unlabeled photos,
+/// it ANDs with the colour multi-select, the text search's `label:none` asks for the same, and it
+/// is part of the quick culling filters the filter bar counts around.
+#[test]
+fn label_filter_none() {
+    let mut c = Catalog::new();
+    let plain = photo(&mut c, "a.jpg", "2026-01-01T10:00:00");
+    let red = photo(&mut c, "b.jpg", "2026-01-02T10:00:00");
+    let green = photo(&mut c, "c.jpg", "2026-01-03T10:00:00");
+    c.apply(Op::SetLabel { id: red, label: Some(ColorLabel::Red) }).unwrap();
+    c.apply(Op::SetLabel { id: green, label: Some(ColorLabel::Green) }).unwrap();
+    let q = |f: Filter| c.query(&f, &Sort::default());
+    let f = Filter { labels_none: true, ..Default::default() };
+    assert_eq!(q(f.clone()), vec![plain]);
+    assert_eq!(
+        q(Filter { labels: vec![ColorLabel::Red], labels_none: true, ..Default::default() }),
+        Vec::<PhotoId>::new(),
+        "no photo carries both nothing and red"
+    );
+    let text = |t: &str| q(Filter { text: t.into(), ..Default::default() });
+    assert_eq!(text("label:none"), vec![plain]);
+    assert_eq!(text("color:none"), vec![plain]);
+    assert!(text("label:red").contains(&red) && !text("label:red").contains(&plain));
+    // the chip and smart-album summary name it
+    assert!(f.describe().contains("label none"));
+    // the quick culling filters the filter bar counts without include it
+    assert!(!f.without_quick().labels_none);
+    let t = c.tally(&f);
+    assert_eq!(t.total, 1);
+}
+
 /// Photos with one import time and capture time, as one import batch or a burst gives them, added
 /// with ids that run opposite to their names.
 fn batch_with_reversed_ids(c: &mut Catalog) -> Vec<PhotoId> {
