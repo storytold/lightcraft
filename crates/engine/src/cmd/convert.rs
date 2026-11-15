@@ -270,13 +270,16 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 }
 
 /// Repair only the shutter data an old import wrote, keeping independently edited metadata.
-/// Take the fields that describe the file itself rather than anything a person edits (recorded depth) from a fresh
+/// Take the fields that describe the file itself rather than anything a person edits (recorded depth, the Portrait
+/// aperture) from a fresh
 /// probe: it is right, also when an editor saved over the file and dropped the depth. A virtual copy shares its
 /// original's file, so it takes them too. True when one changed.
 fn file_fields(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
-    let before = m.has_depth;
+    let before = (m.has_depth, m.portrait_aperture);
     m.has_depth = src.has_depth;
-    m.has_depth != before
+    // the Portrait aperture is filled in, not replaced: a known one is kept
+    m.portrait_aperture = m.portrait_aperture.or(src.portrait_aperture);
+    (m.has_depth, m.portrait_aperture) != before
 }
 
 fn repair_legacy_shutter(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
@@ -611,6 +614,7 @@ mod tests {
         cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
         let mut info = crate::media::ProbeInfo::default();
         info.meta.has_depth = true;
+        info.meta.portrait_aperture = Some(2.8);
         let (mut ops, mut changed) = (Vec::new(), Vec::new());
         reload_ops(&cat, source.id, &info, &mut ops, &mut changed);
         for op in ops {
@@ -618,7 +622,22 @@ mod tests {
         }
         let m = |id| cat.photo(PhotoId(id)).unwrap().meta.clone();
         assert!(m(1).has_depth);
-        assert_eq!((m(2).has_depth, m(2).title.as_str()), (true, "My copy"));
+        assert_eq!((m(2).has_depth, m(2).portrait_aperture, m(2).title.as_str()), (true, Some(2.8), "My copy"));
+    }
+
+    /// Issue #4333: Reload from Disk fills in the Portrait aperture of a photo imported before it was read, and keeps
+    /// one already known.
+    #[test]
+    fn reload_fills_a_missing_portrait_aperture() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.heic".into() }, "x.heic", "HEIC", 4032, 3024, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        info.meta.portrait_aperture = Some(1.4);
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert_eq!(meta.portrait_aperture, Some(1.4));
+        ph.meta.portrait_aperture = Some(4.5);
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a known aperture is kept");
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {

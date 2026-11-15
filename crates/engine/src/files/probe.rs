@@ -20,6 +20,7 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         flash: m.flash.map(|f| f.fired),
         exposure_bias: m.exposure_bias.map(|v| v as f32),
         has_depth: m.has_depth,
+        portrait_aperture: m.portrait_aperture.map(|f| f as f32),
         serial_number: m.serial_number.clone().unwrap_or_default(),
         location: m.sublocation.clone().unwrap_or_default(),
         city: m.city.clone().unwrap_or_default(),

@@ -140,63 +140,104 @@ const DEPTH_AUX_TYPES: [&[u8]; 2] = [b"urn:mpeg:hevc:2015:auxid:2", b"urn:mpeg:m
 /// Most references, properties and property associations read from one file (an iPhone HEIC has well under 100).
 const MAX_ENTRIES: usize = 4096;
 
-/// Does the primary image carry recorded depth? True when an item points at the primary item (`pitm`) through an
-/// `auxl` reference (`iref`) and the `auxC` property associated with it (`ipma` → `ipco`) names a depth type.
-/// Only boxes are read, no picture is decoded; anything malformed is "no depth".
-pub fn has_depth(bytes: &[u8]) -> bool {
+/// The parts of a HEIF `meta` box that tie items to each other: what the depth reading needs.
+struct Structure<'a> {
+    /// The primary item (`pitm`): the photo.
+    primary: Option<u32>,
+    /// `(reference type, from item, to item)` for the `auxl` and `cdsc` references in `iref`.
+    refs: Vec<([u8; 4], u32, u32)>,
+    /// 1-based `ipco` indices of the `auxC` properties whose type is depth.
+    depth_props: Vec<u16>,
+    /// `(item, property index)` from `ipma`.
+    assoc: Vec<(u32, u16)>,
+    items: Vec<(u32, [u8; 4], String)>,
+    locs: Vec<Loc>,
+    idat: Option<&'a [u8]>,
+}
+
+fn structure(bytes: &[u8]) -> Option<Structure<'_>> {
     let mut budget = MAX_BOXES;
-    let Some(meta) = boxes(bytes, 0, bytes.len(), &mut budget).into_iter().find(|b| &b.kind == b"meta") else {
-        return false;
-    };
-    let (mut primary, mut aux_of_primary, mut depth_props, mut assoc) = (None, Vec::new(), Vec::new(), Vec::new());
-    let children = boxes(bytes, meta.body.saturating_add(4), meta.end, &mut budget);
-    for b in &children {
-        if &b.kind == b"pitm" {
-            primary = match bytes.get(b.body) {
-                Some(0) => be16(bytes, b.body + 4).map(u32::from),
-                Some(1) => be32(bytes, b.body + 4),
-                _ => None,
-            };
-        }
-    }
-    let Some(primary) = primary else { return false };
-    for b in &children {
+    let meta = boxes(bytes, 0, bytes.len(), &mut budget).into_iter().find(|b| &b.kind == b"meta")?;
+    let mut s =
+        Structure { primary: None, refs: Vec::new(), depth_props: Vec::new(), assoc: Vec::new(), items: Vec::new(), locs: Vec::new(), idat: None };
+    for b in boxes(bytes, meta.body.saturating_add(4), meta.end, &mut budget) {
         match &b.kind {
-            b"iref" => aux_of_primary = auxl_sources(bytes, b, primary, &mut budget),
+            b"pitm" => {
+                s.primary = match bytes.get(b.body) {
+                    Some(0) => be16(bytes, b.body + 4).map(u32::from),
+                    Some(1) => be32(bytes, b.body + 4),
+                    _ => None,
+                }
+            }
+            b"iref" => s.refs = references(bytes, &b, &mut budget),
             b"iprp" => {
                 for p in boxes(bytes, b.body, b.end, &mut budget) {
                     match &p.kind {
-                        b"ipco" => depth_props = depth_property_indices(bytes, &p, &mut budget),
-                        b"ipma" => assoc.extend(associations(bytes.get(p.body..p.end).unwrap_or_default())),
+                        b"ipco" => s.depth_props = depth_property_indices(bytes, &p, &mut budget),
+                        b"ipma" => s.assoc.extend(associations(bytes.get(p.body..p.end).unwrap_or_default())),
                         _ => {}
                     }
                 }
             }
+            b"iinf" => s.items = item_infos(bytes, &b, &mut budget),
+            b"iloc" => s.locs = item_locations(bytes.get(b.body..b.end).unwrap_or_default()),
+            b"idat" => s.idat = bytes.get(b.body..b.end),
             _ => {}
         }
     }
-    assoc.iter().any(|(item, prop)| aux_of_primary.contains(item) && depth_props.contains(prop))
+    Some(s)
 }
 
-/// `iref` → the items whose `auxl` reference points at `primary`: the primary's auxiliary images.
-fn auxl_sources(bytes: &[u8], iref: &BoxRef, primary: u32, budget: &mut usize) -> Vec<u32> {
+/// The primary image's depth map: an item that points at the primary item (`pitm`) through an `auxl` reference and
+/// whose associated `auxC` property (`ipma` → `ipco`) names a depth type.
+fn depth_item(s: &Structure<'_>) -> Option<u32> {
+    let primary = s.primary?;
+    s.refs
+        .iter()
+        .filter(|(kind, _, to)| kind == b"auxl" && *to == primary)
+        .map(|&(_, from, _)| from)
+        .find(|item| s.assoc.iter().any(|(i, p)| i == item && s.depth_props.contains(p)))
+}
+
+/// Does the primary image carry recorded depth ([`depth_item`])? Only boxes are read, no picture is decoded;
+/// anything malformed is "no depth".
+pub fn has_depth(bytes: &[u8]) -> bool {
+    structure(bytes).is_some_and(|s| depth_item(&s).is_some())
+}
+
+/// The XMP packet that describes the primary image's depth map: the `application/rdf+xml` item whose `cdsc`
+/// reference points at the depth item. iPhones record Portrait settings there, not in the photo's own XMP.
+pub fn depth_xmp(bytes: &[u8]) -> Option<String> {
+    let s = structure(bytes)?;
+    let depth = depth_item(&s)?;
+    let describes_depth = |id: u32| s.refs.iter().any(|&(kind, from, to)| &kind == b"cdsc" && from == id && to == depth);
+    let (id, ..) = s.items.iter().find(|(id, kind, ct)| kind == b"mime" && ct == "application/rdf+xml" && describes_depth(*id))?;
+    let loc = s.locs.iter().find(|l| l.id == *id)?;
+    let block = item_bytes(bytes, s.idat, loc)?;
+    Some(String::from_utf8_lossy(&block).trim_end_matches('\0').to_string())
+}
+
+/// `iref` → `(reference type, from item, to item)` for each `auxl` and `cdsc` reference.
+fn references(bytes: &[u8], iref: &BoxRef, budget: &mut usize) -> Vec<([u8; 4], u32, u32)> {
     // FullBox: version 0 has 16-bit item ids, version 1 32-bit
     let wide = bytes.get(iref.body) == Some(&1);
     let id = |at: usize| if wide { be32(bytes, at) } else { be16(bytes, at).map(u32::from) };
     let w = if wide { 4 } else { 2 };
     let mut out = Vec::new();
     for r in boxes(bytes, iref.body.saturating_add(4), iref.end, budget) {
-        if &r.kind != b"auxl" || out.len() >= MAX_ENTRIES {
+        if !matches!(&r.kind, b"auxl" | b"cdsc") {
             continue;
         }
         let (Some(from), Some(count)) = (id(r.body), be16(bytes, r.body + w)) else { continue };
         let first = r.body + w + 2;
-        let points_at_primary = (0..usize::from(count)).take(MAX_ENTRIES).any(|i| {
+        for i in 0..usize::from(count) {
             let at = first.saturating_add(i.saturating_mul(w));
-            at.saturating_add(w) <= r.end && id(at) == Some(primary)
-        });
-        if points_at_primary {
-            out.push(from);
+            if at.saturating_add(w) > r.end || out.len() >= MAX_ENTRIES {
+                break;
+            }
+            if let Some(to) = id(at) {
+                out.push((r.kind, from, to));
+            }
         }
     }
     out
@@ -585,10 +626,32 @@ mod tests {
     }
 
     fn aux_heic(a: &Aux<'_>) -> Vec<u8> {
+        aux_heic_with_xmp(a, &[])
+    }
+
+    /// [`aux_heic`] plus XMP items: `(XMP item, item it describes, packet)`, as `mime` items in `idat` tied to the
+    /// item they describe by `cdsc`.
+    fn aux_heic_with_xmp(a: &Aux<'_>, xmp: &[(u16, u16, &str)]) -> Vec<u8> {
         let pitm = a.primary.map(|p| full_box(b"pitm", 0, &p.to_be_bytes())).unwrap_or_default();
-        let refs: Vec<u8> =
-            a.auxl.iter().flat_map(|&(from, to)| bx(b"auxl", &[from.to_be_bytes(), 1u16.to_be_bytes(), to.to_be_bytes()].concat())).collect();
+        let reference = |kind: &[u8; 4], from: u16, to: u16| bx(kind, &[from.to_be_bytes(), 1u16.to_be_bytes(), to.to_be_bytes()].concat());
+        let mut refs: Vec<u8> = a.auxl.iter().flat_map(|&(from, to)| reference(b"auxl", from, to)).collect();
+        refs.extend(xmp.iter().flat_map(|&(item, of, _)| reference(b"cdsc", item, of)));
         let iref = full_box(b"iref", 0, &refs);
+        // `infe` version 2 entries, and `iloc` version 1 extents into `idat` (construction method 1)
+        let mut iinf = (xmp.len() as u16).to_be_bytes().to_vec();
+        let mut iloc = vec![0x44, 0x00];
+        iloc.extend_from_slice(&(xmp.len() as u16).to_be_bytes());
+        let mut idat = Vec::new();
+        for &(item, _, packet) in xmp {
+            let e = [&[2u8, 0, 0, 0][..], &item.to_be_bytes(), &[0, 0], b"mime", b"XMP\0application/rdf+xml\0"].concat();
+            iinf.extend_from_slice(&bx(b"infe", &e));
+            iloc.extend_from_slice(&item.to_be_bytes());
+            iloc.extend_from_slice(&[0, 1, 0, 0, 0, 1]); // construction method 1, this file, one extent
+            iloc.extend_from_slice(&(idat.len() as u32).to_be_bytes());
+            iloc.extend_from_slice(&(packet.len() as u32).to_be_bytes());
+            idat.extend_from_slice(packet.as_bytes());
+        }
+        let items = [full_box(b"iinf", 0, &iinf), full_box(b"iloc", 1, &iloc), bx(b"idat", &idat)].concat();
         let ipco: Vec<u8> = a.props.iter().flat_map(|t| full_box(b"auxC", 0, &[t.as_bytes(), &[0u8]].concat())).collect();
         let mut ipma = (a.assoc.len() as u32).to_be_bytes().to_vec();
         for &(item, index) in a.assoc {
@@ -605,7 +668,7 @@ mod tests {
         let ipma = bx(b"ipma", &[&[u8::from(a.wide), 0, 0, u8::from(a.wide)][..], &ipma].concat());
         let iprp = bx(b"iprp", &[bx(b"ipco", &ipco), ipma].concat());
         let ftyp = bx(b"ftyp", b"heic\0\0\0\0mif1heic");
-        [ftyp, full_box(b"meta", 0, &[pitm, iref, iprp].concat())].concat()
+        [ftyp, full_box(b"meta", 0, &[pitm, iref, iprp, items].concat())].concat()
     }
 
     const DEPTH: &str = "urn:mpeg:hevc:2015:auxid:2";
@@ -663,5 +726,34 @@ mod tests {
         }
         assert_eq!(associations(&[1, 0, 0, 1, 0xff, 0xff, 0xff, 0xff, 0, 0, 0, 7, 200]), Vec::new(), "count past the end");
         assert_eq!(associations(&[]), Vec::new());
+    }
+
+    /// A packet as iPhones write it, with Portrait settings in Apple's `depthBlurEffect` namespace.
+    fn packet(body: &str) -> String {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:depthBlurEffect="http://ns.apple.com/depthBlurEffect/1.0/">{body}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    }
+
+    /// Issue #4333: the XMP that describes the depth map (item 39 → 38) is found by its `cdsc` reference, not by
+    /// order: the matte's packet (41 → 40) comes first here, and the photo's own (51 → 36) last.
+    #[test]
+    fn the_depth_maps_xmp_is_found_by_its_reference() {
+        let depth = packet("<depthBlurEffect:SimulatedAperture>2.800000</depthBlurEffect:SimulatedAperture>");
+        let (matte, photo) = (packet(""), packet("<depthBlurEffect:SimulatedAperture>9</depthBlurEffect:SimulatedAperture>"));
+        let portrait = Aux { primary: Some(36), auxl: &[(38, 36), (40, 36)], props: &[MATTE, DEPTH], assoc: &[(40, 1), (38, 2)], wide: false };
+        let file = aux_heic_with_xmp(&portrait, &[(41, 40, &matte), (39, 38, &depth), (51, 36, &photo)]);
+        assert!(has_depth(&file));
+        assert_eq!(depth_xmp(&file).as_deref(), Some(depth.as_str()));
+        assert_eq!(crate::extract(&file).portrait_aperture, Some(2.8));
+        // a matte but no depth map, or a depth map without a packet of its own: nothing
+        let matte_only = Aux { primary: Some(36), auxl: &[(40, 36)], props: &[MATTE], assoc: &[(40, 1)], wide: false };
+        let none = aux_heic_with_xmp(&matte_only, &[(41, 40, &depth)]);
+        assert_eq!((depth_xmp(&none), crate::extract(&none).portrait_aperture), (None, None));
+        let bare = aux_heic_with_xmp(&portrait, &[(51, 36, &photo)]);
+        assert_eq!((depth_xmp(&bare), crate::extract(&bare).portrait_aperture), (None, None));
+        for end in 0..file.len() {
+            let _ = crate::extract(&file[..end]);
+        }
     }
 }

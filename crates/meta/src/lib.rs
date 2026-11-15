@@ -127,6 +127,11 @@ pub struct Metadata {
     /// file's structure only, never from Exif or XMP, and never written.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_depth: bool,
+    /// The aperture (f-number) the photographer chose for an iPhone Portrait photo's background blur
+    /// (`depthBlurEffect:SimulatedAperture` in the XMP that describes its depth map, [`heif::depth_xmp`]). Not the
+    /// lens's real aperture, which is [`Metadata::f_number`]. Read only, never written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portrait_aperture: Option<f64>,
     pub orientation: Option<Orientation>,
     pub gps: Option<Gps>,
     /// Pixel dimensions as recorded (not oriented).
@@ -326,10 +331,28 @@ pub fn extract(bytes: &[u8]) -> Metadata {
     with_structure(bytes, extract_embedded(e, exif, xmp))
 }
 
-/// What the container's structure says, beside its metadata blocks: whether a HEIF carries recorded depth.
+/// What the container's structure says, beside its metadata blocks: whether a HEIF carries recorded depth, and the
+/// Portrait settings recorded with that depth.
 fn with_structure(bytes: &[u8], mut m: Metadata) -> Metadata {
-    m.has_depth = heif::is_heif(bytes) && heif::has_depth(bytes);
+    if heif::is_heif(bytes) {
+        m.has_depth = heif::has_depth(bytes);
+        m.portrait_aperture = heif::depth_xmp(bytes).as_deref().and_then(portrait_aperture);
+    }
     m
+}
+
+/// Apple's namespace for the Portrait background blur settings.
+pub const DEPTH_BLUR_EFFECT_NS: &str = "http://ns.apple.com/depthBlurEffect/1.0/";
+/// The f-numbers a Portrait aperture is believed in: a value outside them is a misread, not a setting.
+const PORTRAIT_APERTURES: std::ops::RangeInclusive<f64> = 0.5..=64.0;
+
+/// `depthBlurEffect:SimulatedAperture` from an XMP packet, matched by namespace URI (whatever prefix the packet
+/// uses), when it is a plausible f-number.
+fn portrait_aperture(xmp: &str) -> Option<f64> {
+    let ns = [craft_metadata::XmpNamespace { prefix: "depthBlurEffect", uri: DEPTH_BLUR_EFFECT_NS }];
+    let data = xmp::parse_xmp_with(xmp, &ns).ok()?;
+    let value = data.properties.get("depthBlurEffect:SimulatedAperture")?.first()?;
+    value.trim().parse::<f64>().ok().filter(|f| PORTRAIT_APERTURES.contains(f))
 }
 
 /// Read metadata while reporting malformed PSD/PSB containers, embedded EXIF, or embedded XMP instead of treating
@@ -730,5 +753,26 @@ mod tests {
         let m = extract(&craft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
         assert_eq!(m.orientation, Some(Orientation::Rotate90));
         assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
+    }
+
+    /// Issue #4333: `SimulatedAperture` is matched by Apple's namespace URI in either XMP form (element or
+    /// attribute) and whatever prefix the packet binds it to; implausible or unreadable values are ignored.
+    #[test]
+    fn the_portrait_aperture_is_read_by_namespace() {
+        let wrap = |ns_prefix: &str, desc: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:{ns_prefix}="{DEPTH_BLUR_EFFECT_NS}" {desc}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        let element = |p: &str, v: &str| wrap(p, &format!("><{p}:SimulatedAperture>{v}</{p}:SimulatedAperture>"));
+        assert_eq!(portrait_aperture(&element("depthBlurEffect", "1.400000")), Some(1.4));
+        assert_eq!(portrait_aperture(&element("dbe", "4.5")), Some(4.5), "another prefix, same namespace");
+        assert_eq!(portrait_aperture(&wrap("depthBlurEffect", r#"depthBlurEffect:SimulatedAperture="7.1">"#)), Some(7.1), "attribute form");
+        for bad in ["0", "-2", "200", "NaN", "inf", "f/2", ""] {
+            assert_eq!(portrait_aperture(&element("depthBlurEffect", bad)), None, "{bad:?}");
+        }
+        let other_ns = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:depthBlurEffect="http://example.com/other/"><depthBlurEffect:SimulatedAperture>2</depthBlurEffect:SimulatedAperture></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        assert_eq!(portrait_aperture(other_ns), None, "the prefix alone doesn't make it Apple's");
+        assert_eq!(portrait_aperture("not xml"), None);
     }
 }

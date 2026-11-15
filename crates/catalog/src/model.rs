@@ -202,6 +202,11 @@ pub struct Meta {
     /// it was read get it at Reload from Disk.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_depth: bool,
+    /// The f-number chosen for an iPhone Portrait photo's background blur
+    /// ([`lightcraft_meta::Metadata::portrait_aperture`]), not the lens's (`aperture`). Left out of the catalog JSON
+    /// when unknown, so older catalogs read unchanged; photos imported earlier get it at Reload from Disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub portrait_aperture: Option<f32>,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
@@ -816,6 +821,16 @@ mod shutter_tests {
         m.has_depth = true;
         let back: Meta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
         assert!(back.has_depth);
+    }
+
+    /// Issue #4333: the Portrait aperture stays out of the catalog JSON when unknown and round-trips when known.
+    #[test]
+    fn portrait_aperture_is_left_out_unless_known() {
+        let mut m = Meta::default();
+        assert!(!serde_json::to_string(&m).unwrap().contains("portrait_aperture"));
+        m.portrait_aperture = Some(2.8);
+        let back: Meta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back.portrait_aperture, Some(2.8));
     }
 
     #[test]
