@@ -3625,7 +3625,8 @@ mod tests {
         assert_eq!(h.app.session.source, lcc_engine::LibrarySource::Folder);
         h.settle(SETTLE);
         assert!(h.app.scan.is_none() && h.app.import.is_none());
-        assert_eq!(h.app.session.visible_cloned().len(), 1);
+        // subfolders come with a first browse of a folder: both photos
+        assert_eq!(h.app.session.visible_cloned().len(), 2);
         assert!(h.settle(SETTLE), "a thumbnail that can't load must not keep the renderer busy");
         // this test session has no file hooks: the thumbnail fails once, is remembered, and isn't retried
         let id = h.app.session.visible_cloned()[0];
@@ -3637,6 +3638,10 @@ mod tests {
         assert_eq!(h.app.renderer.completed, done, "no retry loop");
         let w = h.request("ui.widgets", json!({"filter": "crumb:"}), t);
         assert!(w["result"].as_array().is_some_and(|a| !a.is_empty()), "breadcrumb: {w}");
+        // the toggle browses flat, and back
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), t)["ok"], true);
+        h.settle(SETTLE);
+        assert_eq!(h.app.session.visible_cloned().len(), 1, "off: only the folder's own file");
         assert_eq!(h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), t)["ok"], true);
         h.settle(SETTLE);
         assert_eq!(h.app.session.visible_cloned().len(), 2);
