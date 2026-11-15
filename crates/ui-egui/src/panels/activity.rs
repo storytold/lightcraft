@@ -380,9 +380,59 @@ fn plate_tasks(app: &LccApp) -> Vec<TaskInfo> {
     if crate::modern::on(app) {
         return Vec::new();
     }
+    due_tasks(app).into_iter().map(|(t, ..)| t).collect()
+}
+
+/// The tasks due on the stack, oldest first, as [`ordered`] pairs them (a batch's per-photo rows
+/// folded away): the ones any layout's activity surface owes the user.
+fn due_tasks(app: &LccApp) -> Vec<(TaskInfo, u8, usize)> {
     let all = app.session.activity.list();
     let due: Vec<&TaskInfo> = all.iter().filter(|t| t.age_ms >= SHOW_AFTER_MS).collect();
-    ordered(&due, &std::collections::HashSet::new()).into_iter().map(|(t, ..)| t.clone()).collect()
+    ordered(&due, &std::collections::HashSet::new()).into_iter().map(|(t, a, b)| (t.clone(), a, b)).collect()
+}
+
+/// Full-screen preview: the tasks running, top right in a quiet card — the module bar (Classic)
+/// and the Modern card are both off the screen there, but the work goes on and so does its say
+/// (Library ▸ Previews builds while a photo is judged full screen). One task: its name, count and
+/// bar; several: "N operations in progress…" over a thin bar each, as the identity plate draws
+/// them. No clicks: it takes no part of the photo away.
+pub fn fullscreen(app: &mut LccApp, ctx: &egui::Context) {
+    let tasks = due_tasks(app);
+    let [first, rest @ ..] = tasks.as_slice() else { return };
+    // bars move: look again soon (as the stack does)
+    ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    let t = Tokens::get(ctx);
+    let rect = ctx.content_rect();
+    let width = WIDTH;
+    let origin = pos2(rect.right() - width - MARGIN as f32, rect.top() + f32::from(MARGIN));
+    let frame =
+        egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.field_border)).corner_radius(t.radius(6.0)).inner_margin(Margin::same(MARGIN));
+    let mut bars: Vec<egui::Rect> = Vec::new();
+    let area = egui::Area::new(egui::Id::new("activity-fullscreen")).order(egui::Order::Middle).fixed_pos(origin).show(ctx, |ui| {
+        frame.show(ui, |ui| {
+            ui.set_width(width - 2.0 * (f32::from(MARGIN) + 1.0));
+            ui.spacing_mut().item_spacing.y = 3.0;
+            let caption = if rest.is_empty() { label_text(&first.0) } else { tr_format!("{n} operations in progress…", n = tasks.len()) };
+            ui.add(egui::Label::new(RichText::new(caption).font(t.font(11.5)).color(t.text)).truncate().selectable(false));
+            let shown = tasks.len().min(MAX_ROWS);
+            for task in tasks.iter().take(shown) {
+                let fraction = crate::progress::fraction_of(task.0.done, task.0.total);
+                let r = crate::progress::Progress::new(fraction).width(ui.available_width()).height(THIN).dimmed(task.0.cancelling).show(ui);
+                bars.push(r.rect);
+            }
+            if tasks.len() > shown {
+                ui.add(
+                    egui::Label::new(RichText::new(tr_format!("+{n} more", n = tasks.len() - shown)).font(t.font(11.0)).color(t.text_dim))
+                        .truncate()
+                        .selectable(false),
+                );
+            }
+        })
+    });
+    register(ctx, "activity:fullscreen", area.response.rect);
+    for (task, r) in tasks.iter().take(bars.len()).zip(&bars) {
+        register(ctx, format!("activity:fullscreen:bar:{}", task.0.id), *r);
+    }
 }
 
 /// Classic: tasks are running that take the identity plate's place in the module bar ([`plate`]).
