@@ -103,6 +103,11 @@ pub fn start(
         return Err("an export is already running".into());
     }
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
+    // (a photo that isn't in the library is the request's error, as before the photos were set up in later frames;
+    // one that goes meanwhile is the export's, after the reply)
+    if ids.iter().any(|id| app.session.catalog.photo(*id).is_none()) {
+        return Err("no such photo".into());
+    }
     let total = ids.len();
     let progress = Arc::new(Mutex::new((0, String::new())));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -187,18 +192,22 @@ pub fn prepare(app: &mut LightcraftApp, ctx: &egui::Context) {
                     }
                 }
                 Ok(()) => {}
-                Err(e) => {
-                    app.export = None;
-                    app.toast(ctx, e);
-                }
+                Err(e) => failed(app, ctx, e),
             }
         }
         // (the row goes with the task, and `after` is dropped unrun: Photos is free again)
-        Err(e) => {
-            app.export = None;
-            app.toast(ctx, e);
-        }
+        Err(e) => failed(app, ctx, e),
     }
+}
+
+/// An export that ends after its reply with an error (a photo that can't be set up, a worker that won't start):
+/// the row goes, the error is shown in a toast, and `export.last` of `ui.inspect` becomes
+/// `{files: [], cancelled: false, applePhotos: null, error}`, so a client that polls sees why the export is over
+/// (never the previous export's result as if it were this one's).
+fn failed(app: &mut LightcraftApp, ctx: &egui::Context, error: String) {
+    app.export = None;
+    app.last_export_result = Some(json!({"files": [], "cancelled": false, "applePhotos": null, "error": error}));
+    app.toast(ctx, error);
 }
 
 /// Export a single paginated PDF with the same activity row and cancellation as image exports.

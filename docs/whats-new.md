@@ -231,9 +231,10 @@
   photo with no original file when exporting the original, or one purged meanwhile) ends the export with its error in
   a toast, and nothing is written; opening another library meanwhile stops the export as ✕ does. Export with
   Previous (and the Export dialog's starting settings) keep the last export that got going: one that ends while its
-  photos are being set up doesn't replace them.
+  photos are being set up doesn't replace them. A photo id that isn't in the library is refused at once, as before.
 - Agents: `app.export {background: true}` still answers at once with `{background: true, total}`; `ui.inspect` →
-  `export.running.preparing` is true until the photos are set up. See [Control protocol](control-protocol.md).
+  `export.running.preparing` is true until the photos are set up, and an export that ends with an error after the reply
+  leaves it in `export.last.error`. See [Control protocol](control-protocol.md).
 
 ### A person's page opens in seconds in a large library
 - Finding the unnamed faces that look like a person (a person's page, and again after each face confirmed there) now

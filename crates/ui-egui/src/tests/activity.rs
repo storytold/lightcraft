@@ -341,6 +341,41 @@ fn a_photo_that_cannot_be_prepared_ends_the_export_with_its_error() {
     assert!(toast.contains("generated demo photo"), "{toast}");
     assert!(written.lock().unwrap().is_empty(), "nothing is written");
     assert!(h.app.session.activity.list().is_empty(), "no row is left");
+    // a client that polls sees why the export is over, not the export before it
+    let seen = h.request("ui.inspect", json!({}), T)["result"]["export"]["last"].clone();
+    assert!(seen["error"].as_str().is_some_and(|e| e.contains("generated demo photo")), "{seen}");
+    assert_eq!((seen["files"].as_array().map(Vec::len), &seen["cancelled"]), (Some(0), &json!(false)), "{seen}");
+}
+
+/// What `export.last` held before is replaced by a deferred failure, not kept as if it were this export's result.
+#[test]
+fn a_deferred_failure_replaces_the_previous_exports_result() {
+    let mut h = demo();
+    crate::export_task::set_prep_budget(Duration::ZERO);
+    let (write, _written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    h.app.last_export_result = Some(json!({"files": [{"path": "old.jpg"}], "cancelled": false, "applePhotos": null}));
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    let params = json!({"ids": ids, "dir": "/lc-test-out", "format": "original", "background": true});
+    assert_eq!(h.request("engine.execute", json!({"command": "app.export", "params": params}), T)["ok"], true);
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.export.is_none()));
+    let last = h.app.last_export_result.clone().expect("a result");
+    assert!(last["error"].is_string() && last["files"] == json!([]), "{last}");
+}
+
+/// A photo id that is not in the library is the request's error, as it was before the photos were set up in later
+/// frames: no row, no export, and the reply says why.
+#[test]
+fn an_unknown_photo_id_is_refused_by_the_request() {
+    let mut h = demo();
+    let (write, written) = recording_writer(1);
+    h.app.services.write_shared = Some(write);
+    let params = json!({"ids": [9_999_999u64], "dir": "/lc-test-out", "format": "original", "background": true});
+    let r = h.request("engine.execute", json!({"command": "app.export", "params": params}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r.to_string().contains("no such photo"), "{r}");
+    assert!(h.app.export.is_none() && h.app.session.activity.list().is_empty());
+    assert!(written.lock().unwrap().is_empty());
 }
 
 fn preparing(h: &Headless) -> bool {
