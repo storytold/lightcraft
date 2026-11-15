@@ -86,7 +86,7 @@ All pure Rust, verified with `cargo info` / `cargo tree`:
 | zune-jpeg, zune-core | MIT OR Apache-2.0 OR Zlib | JPEG decode |
 | jpeg-decoder | MIT OR Apache-2.0 | scaled / CMYK JPEG decode |
 | craft-jpeg | MIT OR Apache-2.0 | baseline JPEG encode (shared craft-libs) |
-| jpeg-encoder (dev only) | (MIT OR Apache-2.0) AND IJG | reference CMYK fixture and JPEG benchmark |
+| jpeg-encoder | (MIT OR Apache-2.0) AND IJG | 0.6 still ships inside `craft-image-codecs` (IJG: permissive, attribution in docs); 0.7 only in tests and the JPEG benchmark (reference CMYK fixture, prior 4:2:2 output) |
 | png | MIT OR Apache-2.0 | PNG |
 | tiff | MIT | TIFF |
 | image-webp | MIT OR Apache-2.0 | WebP |
