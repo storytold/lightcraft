@@ -681,30 +681,54 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
     });
 }
 
-/// Separable square min (or max) filter of radius `r`.
+/// Separable square min (or max) filter of radius `r`, linear in the pixels whatever `r` is (a
+/// crop can make the radius as wide as the output, and a scan of every neighbourhood was then
+/// cubic in the side).
 fn min_filter(p: &Plane, r: usize, max: bool) -> Plane {
     let (w, h) = (p.width, p.height);
-    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
     let mut tmp = Plane::new(w, h);
-    for_rows(&mut tmp.data, w, |y, row| {
-        let src = &p.data[y * w..(y + 1) * w];
-        for (x, v) in row.iter_mut().enumerate() {
-            let (a, b) = (x.saturating_sub(r), (x + r).min(w - 1));
-            *v = src[a..=b].iter().copied().fold(src[x], pick);
-        }
-    });
+    for_rows(&mut tmp.data, w, |y, row| extreme_1d(&p.data[y * w..(y + 1) * w], r, max, row));
+    // the vertical pass runs along the rows of the transposed plane
+    let mut t = vec![0f32; w * h];
+    for (i, v) in tmp.data.iter().enumerate() {
+        t[(i % w) * h + i / w] = *v;
+    }
+    // each buffer goes once the next is built, so no more than three planes are alive at once
+    drop(tmp);
+    let mut tt = vec![0f32; w * h];
+    for_rows(&mut tt, h, |x, col| extreme_1d(&t[x * h..(x + 1) * h], r, max, col));
+    drop(t);
     let mut out = Plane::new(w, h);
-    for_rows(&mut out.data, w, |y, row| {
-        let (a, b) = (y.saturating_sub(r), (y + r).min(h - 1));
-        for (x, v) in row.iter_mut().enumerate() {
-            let mut m = tmp.data[y * w + x];
-            for yy in a..=b {
-                m = pick(m, tmp.data[yy * w + x]);
-            }
-            *v = m;
-        }
-    });
+    for (i, v) in tt.iter().enumerate() {
+        out.data[(i % h) * w + i / h] = *v;
+    }
     out
+}
+
+/// `out[x]` = the min (or max) of `src[x - r ..= x + r]` clipped to the slice, by the van Herk /
+/// Gil–Werman blocks: three passes over the line however wide the window.
+fn extreme_1d(src: &[f32], r: usize, max: bool, out: &mut [f32]) {
+    let n = src.len();
+    if n == 0 {
+        return;
+    }
+    // past the line's length a wider window takes in nothing more
+    let r = r.min(n);
+    let id = if max { f32::NEG_INFINITY } else { f32::INFINITY };
+    let pick = |a: f32, b: f32| if max { a.max(b) } else { a.min(b) };
+    let (k, m) = (2 * r + 1, n + 2 * r);
+    let pad = |i: usize| if i < r || i >= r + n { id } else { src[i - r] };
+    let mut g = vec![id; m];
+    let mut hh = vec![id; m];
+    for i in 0..m {
+        g[i] = if i % k == 0 { pad(i) } else { pick(g[i - 1], pad(i)) };
+    }
+    for i in (0..m).rev() {
+        hh[i] = if i % k == k - 1 || i == m - 1 { pad(i) } else { pick(hh[i + 1], pad(i)) };
+    }
+    for (x, o) in out.iter_mut().enumerate().take(n) {
+        *o = pick(hh[x], g[x + k - 1]);
+    }
 }
 
 #[cfg(test)]
