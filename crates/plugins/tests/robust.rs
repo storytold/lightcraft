@@ -72,6 +72,42 @@ fn manifests_never_panic() {
     });
 }
 
+/// The SDK's manifest stamp (`sdk/stamp`) on mutated and malformed modules: errors, never a panic.
+#[test]
+fn stamped_sections_never_panic() {
+    let sandbox = plugin_stamp::Limits { fuel: 5_000_000, ..Default::default() };
+    let stamped = plugin_stamp::stamp(&module(MANIFEST, "{}"), &sandbox).unwrap();
+    lcc_fuzzkit::run("plugins.stamp", &[stamped.as_slice()], 300, |b| {
+        let _ = plugin_stamp::read_section(b);
+        let _ = plugin_stamp::check(b, &sandbox);
+        let _ = plugin_stamp::stamp(b, &sandbox);
+    });
+    for cut in 0..stamped.len() {
+        let _ = plugin_stamp::read_section(&stamped[..cut]);
+        let _ = plugin_stamp::check(&stamped[..cut], &sandbox);
+    }
+    let cut = &stamped[..stamped.len() - 1];
+    assert!(plugin_stamp::read_section(cut).unwrap_err().to_string().contains("past the end"), "a truncated module");
+    let hostile: [(&str, &[u8], &str); 4] = [
+        ("a length over 32 bits", &[0, 0xff, 0xff, 0xff, 0xff, 0x7f], "bad length"),
+        ("a length that never ends", &[0, 0x80], "bad length"),
+        ("a name that isn't UTF-8", &[0, 3, 2, 0xff, 0xfe], "UTF-8"),
+        ("a name longer than its section", &[0, 2, 9, b'x'], "runs past"),
+    ];
+    for (what, tail, needle) in hostile {
+        let wasm = [stamped.as_slice(), tail].concat();
+        let err = plugin_stamp::read_section(&wasm).expect_err(what).to_string();
+        assert!(err.contains(needle), "{what}: {err}");
+        assert!(plugin_stamp::check(&wasm, &sandbox).is_err(), "{what}");
+        assert!(plugin_stamp::stamp(&wasm, &sandbox).is_err(), "{what}");
+    }
+    let twice = plugin_stamp::stamp(&module(MANIFEST, "{}"), &sandbox).unwrap();
+    let section = &twice[module(MANIFEST, "{}").len()..];
+    let doubled = [twice.as_slice(), section].concat();
+    assert_eq!(plugin_stamp::read_section(&doubled), Err(plugin_stamp::Error::Duplicate(2)), "two sections");
+    assert_eq!(plugin_stamp::check(&doubled, &sandbox), Err(plugin_stamp::Error::Duplicate(2)));
+}
+
 /// `requires` and `version` from a hostile manifest: errors, never a panic.
 #[test]
 fn hostile_requires_and_versions_are_errors() {
