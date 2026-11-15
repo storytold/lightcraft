@@ -1311,7 +1311,7 @@ dependencies = [
 [[package]]
 name = "craft-media"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=d6cd7836d364177661b0ae17f48a0805e83a5f32#d6cd7836d364177661b0ae17f48a0805e83a5f32"
+source = "git+https://github.com/storytold/craft-libs?rev=662e906ef928655031c1f021a01da4979f6a3a35#662e906ef928655031c1f021a01da4979f6a3a35"
 dependencies = [
  "thiserror 2.0.21",
 ]
