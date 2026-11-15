@@ -1,6 +1,6 @@
 # Roadmap
 
-*Last updated 2026-11-01 (version 0.8.2). Revision history: [Log](#log).*
+*Last updated 2026-11-15 (version 0.8.2). Revision history: [Log](#log).*
 
 Milestones toward full Adobe Lightroom Classic parity, with the Classic shell and output modules (Map, Book, Slideshow,
 Print, Web, publish) and Immich integration as Chromaforge's own focus on top of the upstream engine. Estimates are for
@@ -109,7 +109,7 @@ photo's own pixels, so 1:1–8:1 is sharp in every view, with mask overlays and 
 | M3 | RAW I | TIFF/DNG (LJ92, deflate, tiles, opcodes), demosaic (AHD/PPG/bilinear), highlight recovery, DNG colour model, CR2, NEF, ARW, embedded previews | 10–15 | 🚧 (DNG, CR2, ARW, NEF uncompressed + Huffman lossless/lossy, embedded previews ✅; NEF lossy-after-split ⬜) |
 | M4 | Crop, geometry, optics | crop tool + overlays, straighten, Upright (auto/level/vertical/full/guided), manual transforms, CA, defringe, manual lens corrections | 6–10 | ✅ |
 | M5 | Performance | source pyramids, wgpu compute pipeline (CPU oracle), draft/full renders, prefetch, budgets (16 ms slider updates on 24 MP) | 10–15 | ✅ (stage cache, source pyramid, wgpu pipeline, prefetch, memory budget, colour NR at half resolution, GPU histogram) |
-| M6 | Masking | brush, linear/radial gradients, colour/luminance/depth range, add/subtract/intersect/invert, all local adjustments, masks panel | 8–12 | 🚧 (brush/linear/radial/colour/luminance range, add/subtract/intersect, masks panel ✅; depth range, AI masks ⬜) |
+| M6 | Masking | brush, linear/radial gradients, colour/luminance/depth range, add/subtract/intersect/invert, all local adjustments, masks panel | 8–12 | 🚧 (brush/linear/radial/colour/luminance range, add/subtract/intersect, masks panel ✅; depth range 🟡 (estimated depth); AI masks ⬜) |
 | M7 | Detail | sharpening + masking preview, luminance/colour NR, Denoise, Raw Details, Super Resolution | 6–10 | 🚧 (sharpening, luminance/colour NR ✅; AI Denoise 🟡 (Bayer, optional weights; policy/fidelity open); Raw Details, Super Resolution 🟡 (classical: edge-aware residual demosaic and 2× back-projection as new DNGs, Photo ▸ Enhance…, an Enhance Preview dialog with before/after and estimated time; no learned model)) |
 | M8 | Heal / Remove | content-aware remove (PatchMatch), heal, clone, brush spots, visualize spots, red/pet eye | 6–10 | 🚧 (heal, clone, auto source, visualize spots, red/pet eye, PatchMatch content-aware remove ✅; generative remove ⬜) |
 | M9 | Presets, profiles, versions, sync | preset browser + amount, create/import presets, profile browser, versions, history, copy/paste/sync settings | 5–8 | ✅ |
@@ -230,6 +230,8 @@ history/snapshots remain source data, and smart collections import current membe
 database is read-only; the app owns subsequent edits. See `docs/lightroom-catalog-import.md`.
 
 ## Log
+- 2026-11-15: M6 row: Depth Range masks are built (estimated depth, Depth Anything V2 Small) and now in the Masks
+  panel's Create New Mask (issue #1144).
 - 2026-11-01: IMM-SIDECARS: XMP sidecars both ways — pull the sidecar Immich stores for a linked asset (metadata
   and the `lc:settings` develop settings another instance published) into the catalog and its local file, and push
   the catalog's: whole sidecars for external-library folders, the rating/description/date/place/tags Immich keeps

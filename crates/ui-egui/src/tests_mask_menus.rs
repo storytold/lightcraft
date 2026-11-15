@@ -82,6 +82,23 @@ fn add_subtract_and_intersect_offer_every_mask_kind() {
     assert!(!h.app.ui.concept_pick && h.app.mask_pick_op.is_none());
 }
 
+/// Issue #1144: Create New Mask offers Depth with the other tiles (it was only in the Tools menu), and the tile does
+/// what the menu item does: a Depth Range mask with the depth model, else no mask and the AI Models settings.
+#[test]
+fn create_new_mask_offers_a_depth_tile() {
+    let mut h = masking();
+    assert!(widgets(&h, "maskNew:").iter().any(|k| k == "depthRange"), "a Depth tile in Create New Mask");
+    let before = develop(&h).masks.len();
+    click(&mut h, "maskNew:depthRange");
+    h.step();
+    if h.app.session.segmenter.open_model_installed("depth") {
+        assert_eq!(develop(&h).masks.len(), before + 1);
+        assert!(matches!(develop(&h).masks.last().map(|m| &m.components[0].shape), Some(MaskShape::DepthRange { .. })));
+    } else {
+        assert_eq!(develop(&h).masks.len(), before, "no mask without the depth model");
+    }
+}
+
 /// Tools ▸ Create New Mask ▸ Select People / Color Range / Luminance Range do what the Masking panel's tiles do.
 #[test]
 fn create_new_mask_menu_items_start_the_tiles_tools() {

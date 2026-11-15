@@ -734,6 +734,7 @@
   "Denoise Status": "ノイズ除去の状態",
   "Denoise all photos with an Amount": "適用量が設定されたすべての写真のノイズを除去",
   "Denoise models are downloaded and chosen under Settings ▸ AI Models.": "ノイズ除去モデルは 設定 → AI モデル でダウンロードして選択します。",
+  "Depth": "深度",
   "Describe photos…": "写真を説明…",
   "Deselect Active Photo": "アクティブな写真の選択を解除",
   "Deselect Unflagged Photos": "フラグなしの写真の選択を解除",

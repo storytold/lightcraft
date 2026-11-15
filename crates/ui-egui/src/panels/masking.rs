@@ -180,7 +180,7 @@ pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {
 
 /// Every kind of mask, in Create New Mask's order, with its tile label (OneSlips 1138a5edd): the tiles and the Add /
 /// Subtract / Intersect menus offer all of them, in the same order, with the same icons.
-pub(crate) const MASK_KINDS: [(&str, &str); 12] = [
+pub(crate) const MASK_KINDS: [(&str, &str); 13] = [
     ("object", "Object"),
     ("prompt", "Describe"),
     ("subject", "Subject"),
@@ -193,6 +193,8 @@ pub(crate) const MASK_KINDS: [(&str, &str); 12] = [
     ("radial", "Radial"),
     ("luminanceRange", "Luminance"),
     ("colorRange", "Color"),
+    // (Depth Anything V2 Small; without it the AI Models settings offer its download, issue #1144)
+    ("depthRange", "Depth"),
 ];
 
 /// The icon of a mask kind, by its `mask.add` kind id: the one table the Create New Mask tiles and
@@ -2185,6 +2187,7 @@ fn component_menu(app: &mut LccApp, ui: &mut egui::Ui, op: &str) {
             "radial" => "Radial Gradient",
             "luminanceRange" => "Luminance Range",
             "colorRange" => "Color Range",
+            "depthRange" => "Depth Range",
             "people" => "People…",
             "concept" => "Remembered…",
             _ => label,
