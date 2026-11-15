@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba604ec61cf5fb69367b0#1fb21f048785bba73b5ba604ec61cf5fb69367b0"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1269,7 +1269,7 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba604ec61cf5fb69367b0#1fb21f048785bba73b5ba604ec61cf5fb69367b0"
 dependencies = [
  "craft-jpeg",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba604ec61cf5fb69367b0)",
+ "craft-metadata",
  "crc32fast",
  "exr",
  "flate2",
@@ -1313,19 +1313,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba6
 dependencies = [
  "brotli-decompressor 6.0.1",
  "chrono",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba604ec61cf5fb69367b0)",
- "quick-xml 0.41.0",
- "serde",
-]
-
-[[package]]
-name = "craft-metadata"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
-dependencies = [
- "brotli-decompressor 6.0.1",
- "chrono",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -1344,12 +1332,12 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba604ec61cf5fb69367b0#1fb21f048785bba73b5ba604ec61cf5fb69367b0"
 dependencies = [
  "chrono",
  "craft-crw",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-metadata",
+ "craft-tiff",
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -1363,15 +1351,6 @@ dependencies = [
 name = "craft-tiff"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba604ec61cf5fb69367b0#1fb21f048785bba73b5ba604ec61cf5fb69367b0"
-dependencies = [
- "serde",
- "thiserror 2.0.21",
-]
-
-[[package]]
-name = "craft-tiff"
-version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -3865,9 +3844,9 @@ dependencies = [
  "craft-heif",
  "craft-image-codecs",
  "craft-jxl",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba604ec61cf5fb69367b0)",
+ "craft-metadata",
  "craft-psd",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff",
  "dhat",
  "jxl-oxide",
  "lightcraft-color",
@@ -3944,7 +3923,7 @@ dependencies = [
  "chrono",
  "craft-docpath",
  "craft-heif",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff",
  "crc32fast",
  "fs4",
  "harfrust 0.13.3",
@@ -4101,9 +4080,9 @@ version = "0.21.1"
 dependencies = [
  "chrono",
  "craft-heif",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=1fb21f048785bba73b5ba604ec61cf5fb69367b0)",
+ "craft-metadata",
  "craft-psd",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff",
  "lightcraft-geom",
  "proptest",
  "serde",
@@ -4158,7 +4137,7 @@ dependencies = [
  "chrono",
  "craft-image-codecs",
  "craft-raw",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff",
  "dhat",
  "lightcraft-color",
  "lightcraft-geom",
