@@ -135,6 +135,8 @@ pub struct Segmenter {
     #[cfg(feature = "sam")]
     paste: Option<paste::Pending>,
     #[cfg(feature = "sam")]
+    paste_queue: std::collections::VecDeque<paste::Pending>,
+    #[cfg(feature = "sam")]
     worker: worker::Worker,
     #[cfg(feature = "sam")]
     download: download::Downloader,
@@ -154,6 +156,8 @@ impl Default for Segmenter {
             messages: Vec::new(),
             #[cfg(feature = "sam")]
             paste: None,
+            #[cfg(feature = "sam")]
+            paste_queue: std::collections::VecDeque::new(),
             #[cfg(feature = "sam")]
             worker: worker::Worker::default(),
             #[cfg(feature = "sam")]
@@ -187,7 +191,7 @@ impl Segmenter {
     /// Whether requests are queued or running (loading, analyzing the photo, a click…).
     pub fn busy(&self) -> bool {
         #[cfg(feature = "sam")]
-        return self.worker.pending() > 0 || self.paste.is_some();
+        return self.worker.pending() > 0 || self.paste.is_some() || !self.paste_queue.is_empty();
         #[cfg(not(feature = "sam"))]
         false
     }

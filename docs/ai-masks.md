@@ -71,8 +71,16 @@ segmentation and detail patches are not reused. Object masks reuse their normali
 points; check the result if the subject moved far from those points. An Object without include
 points must be selected on the source photo before copying.
 
-The app stays responsive and shows **Recomputing AI masks** in Activity. Settings are applied
-together as one undo step only after all selections succeed.
+The app stays responsive and shows **Recomputing AI masks** in Activity. You can move to another
+photo and paste again before the first paste finishes: each click captures its destination
+photos and copied settings, then runs in order. Waiting operations show **Queued AI mask paste**
+and the first destination's filename in their own cancellable Activity rows. Each click's
+settings are applied together as one undo step only after all its selections succeed; separate
+clicks remain separate undo steps. Cancelling or failing one operation does not discard later ones.
+
+At most 64 operations and 10,000 AI selections can be pending across all pastes. A new paste
+that includes any destination already in a pending AI-mask paste is refused as a whole; wait
+for that paste to finish, or cancel it in Activity before trying that photo again.
 
 Cancel, a missing or damaged model, a destination edited while waiting or computing, or an edit
 interaction still open on any destination when computation finishes leaves the entire paste
@@ -86,8 +94,10 @@ heuristic/model limitations are unchanged. Sync Settings, Auto Sync and presets 
 by this paste-specific recomputation yet.
 
 Control/MCP: `develop.paste` and `develop.pastePrevious` return `{pending: true, changed: 0,
-targets}` in the desktop app while inference runs. `activity.list` reports progress
-(`kind: "segment"`); `activity.cancel` cancels it after the current selection finishes.
+targets, queued, task}` in the desktop app when inference is pending. `queued` distinguishes a
+waiting operation from one started immediately; `task` is its stable Activity id.
+`activity.list` reports progress (`kind: "segment"`); `activity.cancel` removes a waiting
+operation on the next poll or cancels a running one after its current selection finishes.
 Waiting-mode clients complete the computation before returning `{changed}`.
 
 ## Remote Metal inference

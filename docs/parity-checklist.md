@@ -346,7 +346,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 |---|---|---|---|---|---|
 | LR-SYNC-COPY | Copy edit settings | P0 | ✅ | `cmd:develop.copy` | |
 | LR-SYNC-CHOOSE | Choose settings to copy | P0 | ✅ | `cmd:dialog.copySettings` | groups are coarser than per-slider |
-| LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste`, `cmd:dialog.pasteSettings` | choose copied groups at paste time; included Object/Describe masks recomputed per destination with SAM 3, asynchronously in the app; failures/cancel leave the whole paste unapplied |
+| LR-SYNC-PASTE | Paste to selection | P0 | ✅ | `cmd:develop.paste`, `cmd:dialog.pasteSettings` | choose copied groups at paste time; included Object/Describe masks recomputed per destination with SAM 3, asynchronously in the app; successive clicks queue captured targets/settings in order, with independent Activity cancellation and one undo step per click; failures/cancel leave that whole paste unapplied |
 | LR-SYNC-SYNCBTN | Sync active → selected | P1 | ✅ | `cmd:develop.sync` | |
 | LR-SYNC-PREVIOUS | Paste from previous / auto sync [Classic] | P2 | ✅ | `cmd:develop.pastePrevious`, `cmd:develop.autoSync` | ⌥⌘V pastes the previously active photo's settings (copy groups); Auto Sync (⌥⇧⌘A) |
 
@@ -802,6 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | patch | LR-SYNC-PASTE: successive AI-mask pastes queue captured targets/settings in order with separate cancellation/undo; status unchanged |
 | 2026-11-14 | minor | LR-MASK-UPDATE ⬜ → 🟡: Paste and Paste from Previous recompute Object/Describe components on each destination, preserving adjustments/manual components, with cancellable Activity progress and atomic one-step undo. LR-MASK-SYNC ✅ → 🟡: Sync/Auto Sync/presets still copy cached AI shapes; no net checklist score change |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-05 | patch | LRC-LIB-CATALOG-LOCK: a library is written only to the folder it was opened from (on Unix, where the system gives a folder an identity, it is checked before every write of the catalog, settings, lock note and thumbnails; a share mounted over it, or a replaced folder, is refused and nothing is written; a folder that holds this session's lock note counts as the opened one, so a drive mounted again keeps saving; on Windows only that the path is still a folder is checked, so a replaced folder or a share mounted at the same path is not caught), a Move import removes its originals only once the catalog log is on disk, and dropping the lock removes only the owner note it wrote itself (#3240); status unchanged |

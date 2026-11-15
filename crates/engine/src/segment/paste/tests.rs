@@ -231,6 +231,257 @@ fn complete(pending: &mut Pending) {
 }
 
 #[cfg(feature = "sam")]
+struct DamagedModel(std::path::PathBuf);
+
+#[cfg(feature = "sam")]
+impl DamagedModel {
+    fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("lc-sam3-paste-queue-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{not json at all}").unwrap();
+        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), b"#version: 0.2\n").unwrap();
+        Self(dir)
+    }
+}
+
+#[cfg(feature = "sam")]
+impl Drop for DamagedModel {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn a_second_paste_queues_without_replacing_the_running_paste() {
+    let model = DamagedModel::new();
+    for command in ["develop.paste", "develop.pastePrevious"] {
+        let (mut s, source, first) = copied();
+        let second = s.catalog.photos().find(|p| p.id != source && p.id != first).unwrap().id;
+        let before = [s.develop_of(first).unwrap(), s.develop_of(second).unwrap()];
+        s.segmenter.background = true;
+        s.segmenter.dir = Some(model.0.clone());
+        s.segmenter.paste = Some(completed_paste(&s, &[first]));
+        let commits = s.commits();
+        let result = s.execute(command, &json!({"ids": [second.0]})).unwrap();
+        assert_eq!(result["pending"], true);
+        assert_eq!(result["queued"], true);
+        assert_eq!(s.activity.list().len(), 2, "each paste click has its own cancellable operation");
+        assert_eq!(result["task"], s.activity.list()[1].id);
+        assert_eq!(s.activity.list()[1].label, "Queued AI mask paste");
+        assert_eq!(s.activity.list()[1].detail, s.catalog.photo(second).unwrap().file_name);
+        assert_eq!(s.develop_of(first).unwrap(), before[0]);
+        assert_eq!(s.develop_of(second).unwrap(), before[1]);
+        assert_eq!(s.commits(), commits);
+    }
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn queued_pastes_capture_each_click_and_commit_in_order_with_separate_undo_steps() {
+    let model = DamagedModel::new();
+    let (mut s, source, first) = copied();
+    let rest: Vec<_> = s.catalog.photos().filter(|p| p.id != source && p.id != first).take(2).map(|p| p.id).collect();
+    let [second, third] = [rest[0], rest[1]];
+    let ids = [first, second, third];
+    let before = ids.map(|id| s.develop_of(id).unwrap());
+    s.segmenter.background = true;
+    s.segmenter.dir = Some(model.0.clone());
+    let mut active = completed_paste(&s, &[first]);
+    active.label = "First paste".into();
+    s.segmenter.paste = Some(active);
+    s.execute("develop.paste", &json!({"ids": [second.0]})).unwrap();
+    let mut later = settings();
+    later.light.exposure = 1.4;
+    s.set_develop(source, later.clone(), "Later source").unwrap();
+    s.execute("develop.pastePrevious", &json!({"ids": [third.0]})).unwrap();
+    later.light.exposure = 2.1;
+    s.set_develop(source, later, "After queue").unwrap();
+    let latest_source = s.develop_of(source).unwrap();
+    s.clipboard = Some(json!({"light": {"exposure": 9.0}}));
+    let commits = s.commits();
+    assert_eq!(s.segmenter.paste_queue.len(), 2);
+    assert!(s.segment_poll().changed, "first click completes first");
+    assert!(s.develop_of(second).unwrap().masks.is_empty());
+    complete(s.segmenter.paste_queue.front_mut().unwrap());
+    assert!(s.segment_poll().changed);
+    assert_eq!(s.develop_of(second).unwrap().light.exposure, 0.7, "clipboard is captured at the click");
+    assert!(s.develop_of(third).unwrap().masks.is_empty());
+    complete(s.segmenter.paste_queue.front_mut().unwrap());
+    assert!(s.segment_poll().changed);
+    assert_eq!(s.develop_of(third).unwrap().light.exposure, 1.4, "Previous is captured at the click");
+    assert_eq!(s.develop_of(source).unwrap(), latest_source);
+    assert_eq!(s.commits(), commits + 3);
+    assert!(s.activity.list().is_empty());
+    assert!(!s.segmenter.busy());
+    for (id, label) in [(third, "Paste from Previous"), (second, "Paste Settings"), (first, "First paste")] {
+        assert_eq!(s.undo_step().unwrap(), label);
+        assert_eq!(s.develop_of(id).unwrap(), before[ids.iter().position(|p| *p == id).unwrap()]);
+    }
+    for (id, exposure) in [(first, 0.7), (second, 0.7), (third, 1.4)] {
+        s.redo_step().unwrap();
+        assert_eq!(s.develop_of(id).unwrap().light.exposure, exposure);
+    }
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn queued_cancellation_does_not_wait_for_or_cancel_the_active_paste() {
+    let (mut s, source, first) = copied();
+    let rest: Vec<_> = s.catalog.photos().filter(|p| p.id != source && p.id != first).take(2).map(|p| p.id).collect();
+    let [second, third] = [rest[0], rest[1]];
+    let before = [s.develop_of(first).unwrap(), s.develop_of(second).unwrap()];
+    let mut active = Pending::new(&s, vec![(first, settings())], "First").unwrap();
+    let selection = active.queue.pop_front().unwrap();
+    let (tx, rx) = mpsc::channel();
+    active.flight = Some(Flight { selection, rx, started: Instant::now() });
+    let active_id = active.task.id();
+    s.segmenter.paste = Some(active);
+    let cancelled = completed_paste(&s, &[second]);
+    s.activity.cancel(cancelled.task.id()).unwrap();
+    s.segmenter.paste_queue.push_back(cancelled);
+    s.segmenter.paste_queue.push_back(completed_paste(&s, &[third]));
+    let polled = s.segment_poll();
+    assert!(!polled.changed);
+    assert_eq!(s.segmenter.paste_queue.len(), 1);
+    assert_eq!(s.activity.list().len(), 2, "cancelled queued row disappears while the active worker waits");
+    assert!(!s.segmenter.paste.as_ref().unwrap().task.is_cancelled());
+    s.activity.cancel(active_id).unwrap();
+    tx.send(outcome(Ok(Some(SegMask::from_logits(1, &[7.0]))))).unwrap();
+    assert!(!s.segment_poll().changed);
+    assert_eq!(s.develop_of(first).unwrap(), before[0]);
+    assert_eq!(s.develop_of(second).unwrap(), before[1]);
+    assert!(s.segment_poll().changed, "the uncancelled third click still completes");
+    assert!(!s.develop_of(third).unwrap().masks.is_empty());
+    assert!(s.activity.list().is_empty());
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn a_failed_paste_does_not_discard_the_next_queued_paste() {
+    let (mut s, source, first) = copied();
+    let second = s.catalog.photos().find(|p| p.id != source && p.id != first).unwrap().id;
+    let before = s.develop_of(first).unwrap();
+    let mut active = Pending::new(&s, vec![(first, settings())], "First").unwrap();
+    let selection = active.queue.pop_front().unwrap();
+    let (tx, rx) = mpsc::channel();
+    active.flight = Some(Flight { selection, rx, started: Instant::now() });
+    s.segmenter.paste = Some(active);
+    s.segmenter.paste_queue.push_back(completed_paste(&s, &[second]));
+    tx.send(outcome(Err("synthetic inference failure".into()))).unwrap();
+    let failed = s.segment_poll();
+    assert!(!failed.changed);
+    assert_eq!(failed.messages, ["synthetic inference failure"]);
+    assert_eq!(s.develop_of(first).unwrap(), before);
+    assert!(s.segmenter.busy());
+    assert!(s.segment_poll().changed);
+    assert!(!s.develop_of(second).unwrap().masks.is_empty());
+    assert!(s.activity.list().is_empty());
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn edited_queued_destinations_are_not_started_and_later_jobs_still_finish() {
+    let (mut s, source, first) = copied();
+    let second = s.catalog.photos().find(|p| p.id != source && p.id != first).unwrap().id;
+    s.segmenter.paste_queue.push_back(Pending::new(&s, vec![(first, settings())], "Stale").unwrap());
+    s.segmenter.paste_queue.push_back(completed_paste(&s, &[second]));
+    let mut edited = DevelopSettings::default();
+    edited.light.exposure = -0.2;
+    s.set_develop(first, edited.clone(), "User edit").unwrap();
+    let polled = s.segment_poll();
+    assert!(!polled.changed);
+    assert!(polled.messages[0].contains("destination photo changed"), "{:?}", polled.messages);
+    assert_eq!(*s.develop_of(first).unwrap(), edited);
+    assert!(s.segment_poll().changed);
+    assert!(!s.develop_of(second).unwrap().masks.is_empty());
+    assert!(s.activity.list().is_empty());
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn a_library_switch_discards_queued_results_even_when_photo_ids_are_reused() {
+    let (mut s, _, target) = copied();
+    let before = s.develop_of(target).unwrap();
+    s.segmenter.paste_queue.push_back(completed_paste(&s, &[target]));
+    s.library_identity = Arc::new(());
+    let polled = s.segment_poll();
+    assert!(!polled.changed);
+    assert_eq!(polled.messages.len(), 1);
+    assert_eq!(s.develop_of(target).unwrap(), before);
+    assert!(!s.segmenter.busy());
+    assert!(s.activity.list().is_empty());
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn overlapping_queue_requests_are_refused_as_a_whole() {
+    let model = DamagedModel::new();
+    let (mut s, source, first) = copied();
+    let rest: Vec<_> = s.catalog.photos().filter(|p| p.id != source && p.id != first).take(2).map(|p| p.id).collect();
+    let [second, third] = [rest[0], rest[1]];
+    s.segmenter.dir = Some(model.0.clone());
+    s.segmenter.background = true;
+    s.segmenter.paste = Some(completed_paste(&s, &[first]));
+    s.segmenter.paste_queue.push_back(completed_paste(&s, &[second]));
+    let before = s.develop_of(third).unwrap();
+    let err = s.execute("develop.paste", &json!({"ids": [second.0, third.0]})).unwrap_err();
+    assert!(err.to_string().contains("already has a pending"), "{err}");
+    assert_eq!(s.segmenter.paste_queue.len(), 1);
+    assert_eq!(s.activity.list().len(), 2);
+    assert_eq!(s.develop_of(third).unwrap(), before);
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn the_queue_bounds_all_requests_before_cloning_more_settings() {
+    let model = DamagedModel::new();
+    let (mut s, source, first) = copied();
+    let second = s.catalog.photos().find(|p| p.id != source && p.id != first).unwrap().id;
+    s.segmenter.dir = Some(model.0.clone());
+    s.segmenter.background = true;
+    let mut active = completed_paste(&s, &[first]);
+    active.total = MAX_SELECTIONS as u64;
+    s.segmenter.paste = Some(active);
+    let err = s.execute("develop.paste", &json!({"ids": [second.0]})).unwrap_err();
+    assert!(err.to_string().contains("10,000"), "{err}");
+    assert_eq!(s.activity.list().len(), 1);
+    s.segmenter.paste = None;
+    for _ in 0..MAX_PASTES {
+        s.segmenter.paste_queue.push_back(completed_paste(&s, &[first]));
+    }
+    let err = s.execute("develop.paste", &json!({"ids": [second.0]})).unwrap_err();
+    assert!(err.to_string().contains("64"), "{err}");
+    assert_eq!(s.segmenter.paste_queue.len(), MAX_PASTES);
+    assert_eq!(s.activity.list().len(), MAX_PASTES);
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn a_new_click_does_not_jump_a_queue_between_polls() {
+    let model = DamagedModel::new();
+    let (mut s, source, first) = copied();
+    let second = s.catalog.photos().find(|p| p.id != source && p.id != first).unwrap().id;
+    s.segmenter.dir = Some(model.0.clone());
+    s.segmenter.background = true;
+    s.segmenter.paste_queue.push_back(completed_paste(&s, &[first]));
+    assert!(s.segmenter.busy(), "queued jobs keep the UI polling even without an active flight");
+    let r = s.execute("develop.paste", &json!({"ids": [second.0]})).unwrap();
+    assert_eq!(r["queued"], true);
+    assert!(s.segmenter.paste.is_none());
+    assert_eq!(s.segmenter.paste_queue.front().unwrap().targets[0].id, first);
+    assert!(s.segment_poll().changed);
+    assert!(!s.develop_of(first).unwrap().masks.is_empty());
+    assert!(s.develop_of(second).unwrap().masks.is_empty());
+    complete(s.segmenter.paste_queue.front_mut().unwrap());
+    assert!(s.segment_poll().changed);
+    assert!(!s.develop_of(second).unwrap().masks.is_empty());
+}
+
+#[cfg(feature = "sam")]
 #[test]
 fn background_paste_rejects_open_destination_interactions_without_changing_history() {
     for (index, cancel) in [(0, false), (0, true), (1, false), (1, true)] {

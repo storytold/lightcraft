@@ -1165,7 +1165,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Edit Settings",
             ["Edit"],
             Some("Cmd+V"),
-            "{ids?, groups?: [settingsGroup] (paste only these of the copied groups)} — copied Object/Describe masks are recomputed on each destination (SAM 3 required); the app returns {pending, targets} while computing",
+            "{ids?, groups?: [settingsGroup] (paste only these of the copied groups)} — copied Object/Describe masks are recomputed on each destination (SAM 3 required); successive app pastes queue captured targets/settings and return {pending, changed: 0, targets, queued, task}",
             has_clipboard,
             |s, p| {
                 let c = "develop.paste";

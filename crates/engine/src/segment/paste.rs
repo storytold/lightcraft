@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use crate::{Result, Session};
 
 const MAX_SELECTIONS: usize = 10_000;
-const TOO_MANY: &str = "A paste can recompute at most 10,000 AI selections. Paste to fewer photos at once.";
+const TOO_MANY: &str = "AI mask pastes can queue at most 10,000 selections. Paste to fewer photos at once, or wait for queued pastes to finish.";
+#[cfg(feature = "sam")]
+const MAX_PASTES: usize = 64;
 
 fn count_ai(d: &DevelopSettings) -> usize {
     d.masks.iter().flat_map(|m| &m.components).filter(|c| matches!(c.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. })).count()
@@ -23,6 +25,10 @@ impl Session {
         if copied_ai.saturating_mul(ids.len()) > MAX_SELECTIONS {
             return Err(crate::EngineError::Other(TOO_MANY.into()));
         }
+        #[cfg(feature = "sam")]
+        if copied_ai > 0 {
+            self.check_paste_queue(ids, copied_ai)?;
+        }
         let targets: Vec<_> =
             ids.iter().filter_map(|id| self.develop_of(*id).map(|before| (*id, lightcraft_develop::apply_partial(&before, partial, 1.0)))).collect();
         // Settings that did not include Masking must not recompute or discard existing masks.
@@ -35,18 +41,22 @@ impl Session {
         self.segmenter.require_model()?;
         #[cfg(feature = "sam")]
         {
-            if self.segmenter.paste.is_some() {
-                return Err(crate::EngineError::Other(
-                    "AI masks are already being recomputed for a paste. Wait or cancel it in Activity first.".into(),
-                ));
-            }
             let mut pending = Pending::new(self, targets, label).map_err(crate::EngineError::Other)?;
             let changed = pending.targets.len();
-            pending.submit_next(self).map_err(crate::EngineError::Other)?;
             if self.segmenter.background {
-                self.segmenter.paste = Some(pending);
-                return Ok(json!({"pending": true, "changed": 0, "targets": changed}));
+                let task = pending.task.id();
+                // Do not jump ahead of jobs waiting between the previous completion and the next poll.
+                let queued = self.segmenter.paste.is_some() || !self.segmenter.paste_queue.is_empty();
+                if queued {
+                    pending.task.label("Queued AI mask paste");
+                    self.segmenter.paste_queue.push_back(pending);
+                } else {
+                    pending.submit_next(self).map_err(crate::EngineError::Other)?;
+                    self.segmenter.paste = Some(pending);
+                }
+                return Ok(json!({"pending": true, "changed": 0, "targets": changed, "queued": queued, "task": task}));
             }
+            pending.submit_next(self).map_err(crate::EngineError::Other)?;
             while let Some(flight) = pending.flight.take() {
                 let outcome =
                     flight.rx.recv_timeout(super::WAIT).map_err(|_| crate::EngineError::Other("the AI model took too long; try again".into()))?;
@@ -59,6 +69,29 @@ impl Session {
         }
         #[cfg(not(feature = "sam"))]
         Err(crate::EngineError::Other("AI masks are not available in this build".into()))
+    }
+
+    #[cfg(feature = "sam")]
+    fn check_paste_queue(&self, ids: &[PhotoId], copied_ai: usize) -> Result<()> {
+        let pending = || self.segmenter.paste.iter().chain(&self.segmenter.paste_queue);
+        if pending().count() >= MAX_PASTES {
+            return Err(crate::EngineError::Other("At most 64 AI mask pastes can be pending. Wait or cancel a paste in Activity first.".into()));
+        }
+        // Bound all captured settings and inference work, not just each individual click.
+        let selections = pending().fold(copied_ai.saturating_mul(ids.len()) as u64, |n, p| n.saturating_add(p.total));
+        if selections > MAX_SELECTIONS as u64 {
+            return Err(crate::EngineError::Other(TOO_MANY.into()));
+        }
+        if pending().any(|p| Arc::ptr_eq(&p.library, &self.library_identity) && p.targets.iter().any(|t| ids.contains(&t.id))) {
+            return Err(crate::EngineError::Other(
+                "A destination photo already has a pending AI mask paste. No new paste was queued; wait or cancel its paste in Activity first."
+                    .into(),
+            ));
+        }
+        if !self.segmenter.background && pending().next().is_some() {
+            return Err(crate::EngineError::Other("Wait or cancel the pending AI mask pastes in Activity before a waiting-mode paste.".into()));
+        }
+        Ok(())
     }
 }
 
@@ -161,11 +194,14 @@ impl Pending {
         if self.task.is_cancelled() {
             return Err("AI mask paste cancelled; no settings were changed.".into());
         }
-        // Stop before another selection if the captured destination settings changed.
+        // A queued request keeps the settings/photo snapshot from its click, not later edits.
         if !self.queue.is_empty() {
             self.check_current(s).map_err(|e| e.to_string())?;
         }
         let Some(selection) = self.queue.pop_front() else { return Ok(()) };
+        if self.done == 0 {
+            self.task.label("Recomputing AI masks");
+        }
         let target = self.targets.get(selection.target).ok_or("no such paste target")?;
         let shape = target.settings.masks.get(selection.mask).and_then(|m| m.components.get(selection.component)).ok_or("no such mask")?;
         let kind = match &shape.shape {
@@ -243,7 +279,19 @@ mod tests;
 #[cfg(feature = "sam")]
 impl Session {
     pub(super) fn poll_mask_paste(&mut self, polled: &mut Polled) {
-        let Some(mut pending) = self.segmenter.paste.take() else { return };
+        let mut cancelled = false;
+        self.segmenter.paste_queue.retain(|pending| {
+            if pending.task.is_cancelled() {
+                cancelled = true;
+                false
+            } else {
+                true
+            }
+        });
+        if cancelled {
+            polled.messages.push("Cancelled a queued AI mask paste.".into());
+        }
+        let Some(mut pending) = self.segmenter.paste.take().or_else(|| self.segmenter.paste_queue.pop_front()) else { return };
         let result = if let Some(flight) = pending.flight.take() {
             match flight.rx.try_recv() {
                 Ok(outcome) => {
