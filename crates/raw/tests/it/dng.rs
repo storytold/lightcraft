@@ -1016,7 +1016,10 @@ fn malformed_semantic_masks_are_skipped() {
     assert_eq!(decode(&bytes).unwrap().cpp, 3);
     let masks = lightcraft_raw::semantic_masks(&bytes);
     let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(names, ["short strip", "sub area too small"]);
+    // A 4×4, 8-bit uncompressed mask needs 16 bytes: the three-byte strip
+    // is truncated, not a valid mask with zero-filled missing pixels. Keep the
+    // separate complete mask to test invalid MaskSubArea handling.
+    assert_eq!(names, ["sub area too small"]);
     assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
     for m in &masks {
         let d = m.developed(Rect::new(0, 0, 8, 6), Rect::new(0, 0, 8, 6)).unwrap();

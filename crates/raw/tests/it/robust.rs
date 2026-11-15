@@ -202,7 +202,10 @@ mod cr3 {
         let mut co64 = vec![0u8; 4];
         co64.extend(1u32.to_be_bytes());
         co64.extend(offset.to_be_bytes());
-        let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
+        // One sample in chunk 1, using sample description 1. The shared parser
+        // deliberately refuses sample access without this mapping.
+        let stsc: Vec<u8> = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect();
+        let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsc", &stsc), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
         box_bytes(b"trak", &box_bytes(b"mdia", &box_bytes(b"minf", &box_bytes(b"stbl", &tables))))
     }
 
