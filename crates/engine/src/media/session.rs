@@ -4,6 +4,14 @@ use super::settings_hash::with_process;
 use super::source::{PreviewLoader, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
+/// The upper-case file extension of `p`'s source, or an empty string for non-file sources.
+fn source_format(p: &Photo) -> String {
+    match &p.source {
+        Source::File { path } => path.split('.').last().map(|ext| ext.to_ascii_uppercase()).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
 impl crate::Session {
     /// Build a render job for `id` fitting `max_w × max_h`. `before` renders the unedited look.
     pub fn render_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, before: bool, apply_crop: bool) -> Option<RenderJob> {
@@ -58,10 +66,7 @@ impl crate::Session {
         let content = Hasher128::new().str(&content_key).finish().0 as u64;
         let source_key = super::quick::source_identity(&p);
         let decoder = super::quick::decoder_key(&p);
-        let format = match &p.source {
-            Source::File { path } => path.split('.').last().map(|ext| ext.to_ascii_uppercase()).unwrap_or_default(),
-            _ => String::new(),
-        };
+        let format = source_format(&p);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
             if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
@@ -157,10 +162,7 @@ impl crate::Session {
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
-        let format = match &p.source {
-            Source::File { path } => path.split('.').last().map(|ext| ext.to_ascii_uppercase()).unwrap_or_default(),
-            _ => String::new(),
-        };
+        let format = source_format(p);
         let decoder = super::quick::decoder_key(p);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
@@ -168,10 +170,10 @@ impl crate::Session {
             .u64(settings.hash64() ^ crate::files::hot_pixel_key(settings))
             .u64(edge as u64)
             .u64(super::decoder_cache_version(&format));
-            // (likewise an ORF decode whose sensor pixels were withdrawn: the cached variant must not stand in)
-            if decoder != 0 {
-                k.str("decoder").u64(decoder);
-            }
+        // (likewise an ORF decode whose sensor pixels were withdrawn: the cached variant must not stand in)
+        if decoder != 0 {
+            k.str("decoder").u64(decoder);
+        }
         with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
         if profile_salt != 0 {
             k.str("dcp").u64(profile_salt);
@@ -298,10 +300,7 @@ impl crate::Session {
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
         let salt = self.media.denoise_salt(p.id, &p.develop);
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
-        let format = match &p.source {
-            Source::File { path } => path.split('.').last().map(|ext| ext.to_ascii_uppercase()).unwrap_or_default(),
-            _ => String::new(),
-        };
+        let format = source_format(p);
         let decoder = super::quick::decoder_key(p);
         let mut k = Hasher128::new();
         k.str(&content_key(p))
@@ -309,10 +308,10 @@ impl crate::Session {
             .u64(p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop))
             .u64(apply_crop as u64)
             .u64(super::decoder_cache_version(&format));
-            // (likewise an ORF decode whose sensor pixels were withdrawn: the cached view must not stand in)
-            if decoder != 0 {
-                k.str("decoder").u64(decoder);
-            }
+        // (likewise an ORF decode whose sensor pixels were withdrawn: the cached view must not stand in)
+        if decoder != 0 {
+            k.str("decoder").u64(decoder);
+        }
         with_process(&mut k, &p.develop).u64(crate::camera_profiles::cache_key());
         if salt != 0 {
             k.u64(salt);
