@@ -2,14 +2,12 @@
 //! thumbnail, colour-space hint). Full EXIF parsing lives in `lightcraft-meta`.
 
 /// Byte-order aware reader over a TIFF-structured blob.
-#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(crate) struct Tiff<'a> {
     pub data: &'a [u8],
     le: bool,
 }
 
-#[cfg(test)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Entry {
     pub tag: u16,
@@ -19,7 +17,6 @@ pub(crate) struct Entry {
     pub value_pos: usize,
 }
 
-#[cfg(test)]
 impl<'a> Tiff<'a> {
     pub fn new(data: &'a [u8]) -> Option<Tiff<'a>> {
         let le = match data.get(0..2)? {
