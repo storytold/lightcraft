@@ -5082,6 +5082,7 @@ name = "lcc-layout"
 version = "26.46.3"
 dependencies = [
  "lcc-fuzzkit",
+ "lcc-meta",
  "lcc-raster",
  "serde",
  "serde_json",

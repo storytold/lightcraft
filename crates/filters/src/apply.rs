@@ -95,6 +95,12 @@ impl Filter {
     /// samples keep their original value. Setting `cancel` stops the run with
     /// [`Error::Cancelled`]; on any error `img` is left unchanged.
     pub fn apply_rgb(&self, img: &mut [f32], width: u32, height: u32, frame: FrameInfo, params: &Value, cancel: &AtomicBool) -> Result<()> {
+        self.apply_rgb_until(img, width, height, frame, params, &[cancel])
+    }
+
+    /// [`Self::apply_rgb`], stopped with [`Error::Cancelled`] when any of `cancel` is set (a render
+    /// no longer wanted, a run another one takes over).
+    pub fn apply_rgb_until(&self, img: &mut [f32], width: u32, height: u32, frame: FrameInfo, params: &Value, cancel: &[&AtomicBool]) -> Result<()> {
         let resolved = self.host_params(params)?;
         let (w, h) = (width as usize, height as usize);
         let samples = w.checked_mul(h).and_then(|n| n.checked_mul(CH)).ok_or_else(|| Error::Params("image size overflows".into()))?;
@@ -109,7 +115,7 @@ impl Filter {
         let room = self.limits().max_memory_bytes / 2;
         let budget_px = self.limits().band_bytes.min(room) / (CH * 4);
         let bands = plan_bands(w, h, ov, budget_px)?;
-        let deadline = Deadline::new(self.limits(), Some(cancel));
+        let deadline = Deadline::new(self.limits(), cancel);
         let base = Value::Object(resolved);
         let src: &[f32] = img;
         let run = |b: &Band| {
@@ -175,7 +181,8 @@ impl Filter {
                    "mode": "rgb", "depth": 32, "alpha": false, "channels": CH}),
         );
         let pbytes = serde_json::to_vec(&Value::Object(base)).map_err(|e| Error::Params(e.to_string()))?;
-        let deadline = Deadline::new(self.limits(), Some(cancel));
+        let cancels = [cancel];
+        let deadline = Deadline::new(self.limits(), &cancels);
         let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.analyze_buffer(img, width, height, CH as u32, FORMAT_RGB32, &pbytes, &deadline)
         }));
@@ -196,7 +203,8 @@ impl Filter {
             return Err(Error::Params(format!("the measurements are {} bytes (limit {MAX_MERGE_BYTES})", text.len())));
         }
         let pbytes = serde_json::to_vec(&Value::Object(base)).map_err(|e| Error::Params(e.to_string()))?;
-        let deadline = Deadline::new(self.limits(), Some(cancel));
+        let cancels = [cancel];
+        let deadline = Deadline::new(self.limits(), &cancels);
         let count = u32::try_from(analyses.len()).map_err(|_| Error::Params("too many measurements".into()))?;
         let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.merge_buffer(&text, count, &pbytes, &deadline)));
         run.map_err(|_| Error::Trap("the runtime panicked".into()))?

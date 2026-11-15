@@ -1658,7 +1658,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 // log2 of the light the photo gathered (shutter s × ISO / f-number²)
                 let gathered = |s: &Session, id: PhotoId| -> Option<f64> {
                     let m = &s.catalog.photo(id)?.meta;
-                    let t = lcc_catalog::parse_shutter_seconds(&m.shutter)?;
+                    let t = m.shutter_seconds()?;
                     let (n, iso) = (m.aperture? as f64, m.iso? as f64);
                     (n > 0.0 && iso > 0.0).then(|| (t * iso / (n * n)).log2())
                 };

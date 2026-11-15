@@ -259,6 +259,8 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, i: usize, r: Re
     {
         p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+    // which face this tile is about, when another shares it (#1147)
+    super::face_preview::outline(app, p, r, f.photo, f.view);
     if selected {
         p.rect_filled(r, 3.0, Color32::from_rgba_unmultiplied(70, 130, 255, 55));
         p.rect_stroke(r, 3.0, Stroke::new(2.0, Color32::from_rgb(110, 160, 255)), StrokeKind::Inside);
@@ -281,6 +283,8 @@ pub fn tile(app: &mut LccApp, ui: &mut egui::Ui, list: &Unnamed, i: usize, r: Re
         name(app, &[key], who);
         return;
     }
+    // hovered: the whole photo, this face marked (#1147)
+    super::face_preview::on_hover(app, &resp, f.photo, f.view, None);
     // a double click opens the photo, as in the grid; its second click must not undo the first one's selection
     if resp.double_clicked() {
         let _ = app.run("library.select", json!({"ids": [f.photo], "active": f.photo}));

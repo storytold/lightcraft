@@ -338,7 +338,8 @@ fn begin_install(app: &mut LccApp, s: &mut State, path: &str) -> Result<Value, S
     if path.is_empty() {
         return Err(tr("Choose a plug-in module (.wasm) first").to_string());
     }
-    let info = app.session.execute("plugin.inspectFile", &json!({"path": path})).map_err(|e| e.to_string())?;
+    // the permissions it lists are lcc_manifest's, never only a stamped section's claim
+    let info = app.session.execute("plugin.inspectFile", &json!({"path": path, "verify": true})).map_err(|e| e.to_string())?;
     if info["installed"]["same"] == true {
         let m = &info["manifest"];
         let id = m["id"].as_str().unwrap_or_default();
