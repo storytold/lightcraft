@@ -657,3 +657,30 @@ fn library_menu_filters_by_rating() {
     assert_eq!(h.app.session.filter.rating, 0, "the same stars again clear the rating filter");
     assert_eq!(h.app.session.visible_cloned().len(), all.len());
 }
+
+/// The Catalog panel's All Photographs with the filter bar's stars and flags (issue #1191): a rule
+/// set while All Photographs is shown narrows the grid, as it does in a collection or a folder, and
+/// stays on when the source changes and comes back (Lock Filters on, the default).
+#[test]
+fn star_and_flag_filters_narrow_all_photographs() {
+    let mut h = demo();
+    let all = h.app.session.visible_cloned().len();
+    click(&mut h, "source:all");
+    for w in ["filter:star3", "filter:pick"] {
+        click(&mut h, w);
+    }
+    let f = h.app.session.filter.clone();
+    assert_eq!((f.rating, f.flag), (3, Some(lcc_catalog::Flag::Pick)), "the bar set the rule");
+    let narrowed = h.app.session.visible_cloned().len();
+    assert!((0..all).contains(&narrowed), "the rule narrowed the grid: {narrowed} of {all}");
+    // away to a collection and back: the rule is still on and still narrows
+    let album = run(&mut h, "album.create", json!({"name": "Trip"}))["id"].as_u64().unwrap();
+    run(&mut h, "library.source", json!({"kind": "album", "id": album}));
+    click(&mut h, "source:all");
+    let f = h.app.session.filter.clone();
+    assert_eq!((f.rating, f.flag), (3, Some(lcc_catalog::Flag::Pick)), "the rule survives the source change");
+    assert_eq!(h.app.session.visible_cloned().len(), narrowed);
+    // the chips' clear shows everything again
+    click(&mut h, "button:filterClear");
+    assert_eq!(h.app.session.visible_cloned().len(), all);
+}

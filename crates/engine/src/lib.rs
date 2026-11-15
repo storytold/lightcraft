@@ -2945,6 +2945,8 @@ pub(crate) fn orientation_change(from: lcc_geom::Orientation, to: lcc_geom::Orie
 }
 
 #[cfg(test)]
+mod tests_view_filter;
+#[cfg(test)]
 mod tests_view_follow;
 #[cfg(test)]
 mod tests_view_reconcile;
