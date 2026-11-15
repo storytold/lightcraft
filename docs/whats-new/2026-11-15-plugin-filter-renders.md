@@ -1,2 +1,3 @@
 ### Faster photos with several plug-in filters
-- A photo with several plug-in filters (a negative conversion and a degrain, say) stays responsive: the loupe, the preview and the grid share one run of the filters instead of each doing it at once, and a render a slider drag or another photo replaces stops its filters instead of finishing behind the new one.
+- Each plug-in filter added to a photo no longer makes it slower than the last: a new filter at the end of the list runs on what the filters before it already made, and the loupe, the preview and the grid share one run of the filters instead of each doing it at once.
+- Edits after adding a filter (exposure, white balance, any slider) reuse the filters' result instead of running them again, and a slider drag stops a render that is still filtering instead of queueing behind it.

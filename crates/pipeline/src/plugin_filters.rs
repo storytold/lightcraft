@@ -72,6 +72,9 @@ pub struct Stack {
     entries: Vec<(PluginFilter, Result<Arc<lcc_filters::Filter>, String>)>,
     /// Identifies what the stack computes (ids, the builds that run, params, analysis).
     pub key: u64,
+    /// `prefixes[k]`: the key of the stack's first `k` filters (`prefixes[len] == key`), so a
+    /// native run can start from what an earlier stack with those first filters made.
+    prefixes: Vec<u64>,
 }
 
 impl Stack {
@@ -88,27 +91,38 @@ impl Stack {
                 (f.clone(), r)
             })
             .collect();
-        let key = crate::hash_of((
-            entries
-                .iter()
-                .map(|(f, r)| {
-                    let build = r.as_ref().map(|x| x.module_hash().to_string()).unwrap_or_default();
-                    let analysis = f.analysis.as_ref().map(Value::to_string).unwrap_or_default();
-                    (f.plugin.clone(), build, Value::Object(f.params.clone()).to_string(), analysis)
-                })
-                .collect::<Vec<_>>(),
-            // the stack runs on the source with its film dust filled in: a change there is a new input
-            info.infrared
-                .as_ref()
-                .filter(|_| s.film_dust.on())
-                .map(|ir| (ir.width, ir.height, s.film_dust.sensitivity.to_bits(), s.film_dust.expand.to_bits())),
-        ));
-        Stack { entries, key }
+        let descs: Vec<_> = entries
+            .iter()
+            .map(|(f, r)| {
+                let build = r.as_ref().map(|x| x.module_hash().to_string()).unwrap_or_default();
+                let analysis = f.analysis.as_ref().map(Value::to_string).unwrap_or_default();
+                (f.plugin.clone(), build, Value::Object(f.params.clone()).to_string(), analysis)
+            })
+            .collect();
+        // the stack runs on the source with its film dust filled in: a change there is a new input
+        let film = info
+            .infrared
+            .as_ref()
+            .filter(|_| s.film_dust.on())
+            .map(|ir| (ir.width, ir.height, s.film_dust.sensitivity.to_bits(), s.film_dust.expand.to_bits()));
+        let prefixes: Vec<u64> = (0..=descs.len()).map(|k| crate::hash_of((descs.get(..k).unwrap_or_default().to_vec(), film))).collect();
+        let key = prefixes.last().copied().unwrap_or_default();
+        Stack { entries, key, prefixes }
     }
 
     /// No filters.
     pub fn empty() -> Stack {
-        Stack { entries: Vec::new(), key: 0 }
+        Stack { entries: Vec::new(), key: 0, prefixes: vec![0] }
+    }
+
+    /// Number of filters.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// The key of the stack's first `k` filters ([`Self::key`] for all of them).
+    pub fn prefix_key(&self, k: usize) -> Option<u64> {
+        self.prefixes.get(k).copied()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -133,12 +147,41 @@ impl Stack {
     /// Stops at the render's cancel ([`crate::with_cancel`]): the filters still to run are skipped
     /// and the render is marked cut short.
     pub fn apply(&self, img: &mut [[f32; 3]], w: usize, h: usize, frame: lcc_filters::FrameInfo, encoding: &str, warnings: &mut Vec<String>) {
+        let run = Run { give_way: &AtomicBool::new(false), start: 0, keep_at: None };
+        self.apply_run(img, w, h, frame, encoding, warnings, run);
+    }
+
+    /// [`Self::apply`] of the filters from `run.start` on, also stopped when `run.give_way` is set
+    /// (another render takes the run over): `gave_way` true then, and `img` is part-filtered, for
+    /// the caller to drop. With `run.keep_at`, a copy of the image as it stands before that filter
+    /// and the warnings so far come back too.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn apply_run(
+        &self,
+        img: &mut [[f32; 3]],
+        w: usize,
+        h: usize,
+        frame: lcc_filters::FrameInfo,
+        encoding: &str,
+        warnings: &mut Vec<String>,
+        run: Run<'_>,
+    ) -> Ran {
         let own = Arc::new(AtomicBool::new(false));
         let cancel = crate::cancel_flag().unwrap_or(own);
-        for (f, r) in &self.entries {
+        let give_way = run.give_way;
+        let gave_way = || give_way.load(std::sync::atomic::Ordering::Relaxed);
+        let mut ran = Ran::default();
+        for (i, (f, r)) in self.entries.iter().enumerate().skip(run.start) {
+            if gave_way() {
+                ran.gave_way = true;
+                return ran;
+            }
+            if run.keep_at == Some(i) {
+                ran.kept = Some((img.to_vec(), warnings.clone()));
+            }
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 crate::note_cut();
-                return;
+                return ran;
             }
             let filter = match r {
                 Ok(x) => x,
@@ -155,17 +198,42 @@ impl Stack {
                 continue;
             };
             let params = filter_params(f, encoding);
-            let r = crate::timed(&format!("plug-in {}", f.plugin), || filter.apply_rgb(img.as_flattened_mut(), w32, h32, frame, &params, &cancel));
+            let r = crate::timed(&format!("plug-in {}", f.plugin), || {
+                filter.apply_rgb_until(img.as_flattened_mut(), w32, h32, frame, &params, &[&cancel, give_way])
+            });
             match r {
+                Err(lcc_filters::Error::Cancelled) if gave_way() => {
+                    ran.gave_way = true;
+                    return ran;
+                }
                 Err(lcc_filters::Error::Cancelled) => {
                     crate::note_cut();
-                    return;
+                    return ran;
                 }
                 Err(e) => warnings.push(format!("{}skipped: {e}", warning_prefix(f))),
                 Ok(()) => {}
             }
         }
+        ran
     }
+}
+
+/// How [`Stack::apply_run`] runs: from which filter, what stops it besides the render's cancel, and
+/// before which filter to keep a copy.
+#[derive(Clone, Copy)]
+pub(crate) struct Run<'a> {
+    pub give_way: &'a AtomicBool,
+    pub start: usize,
+    pub keep_at: Option<usize>,
+}
+
+/// What [`Stack::apply_run`] did besides filtering.
+#[derive(Default)]
+pub(crate) struct Ran {
+    /// It stopped for `give_way`.
+    pub gave_way: bool,
+    /// The image before filter `keep_at` (in the filters' encoding) and the warnings so far.
+    pub kept: Option<(Vec<[f32; 3]>, Vec<String>)>,
 }
 
 /// How a warning about stack entry `f` starts (`plug-in filter #3 "Negative" `): it names the entry
@@ -227,6 +295,25 @@ pub fn apply_source(stack: &Stack, img: &mut Rgb32f, frame: lcc_filters::FrameIn
     let (w, h) = (img.width, img.height);
     stack.apply(&mut img.data, w, h, frame, "linear", warnings);
     crate::for_rows(&mut img.data, img.width.max(1), |_, row| row.iter_mut().for_each(|c| *c = mul(&to_2020, *c)));
+}
+
+/// The Source filters' encoding (linear sRGB primaries) of `img` (linear Rec.2020), in place.
+pub(crate) fn to_filter_space(img: &mut Rgb32f) {
+    let (to_srgb, _) = matrices();
+    crate::for_rows(&mut img.data, img.width.max(1), |_, row| row.iter_mut().for_each(|c| *c = mul(&to_srgb, *c)));
+}
+
+/// Back from [`to_filter_space`].
+pub(crate) fn from_filter_space(img: &mut Rgb32f) {
+    let (_, to_2020) = matrices();
+    crate::for_rows(&mut img.data, img.width.max(1), |_, row| row.iter_mut().for_each(|c| *c = mul(&to_2020, *c)));
+}
+
+/// A native run of `stack` on `img`, already in the filters' encoding ([`to_filter_space`]), as
+/// `run` says ([`Stack::apply_run`]).
+pub(crate) fn apply_native(stack: &Stack, img: &mut Rgb32f, frame: lcc_filters::FrameInfo, warnings: &mut Vec<String>, run: Run<'_>) -> Ran {
+    let (w, h) = (img.width, img.height);
+    stack.apply_run(&mut img.data, w, h, frame, "linear", warnings, run)
 }
 
 fn scale_frame(f: lcc_filters::FrameInfo, k: f64) -> lcc_filters::FrameInfo {

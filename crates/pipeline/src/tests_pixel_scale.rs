@@ -168,7 +168,7 @@ fn renders_started_together_run_the_native_stack_once() {
         let r = r.join().unwrap();
         assert!(r.warnings.is_empty(), "{:?}", r.warnings);
     }
-    let runs = crate::source_stage::NATIVE_RUNS.lock().unwrap().iter().filter(|f| **f == mine).count();
+    let runs = crate::source_stage::NATIVE_RUNS.lock().unwrap().iter().filter(|(f, _)| *f == mine).count();
     // (another test's photo may take the one-photo slot between a run and a waiter's look: two)
     assert!((1..=2).contains(&runs), "the stack ran {runs} times for six renders");
 }
@@ -192,6 +192,70 @@ fn a_cancelled_render_stops_its_filters_and_keeps_nothing() {
         |a: &Rgba8, b: &Rgba8| a.data.iter().zip(&b.data).flat_map(|(p, q)| (0..3).map(move |k| (p[k] as i32 - q[k] as i32).abs())).max().unwrap();
     assert!(diff(&after.image, &fresh.image) <= 1, "the next render is the filtered picture");
     assert!(diff(&plain.image, &fresh.image) > 4, "(the filter shows)");
+}
+
+/// With the photo's identity, a render of a reduced decode (the grid's cell) takes the native
+/// result a larger decode's render made (the loupe's): the stack isn't run again for it. A result
+/// made from a smaller decode never serves a larger one's render (it would be blurrier).
+#[test]
+fn a_reduced_decode_takes_the_native_result_of_a_larger_one() {
+    let src = source(0.39);
+    let half = lcc_raster::resample::resize(&src, 96, 64, lcc_raster::resample::Filter::Box);
+    let identity = Some(crate::SourceIdentity { key: 0x39_39_39, size: [192, 128] });
+    let info = SourceInfo { identity, native_long: Some(192), ..info() };
+    let s = settings();
+    let runs = |img: &Rgb32f| crate::source_stage::NATIVE_RUNS.lock().unwrap().iter().filter(|(f, _)| *f == crate::optics::fingerprint(img)).count();
+    // the smaller decode first: it runs, and its result doesn't serve the larger one
+    let _ = render(&half, &info, &s, &RenderRequest::fit(48, 32));
+    assert_eq!(runs(&half), 1);
+    let big = render(&src, &info, &s, &RenderRequest::fit(48, 32));
+    assert_eq!(runs(&src), 1, "the larger decode runs its own");
+    // now the smaller one takes the larger's result
+    let small = render(&half, &info, &s, &RenderRequest::fit(48, 32));
+    // (another test may have taken the one-photo slot in between: then it ran again)
+    assert!(runs(&half) <= 2);
+    if runs(&half) == 1 {
+        let d = big.image.data.iter().zip(&small.image.data).flat_map(|(p, q)| (0..3).map(move |k| (p[k] as i32 - q[k] as i32).abs())).max().unwrap();
+        assert!(d <= 2, "the cell shows the larger decode's result: {d}");
+    }
+}
+
+/// A filter added at the end of a pixel-scale stack runs alone, on what the stack before it made
+/// (the filters before it are not run again), and the picture is the whole stack's.
+#[test]
+fn a_filter_added_at_the_end_runs_on_the_earlier_result() {
+    let src = source(0.41);
+    let identity = Some(crate::SourceIdentity { key: 0x41_41_41, size: [192, 128] });
+    let info_a = SourceInfo { identity, ..info() };
+    let one = settings();
+    let mut two = one.clone();
+    two.plugin_filters.push(PluginFilter {
+        uid: 2,
+        plugin: "t.blur".into(),
+        name: "Blur 2".into(),
+        stage: FilterStage::Source,
+        ..Default::default()
+    });
+    let req = RenderRequest::fit(192, 128);
+    let _ = render(&src, &info_a, &one, &req);
+    let resumed = render(&src, &info_a, &two, &req);
+    let starts: Vec<usize> =
+        crate::source_stage::NATIVE_RUNS.lock().unwrap().iter().filter(|(f, _)| *f == crate::optics::fingerprint(&src)).map(|(_, k)| *k).collect();
+    // (another test may take the one-photo slot between the two renders: then it starts afresh)
+    assert!(starts.first() == Some(&0) && starts.len() == 2, "{starts:?}");
+    // the same picture as the whole stack run at once (no identity: nothing to resume from)
+    let whole = render(&src, &info(), &two, &req);
+    let d = resumed.image.data.iter().zip(&whole.image.data).flat_map(|(p, q)| (0..3).map(move |k| (p[k] as i32 - q[k] as i32).abs())).max().unwrap();
+    assert!(d <= 1, "{d}");
+    if starts.get(1) == Some(&1) {
+        // and the second blur shows: the two-filter picture isn't the one-filter one
+        let single = render(&src, &info(), &one, &req);
+        let e =
+            single.image.data.iter().zip(&whole.image.data).flat_map(|(p, q)| (0..3).map(move |k| (p[k] as i32 - q[k] as i32).abs())).max().unwrap();
+        assert!(e > 2, "{e}");
+    } else {
+        assert_eq!(starts.get(1), Some(&0), "{starts:?}");
+    }
 }
 
 #[test]
