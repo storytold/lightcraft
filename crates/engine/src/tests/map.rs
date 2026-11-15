@@ -292,3 +292,55 @@ fn a_damaged_saved_tile_source_keeps_the_other_preferences() {
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// What a drop of several photos on the Map view runs: all of them (one already placed
+/// elsewhere) get the drop point in one undo step, and undo restores each one's old position.
+#[test]
+fn set_gps_moves_every_named_photo_in_one_undo_step() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.visible().iter().take(3).map(|p| p.0).collect();
+    s.execute("photo.setGps", &json!({"ids": [ids[0]], "lat": 10.0, "lon": 20.0})).unwrap();
+    let steps = s.undo.len();
+    let r = s.execute("photo.setGps", &json!({"ids": ids, "lat": 48.85, "lon": 2.29})).unwrap();
+    assert_eq!(r["updated"], 3, "{r}");
+    assert_eq!(s.undo.len(), steps + 1, "one undo step");
+    assert_eq!(s.undo.last().map(|u| u.label.as_str()), Some("Set GPS Coordinates"));
+    let gps = |s: &Session, id: u64| s.catalog.photo(lightcraft_catalog::PhotoId(id)).and_then(|p| p.meta.gps);
+    assert!(ids.iter().all(|i| gps(&s, *i) == Some((48.85, 2.29))));
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(gps(&s, ids[0]), Some((10.0, 20.0)), "the old position comes back");
+    assert_eq!((gps(&s, ids[1]), gps(&s, ids[2])), (None, None));
+    // the same position again is no new undo step
+    s.execute("edit.redo", &json!({})).unwrap();
+    let steps = s.undo.len();
+    assert_eq!(s.execute("photo.setGps", &json!({"ids": [ids[1]], "lat": 48.85, "lon": 2.29})).unwrap()["updated"], 0);
+    assert_eq!(s.undo.len(), steps);
+}
+
+/// A longitude past the antimeridian (a drop on the world's repeat at low zoom) is the same
+/// meridian, wrapped; a latitude out of range, a non-number or an id the library doesn't have is
+/// refused and nothing changes.
+#[test]
+fn set_gps_wraps_longitude_and_refuses_hostile_values() {
+    let mut s = Session::with_demo();
+    let id = s.visible()[0].0;
+    let r = s.execute("photo.setGps", &json!({"ids": [id], "lat": -33.9, "lon": 190.0})).unwrap();
+    assert_eq!(r["lon"].as_f64(), Some(-170.0), "{r}");
+    assert_eq!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).and_then(|p| p.meta.gps), Some((-33.9, -170.0)));
+    let steps = s.undo.len();
+    for bad in [
+        json!({"ids": [id], "lat": 91.0, "lon": 0.0}),
+        json!({"ids": [id], "lat": -90.5, "lon": 0.0}),
+        json!({"ids": [id], "lat": "north", "lon": 0.0}),
+        json!({"ids": [id], "lon": 0.0}),
+        json!({"ids": [id], "lat": 0.0}),
+        json!({"ids": [id], "lat": 0.0, "lon": [1]}),
+        json!({"ids": [id, 987_654_321u64], "lat": 1.0, "lon": 1.0}),
+        json!({"ids": "1", "lat": 1.0, "lon": 1.0}),
+        json!({"ids": [], "lat": 1.0, "lon": 1.0}),
+    ] {
+        assert!(s.execute("photo.setGps", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.undo.len(), steps, "nothing changed");
+    assert_eq!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).and_then(|p| p.meta.gps), Some((-33.9, -170.0)));
+}

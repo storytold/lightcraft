@@ -2451,5 +2451,6 @@
   "Map (Ctrl+Alt+3)": "Peta (Ctrl+Alt+3)",
   "Map tiles are off": "Petak peta nonaktif",
   "Offline (no tiles)": "Luring (tanpa petak)",
-  "Custom tile server": "Server petak khusus"
+  "Custom tile server": "Server petak khusus",
+  "Set the location of this photo": "Tetapkan lokasi foto ini"
 }

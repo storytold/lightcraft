@@ -2480,5 +2480,6 @@
   "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)",
   "Map tiles are off": "Las teselas del mapa están desactivadas",
   "Offline (no tiles)": "Sin conexión (sin teselas)",
-  "Custom tile server": "Servidor de teselas personalizado"
+  "Custom tile server": "Servidor de teselas personalizado",
+  "Set the location of this photo": "Establecer la ubicación de esta foto"
 }

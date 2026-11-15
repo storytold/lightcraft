@@ -2541,5 +2541,6 @@
   "Map (Ctrl+Alt+3)": "Karta (Ctrl+Alt+3)",
   "Map tiles are off": "Kartrutor är avstängda",
   "Offline (no tiles)": "Offline (inga rutor)",
-  "Custom tile server": "Egen rutserver"
+  "Custom tile server": "Egen rutserver",
+  "Set the location of this photo": "Ange platsen för det här fotot"
 }

@@ -2644,5 +2644,6 @@
   "Map (Ctrl+Alt+3)": "Mappa (Ctrl+Alt+3)",
   "Map tiles are off": "Le tessere della mappa sono disattivate",
   "Offline (no tiles)": "Offline (nessuna tessera)",
-  "Custom tile server": "Server di tessere personalizzato"
+  "Custom tile server": "Server di tessere personalizzato",
+  "Set the location of this photo": "Imposta la posizione di questa foto"
 }

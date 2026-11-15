@@ -11,6 +11,52 @@ use crate::{EngineError, Result, Session};
 
 const SOURCE: &str = "map.tileSource";
 
+/// `photo.setGps`: every target photo gets the position (lat −90…90; the longitude wrapped into
+/// −180…180, so a drop past the antimeridian lands on the same meridian), as one undo step.
+/// Photos already there are left alone (no empty undo step). A named photo the library doesn't
+/// have is an error and nothing changes: the caller (a drag of photos deleted meanwhile, an agent)
+/// learns of it instead of a silent no-op.
+fn set_gps(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "photo.setGps";
+    let lat = f64_req(p, "lat", C)?;
+    let lon = f64_req(p, "lon", C)?;
+    let Some(at) = LatLon::wrapped(lat, lon) else {
+        return Err(bad(C, format!("lat must be −90…90 and lon a finite number (got {lat}, {lon})")));
+    };
+    let pos = ((at.lat * 1e7).round() / 1e7, (at.lon * 1e7).round() / 1e7);
+    let mut seen = std::collections::HashSet::new();
+    let targets: Vec<_> = s
+        .targets(p)
+        .map_err(|e| match e {
+            EngineError::BadParams { msg, .. } => bad(C, msg),
+            other => other,
+        })?
+        .into_iter()
+        .filter(|id| seen.insert(*id))
+        .collect();
+    if let Some(gone) = targets.iter().find(|id| s.catalog.photo(**id).is_none()) {
+        return Err(bad(C, format!("no such photo {}", gone.0)));
+    }
+    if targets.is_empty() {
+        return Err(bad(C, "no photos selected"));
+    }
+    let ops: Vec<Op> = targets
+        .iter()
+        .filter_map(|id| s.catalog.photo(*id))
+        .filter(|ph| ph.meta.gps != Some(pos))
+        .map(|ph| {
+            let mut meta = ph.meta.clone();
+            meta.gps = Some(pos);
+            Op::SetMeta { id: ph.id, meta: Box::new(meta) }
+        })
+        .collect();
+    let count = ops.len();
+    if count > 0 {
+        s.commit("Set GPS Coordinates", Op::Batch { ops })?;
+    }
+    Ok(json!({ "updated": count, "lat": pos.0, "lon": pos.1 }))
+}
+
 fn source_json(s: &Session) -> Value {
     let chosen = s.map.source();
     let used = s.map.effective_source();
@@ -279,37 +325,18 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(json!({ "photos": out }))
         }),
-        cmd!(
-            "photo.setGps",
-            "Set Photo GPS Coordinates",
-            [],
-            None,
-            "{ids?: [PhotoId], lat: f64, lon: f64} → {updated: count} — sets GPS coordinates for target photos (undoable)",
-            has_selection,
-            |s, p| {
-                const C: &str = "photo.setGps";
-                let lat = f64_req(p, "lat", C)?;
-                let lon = f64_req(p, "lon", C)?;
-                if LatLon::new(lat, lon).is_none() {
-                    return Err(bad(C, "lat/lon out of range or non-finite"));
-                }
-                let pos = ((lat * 1e7).round() / 1e7, (lon * 1e7).round() / 1e7);
-                let mut ops = Vec::new();
-                for id in s.targets(p)? {
-                    let Some(ph) = s.catalog.photo(id) else { continue };
-                    if ph.meta.gps != Some(pos) {
-                        let mut meta = ph.meta.clone();
-                        meta.gps = Some(pos);
-                        ops.push(Op::SetMeta { id, meta: Box::new(meta) });
-                    }
-                }
-                let count = ops.len();
-                if !ops.is_empty() {
-                    s.commit("Set GPS Location", Op::Batch { ops })?;
-                }
-                Ok(json!({ "updated": count }))
-            }
-        ),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.setGps",
+                "Set GPS Coordinates",
+                [],
+                None,
+                "{ids?: [PhotoId], lat: −90…90, lon: degrees (wrapped into −180…180)} → {updated, lat, lon} — sets the GPS position of the photos (default: the selection), one undo step \"Set GPS Coordinates\"; what dropping photos on the Map view does. Unknown ids are refused",
+                has_selection,
+                set_gps
+            )
+        },
         cmd!(
             "photo.clearGps",
             "Clear Photo GPS Coordinates",

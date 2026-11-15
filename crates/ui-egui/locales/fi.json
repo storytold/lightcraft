@@ -2437,5 +2437,6 @@
   "Map (Ctrl+Alt+3)": "Kartta (Ctrl+Alt+3)",
   "Map tiles are off": "Karttaruudut ovat pois päältä",
   "Offline (no tiles)": "Offline (ei ruutuja)",
-  "Custom tile server": "Oma ruutupalvelin"
+  "Custom tile server": "Oma ruutupalvelin",
+  "Set the location of this photo": "Aseta tämän kuvan sijainti"
 }

@@ -2403,5 +2403,6 @@
   "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)",
   "Map tiles are off": "Kafelki mapy są wyłączone",
   "Offline (no tiles)": "Offline (bez kafelków)",
-  "Custom tile server": "Własny serwer kafelków"
+  "Custom tile server": "Własny serwer kafelków",
+  "Set the location of this photo": "Ustaw lokalizację tego zdjęcia"
 }

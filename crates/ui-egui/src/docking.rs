@@ -422,6 +422,8 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
             }
         },
     );
+    // what the Map view drew is this frame's only (`map.state` reports no pins once it is gone)
+    app.map_drawn = Default::default();
     if let Some(mut canvas) = canvas {
         let ui = &mut canvas;
         crate::panels::bottombar::show(app, ui);

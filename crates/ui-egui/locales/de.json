@@ -3561,5 +3561,6 @@
   "Map (Ctrl+Alt+3)": "Karte (Strg+Alt+3)",
   "Map tiles are off": "Kartenkacheln sind aus",
   "Offline (no tiles)": "Offline (keine Kacheln)",
-  "Custom tile server": "Eigener Kachelserver"
+  "Custom tile server": "Eigener Kachelserver",
+  "Set the location of this photo": "Ort dieses Fotos festlegen"
 }

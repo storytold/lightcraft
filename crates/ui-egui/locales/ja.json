@@ -2478,5 +2478,6 @@
   "Map (Ctrl+Alt+3)": "地図（Ctrl+Alt+3）",
   "Map tiles are off": "地図タイルはオフです",
   "Offline (no tiles)": "オフライン（タイルなし）",
-  "Custom tile server": "カスタムタイルサーバー"
+  "Custom tile server": "カスタムタイルサーバー",
+  "Set the location of this photo": "この写真の位置を設定"
 }

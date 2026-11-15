@@ -2526,5 +2526,6 @@
   "Map (Ctrl+Alt+3)": "Mapa (Ctrl+Alt+3)",
   "Map tiles are off": "Mapové dlaždice jsou vypnuté",
   "Offline (no tiles)": "Offline (bez dlaždic)",
-  "Custom tile server": "Vlastní server dlaždic"
+  "Custom tile server": "Vlastní server dlaždic",
+  "Set the location of this photo": "Nastavit polohu této fotky"
 }

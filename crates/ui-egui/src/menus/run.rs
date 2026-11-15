@@ -388,6 +388,8 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.map.legend_open = !app.ui.map.legend_open;
             Ok(json!({"open": app.ui.map.legend_open}))
         }
+        // the view, the pins drawn last frame (with how many of their photos are selected), a drop
+        "map.state" => Ok(crate::panels::map::state(app)),
         "photo.showInMap" => {
             let target_id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or(app.session.selection.active);
             if let Some(id) = target_id {

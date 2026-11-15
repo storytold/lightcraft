@@ -79,6 +79,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("map.filterBar", "Location Filter Bar", None, "Window>Map"),
     ("map.legend", "Map Legend", None, "Window>Map"),
     ("map.lock", "Lock Map Markers", None, "Window>Map"),
+    ("map.state", "Map State", None, ""),
     ("view.person", "Show Person", None, ""),
     ("view.faceBoxes", "Face Boxes", None, "View"),
     ("view.focusPoint", "Focus Point", Some("Alt+F"), "View"),

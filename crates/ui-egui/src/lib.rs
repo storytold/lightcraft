@@ -276,6 +276,8 @@ pub struct LightcraftApp {
     /// drawn last (`ui.inspect` → `scroll`).
     pub grid_scroll: Option<f32>,
     pub film_scroll: Option<f32>,
+    /// What the Map view drew last frame (pins, the drop under the pointer), for `map.state`.
+    pub map_drawn: panels::map::MapDrawn,
     /// Widget registry from the last completed, nondiscarded frame (automation ids → rects).
     pub widgets: Vec<(String, egui::Rect)>,
     /// Egui hit owners for [`Self::widgets`] from the same completed pass. A press is delivered

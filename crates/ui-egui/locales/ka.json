@@ -3746,5 +3746,6 @@
   "Map (Ctrl+Alt+3)": "რუკა (Ctrl+Alt+3)",
   "Map tiles are off": "რუკის ფილები გამორთულია",
   "Offline (no tiles)": "ოფლაინ (ფილების გარეშე)",
-  "Custom tile server": "საკუთარი ფილების სერვერი"
+  "Custom tile server": "საკუთარი ფილების სერვერი",
+  "Set the location of this photo": "ამ ფოტოს მდებარეობის დაყენება"
 }

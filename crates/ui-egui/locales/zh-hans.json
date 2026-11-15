@@ -2479,5 +2479,6 @@
   "Map (Ctrl+Alt+3)": "地图（Ctrl+Alt+3）",
   "Map tiles are off": "地图图块已关闭",
   "Offline (no tiles)": "离线（无图块）",
-  "Custom tile server": "自定义图块服务器"
+  "Custom tile server": "自定义图块服务器",
+  "Set the location of this photo": "设置这张照片的位置"
 }

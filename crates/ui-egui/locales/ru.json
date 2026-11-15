@@ -2686,5 +2686,6 @@
   "Map (Ctrl+Alt+3)": "Карта (Ctrl+Alt+3)",
   "Map tiles are off": "Тайлы карты отключены",
   "Offline (no tiles)": "Офлайн (без тайлов)",
-  "Custom tile server": "Свой сервер тайлов"
+  "Custom tile server": "Свой сервер тайлов",
+  "Set the location of this photo": "Задать местоположение этого фото"
 }

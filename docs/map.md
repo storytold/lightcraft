@@ -5,6 +5,34 @@ This page describes where the map's tiles come from, what is sent over the netwo
 behind it. Later sections (pins and clusters, the Info panel map, geotagging, the location filter, saved
 locations, track logs, keys and menus) are filled in as those parts land.
 
+## Map view
+
+The filmstrip runs under the map, as in Detail: View ▸ Filmstrip, `/` (F6), or the Filmstrip button at the
+right of the bottom bar, which in the Map view takes the place of the grid's thumbnail size. It shows the
+same photos as the grid. The selection shows both ways:
+
+- Selected photos' pins are yellow. A cluster holding selected photos is yellow and carries a small blue
+  bubble with how many of its photos are selected.
+- A click on a pin selects its photo; a click on a cluster selects all its photos, the first one active.
+  The filmstrip shows them selected and scrolls to the active one. ⌘-click (Ctrl-click) adds them to the
+  selection instead. A double-click on a pin opens Detail; on a cluster it zooms in.
+
+`map.state` reports the view (`lat`, `lon`, `zoom`), the map canvas, whether the filmstrip is drawn, every pin
+or cluster drawn in the last frame (`ids`, `count`, `selected`, screen `x` / `y`) and a drop in progress.
+
+## Geotagging
+
+Drag photos from the filmstrip onto the map to set where they were taken. The drag carries the selection,
+or only the photo dragged when it isn't selected. While they are over the map a pin with their count
+follows the pointer; release to give every one of them that point's position, overwriting a position they
+had. That is one undo step, "Set GPS Coordinates" (`photo.setGps`). A release over the map's toolbar or
+location filter bar, or outside the map, changes nothing. Drops are limited to the map's ±85.05° latitude
+(the edge of the Web Mercator projection); the longitude of a drop on the world's repeat at low zoom is
+wrapped into −180…180.
+
+Not yet: moving a pin by dragging it, Lock Markers stopping that, and Remove GPS Coordinates in the Photo
+menu and a pin's menu (`photo.clearGps` removes a position today).
+
 ## Tile sources and cache
 
 The tiles are raster images in the Web Mercator projection (256 px, zoom 0–19). Where they come from is a
@@ -95,6 +123,9 @@ GeoNames). Choose Offline to fetch nothing.
 | `map.providers` | The sources offered now, with credit and max zoom |
 | `map.cacheInfo` | `{bytes, tiles, capBytes, dir}` of the tile cache |
 | `map.clearCache` | Deletes every cached tile |
+| `map.state` | The view, the pins drawn (with how many of their photos are selected) and a drop in progress (app only) |
+| `photo.setGps` | `{ids?, lat, lon}`: sets the position of the photos (default: the selection), one undo step; lat −90…90, lon wrapped into −180…180; unknown ids are refused |
+| `photo.clearGps` | `{ids?}`: removes the position of the photos, one undo step |
 
 The tile core (Web Mercator maths, source checks, cache, fetch queue) is ported from PR #797 by Jason
 Baldwin.
