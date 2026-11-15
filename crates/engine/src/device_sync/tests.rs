@@ -492,3 +492,26 @@ fn a_wrong_claimed_sha1_changes_nothing() {
     assert_eq!(b.catalog.photos().count(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Importing a file an Immich link-only photo already stands for leaves one photo: the link-only
+/// one takes the file, keeps its link and edits, and joins the import's collection.
+#[test]
+fn importing_the_original_of_a_link_only_photo_keeps_one_photo() {
+    let dir = lcc_testkit::TempDir::new("lcc-engine-linkonly-import");
+    let src = dir.join("roll.png");
+    write_png(&src, 21);
+    let (mut s, _) = offline(&dir, "d");
+    let keep = link_only(&mut s, &src, "http://immich#u1");
+    s.execute("photo.rate", &json!({"ids": [keep.0], "rating": 4})).unwrap();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()], "albumName": "Import"})).unwrap();
+    assert_eq!(s.catalog.photos().count(), 1, "{r}");
+    assert_eq!(r["imported"], json!([keep.0]));
+    let p = s.catalog.photo(keep).unwrap();
+    assert_eq!(p.preview_only, None);
+    assert_eq!(p.rating, 4);
+    assert!(matches!(&p.source, lcc_catalog::Source::File { path } if std::path::Path::new(path) == src.as_path()));
+    assert_eq!(p.sha1.as_deref(), Some(lcc_hash::sha1_file(&src).unwrap().to_hex().as_str()));
+    assert!(s.catalog.remote_of(keep).any(|r| r.remote_id == "asset-1"));
+    assert!(s.catalog.albums().any(|a| a.name == "Import" && a.photos == vec![keep]));
+    let _ = std::fs::remove_dir_all(&dir);
+}

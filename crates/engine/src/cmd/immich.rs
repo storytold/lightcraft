@@ -1070,6 +1070,51 @@ fn finish_import(s: &mut Session, d: Downloaded, now: &str) {
         remote::ImportProgress { active: false, requested: s.remote.import.requested, imported, skipped: d.skipped, present: have.len(), failed };
 }
 
+/// Newly imported photos whose original an Immich link-only photo already stands for: the
+/// link-only photo takes the file (as when its original is downloaded) and the new entry goes,
+/// so the catalog holds the photo once. → `(new id, the link-only photo that took its file)`.
+pub(crate) fn merge_into_link_only(s: &mut Session, ids: &[PhotoId]) -> Vec<(PhotoId, PhotoId)> {
+    let mut by_sha1: std::collections::HashMap<String, (PhotoId, String)> = std::collections::HashMap::new();
+    for p in s.catalog.photos().filter(|p| p.preview_only.as_deref() == Some(LINK_ONLY) && !p.deleted) {
+        for r in s.catalog.remote_of(p.id).filter(|r| r.service == SERVICE) {
+            if let Some(d) = r.remote_checksum.as_deref().and_then(lcc_hash::Sha1Digest::parse) {
+                by_sha1.entry(d.to_hex()).or_insert((p.id, r.account_id.clone()));
+            }
+        }
+    }
+    if by_sha1.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for id in ids {
+        let Some(ph) = s.catalog.photo(*id) else { continue };
+        if ph.preview_only.is_some() || ph.copy_of.is_some() {
+            continue;
+        }
+        let (Some(sha1), Source::File { path }) = (ph.sha1.clone(), ph.source.clone()) else { continue };
+        let Some((keep, account)) = by_sha1.remove(&sha1) else { continue };
+        let albums = s.catalog.albums_of(*id);
+        if let Err(e) = adopt_original(s, keep, &account, Path::new(&path)) {
+            log::warn!("import: the Immich photo couldn't take `{path}`: {e}");
+            continue;
+        }
+        for a in albums {
+            if let Some(al) = s.catalog.album(a) {
+                let mut photos: Vec<PhotoId> = al.photos.iter().copied().filter(|p| p != id).collect();
+                if !photos.contains(&keep) {
+                    photos.push(keep);
+                }
+                let _ = s.apply_system(Op::SetAlbumPhotos { id: a, photos });
+            }
+        }
+        if let Err(e) = s.apply_system(Op::RemovePhoto { id: *id }) {
+            log::warn!("import: {e}");
+        }
+        out.push((*id, keep));
+    }
+    out
+}
+
 /// A link-only photo's original arrived: point the photo at it.
 fn adopt_original(s: &mut Session, id: PhotoId, account: &str, path: &Path) -> Result<()> {
     let abs = path.to_string_lossy().to_string();

@@ -195,8 +195,25 @@ fn not_browsed(s: &Session, ids: Vec<PhotoId>, c: &str) -> Result<Vec<PhotoId>> 
 pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, mut album: Option<u64>, album_name: Option<&str>) -> Result<Value> {
     let mut report = serde_json::to_value(report).unwrap_or_default();
     // photos an import restored from Recently Deleted take part like new ones (album, selection)
-    let imported: Vec<u64> =
+    let mut imported: Vec<u64> =
         ["imported", "restored"].iter().flat_map(|k| report[*k].as_array().into_iter().flatten().filter_map(Value::as_u64)).collect();
+    // a file an Immich link-only photo stands for: that photo takes it, no second entry
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ids: Vec<PhotoId> = imported.iter().map(|i| PhotoId(*i)).collect();
+        let merged = crate::cmd::immich::merge_into_link_only(s, &ids);
+        if !merged.is_empty() {
+            for (new, keep) in &merged {
+                for i in imported.iter_mut().filter(|i| **i == new.0) {
+                    *i = keep.0;
+                }
+            }
+            let swap = |v: u64| merged.iter().find(|(n, _)| n.0 == v).map_or(v, |(_, k)| k.0);
+            let only: Vec<u64> = report["imported"].as_array().into_iter().flatten().filter_map(Value::as_u64).map(swap).collect();
+            report["imported"] = json!(only);
+            report["mergedIntoImmich"] = json!(merged.iter().map(|(_, k)| k.0).collect::<Vec<_>>());
+        }
+    }
     if album.is_none()
         && let Some(name) = album_name
         && !imported.is_empty()

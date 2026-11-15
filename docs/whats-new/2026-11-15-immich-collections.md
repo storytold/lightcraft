@@ -6,3 +6,5 @@
   names on their own, keeping every edit.
 - A photo that arrives from another device is looked up on your Immich server first, so an original Immich
   already has is linked instead of uploaded again.
+- Importing a file you already have as an Immich link-only photo no longer makes a second photo: the Immich photo
+  takes the file and keeps its edits.

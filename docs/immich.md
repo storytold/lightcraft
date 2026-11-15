@@ -79,6 +79,10 @@ counts them). The import and the download of a link-only original hold an activi
 cancelled (what was downloaded before the stop is still imported); a failed original download is reported, and
 opening the photo in Develop again tries again.
 
+A file imported from disk whose SHA-1 is the checksum of a link-only photo's asset doesn't stay a second
+photo: the link-only photo takes the file as `immich.fetchOriginal` would (`cmd::immich::merge_into_link_only`,
+called from `library.import`), the new entry is removed, and it joins the import's collection in its place.
+
 ## External libraries (IMM-EXTLIB)
 
 When Immich indexes the same folders as the catalog as an *external library*, nothing is uploaded. Immich does not
