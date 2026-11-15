@@ -2923,6 +2923,28 @@ fn trackpad_brush_resize_keeps_cursor_and_is_quick() {
     assert!(h.app.ui.brush_size > size0 * 1.2, "one swipe grows the brush noticeably: {size0} -> {}", h.app.ui.brush_size);
 }
 
+/// Issue #1190: with no masks on the photo, the sliders under "Settings for the next mask" look
+/// like the image's own develop sliders; they are dimmed and inert (a drag changes nothing) until
+/// a mask exists, then the same sliders drive the photo again.
+#[test]
+fn the_next_mask_settings_are_inert_until_a_mask_exists() {
+    let mut h = detail("panel.masking");
+    h.step();
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "maskNextSettings"), "the next mask's settings show");
+    let drag = |h: &mut Headless| {
+        let r = h.request("ui.dragWidget", json!({"id": "slider:exposure", "fx": 0.1, "dx": 600.0, "steps": 8}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+    };
+    drag(&mut h);
+    assert_eq!(h.app.session.mask_next.exposure, 0.0, "no mask yet: the next-mask slider is inert");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5]}));
+    drag(&mut h);
+    let id = h.app.session.active().expect("active photo");
+    let d = h.app.session.develop_of(id).expect("develop");
+    assert!(d.masks[0].adjust.exposure.abs() > 0.1, "a mask exists: the slider works again");
+}
+
 /// Issue #1161 (Part A): clicking another mask's pin while the Brush tool (or an armed new tool)
 /// is active selects that mask and its component instead of painting a stroke or adding a new mask.
 #[test]

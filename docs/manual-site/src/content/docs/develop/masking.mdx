@@ -37,6 +37,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 - **Create from the photo**: Object, Describe (text prompt), Subject, Sky, Background, People, Remembered (reuse a saved selection). AI selections need their model installed.
 - **Draw**: Brush, Linear, Radial.
 - **Range**: Luminance, Color, Depth (needs the Depth Anything model; see [AI masks](../../ai/masks-ai/#depth)).
+- **Before any mask exists**: the panel shows the settings the next mask will start from ("Settings for the next mask"), dimmed and inert. Create a mask first; once one exists those sliders work, and with masks present but none selected they again set up the next mask.
 - **Color** (the swatch under Saturation): tints the masked area. Open it for **Hue** (0–360°, round the colour wheel) and **Saturation** (how strongly); Saturation 0 is no tint.
 - Add, subtract and intersect to refine; **Refine Edges** and **Feather** soften the border.
 - Masks use image-relative coordinates, so previews and exports match at any size.
