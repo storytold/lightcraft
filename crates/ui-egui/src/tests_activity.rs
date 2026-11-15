@@ -93,6 +93,9 @@ fn a_task_takes_the_identity_plates_place_and_gives_it_back() {
     h.step();
     click(&mut h, "status:message");
     assert!(h.app.ui.status.is_empty(), "a click dismissed the message");
+    // the pointer still sits in the quick settings bar's stretch, whose hover dismisses any message: move it off
+    assert_eq!(h.request("ui.move", json!({"x": 5, "y": 500}), T)["ok"], true);
+    h.step();
 
     // a task takes the plate's and the status line's place, half a second in
     h.app.ui.status = "Ready".into();

@@ -1502,9 +1502,10 @@ mod tests {
         assert_eq!(r["ok"], true, "{r}");
         let listed = h.app.run("faces.models.list", json!({})).unwrap();
         assert!(listed["models"].as_array().unwrap().iter().any(|m| m["installed"] == true && m["known"] == false), "{listed}");
-        // installed, in use and recognition on: back in Settings ▸ Faces, where the scan can be watched
+        // installed and in use, but recognition stays off until switched on (the scan can take a long time): back in
+        // Settings ▸ Faces, where it can be switched on and watched
         assert_eq!(h.app.ui.dialog, Some(Dialog::Settings { tab: "ai".into() }));
-        assert_eq!(listed["enabled"], true);
+        assert_eq!(listed["enabled"], false);
         h.app.ui.dialog = None;
 
         // a file that is not a usable model says why and offers no install

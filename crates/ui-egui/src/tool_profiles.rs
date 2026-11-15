@@ -195,7 +195,7 @@ fn clean_name(name: &str) -> Option<String> {
 }
 
 /// Every tool profile and the one in use (the app's settings, `toolProfiles`).
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolProfiles {
     /// The profile in use (empty or unknown: Default).
@@ -210,6 +210,13 @@ impl<'de> Deserialize<'de> for ToolProfiles {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let v = Value::deserialize(d)?;
         Ok(Self::from_value(&v))
+    }
+}
+
+impl Default for ToolProfiles {
+    /// Default in use and no profiles of the user's: what a settings file without any reads as.
+    fn default() -> Self {
+        ToolProfiles { active: DEFAULT.into(), user: Vec::new() }
     }
 }
 

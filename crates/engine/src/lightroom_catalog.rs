@@ -1723,7 +1723,7 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
     }
     if capture_one_wb_approximate > 0 {
         warnings.push(format!(
-            "Capture One White Balance: approximate on {capture_one_wb_approximate} photo(s) — their raws are edited on the \
+            "Capture One White Balance: approximate on {capture_one_wb_approximate} photo(s); their raws are edited on the \
              relative white balance scale, where Capture One's change can only be approximated"
         ));
     }
