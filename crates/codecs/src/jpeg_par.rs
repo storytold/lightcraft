@@ -401,6 +401,12 @@ fn encode_with(
     app_segments: &[(u8, Vec<u8>)],
     optimize: bool,
 ) -> Vec<u8> {
+    // The public entry takes caller-sized dimensions: refuse (an empty output) what would size an allocation from
+    // them or index past `data`, rather than panic or allocate for them.
+    let fits = width.checked_mul(height).and_then(|n| n.checked_mul(channels)).is_some_and(|n| n <= data.len());
+    if !fits || width == 0 || height == 0 || width > 65_535 || height > 65_535 || !matches!(channels, 1 | 3 | 4) {
+        return Vec::new();
+    }
     let gray = channels == 1;
     let (hs, vs) = match (gray, sub) {
         (true, _) | (false, ChromaSubsampling::S444) => (1usize, 1usize),
@@ -586,6 +592,13 @@ fn encode_with(
 mod tests {
     use super::*;
 
+    #[test]
+    fn hostile_dimensions_give_no_output_instead_of_a_panic_or_allocation() {
+        for (w, h, c) in [(1usize << 40, 1usize << 40, 3usize), (0, 8, 3), (70_000, 2, 3), (8, 8, 7), (8, 8, 3)] {
+            assert!(encode(&[0u8; 16], w, h, c, 90, ChromaSubsampling::S444, &[]).is_empty(), "{w} x {h} x {c}");
+        }
+    }
+
     fn test_rgb(w: usize, h: usize) -> Vec<u8> {
         let mut v = Vec::with_capacity(w * h * 3);
         for y in 0..h {
@@ -643,15 +656,13 @@ mod tests {
         ] {
             let src = test_rgb(w, h);
             let jpg = encode(&src, w, h, 3, 92, sub, &[]);
-            let mut d = jpeg_decoder::Decoder::new(&jpg[..]);
-            let px = d.decode().expect("jpeg-decoder");
-            let info = d.info().unwrap();
-            assert_eq!((info.width as usize, info.height as usize), (w, h));
+            let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, &jpg, &craft_image_codecs::DecodeOptions::default())
+                .expect("craft-image-codecs");
+            assert_eq!((img.width() as usize, img.height() as usize), (w, h));
+            let px = img.as_u8().expect("u8");
             if w * h > 64 {
-                assert!(psnr(&src, &px) > 30.0, "{w}x{h} {sub:?}: psnr {}", psnr(&src, &px));
+                assert!(psnr(&src, px) > 30.0, "{w}x{h} {sub:?}: psnr {}", psnr(&src, px));
             }
-            let z = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&jpg[..])).decode().expect("zune-jpeg");
-            assert_eq!(z.len(), px.len());
         }
     }
 
@@ -735,18 +746,30 @@ mod tests {
             let std = encode_with(&src, w, h, 3, q, sub, &[], false);
             let opt = encode(&src, w, h, 3, q, sub, &[]);
             assert!(opt.len() < std.len(), "q{q} {sub:?}: {} ≥ {}", opt.len(), std.len());
-            let a = jpeg_decoder::Decoder::new(&std[..]).decode().expect("standard tables");
-            let b = jpeg_decoder::Decoder::new(&opt[..]).decode().expect("optimized tables");
+            let dec = |b: &[u8]| {
+                craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, b, &craft_image_codecs::DecodeOptions::default())
+                    .expect("craft-image-codecs")
+                    .as_u8()
+                    .expect("u8")
+                    .to_vec()
+            };
+            let a = dec(&std);
+            let b = dec(&opt);
             assert_eq!(a, b, "q{q} {sub:?}: pixels differ");
-            let z = zune_jpeg::JpegDecoder::new(zune_core::bytestream::ZCursor::new(&opt[..])).decode().expect("zune-jpeg");
-            assert_eq!(z.len(), b.len());
         }
         // grayscale too
         let gray: Vec<u8> = src.iter().step_by(3).copied().collect();
         let std = encode_with(&gray, w, h, 1, 90, ChromaSubsampling::S444, &[], false);
         let opt = encode(&gray, w, h, 1, 90, ChromaSubsampling::S444, &[]);
         assert!(opt.len() < std.len());
-        assert_eq!(jpeg_decoder::Decoder::new(&std[..]).decode().unwrap(), jpeg_decoder::Decoder::new(&opt[..]).decode().unwrap());
+        let dec = |b: &[u8]| {
+            craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, b, &craft_image_codecs::DecodeOptions::default())
+                .unwrap()
+                .as_u8()
+                .unwrap()
+                .to_vec()
+        };
+        assert_eq!(dec(&std), dec(&opt));
     }
 
     /// The bytes written for 4:4:4, 4:2:0, grayscale and RGBA input at a size cut into many bands, with partial MCUs
@@ -784,7 +807,8 @@ mod tests {
         let lo = encode(&src, w, h, 1, 30, ChromaSubsampling::S444, &[]);
         let hi = encode(&src, w, h, 1, 95, ChromaSubsampling::S444, &[]);
         assert!(lo.len() < hi.len());
-        let px = jpeg_decoder::Decoder::new(&hi[..]).decode().unwrap();
-        assert!(psnr(&src, &px) > 35.0);
+        let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, &hi, &craft_image_codecs::DecodeOptions::default()).unwrap();
+        let px = img.as_u8().unwrap();
+        assert!(psnr(&src, px) > 35.0);
     }
 }

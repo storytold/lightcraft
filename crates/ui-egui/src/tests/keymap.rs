@@ -1,13 +1,15 @@
 //! Headless tests of the editable keymap (Help ▸ Keyboard Shortcuts): a changed shortcut fires
 //! its command and not the old one's, the editor records a key press without running it, Esc
 //! cancels recording without closing the dialog, and the keymap survives a save/load of `ui.json`.
+//! It also covers the H key: H toggles the mask pins while the Masking panel shows (it opens
+//! Remove everywhere else, and only an unmodified H does).
 
 use std::time::Duration;
 
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::state::{Dialog, ViewMode};
+use crate::state::{Dialog, RightPanel, ViewMode};
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -566,4 +568,128 @@ fn a_is_the_aspect_lock_under_crop_and_visualize_spots_elsewhere() {
     assert_eq!(h.app.ui.right, RightPanel::Remove, "A opens Remove with the visualization");
     assert!(h.app.ui.visualize_spots, "Visualize Spots is on");
     assert_eq!(aspect(&h), before, "and the aspect is untouched");
+}
+
+/// Open the right-hand panel `command` and check it is the active one.
+fn open_panel(h: &mut Headless, command: &str, panel: RightPanel) {
+    // the panel commands toggle: don't switch off a panel that is already open
+    if h.app.ui.right != panel {
+        h.app.run(command, json!({})).unwrap();
+    }
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.right, panel, "{command}");
+}
+
+/// H toggles the mask pins while the Masking panel shows; it opens Remove everywhere else.
+#[test]
+fn h_toggles_the_mask_pins_while_masking() {
+    let mut h = demo();
+    open_panel(&mut h, "panel.masking", RightPanel::Masking);
+    assert!(h.app.ui.mask_pins, "pins are shown by default");
+    key(&mut h, "H", false);
+    assert!(!h.app.ui.mask_pins, "H hides the pins");
+    key(&mut h, "H", false);
+    assert!(h.app.ui.mask_pins, "H shows them again");
+    // the same toggle as View ▸ Show Mask Pins
+    h.app.run("view.maskPins", json!({"show": false})).unwrap();
+    key(&mut h, "H", false);
+    assert!(h.app.ui.mask_pins);
+}
+
+#[test]
+fn h_while_masking_does_not_open_remove() {
+    let mut h = demo();
+    open_panel(&mut h, "panel.masking", RightPanel::Masking);
+    for _ in 0..2 {
+        key(&mut h, "H", false);
+        assert_eq!(h.app.ui.right, RightPanel::Masking, "H stays in Masking");
+        assert_ne!(h.app.ui.tool, "remove");
+    }
+}
+
+#[test]
+fn h_opens_remove_when_another_panel_is_active() {
+    for (command, panel) in [("panel.edit", RightPanel::Edit), ("panel.crop", RightPanel::Crop), ("panel.redeye", RightPanel::RedEye)] {
+        let mut h = demo();
+        open_panel(&mut h, command, panel);
+        let pins = h.app.ui.mask_pins;
+        key(&mut h, "H", false);
+        assert_eq!(h.app.ui.right, RightPanel::Remove, "H from {panel:?}");
+        assert_eq!(h.app.ui.tool, "remove");
+        assert_eq!(h.app.ui.mask_pins, pins, "H outside Masking leaves the pins alone");
+    }
+}
+
+/// Remove stays on whatever key the keymap gives it: only an unmodified H press is overridden in
+/// Masking, so a reassigned Remove key still opens Remove there and leaves the pins alone.
+#[test]
+fn a_remapped_remove_key_still_opens_remove_while_masking() {
+    let mut h = demo();
+    let r = h.app.run("app.setShortcut", json!({"id": "panel.remove", "shortcut": "J"})).unwrap();
+    assert_eq!(r["shortcut"], "J", "{r}");
+    open_panel(&mut h, "panel.masking", RightPanel::Masking);
+    let pins = h.app.ui.mask_pins;
+    key(&mut h, "J", false);
+    assert_eq!(h.app.ui.right, RightPanel::Remove, "the reassigned Remove key opens Remove in Masking");
+    assert_eq!(h.app.ui.tool, "remove");
+    assert_eq!(h.app.ui.mask_pins, pins, "the reassigned key leaves the pins alone");
+}
+
+/// H stays the mask-pin key while Masking is open even after Remove moved to another key: only an
+/// explicit assignment of H itself takes the toggle away. J keeps opening Remove, and outside
+/// Masking the now unbound H does nothing.
+#[test]
+fn h_still_toggles_the_pins_when_remove_moves_to_another_key() {
+    let mut h = demo();
+    h.app.run("app.setShortcut", json!({"id": "panel.remove", "shortcut": "J"})).unwrap();
+    open_panel(&mut h, "panel.masking", RightPanel::Masking);
+    assert!(h.app.ui.mask_pins, "pins are shown by default");
+    key(&mut h, "H", false);
+    assert!(!h.app.ui.mask_pins, "H toggles the pins after Remove moved away");
+    key(&mut h, "H", false);
+    assert!(h.app.ui.mask_pins);
+    assert_eq!(h.app.ui.right, RightPanel::Masking, "H does not open Remove");
+    // J keeps opening Remove while Masking is open
+    key(&mut h, "J", false);
+    assert_eq!(h.app.ui.right, RightPanel::Remove, "J opens Remove");
+    assert_eq!(h.app.ui.tool, "remove");
+    // outside Masking the unbound H does nothing
+    open_panel(&mut h, "panel.edit", RightPanel::Edit);
+    key(&mut h, "H", false);
+    assert_eq!(h.app.ui.right, RightPanel::Edit, "unbound H does nothing outside Masking");
+    assert!(h.app.ui.mask_pins, "and it leaves the pins alone");
+}
+
+/// The full-screen preview shows no panels (the Masking panel state stays behind it): H keeps
+/// opening Remove there instead of toggling the invisible panel's pins.
+#[test]
+fn h_keeps_its_binding_in_the_full_screen_preview() {
+    let mut h = demo();
+    open_panel(&mut h, "panel.masking", RightPanel::Masking);
+    h.app.run("view.fullScreenPreview", json!({})).unwrap();
+    assert!(h.app.ui.fullscreen);
+    key(&mut h, "H", false);
+    assert!(h.app.ui.fullscreen, "H does not leave the full-screen preview");
+    assert_eq!(h.app.ui.right, RightPanel::Remove, "H opens Remove in the full-screen preview");
+    assert_eq!(h.app.ui.tool, "remove");
+    assert!(h.app.ui.mask_pins, "the pins are untouched");
+}
+
+/// A minimized Tools window hides the Masking panel (the panel state stays Masking behind it):
+/// H keeps opening Remove there instead of toggling the invisible panel's pins.
+#[test]
+fn h_keeps_its_binding_when_the_masking_panel_is_not_exposed() {
+    use crate::docking::Panel;
+    let mut h = demo();
+    open_panel(&mut h, "panel.masking", RightPanel::Masking);
+    h.app.run("ui.dock", json!({"operation": "float", "panel": "tools", "rect": [400, 100, 320, 500]})).unwrap();
+    h.app.run("ui.dock", json!({"action": {"SetMinimized": {"panel": "tools", "minimized": true}}})).unwrap();
+    h.step();
+    assert_eq!(h.app.ui.right, RightPanel::Masking, "the panel state stays Masking");
+    assert!(!crate::docking::exposed(&h.app, Panel::Tools), "the minimized window hides the panel");
+    key(&mut h, "H", false);
+    assert_eq!(h.app.ui.right, RightPanel::Remove, "H opens Remove while the panel is hidden");
+    assert_eq!(h.app.ui.tool, "remove");
+    assert!(h.app.ui.mask_pins, "the pins are untouched");
 }
