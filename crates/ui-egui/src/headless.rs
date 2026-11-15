@@ -2040,10 +2040,38 @@ mod tests {
         assert_eq!((h.app.ui.view, h.app.ui.person_page.clone()), (ViewMode::People, None));
     }
 
-    /// Issue #1050: the People view's three categories. The faces recognition matched to someone wait under Suggested
-    /// in their person's group, with **Confirm all** over a group and **✓** / **✗** / **−** over one face: confirming
-    /// names them that person in one undo step, rejecting keeps them unnamed and unignored (Undo comes back through
-    /// the toast), and both leave the groups at once.
+    /// Issue #1050: `people.category {category}` is how a control surface or a script picks a category: it opens People
+    /// on it, leaves a person's page, and refuses a name that is no category (the view then stays where it was).
+    #[test]
+    fn a_script_picks_the_people_category() {
+        use crate::state::ViewMode;
+        let mut h = demo([1400.0, 900.0]);
+        let t = Duration::from_secs(10);
+        h.app.ui.person_page = Some("Jane Doe".into());
+        for (asked, expected) in [("suggested", crate::state::PeopleCategory::Suggested), ("confirmed", crate::state::PeopleCategory::Confirmed)] {
+            let r = h.request("engine.execute", json!({"command": "people.category", "params": {"category": asked}}), t);
+            assert_eq!(r["ok"], true, "{asked}: {r}");
+            assert_eq!((h.app.ui.view, h.app.ui.people_category, h.app.ui.person_page.clone()), (ViewMode::People, expected, None));
+            h.step();
+            // the category it opened is the one on screen
+            let active = format!("button:peopleCategory-{}", expected.id());
+            assert!(h.request("ui.widgets", json!({"filter": "button:peopleCategory-"}), t).to_string().contains(&active), "{active}");
+        }
+        // an unknown category, a title instead of an id, and nothing at all: refused, and the view does not move
+        for params in [json!({"category": "nobody"}), json!({"category": "Confirmed"}), json!({})] {
+            let r = h.request("engine.execute", json!({"command": "people.category", "params": params.clone()}), t);
+            assert_eq!(r["ok"], false, "{params}: {r}");
+            assert_eq!(h.app.ui.people_category, crate::state::PeopleCategory::Confirmed, "unchanged: {params}");
+        }
+    }
+
+    /// Issue #1050: the People view's three categories. The faces recognition matched to someone wait under Suggested,
+    /// in their person's group, with **Confirm all** / **Reject all** over a group and ✓ / ✗ / − over one face.
+    ///
+    /// Nothing is recognised in this demo library (no model is chosen), so the groups are put where the view reads them;
+    /// the decisions themselves are the commands' (`tests_face_recognize`), and what is checked here is that the view
+    /// acts on them: a confirmation names the face and leaves the group in one undo step, and a rejection names nothing,
+    /// leaves the face a face, and hands the way back to the toast.
     #[test]
     fn suggested_faces_are_grouped_under_people_and_confirmed_or_rejected() {
         use lcc_catalog::Op;
@@ -2068,31 +2096,28 @@ mod tests {
             let r = h.app.session.catalog.photo(id).unwrap().meta.regions[i].clone();
             (r.kind, r.name)
         };
-        // nothing is recognised in this demo library, so what the engine would answer is put where the view reads it
-        let boxes = [ids[0], ids[1], ids[1]];
-        let places = [1usize, 1, 2];
-        let views: Vec<serde_json::Value> = boxes
+        // the boxes the four faces have in their photos (what a decision sends back, so the engine can refuse a face
+        // that changed since the list was read)
+        let rects: Vec<lcc_geom::Rect> = [ids[0], ids[1], ids[1]]
             .iter()
-            .zip(places.iter())
-            .map(|(id, i)| {
-                let r = h.app.session.catalog.photo(*id).unwrap().meta.regions[*i].rect;
-                json!({"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1})
-            })
+            .zip([1usize, 1, 2].iter())
+            .map(|(id, i)| h.app.session.catalog.photo(*id).unwrap().meta.regions[*i].rect)
             .collect();
+        let box_json = |r: lcc_geom::Rect| json!({"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1});
         h.app.caches.unnamed = Some((
             h.app.session.catalog.revision,
             h.app.caches.faces_indexed,
             0.0,
-            std::sync::Arc::new(super::unnamed::parse(&json!({
+            std::sync::Arc::new(crate::panels::unnamed::parse(&json!({
                 "total": 3, "ordered": true, "ready": true, "rejected": 0,
                 "faces": [
-                    {"photo": ids[0].0, "index": 1, "rect": views[0].clone(), "view": views[0].clone(), "suggestion": {"name": "Jane Doe", "score": 0.7}},
-                    {"photo": ids[1].0, "index": 1, "rect": views[1].clone(), "view": views[1].clone(), "suggestion": {"name": "Jane Doe", "score": 0.6}},
-                    {"photo": ids[1].0, "index": 2, "rect": views[2].clone(), "view": views[2].clone(), "suggestion": null}
+                    {"photo": ids[0].0, "index": 1, "rect": box_json(rects[0]), "view": box_json(rects[0]), "suggestion": {"name": "Jane Doe", "score": 0.7}},
+                    {"photo": ids[1].0, "index": 1, "rect": box_json(rects[1]), "view": box_json(rects[1]), "suggestion": {"name": "Jane Doe", "score": 0.6}},
+                    {"photo": ids[1].0, "index": 2, "rect": box_json(rects[2]), "view": box_json(rects[2]), "suggestion": null}
                 ],
                 "groups": [{"name": "Jane Doe", "total": 2, "faces": [
-                    {"photo": ids[0].0, "index": 1, "view": views[0].clone(), "score": 0.7},
-                    {"photo": ids[1].0, "index": 1, "view": views[1].clone(), "score": 0.6}
+                    {"photo": ids[0].0, "index": 1, "rect": box_json(rects[0]), "view": box_json(rects[0]), "score": 0.7},
+                    {"photo": ids[1].0, "index": 1, "rect": box_json(rects[1]), "view": box_json(rects[1]), "score": 0.6}
                 ]}]
             }))),
         ));
@@ -2117,24 +2142,35 @@ mod tests {
         ] {
             assert!(widgets.contains(&id), "{id} is on screen: {widgets}");
         }
-        // confirming one names it her, in one undo step
+        // with no recognition model chosen the engine suggests nothing, and it never names a face what it was not seen
+        // to look like: a confirmation names nothing, takes no undo step, and the toast says how many it took
         let undo = h.app.session.undo.len();
         assert_eq!(h.request("ui.clickWidget", json!({"id": format!("suggested:confirm:{}:1", ids[0].0)}), t)["ok"], true);
         h.step();
         h.step();
-        assert_eq!(region(&h, ids[0], 1), (lcc_meta::RegionKind::Face, Some("Jane Doe".to_string())));
-        assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
-        // rejecting the other leaves it a face, unnamed, and nothing on the catalog to undo: the toast carries the way back
+        assert_eq!(region(&h, ids[0], 1), (lcc_meta::RegionKind::Face, None), "nothing was suggested, so nothing is named");
+        assert_eq!(h.app.session.undo.len(), undo, "and no undo step");
+        assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("Named 0 of 1")), "{:?}", h.app.ui.toasts);
+        // and a rejection has nothing to remember either: no decision, no toast action to undo one
         assert_eq!(h.request("ui.clickWidget", json!({"id": format!("suggested:reject:{}:1", ids[1].0)}), t)["ok"], true);
         h.step();
         h.step();
         assert_eq!(region(&h, ids[1], 1), (lcc_meta::RegionKind::Face, None), "not named, not ignored");
-        assert_eq!(h.app.session.undo.len(), undo + 1, "a rejection changes no photo");
-        assert!(h.app.ui.toast_action.is_some(), "the message offers Undo");
-        assert_eq!(h.request("ui.clickWidget", json!({"id": "button:toastAction"}), t)["ok"], true);
-        h.step();
-        h.step();
-        assert!(h.app.ui.toast_action.is_none(), "Undo ran once");
+        assert_eq!(h.app.session.undo.len(), undo, "a rejection changes no photo");
+        assert!(h.app.ui.toast().is_some_and(|t| t.0.contains("Rejected 0 of 1")), "{:?}", h.app.ui.toasts);
+        assert!(h.app.ui.toast_action.is_none(), "there is nothing to undo");
+        // the group's own buttons are the batch decisions, met by the same engine answer
+        for id in ["suggested:confirmAll:Jane Doe", "suggested:rejectAll:Jane Doe"] {
+            assert_eq!(h.request("ui.clickWidget", json!({"id": id}), t)["ok"], true, "{id}");
+            h.step();
+            h.step();
+        }
+        assert_eq!(region(&h, ids[0], 1), (lcc_meta::RegionKind::Face, None), "still a suggestion, nothing named");
+        assert_eq!(h.app.session.undo.len(), undo, "and still nothing on the catalog");
+
+        // the engines' side of these commands (one undo step when it names, a rejection that sticks, the toast's Undo)
+        // is `tests_face_recognize::suggested_faces_are_confirmed_or_rejected_and_a_rejection_sticks`, which has a model
+        // and the embeddings to go with it.
     }
 
     /// The name field under the unnamed faces is a shared text field: right-click ▸ Paste puts the
