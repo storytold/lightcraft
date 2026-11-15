@@ -29,6 +29,26 @@ fn next_seed(prev: u64, now: &str) -> u64 {
     (lightcraft_catalog::mix64(prev.wrapping_add(1)) ^ t) & (MAX_SEED - 1)
 }
 
+/// `photo.label` / `photo.clearLabel`: give the targets `label`. A colour kept from another
+/// program ([`lightcraft_catalog::Meta::label_text`]) goes with it: the choice made here replaces
+/// it, in the same undo step, so undo brings both back.
+fn set_label(s: &mut crate::Session, p: &Value, label: Option<ColorLabel>) -> Result<Value> {
+    let kept: std::collections::HashMap<PhotoId, lightcraft_catalog::Meta> = s
+        .catalog
+        .photos()
+        .filter(|photo| !photo.meta.label_text.is_empty())
+        .map(|photo| (photo.id, lightcraft_catalog::Meta { label_text: String::new(), ..photo.meta.clone() }))
+        .collect();
+    cull(s, p, |s| {
+        for_targets(s, p, "Set Color Label", |id| {
+            Some(match kept.get(&id) {
+                Some(meta) => Op::Batch { ops: vec![Op::SetLabel { id, label }, Op::SetMeta { id, meta: Box::new(meta.clone()) }] },
+                None => Op::SetLabel { id, label },
+            })
+        })
+    })
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         // ---- view source / filter / sort
@@ -575,7 +595,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => return Err(bad("photo.label", "missing `label` (red|yellow|green|blue|purple|none)")),
                     Some(_) => return Err(bad("photo.label", "label must be red|yellow|green|blue|purple|none")),
                 };
-                cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: l })))
+                set_label(s, p, l)
             }
         ),
         // `photo.label` takes the colour as a parameter, so a key can't be given to "none" alone
@@ -586,7 +606,7 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             "{ids?, advance?: bool} — `photo.label` with `none`; without `ids`, the selection moves on when this takes the active photo out of the view",
             has_selection,
-            |s, p| { cull(s, p, |s| for_targets(s, p, "Set Color Label", |id| Some(Op::SetLabel { id, label: None }))) }
+            |s, p| set_label(s, p, None)
         ),
         // ---- orientation
         cmd!("photo.rotateLeft", "Rotate Left", ["Photo"], Some("Cmd+["), "{ids?}", has_selection, |s, p| rotate(s, p, false)),

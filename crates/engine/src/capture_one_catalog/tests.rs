@@ -881,7 +881,7 @@ fn a_catalog_becomes_photos_virtual_copies_and_albums_in_one_undo_step() {
         warnings,
         [
             "1 image(s) in Capture One's trash were left out",
-            "2 photo(s) have Capture One's orange or pink colour tag, which has no label here yet; imported without a label",
+            "2 photo(s) have Capture One's orange or pink colour tag, which has no label here yet: the colour is kept with the photo, and the keywords “Capture One|Orange” and “Capture One|Pink” find them",
             "4 photo(s) have Capture One adjustments; adjustments are not imported yet",
             "smart album “Five stars”: not imported; smart album rules can't be converted yet",
         ]
@@ -898,6 +898,7 @@ fn a_catalog_becomes_photos_virtual_copies_and_albums_in_one_undo_step() {
         ("A title", "A description", "A creator", "A notice", "A city")
     );
     assert!(master.edited.is_none(), "no adjustments are imported");
+    assert_eq!(master.meta.label_text, "", "a colour the library has is its label, nothing is kept beside it");
     // its second variant is a virtual copy with a rating and keywords of its own
     let copy = by_name(&s, "managed.RAF", true);
     assert_eq!((copy.copy_of, copy.copy_name.as_deref()), (Some(master.id), Some("Variant 2")));
@@ -920,6 +921,68 @@ fn a_catalog_becomes_photos_virtual_copies_and_albums_in_one_undo_step() {
     assert_eq!(s.undo.last().map(|step| step.label.as_str()), Some("Import Capture One Catalog"));
     s.execute("edit.undo", &serde_json::json!({})).unwrap();
     assert!(s.catalog.is_empty() && s.catalog.albums().count() == 0);
+}
+
+/// Capture One has seven colour tags, the library five labels. Orange and pink are not lost: the
+/// colour's name stays with the photo, goes into its XMP, and a keyword finds the photo.
+#[test]
+fn orange_and_pink_are_kept_found_by_a_keyword_and_replaced_by_a_label_set_here() {
+    use lightcraft_catalog::ColorLabel;
+    let scratch = Scratch::new("kept-label");
+    let package = sample_on_disk(&scratch);
+    let mut s = crate::Session::new().with_fs();
+    let params = serde_json::json!({ "path": package });
+    s.execute("library.importLightroom", &params).unwrap();
+    let kept = |s: &crate::Session, name: &str| {
+        let p = by_name(s, name, false);
+        (p.label, p.meta.label_text.clone(), p.meta.keywords.clone())
+    };
+    assert_eq!(kept(&s, "referenced.jpg"), (None, "Orange".to_string(), vec!["Capture One|Orange".to_string()]));
+    assert_eq!(kept(&s, "elsewhere.ARW"), (None, "Pink".to_string(), vec!["Capture One|Pink".to_string()]));
+    let id = by_name(&s, "referenced.jpg", false).id;
+    let packet = |s: &crate::Session| crate::sidecar::sidecar_packet(s.catalog.photo(id).unwrap(), &s.catalog);
+    assert!(packet(&s).contains("<xmp:Label>Orange</xmp:Label>"), "{}", packet(&s));
+
+    // (the photo commands want a selection, also when they are given ids)
+    s.execute("library.select", &serde_json::json!({ "ids": [id.0] })).unwrap();
+    // other edits of the photo's metadata leave the kept colour alone
+    s.execute("photo.setMeta", &serde_json::json!({ "ids": [id.0], "title": "A new title" })).unwrap();
+    assert_eq!(kept(&s, "referenced.jpg").1, "Orange");
+
+    // a label set here replaces it, in one undo step
+    s.execute("photo.label", &serde_json::json!({ "ids": [id.0], "label": "red" })).unwrap();
+    assert_eq!((kept(&s, "referenced.jpg").0, kept(&s, "referenced.jpg").1.as_str()), (Some(ColorLabel::Red), ""));
+    // (the keyword still names the colour; the label is the one set here)
+    assert!(packet(&s).contains("<xmp:Label>Red</xmp:Label>") && !packet(&s).contains("<xmp:Label>Orange"), "{}", packet(&s));
+    s.execute("edit.undo", &serde_json::json!({})).unwrap();
+    assert_eq!((kept(&s, "referenced.jpg").0, kept(&s, "referenced.jpg").1.as_str()), (None, "Orange"));
+    // so does taking the label away, which the photo doesn't show it has
+    s.execute("photo.clearLabel", &serde_json::json!({ "ids": [id.0] })).unwrap();
+    assert_eq!((kept(&s, "referenced.jpg").0, kept(&s, "referenced.jpg").1.as_str()), (None, ""));
+    // a photo without a kept colour takes a label as before: one operation, no metadata touched
+    let other = by_name(&s, "managed.RAF", false).id;
+    s.execute("photo.label", &serde_json::json!({ "ids": [other.0], "label": "none" })).unwrap();
+    assert!(
+        matches!(&s.undo.last().unwrap().op, lightcraft_catalog::Op::Batch { ops } if matches!(ops.as_slice(), [lightcraft_catalog::Op::SetLabel { .. }]))
+    );
+
+    // the catalog says orange again when it is imported again
+    s.execute("library.importLightroom", &params).unwrap();
+    assert_eq!(kept(&s, "referenced.jpg"), (None, "Orange".to_string(), vec!["Capture One|Orange".to_string()]));
+}
+
+/// A library written before the field existed reads as before, and one without a kept colour
+/// is written as before.
+#[test]
+fn the_kept_label_is_left_out_of_the_catalog_when_empty() {
+    let mut meta = lightcraft_catalog::Meta::default();
+    assert!(serde_json::to_value(&meta).unwrap().get("label_text").is_none());
+    let old: lightcraft_catalog::Meta = serde_json::from_value(serde_json::json!({ "title": "x" })).unwrap();
+    assert_eq!((old.title.as_str(), old.label_text.as_str()), ("x", ""));
+    meta.label_text = "Pink".into();
+    let json = serde_json::to_value(&meta).unwrap();
+    assert_eq!(json["label_text"], "Pink");
+    assert_eq!(serde_json::from_value::<lightcraft_catalog::Meta>(json).unwrap().label_text, "Pink");
 }
 
 #[test]

@@ -1400,6 +1400,11 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
             _ => Flag::None,
         };
         p.label = s.catalog.label_from_name(text(&src.image, "colorLabels"));
+        // a colour the library has no label for, where the catalog's reader names one (Capture
+        // One's orange and pink): kept with the photo instead of lost
+        if let Some(kept) = src.image.get("labelText").and_then(Value::as_str) {
+            p.meta.label_text = if p.label.is_none() { kept.trim().to_string() } else { String::new() };
+        }
         if !text(&src.image, "captureTime").is_empty() {
             p.captured = Some(text(&src.image, "captureTime").into());
         }

@@ -7,9 +7,10 @@
 //! variant is the master and its further variants are virtual copies, a project or group is a
 //! collection set, and IPTC fields travel as an XMP packet.
 //!
-//! Not carried yet, and said so in the import's warnings: adjustments, smart albums, and the
-//! orange and pink colour tags (the library has no such labels). Each photo's row keeps what was
-//! read under `captureOne`, so the import's recovery archive has it.
+//! Not carried yet, and said so in the import's warnings: adjustments and smart albums. The
+//! orange and pink colour tags have no label in the library: the colour is kept with the photo
+//! (`Meta::label_text`) and a keyword finds it. Each photo's row keeps what was read under
+//! `captureOne`, so the import's recovery archive has it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -24,6 +25,8 @@ use crate::lightroom_catalog::{CatalogImport, CatalogPhoto as ImportPhoto};
 const MAX_NAMED: usize = 50;
 /// What marks a catalog id and a photo's identity as Capture One's in the import's index.
 const PREFIX: &str = "captureone:";
+/// The keyword the colour keywords are inside.
+const KEYWORD_PARENT: &str = "Capture One";
 
 /// Read the Capture One catalog at `path` for the catalog import.
 pub(crate) fn read_for_import(path: &Path, cancel: &AtomicBool) -> Result<CatalogImport, String> {
@@ -49,10 +52,22 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
         warnings.push(format!("{} image(s) in Capture One's trash were left out", catalog.trashed));
     }
     let count = |test: fn(&CatalogPhoto) -> bool| catalog.photos.iter().filter(|p| test(p)).count();
-    let unlabelled = count(|p| matches!(p.color_tag, ColorTag::Orange | ColorTag::Pink));
+    // the colours the library has no label for, each named with the keyword that finds it
+    let kept: Vec<&str> = [ColorTag::Orange, ColorTag::Pink]
+        .into_iter()
+        .filter(|tag| catalog.photos.iter().any(|p| p.color_tag == *tag))
+        .filter_map(kept_label)
+        .collect();
+    let unlabelled = count(|p| kept_label(p.color_tag).is_some());
     if unlabelled > 0 {
+        let found = match kept.as_slice() {
+            [one] => format!("the keyword “{KEYWORD_PARENT}|{one}” finds them"),
+            names => {
+                format!("the keywords {} find them", names.iter().map(|name| format!("“{KEYWORD_PARENT}|{name}”")).collect::<Vec<_>>().join(" and "))
+            }
+        };
         warnings.push(format!(
-            "{unlabelled} photo(s) have Capture One's orange or pink colour tag, which has no label here yet; imported without a label"
+            "{unlabelled} photo(s) have Capture One's orange or pink colour tag, which has no label here yet: the colour is kept with the photo, and {found}"
         ));
     }
     let adjusted = count(|p| p.adjusted);
@@ -120,6 +135,8 @@ fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64) -> ImportPhot
     set("rating", json!(photo.rating));
     set("pick", json!(0));
     set("colorLabels", json!(label(photo.color_tag)));
+    // (always there, so a tag Capture One has since changed replaces what an earlier import kept)
+    set("labelText", json!(kept_label(photo.color_tag).unwrap_or("")));
     // Capture One keeps the camera's clock as the file gives it and has no command to change it,
     // so a file that is there says it better (with its zone, when it has one)
     if !here && let Some(captured) = &photo.captured {
@@ -133,7 +150,7 @@ fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64) -> ImportPhot
         image,
         settings: String::new(),
         xmp: iptc_packet(photo),
-        keywords: photo.keywords.clone(),
+        keywords: keywords(photo),
         history: Vec::new(),
         snapshots: Vec::new(),
         original: photo.original.clone(),
@@ -169,6 +186,25 @@ fn label(tag: ColorTag) -> &'static str {
         ColorTag::Red | ColorTag::Yellow | ColorTag::Green | ColorTag::Blue | ColorTag::Purple => tag.name().unwrap_or(""),
         ColorTag::None | ColorTag::Orange | ColorTag::Pink => "",
     }
+}
+
+/// The name of a colour tag the library has no label for: kept with the photo as its
+/// `xmp:Label` text ([`lightcraft_catalog::Meta::label_text`]).
+fn kept_label(tag: ColorTag) -> Option<&'static str> {
+    matches!(tag, ColorTag::Orange | ColorTag::Pink).then(|| tag.name()).flatten()
+}
+
+/// The photo's keywords, with one that finds an orange or pink photo while the library can't
+/// show or filter those colours: `Capture One|Orange`, `Capture One|Pink`.
+fn keywords(photo: &CatalogPhoto) -> Vec<String> {
+    let mut keywords = photo.keywords.clone();
+    if let Some(name) = kept_label(photo.color_tag) {
+        let keyword = format!("{KEYWORD_PARENT}|{name}");
+        if !keywords.contains(&keyword) {
+            keywords.push(keyword);
+        }
+    }
+    keywords
 }
 
 /// What the import doesn't carry into the library yet, kept with the photo's row.
