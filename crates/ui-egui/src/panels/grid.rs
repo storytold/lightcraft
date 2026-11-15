@@ -588,15 +588,23 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
     let anchor_id = egui::Id::new("grid-anchor");
     let lay_id = (Arc::as_ptr(&lay) as usize, ids.len(), lay.height.to_bits());
     let last: Option<GridAnchor> = ui.ctx().data(|d| d.get_temp(anchor_id));
-    // a bar that can be seen and grabbed, its handle always drawn: it says where the view is in the shoot
-    visible_scroll_bar(ui);
-    let mut area_ui = egui::ScrollArea::vertical()
-        .id_salt("grid-scroll")
-        .auto_shrink([false, false])
-        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible);
+    // a bar that can be seen and grabbed, its handle always drawn: it says where the view is in the shoot.
+    // The Modern layout instead has a finger-sized fast-scroll handle over the edge
+    // (`modern_library::scroll_handle`): its thin bar would only be in the way there.
+    let modern = crate::modern::on(app);
+    if !modern {
+        visible_scroll_bar(ui);
+    }
+    // the fast-scroll handle's drag, taken as the view's absolute offset
+    let handle_to: Option<f32> = ui.ctx().data_mut(|d| d.remove_temp(egui::Id::new("modern-grid-scroll-to")));
+    let mut area_ui = egui::ScrollArea::vertical().id_salt("grid-scroll").auto_shrink([false, false]).scroll_bar_visibility(if modern {
+        egui::scroll_area::ScrollBarVisibility::AlwaysHidden
+    } else {
+        egui::scroll_area::ScrollBarVisibility::AlwaysVisible
+    });
     let mut viewport_seen = Rect::NOTHING;
     if scroll_to.is_none()
-        && let Some(y) = last.as_ref().and_then(|a| a.reflow_offset(lay_id, &ids, &lay))
+        && let Some(y) = handle_to.or_else(|| last.as_ref().and_then(|a| a.reflow_offset(lay_id, &ids, &lay)))
     {
         area_ui = area_ui.vertical_scroll_offset(y);
     }
@@ -672,6 +680,12 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
     });
     // where the view is in the shoot: "1,234 / 2,233" by the scroll bar while it is dragged or the view scrolls
     scroll_position_label(app, ui, scroll_rect, viewport_seen, total_h, &ids, &lay);
+    // the Modern layout's fast-scroll handle: where the view is, how far it may go, how tall the shoot is
+    if viewport_seen.is_positive() {
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(egui::Id::new("modern-grid-scroll"), (viewport_seen.top(), (total_h - viewport_seen.height()).max(0.0), total_h))
+        });
+    }
     app.caches.grid_stats.cells_visited += visited;
     app.renderer.evict_thumbs(&visible_ids, 600);
     let _ = (Color32::BLACK, StrokeKind::Inside, Stroke::NONE);
