@@ -358,6 +358,16 @@ fn lightroom_profile_bookkeeping_is_not_reported() {
     assert_eq!(unmapped(&scaled), ["LensProfileDistortionScale"]);
 }
 
+/// Only outright digests of LightCraft's own state are non-rendering: a dropped local
+/// correction changes the render whatever its component is named (#3050).
+#[test]
+fn only_outright_digests_are_non_rendering() {
+    assert!(non_rendering("AutoToneDigest"));
+    assert!(!non_rendering("ColorVariance"), "the Variance slider is an adjustment");
+    assert!(!non_rendering("Spot: FutureDigest"), "a dropped spot changes the render");
+    assert!(!non_rendering("Mask: FutureDigest"), "so does a dropped mask");
+}
+
 #[test]
 fn disabled_lens_profile_switch_keeps_embedded_corrections() {
     // Lightroom applies a file's built-in lens corrections regardless of its profile switch,
