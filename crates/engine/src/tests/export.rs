@@ -374,6 +374,8 @@ fn library_with_jpeg(tag: &str) -> (Session, lightcraft_catalog::PhotoId, std::p
 
 fn preset_export_preserves_originals(command: &str, selection: serde_json::Value, tag: &str) {
     let (mut s, _, dir, src, original) = library_with_jpeg(tag);
+    // something for mask.exportEffects to write (the other commands ignore it)
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
     let sidecar = src.with_extension("xmp");
     let appended_sidecar = dir.join("IMG_1.jpg.xmp");
     std::fs::write(&sidecar, b"existing sidecar").unwrap();
@@ -399,6 +401,14 @@ fn preset_export_preserves_originals(command: &str, selection: serde_json::Value
         assert_eq!(std::fs::read(&sidecar).unwrap(), b"existing sidecar");
         assert_eq!(std::fs::read(&appended_sidecar).unwrap(), b"appended sidecar");
     }
+    // `..` through a folder that does not exist yet could reach the original once it is created
+    let mut params = selection.clone();
+    params["path"] = json!(dir.join("missing/../IMG_1.jpg").to_string_lossy());
+    let error = s.execute(command, &params).unwrap_err().to_string();
+    // Windows resolves `..` lexically and finds the original; Unix cannot resolve it and refuses
+    assert!(error.contains("cannot be resolved") || error.contains("never writes over an original"), "{error}");
+    assert!(!dir.join("missing").exists());
+    assert_eq!(std::fs::read(&src).unwrap(), original);
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -460,9 +470,12 @@ fn keyword_export_preserves_the_previous_file_on_write_failure() {
 fn preset_exports_preserve_previous_files_on_write_failure() {
     let dir = temp_dir("preset-export-failure");
     let mut s = Session::new();
-    for (command, selection, file) in
-        [("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"), ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve")]
-    {
+    s.mask_effects.push(crate::cmd::mask_effects::MaskEffect { name: "Glow".into(), ..Default::default() });
+    for (command, selection, file) in [
+        ("preset.export", json!({"ids": ["lc.warm-glow"]}), "look.lcpreset"),
+        ("curve.exportPresets", json!({"names": ["Linear"]}), "curve.lccurve"),
+        ("mask.exportEffects", json!({"names": ["Glow"]}), "effects.lceffect"),
+    ] {
         let path = dir.join(file);
         let mut params = selection;
         params["path"] = json!(path.to_string_lossy());
@@ -475,8 +488,13 @@ fn preset_exports_preserve_previous_files_on_write_failure() {
         assert_eq!(std::fs::read(&path).unwrap(), previous, "{command} preserves the prior export");
         assert_eq!(s.execute(command, &params).unwrap()["count"], 1, "replacement still succeeds");
     }
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no temporary files remain");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 3, "no temporary files remain");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn mask_effect_export_never_overwrites_originals_or_sidecars() {
+    preset_export_preserves_originals("mask.exportEffects", json!({"names": ["Glow"]}), "effect-export-guard");
 }
 
 fn disk_batch(
@@ -1053,6 +1071,12 @@ fn remove_location_refuses_a_psd_with_unreadable_resources() {
     let path = dir.join("Geo.psd");
     let valid_bytes = synthetic_psd_with_metadata(&gps);
     assert_eq!(lightcraft_meta::extract(&valid_bytes).gps, gps.gps, "the fixture embeds EXIF GPS before corruption");
+    std::fs::write(&path, &valid_bytes).unwrap();
+    let mut session = Session::new().with_fs();
+    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = session.catalog.photos().next().unwrap().id;
+    // Import the decodable original first. The malformed resource list below is the file state the
+    // export safety check must refuse; it is not a fixture the image importer should have to decode.
     let mut bytes = valid_bytes;
     let colour_length = usize::try_from(u32::from_be_bytes(bytes[26..30].try_into().unwrap())).unwrap();
     let resource_length_at = 30 + colour_length;
@@ -1064,9 +1088,6 @@ fn remove_location_refuses_a_psd_with_unreadable_resources() {
 
     assert!(lightcraft_meta::extract(&bytes).gps.is_none(), "the malformed trailing resource reproduces the metadata gap");
     std::fs::write(&path, bytes).unwrap();
-    let mut session = Session::new().with_fs();
-    session.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
-    let id = session.catalog.photos().next().unwrap().id;
     let err = export_photo(&mut session, id, &ExportOptions::from_json(&json!({"format": "original", "removeLocation": true})), 1).err().unwrap();
     assert!(err.contains("can't verify location metadata") && err.contains("malformed PSD/PSB"), "{err}");
     let _ = std::fs::remove_dir_all(&dir);
