@@ -65,12 +65,28 @@ fn median(v: &mut [f64]) -> Option<f64> {
 }
 
 fn from_preview(bytes: &[u8], f: &Frame) -> Option<[f32; 3]> {
-    let jpeg = crate::preview::embedded_preview(bytes)?;
-    let (px, pw, ph, ch) = crate::tiffraw::lossy_jpeg(&jpeg, 3, crate::tiffraw::MAX_JPEG_SAMPLES).ok()?;
-    if ch != 3 {
+    let jpeg = crate::embedded_preview(bytes)?;
+    let ic_opts = craft_image_codecs::DecodeOptions {
+        limits: craft_image_codecs::Limits {
+            max_width: 1 << 16,
+            max_height: 1 << 16,
+            max_pixels: MAX_PREVIEW_PIXELS as u64,
+            max_alloc: (MAX_PREVIEW_PIXELS * 3) as u64,
+        },
+        keep_orientation: true,
+    };
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, &jpeg, &ic_opts).ok()?;
+    let (pw, ph) = (img.width() as usize, img.height() as usize);
+    if pw == 0 || ph == 0 || pw.saturating_mul(ph).saturating_mul(3) > MAX_PREVIEW_PIXELS * 3 {
         return None;
     }
-    from_rgb(&px, pw, ph, f)
+    let px = img.as_u8()?;
+    let rgb: std::borrow::Cow<[u8]> = match img.layout() {
+        craft_image_codecs::ChannelLayout::Rgb => px.into(),
+        craft_image_codecs::ChannelLayout::Gray => px.iter().flat_map(|&y| [y, y, y]).collect::<Vec<_>>().into(),
+        _ => return None,
+    };
+    from_rgb(&rgb, pw, ph, f)
 }
 
 /// Gains from an 8-bit RGB preview `pw` x `ph` (rows of RGB triplets) showing the crop: its neutral pixels, else
@@ -144,7 +160,7 @@ mod tests {
         // RGGB, R at 400, G at 800, B at 200 above a black of 100
         let (w, h) = (8, 8);
         let d: Vec<u16> = (0..w * h).map(|i| [500, 900, 900, 300][(i / w % 2) * 2 + i % 2]).collect();
-        let cfa = Cfa::bayer_static("RGGB");
+        let cfa = crate::bayer("RGGB");
         let black = BlackLevel::uniform(100.0);
         let f = Frame { data: &d, width: w, crop: Rect::new(0, 0, w, h), cfa: &cfa, black: &black, white: 4095.0 };
         assert_eq!(as_shot(b"not a raw", &f), Some([2.0, 1.0, 4.0]));
