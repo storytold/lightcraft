@@ -859,7 +859,7 @@ impl Av1Encoder {
             let sb_cols = w.div_ceil(64);
             let sb_rows = h.div_ceil(64);
             let enc = if w > 4096 || h > 4096 || sb_cols * sb_rows > 2304 {
-                Av1Backend::Tiled(craft_video::av1::LargeEncoder::new(&ec).map_err(|e| bad(format!("AV1: {e}")))?)
+                Av1Backend::Tiled(craft_video::av1::LargeEncoder::with_speed(&ec, c.speed).map_err(|e| bad(format!("AV1: {e}")))?)
             } else {
                 Av1Backend::Single(Encoder::new(ec).map_err(|e| bad(format!("AV1: {e}")))?)
             };
