@@ -717,11 +717,7 @@ fn open_many_and_scan(h: &mut Headless, folders: &[String]) {
     h.step();
     let r = h.request("ui.clickWidget", json!({"id": "sideMenu:folders:synchronize"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(
-        h.step_until(T, |h| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolders { .. }))),
-        "the dialog opens: {:?}",
-        h.app.ui.dialog
-    );
+    assert!(h.step_until(T, |h| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolders { .. }))), "the dialog opens: {:?}", h.app.ui.dialog);
     assert!(h.step_until(T, |h| h.app.ui.dialog.as_ref().is_some_and(crate::sync::many_scanned)), "every folder was scanned");
 }
 
@@ -907,11 +903,7 @@ fn one_folder_with_something_to_do_is_put_in_line_and_the_toast_says_so() {
     let dlg = h.app.ui.dialog.take().expect("the dialog is open");
     let r = crate::panels::dialogs::confirm_dialog(&mut h.app, &dlg).expect("it synchronizes");
     assert_eq!(r["queued"].as_array().map(Vec::len), Some(1), "trip only: {r}");
-    assert!(
-        h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "Synchronizing the folder: see it under the bell"),
-        "{:?}",
-        h.app.ui.toast
-    );
+    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "Synchronizing the folder: see it under the bell"), "{:?}", h.app.ui.toast);
 }
 
 /// Given folders that are up to date or not there (nothing is wrong with the choices: the scans found nothing to
