@@ -1190,7 +1190,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
 dependencies = [
  "md-5",
  "rayon",
@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "craft-crw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1266,13 +1266,16 @@ dependencies = [
 [[package]]
 name = "craft-image-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
 dependencies = [
  "craft-jpeg",
  "craft-metadata",
+ "craft-video",
+ "crc32fast",
  "exr",
  "flate2",
  "half",
+ "hayro-jpeg2000",
  "image",
  "image-webp",
  "jpeg-encoder",
@@ -1289,7 +1292,7 @@ dependencies = [
 [[package]]
 name = "craft-jpeg"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1305,9 +1308,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-media"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
+
+[[package]]
 name = "craft-metadata"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
 dependencies = [
  "brotli-decompressor 6.0.1",
  "chrono",
@@ -1330,7 +1338,7 @@ dependencies = [
 [[package]]
 name = "craft-raw"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
 dependencies = [
  "chrono",
  "craft-crw",
@@ -1348,7 +1356,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -1403,6 +1411,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-video"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
+dependencies = [
+ "craft-media",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-window"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -1416,9 +1433,10 @@ dependencies = [
 [[package]]
 name = "craft-xml"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=9399c25341289c1d523e64c92a1b95735c81933f#9399c25341289c1d523e64c92a1b95735c81933f"
 dependencies = [
  "quick-xml 0.41.0",
+ "serde",
  "thiserror 2.0.21",
 ]
 
@@ -3031,6 +3049,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
  "foldhash 0.2.0",
+]
+
+[[package]]
+name = "hayro-jpeg2000"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
+dependencies = [
+ "fearless_simd",
 ]
 
 [[package]]

@@ -40,7 +40,7 @@ jxl = ["dep:craft-jxl"]
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.
 heif = ["dep:craft-heif"]
 ## AVIF encoding via ravif/rav1e (pure Rust, BSD). Native targets only; a no-op on wasm32.
-avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
+avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize", "craft-image-codecs/avif-decode"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
