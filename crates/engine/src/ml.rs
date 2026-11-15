@@ -34,6 +34,12 @@ pub(crate) type Output = Box<dyn Any + Send>;
 pub(crate) const ROW_KIND: &str = "mlIndex";
 pub(crate) const ROW_LABEL: &str = "Indexing photos";
 
+/// The command that pauses search indexing, the one that resumes it, and where its options are (Settings ▸ AI Models ▸
+/// Semantic search): the indexing row's pause button and gear.
+fn row_controls(paused: bool) -> crate::activity::Controls {
+    crate::activity::Controls { paused, pause: "ml.pause", resume: "ml.resume", settings_tab: "ai", settings_section: Some("semanticSearch") }
+}
+
 /// Staging folder inside `ml_models_dir` for in-progress model downloads.
 pub const STAGING_DIR: &str = ".downloads";
 
@@ -109,9 +115,12 @@ impl Pace {
 struct MlSettings {
     embedder: Option<String>,
     device: Option<String>,
-    /// Background indexing on or off (`ml.enable`); unset means on.
+    /// Semantic search (and its background indexing) on or off (`ml.enable`); unset means on.
     #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
+    /// Background indexing paused by the user (`ml.pause`); unset means not paused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paused: Option<bool>,
 }
 
 fn read_settings(dir: &Path) -> MlSettings {
@@ -224,6 +233,14 @@ pub(crate) struct State {
     enabled_adopted_dir: Option<PathBuf>,
     /// Set when the user clicks ✕ on the `mlIndex` activity row; cleared on library change, import, or `ml.index`.
     pub paused_by_user: bool,
+    /// Background indexing paused (`ml.pause`, the row's pause button), saved in the models folder so it stays paused
+    /// across restarts until `ml.resume`. Adopted with `enabled` ([`Session::ml_enabled`]).
+    pub paused: bool,
+    /// The batch row the queue shows while it has work, to give it pause / resume (it is made on the worker's side).
+    row: Arc<Mutex<Option<TaskHandle>>>,
+    /// The row shown while indexing is paused with photos left and nothing queued (after a restart, say), so the
+    /// row's resume button is there.
+    paused_row: Option<TaskGuard>,
     /// Bumped whenever the library or active model changes so stale in-flight results are ignored.
     pub epoch: u64,
     /// Current pace set by `ml.pump`.
@@ -264,6 +281,9 @@ impl Default for State {
             enabled: true,
             enabled_adopted_dir: None,
             paused_by_user: false,
+            paused: false,
+            row: Arc::new(Mutex::new(None)),
+            paused_row: None,
             epoch: 1,
             pace: Arc::new(AtomicU8::new(Pace::Normal as u8)),
             downloads: Downloads::default(),
@@ -343,6 +363,7 @@ impl State {
         }
         self.failed_photos.clear();
         self.paused_by_user = false;
+        self.paused_row = None;
         self.store = None;
         self.store_path = None;
         self.last_checked = None;
@@ -468,13 +489,20 @@ pub(crate) fn clip_accelerator_for(device_choice: Arc<Mutex<Option<String>>>) ->
     })
 }
 
-struct ActivityRows(Activity);
+struct ActivityRows {
+    activity: Activity,
+    /// The row now shown, for `ml.pump` to keep its pause / resume up to date.
+    current: Arc<Mutex<Option<TaskHandle>>>,
+}
 
 struct ActivityRow(TaskGuard);
 
 impl Rows for ActivityRows {
     fn begin(&self, cancel: Arc<AtomicBool>) -> Box<dyn Row> {
-        Box::new(ActivityRow(self.0.start_batch(ROW_KIND, ROW_LABEL, Cancel::Flag(cancel))))
+        let guard = self.activity.start_batch(ROW_KIND, ROW_LABEL, Cancel::Flag(cancel));
+        guard.set_controls(Some(row_controls(false)));
+        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Some(guard.handle());
+        Box::new(ActivityRow(guard))
     }
 }
 
@@ -613,8 +641,8 @@ impl Session {
     /// The queue, made with `probe` and `config` if it doesn't exist yet (tests pick the GPU this way).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn ml_queue_with(&mut self, config: Config, probe: Probe) -> &Queue<Output> {
-        let activity = self.activity.clone();
-        self.ml.queue.get_or_insert_with(|| Queue::new(config, probe, Some(Arc::new(ActivityRows(activity)) as Arc<dyn Rows>)))
+        let rows = ActivityRows { activity: self.activity.clone(), current: Arc::clone(&self.ml.row) };
+        self.ml.queue.get_or_insert_with(|| Queue::new(config, probe, Some(Arc::new(rows) as Arc<dyn Rows>)))
     }
 
     /// Queue an AI job.
@@ -631,13 +659,23 @@ impl Session {
         self.ml.query_queue.get_or_insert_with(|| Queue::new(Config { preference, ..Config::default() }, probe, None))
     }
 
+    /// Whether semantic search is switched on (Settings ▸ AI Models ▸ Semantic search, `ml.enable`): frontends hide
+    /// their AI search button while it is off.
+    pub fn semantic_search_on(&mut self) -> bool {
+        self.ml_enabled()
+    }
+
     /// Whether background indexing is on, adopting the choice saved in the models folder once per folder (#1133).
     pub(crate) fn ml_enabled(&mut self) -> bool {
         if let Some(dir) = self.ml_models_dir.clone()
             && self.ml.enabled_adopted_dir.as_deref() != Some(dir.as_path())
         {
-            if let Some(saved) = self.ml.cached_settings(&dir).enabled {
-                self.ml.enabled = saved;
+            let saved = self.ml.cached_settings(&dir);
+            if let Some(on) = saved.enabled {
+                self.ml.enabled = on;
+            }
+            if let Some(paused) = saved.paused {
+                self.ml.paused = paused;
             }
             self.ml.enabled_adopted_dir = Some(dir);
         }
@@ -827,8 +865,11 @@ impl Session {
         .collect();
 
         let device_choice = self.ml.chosen_device();
+        let progress = self.ml_progress()?;
         if let Some(obj) = base.as_object_mut() {
             obj.insert("enabled".into(), Value::Bool(self.ml_enabled()));
+            obj.insert("paused".into(), progress["paused"].clone());
+            obj.insert("state".into(), progress["state"].clone());
             obj.insert("modelId".into(), model_id.as_ref().map(|s| Value::String(s.clone())).unwrap_or(Value::Null));
             obj.insert("modelInstalled".into(), Value::Bool(model_id.is_some()));
             obj.insert("indexedPhotos".into(), json!(indexed));
@@ -859,14 +900,114 @@ impl Session {
         }
         if enabled {
             self.ml.paused_by_user = false;
-        } else if let Some(q) = &self.ml.queue {
-            for id in self.ml.in_flight.drain() {
-                q.cancel(&format!("embed:{}", id.0));
-            }
         } else {
-            self.ml.in_flight.clear();
+            if let Some(q) = &self.ml.queue {
+                for id in self.ml.in_flight.drain() {
+                    q.cancel(&format!("embed:{}", id.0));
+                }
+            } else {
+                self.ml.in_flight.clear();
+            }
+            self.ml.paused_row = None;
+            // semantic search is off: a description filter on the grid goes with it
+            if self.filter.semantic.is_some() {
+                let _ = self.apply_semantic_filter(C, None, None, None);
+                self.reconcile_view();
+                self.save_view();
+            }
         }
         Ok(json!({"enabled": self.ml.enabled}))
+    }
+
+    /// `ml.pause` / `ml.resume`: hold background indexing (photos being embedded wait; nothing new starts) or let it go
+    /// on, remembered in the models folder so a paused index stays paused across restarts.
+    pub(crate) fn ml_set_paused(&mut self, cmd: &'static str, paused: bool) -> crate::Result<Value> {
+        self.ml_enabled();
+        self.ml.paused = paused;
+        if let Some(dir) = self.ml_models_dir.clone() {
+            let mut settings = self.ml.cached_settings(&dir);
+            settings.paused = Some(paused);
+            self.ml.save_settings(&dir, settings).map_err(|e| bad(cmd, e))?;
+        }
+        if paused {
+            self.ml.pace.store(Pace::Pause as u8, Ordering::Relaxed);
+        } else {
+            self.ml.paused_by_user = false;
+            self.ml.paused_row = None;
+        }
+        if let Some(row) = self.ml.row.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            row.set_controls(Some(row_controls(paused)));
+        }
+        Ok(json!({"enabled": self.ml.enabled, "paused": self.ml.paused}))
+    }
+
+    /// Drop the library's search index: every photo's embedding (of every model), in memory and on disk. Photos being
+    /// embedded finish, and what they bring back is dropped.
+    fn ml_drop_index(&mut self) {
+        self.ml.epoch = self.ml.epoch.wrapping_add(1);
+        if let Some(store) = &mut self.ml.store {
+            store.retain(|_| false);
+        }
+        self.ml.failed_photos.clear();
+        self.ml.paused_row = None;
+        if let Some(dir) = self.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone())
+            && let Ok(entries) = std::fs::read_dir(&dir)
+        {
+            for e in entries.flatten() {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with("ml-embeddings-") && name.ends_with(".bin") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        // the open model's file comes back empty
+        self.ml.save_store_now();
+        #[cfg(not(target_arch = "wasm32"))]
+        self.refresh_semantic_filter_from_cache();
+    }
+
+    /// `ml.clearIndex`: drop the search index and pause indexing, so it does not start over at once.
+    pub(crate) fn ml_clear_index(&mut self, _p: &Value) -> crate::Result<Value> {
+        self.ml_set_paused("ml.clearIndex", true)?;
+        self.ml_drop_index();
+        self.ml_progress()
+    }
+
+    /// `ml.restart`: drop the search index and index the library again from the start.
+    pub(crate) fn ml_restart(&mut self, _p: &Value) -> crate::Result<Value> {
+        self.ml_set_paused("ml.restart", false)?;
+        self.ml_drop_index();
+        self.ml_progress()
+    }
+
+    /// Where search indexing stands: `off` (semantic search switched off), `paused`, `indexing` (photos left), `complete`
+    /// (none left) or `idle` (no model installed, or not looked at yet), with `done` of `total` photos.
+    pub(crate) fn ml_progress(&mut self) -> crate::Result<Value> {
+        let enabled = self.ml_enabled();
+        let indexed = self.ml.store.as_ref().map_or(0, Store::len);
+        let unindexed = self.unindexed_photo_count();
+        let ready = self.ml.store.is_some() && self.selected_ml_model().is_some();
+        let state = if !enabled {
+            "off"
+        } else if self.ml.paused || self.ml.paused_by_user {
+            "paused"
+        } else if !ready {
+            "idle"
+        } else if unindexed > 0 {
+            "indexing"
+        } else {
+            "complete"
+        };
+        Ok(json!({
+            "enabled": enabled,
+            "paused": self.ml.paused || self.ml.paused_by_user,
+            "state": state,
+            "done": indexed,
+            "total": indexed + unindexed,
+            "indexedPhotos": indexed,
+            "unindexedPhotos": unindexed,
+        }))
     }
 
     /// `ml.models.list {}`.
@@ -1436,7 +1577,9 @@ impl Session {
 
     /// `ml.pump {pace?: pause | light | normal | full}`.
     pub(crate) fn ml_pump(&mut self, p: &Value) -> crate::Result<Value> {
-        let pace = Pace::parse(p.get("pace").and_then(Value::as_str));
+        self.ml_enabled();
+        // paused by the user (`ml.pause`): the photos being embedded wait, nothing new is queued
+        let pace = if self.ml.paused { Pace::Pause } else { Pace::parse(p.get("pace").and_then(Value::as_str)) };
         self.ml.pace.store(pace as u8, Ordering::Relaxed);
         let (added, _) = self.drain_ml_results();
 
@@ -1452,6 +1595,23 @@ impl Session {
         }
         let indexed = self.ml.store.as_ref().map_or(0, Store::len);
         let unindexed = self.unindexed_photo_count();
+        // the queue's row (while it has work) says whether it is paused; with nothing queued, a paused index with photos
+        // left keeps a row of its own, so resume is there
+        let busy = self.ml.queue.as_ref().is_some_and(Queue::busy);
+        if let Some(row) = self.ml.row.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+            row.set_controls(Some(row_controls(self.ml.paused)));
+            if self.ml.paused && busy {
+                row.detail("Paused");
+            }
+        }
+        if self.ml.paused && ready && unindexed > 0 && !busy {
+            let row = self.ml.paused_row.get_or_insert_with(|| self.activity.start(ROW_KIND, ROW_LABEL, Cancel::No));
+            row.progress(indexed as u64, (indexed + unindexed) as u64);
+            row.detail("Paused");
+            row.set_controls(Some(row_controls(true)));
+        } else {
+            self.ml.paused_row = None;
+        }
         let in_flight = self.ml.in_flight.len();
         let (pending, running, done, failed) = match &self.ml.queue {
             Some(q) => {
@@ -1460,12 +1620,12 @@ impl Session {
             }
             None => (0, None, 0, 0),
         };
-        let active = ready && self.ml.enabled && !self.ml.paused_by_user;
+        let active = ready && self.ml.enabled && !self.ml.paused_by_user && !self.ml.paused;
         Ok(json!({
             "active": active,
             "ready": ready,
             "enabled": self.ml.enabled,
-            "paused": self.ml.paused_by_user,
+            "paused": self.ml.paused_by_user || self.ml.paused,
             "added": added,
             "indexedPhotos": indexed,
             "unindexedPhotos": unindexed,
@@ -1608,6 +1768,9 @@ impl Session {
             self.ml.last_query = None;
             return Ok(Vec::new());
         };
+        if !self.ml_enabled() {
+            return Err(bad(cmd_name, "semantic search is off (Settings ▸ AI Models ▸ Semantic search)"));
+        }
         let top_k = top_k.unwrap_or(DEFAULT_FILTER_TOP_K);
         let threshold = threshold.unwrap_or(DEFAULT_FILTER_THRESHOLD);
         if cmd_name != "search.semantic" && self.selected_ml_model().is_none() {
@@ -1660,6 +1823,9 @@ impl Session {
         }
         if raw_text.is_empty() {
             return Err(bad(C, "missing non-empty `text` query"));
+        }
+        if !self.ml_enabled() {
+            return Err(bad(C, "semantic search is off (Settings ▸ AI Models ▸ Semantic search)"));
         }
         let text = raw_text.to_string();
         let top_k = match p.get("topK").or_else(|| p.get("limit")) {

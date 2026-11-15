@@ -99,7 +99,8 @@ fn err(e: ImmichError) -> PublishError {
     }
 }
 
-fn mime_of(name: &str) -> &'static str {
+/// The media type an upload of a file called `name` is sent as.
+pub fn mime_of(name: &str) -> &'static str {
     let ext = name.rsplit('.').next().unwrap_or_default().to_ascii_lowercase();
     match ext.as_str() {
         "jpg" | "jpeg" => "image/jpeg",

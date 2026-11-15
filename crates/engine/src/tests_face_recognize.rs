@@ -24,7 +24,7 @@ pub(crate) fn setup(d: &std::path::Path, dim: u64) -> (Session, String) {
     s.face_models_dir = Some(d.join("models"));
     let model = d.join(format!("tiny{dim}.onnx"));
     std::fs::write(&model, lcc_faces::synthetic::tiny_embedder_model(dim)).unwrap();
-    let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+    let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true, "enable": true})).unwrap();
     let id = r["installed"]["id"].as_str().unwrap().to_string();
     s.execute("faces.models.select", &json!({"id": id})).unwrap();
     (s, id)
@@ -232,7 +232,7 @@ fn embeddings_are_cached_beside_the_library_and_reset_for_another_model() {
     let install = |s: &mut Session, dim: u64| -> String {
         let model = d.join(format!("tiny{dim}.onnx"));
         std::fs::write(&model, lcc_faces::synthetic::tiny_embedder_model(dim)).unwrap();
-        let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+        let r = s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true, "enable": true})).unwrap();
         let id = r["installed"]["id"].as_str().unwrap().to_string();
         s.execute("faces.models.select", &json!({"id": id})).unwrap();
         id
@@ -314,6 +314,63 @@ fn the_background_pump_indexes_by_itself_once_recognition_is_on() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// Pump until the index holds `faces` faces (or a minute passes); the last status.
+fn pump_until(s: &mut Session, faces: usize) -> Value {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while std::time::Instant::now() < deadline && s.faces.index.len() < faces {
+        s.execute("faces.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    s.execute("faces.pump", &json!({"pace": "full"})).unwrap();
+    s.execute("faces.status", &json!({})).unwrap()
+}
+
+/// The scan pauses (and stays paused: it is saved), its row then offering resume and Settings ▸ Faces; it resumes
+/// through the row; Clear empties the index and leaves the scan paused; Restart scans everything again.
+#[test]
+fn the_face_scan_pauses_resumes_clears_and_restarts() {
+    let d = temp("pause");
+    let (mut s, _) = setup(&d, 64);
+    let (a, b) = two_photos(&s);
+    set_regions(&mut s, a, vec![region(0.1, Some("Ann")), region(0.5, None)]);
+    set_regions(&mut s, b, vec![region(0.3, None)]);
+    assert_eq!(s.execute("faces.pause", &json!({})).unwrap()["paused"], true);
+    for _ in 0..30 {
+        s.execute("faces.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(s.faces.index.len(), 0, "nothing is embedded while paused");
+    let st = s.execute("faces.status", &json!({})).unwrap();
+    assert_eq!((st["state"].clone(), st["paused"].clone(), st["done"].clone()), (json!("paused"), json!(true), json!(0)), "{st}");
+    assert!(st["total"].as_u64().unwrap() > 0, "{st}");
+    // the pause is saved: a session started now is paused too
+    assert_eq!(s.execute("faces.models.list", &json!({})).unwrap()["paused"], true);
+    // the row stays while paused, with resume and the gear's page
+    let rows: Vec<_> = s.activity.list().into_iter().filter(|t| t.kind == "faces").collect();
+    assert_eq!(rows.len(), 1);
+    let c = rows[0].controls.clone().expect("the scan's row has controls");
+    assert!(c.paused);
+    assert_eq!((c.pause, c.resume, c.settings_tab), ("faces.pause", "faces.resume", "faces"));
+    // resumed through the row, as its button does
+    s.execute("activity.pause", &json!({"id": rows[0].id, "paused": false})).unwrap();
+    let st = pump_until(&mut s, 3);
+    assert_eq!((st["state"].clone(), st["indexedFaces"].clone()), (json!("complete"), json!(3)), "{st}");
+    // Clear: the index is empty and the scan stays paused, however long it is pumped
+    let st = s.execute("faces.clearIndex", &json!({})).unwrap();
+    assert_eq!((st["paused"].clone(), st["indexedFaces"].clone(), st["searchedPhotos"].clone()), (json!(true), json!(0), json!(0)), "{st}");
+    for _ in 0..30 {
+        s.execute("faces.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(s.faces.index.len(), 0);
+    assert!(s.catalog.photo(a).unwrap().meta.regions.iter().any(|r| r.name.as_deref() == Some("Ann")), "named faces stay");
+    // Restart: everything is scanned again
+    assert_eq!(s.execute("faces.restart", &json!({})).unwrap()["paused"], false);
+    let st = pump_until(&mut s, 3);
+    assert_eq!(st["indexedFaces"], 3, "{st}");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 #[test]
 fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
     let d = temp("pumpsave");
@@ -324,7 +381,7 @@ fn the_background_pump_saves_what_it_embeds_for_the_next_launch() {
     let model = d.join("tiny64.onnx");
     std::fs::write(&model, lcc_faces::synthetic::tiny_embedder_model(64)).unwrap();
     // installing switches recognition on: nothing else is asked for
-    s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true})).unwrap();
+    s.execute("faces.models.install", &json!({"path": model.to_string_lossy(), "acknowledged": true, "enable": true})).unwrap();
     // without the detector (not bundled) photos without faces are left unsearched
     let searching = install_face_model(&mut s);
     let (a, b) = two_photos(&s);

@@ -59,8 +59,17 @@ embedding cache store.
 - commands:
   - `ml.status {preference?: auto | cpu}`: reports device status, queue counts, `enabled`, `modelId`, `modelInstalled`,
     `indexedPhotos`, and `unindexedPhotos`;
-  - `ml.enable {enabled: bool}`: enables or pauses background ML indexing; the choice is saved in the models folder's
-    `settings.json` and kept across launches;
+  - `ml.enable {enabled: bool}`: switches semantic search on or off (Settings ▸ AI Models ▸ Semantic search; on unless
+    switched off). Off: nothing is indexed, `search.semantic` and `library.filter {semantic}` are refused, an active
+    description filter is cleared and the search box loses its **AI** button; the index already made is kept. The choice
+    is saved in the models folder's `settings.json` and kept across launches;
+  - `ml.indexStatus`, `ml.pause`, `ml.resume`, `ml.clearIndex`, `ml.restart`: where indexing stands (`state`: `off`,
+    `idle`, `indexing`, `paused`, `complete`, with `done` of `total` photos), pausing it (saved as `paused` in
+    `settings.json`, so it stays paused across launches; queued photos wait on the pace, nothing new is queued), resuming
+    it, deleting this library's `ml-embeddings-*.bin` (leaving indexing paused) and deleting them and indexing again. The
+    "Indexing photos" row carries `controls` (`activity.list`): a pause button and a gear that opens Settings ▸ AI Models
+    at its Semantic search section (`app.settings {section: "semanticSearch"}`); while paused with nothing queued, a row
+    of its own stays so resume is there;
   - `ml.models.list`, `ml.models.install`, `ml.models.select`, `ml.models.remove`, `ml.models.download`,
     `ml.models.downloads`, `ml.models.downloadCancel`: manage installed and downloadable ML models behind explicit
     licence acknowledgement;

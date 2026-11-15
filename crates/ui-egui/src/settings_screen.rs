@@ -1,8 +1,10 @@
-//! Settings (fork-owned). In the Classic layout on a window at least [`ROOMY`] points wide it is a
-//! window with one row of tabs, one tab's settings at a time (OneSlips, LR-PREF-WINDOW:
-//! [`crate::panels::settings::body`]). In the Modern layout and on a narrow window it is a
-//! full-window sheet with an icon rail of sections down its left side and the open section's rows
-//! beside it:
+//! Settings (fork-owned). In the Classic and Compact layouts on a window at least [`ROOMY`] points
+//! wide it is a window of normal size showing one category's settings at a time (OneSlips,
+//! LR-PREF-WINDOW), its categories listed as Settings ▸ General ▸ Settings Categories says
+//! ([`categories`]): down its left side (Classic's default) or in one row of tabs along its top
+//! (Compact's default, [`crate::panels::settings::body`]). In the Modern layout and on a narrow
+//! window it is a full-window sheet with an icon rail of sections down its left side and the open
+//! section's rows beside it:
 //!
 //! - With room (a window at least [`ROOMY`] points wide: desktops, tablets) the rail always shows
 //!   each section's name and a search field; Back (the ‹ button, Esc, Android's Back) closes
@@ -23,7 +25,7 @@ use egui::{Align2, Color32, Id, Rect, Sense, Stroke, Vec2, pos2, vec2};
 
 use crate::LccApp;
 use crate::icons::{Icon, paint};
-use crate::state::Dialog;
+use crate::state::{Dialog, SettingsCategories};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -37,6 +39,10 @@ const HEADER_H: f32 = 56.0;
 const RAIL_WIDE: f32 = 220.0;
 const RAIL_NARROW: f32 = 60.0;
 const ITEM_H: f32 = 44.0;
+/// The category list's width in the Settings window (Settings Categories: Left).
+const LIST_W: f32 = 190.0;
+/// A category's height in that list: a mouse's, not a finger's.
+const LIST_ITEM_H: f32 = 28.0;
 /// The Settings window's margin inside its frame.
 const WINDOW_PAD: f32 = 16.0;
 /// The rows' widest, so a large window doesn't stretch them.
@@ -86,6 +92,13 @@ const SECTIONS: &[Section] = &[
     Section { key: "slideshow", label: "Slideshow", icon: Icon::Slideshow, tabs: &["slideshow"], words: "slide duration fade playback export" },
     Section { key: "faces", label: "Faces", icon: Icon::FaceBox, tabs: &["faces"], words: "faces people recognition" },
     Section { key: "profiles", label: "Profiles", icon: Icon::ProfileGrid, tabs: &["profiles"], words: "profiles hide camera body serial" },
+    Section {
+        key: "develop",
+        label: "Develop",
+        icon: Icon::Sliders,
+        tabs: &["develop"],
+        words: "develop tool profiles tools sliders groups custom hide panel witchcraft eboda",
+    },
     Section { key: "denoise", label: "AI Denoise", icon: Icon::Sparkle, tabs: &["denoise"], words: "ai denoise" },
     Section {
         key: "ai",
@@ -110,8 +123,58 @@ const SECTIONS: &[Section] = &[
         words: "control surfaces hardware console dial dials knob keys keypad dialpad actions ring logi logitech mx creative loupedeck tactilebridge plugin pairing",
     },
     Section { key: "connections", label: "Connections", icon: Icon::Share, tabs: &["connections"], words: "connections keychain" },
-    Section { key: "sync", label: "Sync", icon: Icon::Cloud, tabs: &["sync"], words: "devices peers immich server api key" },
+    Section { key: "sync", label: "Sync", icon: Icon::Cloud, tabs: &["sync"], words: "devices peers pair pairing catalog collections share network" },
 ];
+
+/// How Settings is drawn ([`presentation`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Presentation {
+    /// Over the whole window, the sections down its left side, finger-sized: the Modern layout,
+    /// and every layout on a window narrower than [`ROOMY`].
+    Sheet,
+    /// A window of normal size with its categories in a list down its left side.
+    WindowLeft,
+    /// A window of normal size with its categories in one row of tabs along its top.
+    WindowTop,
+}
+
+/// Where the Settings window lists its categories in the layout drawn now (Settings ▸ General ▸
+/// Settings Categories): by default down the left in Classic, along the top in Compact. `None` in
+/// the Modern layout, which always lists them down the left of its full-window sheet.
+pub fn categories(app: &LccApp) -> Option<SettingsCategories> {
+    if crate::modern::on(app) {
+        return None;
+    }
+    let s = &app.ui.settings;
+    Some(if app.compact() {
+        s.settings_categories_compact.unwrap_or(SettingsCategories::Top)
+    } else {
+        s.settings_categories_classic.unwrap_or(SettingsCategories::Left)
+    })
+}
+
+/// Keep `c` as where the Settings window lists its categories in the layout drawn now (Classic or
+/// Compact each keep their own); nothing in the Modern layout, which has no choice.
+pub fn set_categories(app: &mut LccApp, c: SettingsCategories) {
+    if crate::modern::on(app) {
+        return;
+    }
+    if app.compact() {
+        app.ui.settings.settings_categories_compact = Some(c);
+    } else {
+        app.ui.settings.settings_categories_classic = Some(c);
+    }
+}
+
+/// How Settings is drawn on a window `width` points wide in the layout drawn now.
+pub fn presentation(app: &LccApp, width: f32) -> Presentation {
+    match categories(app) {
+        Some(_) if width < ROOMY => Presentation::Sheet,
+        Some(SettingsCategories::Left) => Presentation::WindowLeft,
+        Some(SettingsCategories::Top) => Presentation::WindowTop,
+        None => Presentation::Sheet,
+    }
+}
 
 /// Settings' own state between frames (kept in `LccApp::modern_sheets`).
 #[derive(Default)]
@@ -206,10 +269,12 @@ fn close(app: &mut LccApp) {
 pub(crate) fn show(app: &mut LccApp, ctx: &egui::Context) {
     let Some(Dialog::Settings { tab }) = app.ui.dialog.clone() else { return };
     let screen = ctx.content_rect();
-    // the Classic layout with room: a window with one row of tabs (OneSlips, LR-PREF-WINDOW)
-    if screen.width() >= ROOMY && !crate::modern::on(app) {
-        window(app, ctx, &tab);
-        return;
+    // the Classic and Compact layouts with room: a window, its categories down its left side or
+    // in one row of tabs along its top (OneSlips, LR-PREF-WINDOW)
+    match presentation(app, screen.width()) {
+        Presentation::WindowLeft => return window(app, ctx, &tab, true),
+        Presentation::WindowTop => return window(app, ctx, &tab, false),
+        Presentation::Sheet => {}
     }
     let open = section_of(&tab).to_string();
     let roomy = screen.width() >= ROOMY;
@@ -285,7 +350,7 @@ pub(crate) fn show(app: &mut LccApp, ctx: &egui::Context) {
             RAIL_NARROW
         };
         let rail = Rect::from_min_size(body.min, vec2(rail_w, body.height()));
-        picked = rail_ui(app, ui, rail, &open, names).or(picked_by_key);
+        picked = rail_ui(app, ui, rail, &open, names, false).or(picked_by_key);
         ui.painter().vline(rail.right(), body.y_range(), Stroke::new(1.0, t.divider));
         let content = Rect::from_min_max(pos2(rail.right() + 1.0, body.top()), body.max);
         if !(wide && !roomy) {
@@ -323,12 +388,13 @@ pub(crate) fn show(app: &mut LccApp, ctx: &egui::Context) {
     }
 }
 
-/// Settings as a window (the Classic layout on a window at least [`ROOMY`] wide; OneSlips,
-/// LR-PREF-WINDOW): one row of tabs, a tab's settings in a page that scrolls inside the window,
-/// and Close (`settings:back`). It opens at the size it was left at (`settingsSize` in `ui.json`)
-/// and on the tab shown last, can be resized from its edges, and keeps its size and place
-/// whatever the tab. Esc closes it.
-fn window(app: &mut LccApp, ctx: &egui::Context, asked: &str) {
+/// Settings as a window (the Classic and Compact layouts on a window at least [`ROOMY`] wide;
+/// OneSlips, LR-PREF-WINDOW): the categories in a list down its left side (`left`) or in one row
+/// of tabs, a category's settings in a page that scrolls inside the window, and Close
+/// (`settings:back`). It opens at the size it was left at (`settingsSize` in `ui.json`) and on the
+/// category shown last, can be resized from its edges, and keeps its size and place whatever the
+/// category. Esc closes it.
+fn window(app: &mut LccApp, ctx: &egui::Context, asked: &str, left: bool) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
     let mut tab = crate::panels::settings::window_tab(asked).to_string();
@@ -342,7 +408,7 @@ fn window(app: &mut LccApp, ctx: &egui::Context, asked: &str) {
     });
     // (the sizes are the content's, inside the frame's margin)
     // (at least as wide as the row of tabs, so none is under More until the user narrows it)
-    let tabs_w = crate::panels::settings::tab_row_width(ctx);
+    let tabs_w = if left { 0.0 } else { crate::panels::settings::tab_row_width(ctx) };
     let size = crate::panels::settings::window_size(screen.shrink(WINDOW_PAD), app.ui.settings.settings_size, tabs_w);
     let frame = egui::Frame::window(&ctx.global_style())
         .inner_margin(egui::Margin::same(WINDOW_PAD as i8))
@@ -374,7 +440,11 @@ fn window(app: &mut LccApp, ctx: &egui::Context, asked: &str) {
             });
             // under the page: a gap and the Close button's row
             let footer = 2.0 * ui.spacing().item_spacing.y + ui.spacing().interact_size.y + 6.0;
-            crate::panels::settings::body(app, ui, &mut tab, footer);
+            if left {
+                listed_body(app, ui, &mut tab, footer);
+            } else {
+                crate::panels::settings::body(app, ui, &mut tab, footer);
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::button::Button::new("Close").widget("settings:back").min_width(72.0).show(ui).clicked() {
                     closing = true;
@@ -408,11 +478,67 @@ fn window(app: &mut LccApp, ctx: &egui::Context, asked: &str) {
     }
 }
 
+/// The Settings window's body with its categories listed down the left (Settings Categories:
+/// Left): the list (and its search field) beside the open category's page, which scrolls inside
+/// the window (`settings:rows`). The list's buttons answer to the tab row's ids too
+/// (`button:settingsTab-{id}`). Ctrl+Tab / Ctrl+Page Down: the next category; Ctrl+Shift+Tab /
+/// Ctrl+Page Up: the one before. `footer` is the room to leave under it for the Close button.
+fn listed_body(app: &mut LccApp, ui: &mut egui::Ui, tab: &mut String, footer: f32) {
+    let t = Tokens::get(ui.ctx());
+    let ctx = ui.ctx().clone();
+    let full = ui.available_size();
+    let rect = Rect::from_min_size(ui.cursor().min, vec2(full.x.max(1.0), (full.y - footer).max(80.0)));
+    // the list and the page draw in children of exactly this size: what they hold can't widen or
+    // heighten the window
+    ui.advance_cursor_after_rect(rect);
+    let before = tab.clone();
+    let open = section_of(tab);
+    let back_key = ctrl_key(&ctx, egui::Key::Tab, true) || ctrl_key(&ctx, egui::Key::PageUp, false);
+    let next_key = !back_key && (ctrl_key(&ctx, egui::Key::Tab, false) || ctrl_key(&ctx, egui::Key::PageDown, false));
+    let mut picked = if back_key || next_key { step_section(app, open, if back_key { -1 } else { 1 }) } else { None };
+    // a category wider than the room beside the named list (Slideshow's settings and preview)
+    // takes the names' room: the list shows icons
+    let cramped = open == "slideshow" && rect.width() - LIST_W < crate::panels::settings::SLIDESHOW_W + 80.0;
+    let list_w = if cramped { LIST_ITEM_H + 8.0 } else { LIST_W.min(rect.width() * 0.4) };
+    let list = Rect::from_min_size(rect.min, vec2(list_w, rect.height()));
+    picked = rail_ui(app, ui, list, open, !cramped, true).or(picked);
+    ui.painter().vline(list.right(), rect.y_range(), Stroke::new(1.0, t.divider));
+    if let Some(p) = picked {
+        *tab = p.to_string();
+    }
+    if before == "performance" && *tab != before {
+        crate::panels::settings::save_pending_cache_size(app, &ctx);
+    }
+    let page = Rect::from_min_max(pos2(list.right() + 12.0, rect.top()), rect.max);
+    let mut frame =
+        ui.new_child(egui::UiBuilder::new().id_salt("settingsListedPage").max_rect(page).layout(egui::Layout::top_down(egui::Align::Min)));
+    frame.set_clip_rect(page.intersect(ui.clip_rect()));
+    // (the page's room: where a pointer scrolls it)
+    register(&ctx, "settings:rows", page);
+    // a page that goes on below shows its scroll handle all the time (as the tabbed window's)
+    frame.spacing_mut().scroll.dormant_handle_opacity = 0.6;
+    let shown = section_of(tab);
+    egui::ScrollArea::both().id_salt(("settingsTab", shown)).auto_shrink([false, false]).show(&mut frame, |ui| {
+        // room for the vertical scroll bar, so it never covers a control
+        ui.set_max_width((ui.available_width() - 12.0).max(120.0));
+        crate::dialog_frame::plain_form(ui, crate::panels::settings::LABEL_W, |ui| {
+            crate::dialog_frame::group_begin(ui, None);
+            crate::panels::settings::tab_body(app, ui, &t, shown);
+        });
+        register(ui.ctx(), "settings:page", ui.min_rect());
+        ui.add_space(8.0);
+    });
+}
+
 /// The rail: the search field (when wide) and a button per section. Returns the one picked.
-fn rail_ui(app: &mut LccApp, ui: &mut egui::Ui, rail: Rect, open: &str, wide: bool) -> Option<&'static str> {
+/// `dense`: the Settings window's list (mouse-sized rows in the theme's colours), not the
+/// full-window sheet's finger-sized rail.
+fn rail_ui(app: &mut LccApp, ui: &mut egui::Ui, rail: Rect, open: &str, wide: bool, dense: bool) -> Option<&'static str> {
     let t = Tokens::get(ui.ctx());
     let mut picked = None;
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(vec2(8.0, 10.0))));
+    let (item_h, radius, icon, text) = if dense { (LIST_ITEM_H, 6.0, 16.0, 13.0) } else { (ITEM_H, 12.0, 20.0, 14.0) };
+    let inset = if dense { vec2(0.0, 0.0) } else { vec2(8.0, 10.0) };
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rail.shrink2(inset)));
     egui::ScrollArea::vertical().id_salt("settings-rail").auto_shrink([false, false]).show(&mut child, |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         let query = app.modern_sheets.settings.search.trim().to_lowercase();
@@ -428,7 +554,7 @@ fn rail_ui(app: &mut LccApp, ui: &mut egui::Ui, rail: Rect, open: &str, wide: bo
             if wide && !matches {
                 continue;
             }
-            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ITEM_H), Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width() - if dense { 8.0 } else { 0.0 }, item_h), Sense::click());
             let name = crate::i18n::tr(s.label);
             let on = s.key == open;
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, name));
@@ -439,17 +565,25 @@ fn rail_ui(app: &mut LccApp, ui: &mut egui::Ui, rail: Rect, open: &str, wide: bo
             }
             let resp = if wide { resp } else { resp.on_hover_text(name) };
             let p = ui.painter();
-            if on {
-                p.rect_filled(r, 12.0, Color32::from_white_alpha(30));
-                p.rect_stroke(r, 12.0, Stroke::new(1.0, Color32::from_white_alpha(24)), egui::StrokeKind::Inside);
+            if dense {
+                if on {
+                    p.rect_filled(r, radius, t.pressed);
+                } else if resp.hovered() || resp.is_pointer_button_down_on() {
+                    p.rect_filled(r, radius, t.hover);
+                }
+            } else if on {
+                p.rect_filled(r, radius, Color32::from_white_alpha(30));
+                p.rect_stroke(r, radius, Stroke::new(1.0, Color32::from_white_alpha(24)), egui::StrokeKind::Inside);
             } else if resp.hovered() || resp.is_pointer_button_down_on() {
-                p.rect_filled(r, 12.0, Color32::from_white_alpha(14));
+                p.rect_filled(r, radius, Color32::from_white_alpha(14));
             }
             let c = if on { t.accent } else { t.text_label };
-            let icon_at = if wide { pos2(r.left() + 22.0, r.center().y) } else { r.center() };
-            paint(p, Rect::from_center_size(icon_at, Vec2::splat(20.0)), s.icon, c);
+            let icon_x = if dense { 16.0 } else { 22.0 };
+            let icon_at = if wide { pos2(r.left() + icon_x, r.center().y) } else { r.center() };
+            paint(p, Rect::from_center_size(icon_at, Vec2::splat(icon)), s.icon, c);
             if wide {
-                p.text(pos2(r.left() + 44.0, r.center().y), Align2::LEFT_CENTER, name, t.font(14.0), if on { t.text } else { t.text_label });
+                let x = r.left() + icon_x + icon / 2.0 + 10.0;
+                p.text(pos2(x, r.center().y), Align2::LEFT_CENTER, name, t.font(text), if on { t.text } else { t.text_label });
             }
             if resp.clicked() {
                 picked = Some(s.key);

@@ -164,16 +164,16 @@ fn compact_edit_panel_rows_columns_and_tools_line_up() {
     let mut h = develop_at(true);
     // compact starts with basic and its treatment row
     // LAYOUT-DENSE (OneSlips' 23e2bec5c, 703ccb4f9): Compact has no "Edit" header above the sections:
-    // Basic's banded header comes first, and Auto · B&W | HDR, the profile row and white balance are
-    // its first rows. Classic keeps them above Basic.
+    // Basic's banded header comes first (under the tool profile's row), and Auto · B&W | HDR and white balance
+    // are its first rows; Browse Profiles is in the tool row above the panels, as in Classic.
     {
         let basic = rect(&h, "section:light").expect("Basic");
         let auto = button(&h, "auto").expect("Auto");
-        let profile = button(&h, "profileBrowser").expect("the profile row");
+        let profile = button(&h, "profileBrowser").expect("Browse Profiles");
         assert!(auto.top() >= basic.bottom() - 0.5, "Auto {auto:?} is inside Basic {basic:?}");
-        assert!(profile.top() >= auto.bottom() - 0.5, "the profile row {profile:?} under Auto {auto:?}");
+        assert!(profile.bottom() <= basic.top() + 0.5, "Browse Profiles {profile:?} is above Basic {basic:?}");
         let wb = button(&h, "wbPicker").expect("the white balance selector");
-        assert!(wb.top() >= profile.bottom() - 0.5, "white balance {wb:?} under the profile {profile:?}");
+        assert!(wb.top() >= auto.bottom() - 0.5, "white balance {wb:?} under Auto {auto:?}");
     }
     // compact treatment buttons share one right aligned row
     // Auto, B&W and HDR stand on one row, right-aligned on the rows' right margin.
@@ -240,7 +240,7 @@ fn compact_edit_panel_rows_columns_and_tools_line_up() {
     // The tool row (OneSlips' fe1eb033d): in Compact every tool and Reset share one evenly spaced row
     // under the histogram, and Reset resets the photo; Classic's row has no Reset of its own.
     {
-        let ids = ["toolsEdit", "crop", "remove", "redeye", "masking", "toolsReset"];
+        let ids = ["toolsEdit", "crop", "remove", "redeye", "masking", "profileBrowser", "toolsReset"];
         let rects: Vec<egui::Rect> = ids.iter().map(|id| button(&h, id).unwrap_or_else(|| panic!("{id}"))).collect();
         let step = rects[1].center().x - rects[0].center().x;
         for pair in rects.windows(2) {
@@ -256,14 +256,14 @@ fn compact_edit_panel_rows_columns_and_tools_line_up() {
     }
 }
 
-/// Classic's Edit panel is as it was without Compact: Auto · B&W | HDR above Basic, the boxed sub-tool row as tall
+/// Classic's Edit panel is as it was without Compact (Auto · B&W | HDR at the top of Basic, as there), the boxed sub-tool row as tall
 /// as a section header, no Original Photo box under the histogram and no Reset in the tool row.
 #[test]
 fn classic_keeps_its_edit_panel_layout() {
     let classic = develop_at(false);
     let basic = rect(&classic, "section:light").expect("Basic");
     let auto = button(&classic, "auto").expect("Auto");
-    assert!(auto.bottom() <= basic.top() + 0.5, "Classic: Auto {auto:?} above Basic {basic:?}");
+    assert!(auto.top() >= basic.bottom() - 0.5, "Classic too: Auto {auto:?} inside Basic {basic:?} (no Edit line above it)");
     let (sec, fly) = (rect(&classic, "section:optics").expect("Lens Corrections"), rect(&classic, "flyout:defringe").expect("Defringe"));
     assert!(fly.height() >= sec.height() - 10.0, "Classic keeps its boxed sub-tool row: {fly:?} vs {sec:?}");
     assert!(rect(&classic, "check:originalPhoto").is_none(), "Classic's histogram is as it was");

@@ -36,7 +36,8 @@ pub(super) fn row(app: &mut LccApp, ui: &mut egui::Ui) {
     let width = ui.available_width();
     // Compact: every tool and Reset share the row's width evenly, one row (LAYOUT-DENSE)
     let dense = crate::theme::compact(ui.ctx());
-    let count = tools.len() + 1 + usize::from(dense);
+    // (Edit, the tools, Browse Profiles, and Compact's Reset)
+    let count = tools.len() + 2 + usize::from(dense);
     let (row_h, button_w, gap) = if dense {
         let gap = 2.0;
         let room = width - crate::widgets::PAD_L - crate::widgets::PAD_R + 8.0;
@@ -75,6 +76,23 @@ pub(super) fn row(app: &mut LccApp, ui: &mut egui::Ui) {
             }
             // the strip's header menu: show/hide, solo, hiding mode
             crate::panels::classic::side_menu(app, &resp, crate::panels::strip::strip_declared(ModuleId::Develop));
+        }
+        // Browse Profiles, after the tools: the profile browser in the panels' place (a second click puts it away)
+        let on = app.ui.right == RightPanel::Profiles;
+        let sc = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "panel.profiles");
+        let tip = crate::widgets::command_tooltip(ui, "Browse Profiles", sc);
+        let resp = icon_button_named(
+            ui,
+            "profileBrowser",
+            Icon::ProfileGrid,
+            vec2(button_w, row_h - 4.0),
+            on,
+            has_photo,
+            crate::i18n::tr("Browse Profiles"),
+            &tip,
+        );
+        if resp.clicked() {
+            let _ = app.run(if on { "panel.edit" } else { "panel.profiles" }, json!({}));
         }
         if dense {
             // Reset, last in the row (the bar under the panels keeps its own)

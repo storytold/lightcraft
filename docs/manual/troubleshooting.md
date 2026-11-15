@@ -45,6 +45,9 @@ Library → Validate DNG Files checks the selected DNGs' raw data against their 
 
 ## The catalog won't open
 
+- After an update the app first shows *Opening your catalog* while it makes and checks a safety copy of the
+  catalog (the progress bar moves by the copy's bytes); on a large catalog this takes a little while and is
+  normal, not a hang. A catalog that still can't be opened ends at the usual window offering Try Again.
 - "This library is already open in …": another running program holds the library's lock (the message names the
   process and computer). Close it there. A `catalog.lock` file left by a crash doesn't block anything: the
   operating system releases the lock when the process ends.
@@ -69,6 +72,10 @@ download it for this system and install it; the app restarts afterwards. Things 
   the releases page instead, and tell the project.
 - "This build can't verify updates": the build was made without an update key (a fork or a build from
   source). It still tells you when a new version is out; download it from the releases page.
+- An update installed through the Windows installer (`.msi`): the app quits, the installer runs and
+  the app starts again when it is done. When the installer wants a Windows restart as part of it
+  (rare), the app starts after that restart instead. Start-menu shortcuts — and taskbar entries
+  pinned from them — keep working across updates.
 - A Windows copy unpacked from the portable zip (with or without `portable.txt`) updates itself: the new zip is
   unpacked beside the program, its files replace the copy's own, and the new version starts once the app has quit.
   Only the zip's files are replaced; `portable.txt`, the portable data folder and anything else you put there stay.

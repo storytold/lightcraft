@@ -1,4 +1,4 @@
-//! The Edit panel at its narrowest with a long profile applied: the profile row fits (#1759).
+//! The Edit panel at its narrowest with a long profile applied: every row fits (#1759).
 
 use egui::{Rect, vec2};
 use serde_json::json;
@@ -53,12 +53,14 @@ fn a_long_profile_name_leaves_the_edit_panel_its_width() {
     let width = crate::state::RIGHT_WIDTH.min;
     let (texts, widgets) = panel(width);
     let rect = |id: &str| widgets.iter().find(|(w, _)| w == id).unwrap_or_else(|| panic!("{id} not drawn")).1;
-    let dropdown = rect("dropdown:profile");
-    let browse = rect("icon:profileBrowser");
-    assert!(dropdown.right() <= browse.left(), "the profile menu {dropdown:?} runs into Browse Profiles {browse:?}");
-    let name = texts.iter().find(|t| t.galley.job.text == LONG_NAME).unwrap();
-    assert!(name.galley.elided, "a name wider than the row is cut short");
-    assert!(name.visual_bounding_rect().right() <= dropdown.right(), "the name leaves its menu");
+    // no profile row any more (Browse Profiles is in the tool row above the panels): the tool profile's row instead,
+    // its menu clear of the gear and both inside the panel
+    assert!(!widgets.iter().any(|(w, _)| w == "dropdown:profile"), "the profile row is gone");
+    assert!(!texts.iter().any(|t| t.galley.job.text == LONG_NAME), "the profile's name isn't a row of the panel");
+    let menu = rect("dropdown:toolProfile");
+    let gear = rect("icon:toolProfileSettings");
+    assert!(menu.right() <= gear.left(), "the tool profile menu {menu:?} runs into its gear {gear:?}");
+    assert!(gear.right() <= width, "the gear {gear:?} is cut off by the {width} pt panel");
     // every slider drawn, from the profile's Amount down
     rect("sliderValue:profile.amount");
     rect("sliderValue:light.exposure");

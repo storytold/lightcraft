@@ -140,7 +140,11 @@ fn watch_collect(app: &mut LccApp, ctx: &egui::Context) {
     };
     app.pending_camera_roll_watch = None;
     match answer {
-        Ok(paths) => import_new(app, paths),
+        Ok(paths) => {
+            // device sync's camera-roll collection learns where the platform keeps the roll
+            let _ = app.session.execute("sync.cameraRollSeen", &serde_json::json!({"paths": paths.iter().take(16).collect::<Vec<_>>()}));
+            import_new(app, paths)
+        }
         // a watch that can't read the roll says so in the log, not in a toast every few minutes
         Err(e) => log::warn!("camera roll watch: {e}"),
     }

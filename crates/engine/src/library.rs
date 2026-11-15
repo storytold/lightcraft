@@ -52,6 +52,21 @@ pub fn migrate_library(dir: &Path) -> Result<bool> {
     Ok(lcc_catalog::library::migrate(dir)?)
 }
 
+/// Prepare the library in `dir` for opening without a session, so a frontend can run it on a
+/// worker thread and show [`migration_progress`] while its window is up: the v3 → v4 migration
+/// ([`migrate_library`]), or a v4 store's format bump — the byte-verified backup copy after an
+/// update, which over a store of gigabytes is most of the wait. [`Session::open_library`]
+/// afterwards finds the current format and is quick. The library is locked meanwhile (another
+/// process using it: `LibraryInUse`). `Ok(true)` when something was upgraded.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn prepare_library(dir: &Path) -> Result<bool> {
+    if needs_migration(dir) {
+        return migrate_library(dir);
+    }
+    let _lock = LibraryLock::acquire(dir, &program_name()).map_err(|e| EngineError::LibraryInUse(e.to_string()))?;
+    Ok(lcc_catalog::library::prepare_upgrade(dir)?)
+}
+
 /// The library folder `path` names. A library is a folder; naming one of its own files
 /// (`catalog.snap`, `catalog.log`, `catalog.lock`) means the folder that holds it. Any other
 /// existing file is an error that says so, instead of the OS's "File exists" from creating the
@@ -1147,6 +1162,9 @@ impl Session {
         // the automatic sidecar writes and ML embeddings still queued are saved before the library goes
         self.flush_sidecar_writes();
         self.ml.save_store_now();
+        // the device-sync replica of this catalogue is written now, not on the next tick
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::device_sync::flush(self);
         let persisted = self.persist();
         // a presets.json save on its way finishes first (it is this library's), and a failed one
         // is made here, in the close

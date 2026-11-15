@@ -1,0 +1,3 @@
+## Library
+
+- **Face and search indexing controls:** Recognise faces is off by default (installing or downloading a model no longer switches it on; a library where it was on keeps it). Settings ▸ Faces and Settings ▸ AI Models ▸ Semantic search show the face scan's and search indexing's progress with Pause / Resume (kept across restarts), Clear… and Restart…, which ask first; their activity rows get a pause button and a gear that opens the right Settings page. Semantic search can be switched off, which stops its indexing and hides the AI search button. New commands: `faces.status`, `faces.pause`, `faces.resume`, `faces.clearIndex`, `faces.restart`, `ml.indexStatus`, `ml.pause`, `ml.resume`, `ml.clearIndex`, `ml.restart`, `activity.pause`.

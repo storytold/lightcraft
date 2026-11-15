@@ -2454,8 +2454,9 @@ fn command_toasts_show_after_a_while() {
 }
 
 /// Issue #678: Settings ▸ Faces cannot switch recognition on until a recognition model is chosen:
-/// the box is off and clicking it changes nothing. Installing a model switches recognition on by
-/// itself, and from then on the box turns it off and on.
+/// the box is off and clicking it changes nothing. Installing a model chooses it but leaves recognition
+/// off (it is off by default: the scan can take long); from then on the box turns it on and off, and the
+/// Face scan section has its status and Pause / Clear… / Restart….
 #[test]
 fn recognise_faces_stays_off_until_a_model_is_chosen() {
     let dir = lcc_testkit::TempDir::new("lc-ui-faces-toggle");
@@ -2485,18 +2486,39 @@ fn recognise_faces_stays_off_until_a_model_is_chosen() {
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
-    // a model: installing it chooses it and switches recognition on; the box then works both ways
+    // a model: installing it chooses it and leaves recognition off; the box then works both ways
     let f = dir.join("m.onnx");
     std::fs::write(&f, lcc_faces::synthetic::tiny_embedder_model(64)).unwrap();
     h.app.session.execute("faces.models.install", &json!({"path": f.to_string_lossy(), "acknowledged": true})).unwrap();
     h.app.caches.faces_epoch += 1;
     h.step();
     h.step();
-    assert!(enabled(&mut h));
+    assert!(!enabled(&mut h), "installing a model leaves recognition off");
     click(&mut h);
-    assert!(!enabled(&mut h), "the box switches recognition off");
+    assert!(enabled(&mut h), "the box switches recognition on, with a model chosen");
     click(&mut h);
-    assert!(enabled(&mut h), "and on again, with a model chosen");
+    assert!(!enabled(&mut h), "and off again");
+    // the Face scan section: its status and buttons; Clear… asks before it deletes anything
+    click(&mut h);
+    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    for id in ["faces:status", "button:facesPause", "button:facesClear", "button:facesRestart"] {
+        assert!(has(&h, id), "{id} is shown");
+    }
+    let press = |h: &mut Headless, id: &str| {
+        let r = h.request("ui.clickWidget", json!({"id": id}), T);
+        assert_eq!(r["ok"], true, "{id}: {r}");
+        h.step();
+        h.step();
+    };
+    press(&mut h, "button:facesPause");
+    assert_eq!(h.app.session.execute("faces.status", &json!({})).unwrap()["paused"], true);
+    assert!(has(&h, "button:facesResume"), "paused: the button offers resume");
+    press(&mut h, "button:facesClear");
+    assert!(has(&h, "button:facesClearConfirm"), "Clear… asks first");
+    press(&mut h, "button:facesConfirmCancel");
+    assert!(!has(&h, "button:facesClearConfirm"));
+    press(&mut h, "button:facesResume");
+    assert_eq!(h.app.session.execute("faces.status", &json!({})).unwrap()["paused"], false);
 }
 
 /// Issue #684: albums hold library photos. For a browsed (Local) photo the grid's right-click

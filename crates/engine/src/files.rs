@@ -923,6 +923,7 @@ fn load_bytes_now(
                 colorimetric,
                 rendered_rgb,
                 alpha: None,
+                infrared: None,
                 generated: None,
                 avoid: None,
                 pixels: Some(pixels),
@@ -949,13 +950,18 @@ fn load_bytes_now(
         let a = if a.width.max(a.height) > max_edge { fit(&a, max_edge, max_edge, Filter::Mitchell) } else { a };
         Arc::new(a.into_oriented(orientation))
     });
+    // a film scanner's infrared pass, fitted and oriented with the pixels (Find Film Dust reads it)
+    let infrared = d.infrared.filter(|p| (p.width, p.height) == (img.width, img.height)).map(|p| {
+        let p = if p.width.max(p.height) > max_edge { fit(&p, max_edge, max_edge, Filter::Mitchell) } else { p };
+        Arc::new(p.into_oriented(orientation))
+    });
     let finish = |img: Rgb32f| {
         let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
         img.into_oriented(orientation)
     };
     let img = finish(img);
     let twin = twin.map(finish).filter(|t| t.width == img.width && t.height == img.height);
-    Ok((img, twin, SourceInfo { alpha, ..SourceInfo::default() }, false))
+    Ok((img, twin, SourceInfo { alpha, infrared, ..SourceInfo::default() }, false))
 }
 
 /// The cached denoised picture of a finished picture (gamma-encoded sRGB at the file's full size, see

@@ -447,6 +447,7 @@ fn thumbs(app: &mut LccApp, ui: &mut egui::Ui, canvas: Rect, key: u64) {
         app.eye_strip.scrolled = (key, first_row);
         order = order.into_iter().skip(first_row.saturating_mul(cols)).take(rows_shown.saturating_mul(cols)).collect();
     }
+    let first_shown = order.first().copied().unwrap_or(0);
     let p = ui.painter_at(canvas);
     p.rect_filled(band, 8.0, Color32::from_black_alpha(175));
     register(ui.ctx(), "eyes:strip", band);
@@ -510,6 +511,59 @@ fn thumbs(app: &mut LccApp, ui: &mut egui::Ui, canvas: Rect, key: u64) {
         if resp.clicked() {
             zoom_to(app, e.center);
         }
+    }
+    controls(app, ui, canvas, band, first_shown);
+}
+
+/// The strip's controls, shown while the pointer is over it: ✕ hides the strip (and the quick
+/// settings bar flashes where it turns back on: `view.dismissEyeFocus`), the eye shows the first
+/// eye shown at 100 % (`view.zoomToEye`). Beside the band's top-right corner, or inside it when the
+/// band fills the loupe.
+fn controls(app: &mut LccApp, ui: &mut egui::Ui, canvas: Rect, band: Rect, first: usize) {
+    const SIDE: f32 = 22.0;
+    let (close, eye) = if band.right() + 6.0 + SIDE <= canvas.right() - 4.0 {
+        let close = Rect::from_min_size(pos2(band.right() + 6.0, band.top()), vec2(SIDE, SIDE));
+        (close, close.translate(vec2(0.0, SIDE + 4.0)))
+    } else {
+        let close = Rect::from_min_size(pos2(band.right() - SIDE - 4.0, band.top() + 4.0), vec2(SIDE, SIDE));
+        (close, close.translate(vec2(-(SIDE + 4.0), 0.0)))
+    };
+    let hovered = ui.rect_contains_pointer(band.union(close).union(eye).expand(2.0));
+    let a = ui.ctx().animate_bool_with_time(egui::Id::new("eye-strip-controls"), hovered, crate::quick_bar::FADE_SECS);
+    if a <= 0.0 {
+        return;
+    }
+    let p = ui.painter_at(canvas);
+    let mut run = None;
+    for (rect, id, label) in [(close, "eyes:dismiss", "Hide Eye Focus Strip"), (eye, "eyes:zoom", "Zoom to Eye")] {
+        register(ui.ctx(), id, rect);
+        let resp = ui.interact(rect, egui::Id::new(id), if a >= 0.5 { Sense::click() } else { Sense::hover() });
+        crate::access::button(&resp, label);
+        let fill = if resp.hovered() { 220.0 } else { 170.0 };
+        p.circle_filled(rect.center(), SIDE / 2.0, Color32::from_black_alpha((fill * a) as u8));
+        let ink = Color32::from_gray(235).gamma_multiply(a);
+        if id == "eyes:dismiss" {
+            let k = SIDE * 0.2;
+            let c = rect.center();
+            p.line_segment([c + vec2(-k, -k), c + vec2(k, k)], Stroke::new(1.6, ink));
+            p.line_segment([c + vec2(k, -k), c + vec2(-k, k)], Stroke::new(1.6, ink));
+        } else {
+            crate::icons::paint(&p, Rect::from_center_size(rect.center(), vec2(15.0, 15.0)), crate::icons::Icon::Eye, ink);
+        }
+        if resp.on_hover_text(crate::i18n::tr(label)).clicked() {
+            run = Some(id);
+        }
+    }
+    if a < 1.0 {
+        ui.ctx().request_repaint();
+    }
+    let r = match run {
+        Some("eyes:dismiss") => app.run("view.dismissEyeFocus", serde_json::json!({})),
+        Some(_) => app.run("view.zoomToEye", serde_json::json!({"index": first})),
+        None => return,
+    };
+    if let Err(e) = r {
+        app.ui.status = e;
     }
 }
 

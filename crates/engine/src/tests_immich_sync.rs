@@ -6,23 +6,38 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use super::*;
 
 #[derive(Default)]
-struct Server {
-    assets: Vec<Value>,
+pub(crate) struct Server {
+    /// Asset id → its bytes (`/assets/{id}/original` and `/thumbnail`).
+    pub(crate) bytes: std::collections::HashMap<String, Vec<u8>>,
+    /// Uploads keep their bytes and the SHA-1 of them as checksum (as a real server does).
+    pub(crate) real_uploads: bool,
+    pub(crate) assets: Vec<Value>,
     faces: Vec<(String, Value)>,
     people: Vec<Value>,
     renamed: Vec<Value>,
     merged: Vec<String>,
     clock: u32,
     /// (id, name, asset ids)
-    albums: Vec<(String, String, Vec<String>)>,
+    pub(crate) albums: Vec<(String, String, Vec<String>)>,
     stacks: Vec<Vec<String>>,
-    uploads: u32,
+    pub(crate) uploads: u32,
     /// Uploads whose multipart body carried a `sidecarData` part (IMM-SIDECARS).
     sidecar_uploads: u32,
     /// Asset id → the XMP sidecar the server holds for it.
     sidecars: std::collections::HashMap<String, String>,
     /// Assets removed with `DELETE /assets` (the temporary sidecar-copy assets).
     deleted: Vec<String>,
+    /// Failure injection: assets whose `PUT /assets/{id}` answers 503.
+    fail_update: Vec<String>,
+    /// Failure injection: `PUT /albums/{id}/assets` answers 503.
+    album_add_down: bool,
+    /// Failure injection: assets an album add refuses (200, `success: false`), as a real server
+    /// does for an asset the key may not share.
+    album_add_refused: Vec<String>,
+    /// `POST /assets/bulk-upload-check` answers like a real server: a checksum it has is rejected
+    /// as a duplicate, with the asset's id. (Off by default: the publish tests upload files the
+    /// server "has" and count on every upload being accepted.)
+    pub(crate) check_checksums: bool,
 }
 
 impl Server {
@@ -35,9 +50,9 @@ impl Server {
     }
 }
 
-type Shared = Arc<Mutex<Server>>;
+pub(crate) type Shared = Arc<Mutex<Server>>;
 
-fn serve_state(state: Shared, down: Arc<AtomicBool>, hits: Arc<AtomicU32>) -> String {
+pub(crate) fn serve_state(state: Shared, down: Arc<AtomicBool>, hits: Arc<AtomicU32>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -63,6 +78,17 @@ fn sidecar_part(body: &[u8]) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+/// The bytes of the `assetData` part of a multipart upload.
+fn file_part(body: &[u8]) -> Option<Vec<u8>> {
+    let marker = b"name=\"assetData\"";
+    let i = body.windows(marker.len()).position(|w| w == marker)?;
+    let after = body.get(i..)?;
+    let start = after.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
+    let rest = after.get(start..)?;
+    let end = rest.windows(4).position(|w| w == b"\r\n--")?;
+    rest.get(..end).map(<[u8]>::to_vec)
+}
+
 fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>, body: &[u8]) -> Vec<u8> {
     let json = |v: Value| resp("200 OK", "application/json", v.to_string().as_bytes());
     let not_found = || resp("404 Not Found", "application/json", b"{}");
@@ -86,7 +112,7 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
             let album: Option<Vec<String>> =
                 b["albumIds"][0].as_str().map(|a| st.albums.iter().find(|x| x.0 == a).map(|x| x.2.clone()).unwrap_or_default());
             let items: Vec<Value> = if let Some(ids) = album {
-                ids.iter().map(|i| json!({"id": i})).collect()
+                ids.iter().map(|i| st.assets.iter().find(|a| a["id"] == i.as_str()).cloned().unwrap_or_else(|| json!({"id": i}))).collect()
             } else if b["page"].as_u64().unwrap_or(1) == 1 {
                 st.assets.iter().filter(|a| a["updatedAt"].as_str().unwrap_or("") > after).cloned().collect()
             } else {
@@ -126,11 +152,31 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
             }
             // like the real server, the asset remembers the uploading device (`deviceId` form field)
             let device = text.split("name=\"deviceId\"").nth(1).and_then(|x| x.trim_start().lines().next()).unwrap_or("").trim().to_string();
-            st.assets.push(json!({"id": id, "type": "IMAGE", "deviceId": device, "originalFileName": name, "updatedAt": now, "checksum": format!("name:{name}"), "exifInfo": {}, "tags": []}));
+            let mut checksum = format!("name:{name}");
+            if st.real_uploads
+                && let Some(data) = file_part(body)
+            {
+                checksum = lcc_hash::sha1_bytes(&data).to_base64();
+                st.bytes.insert(id.clone(), data);
+            }
+            st.assets.push(json!({"id": id, "type": "IMAGE", "deviceId": device, "originalFileName": name, "updatedAt": now, "checksum": checksum, "exifInfo": {}, "tags": []}));
             resp("201 Created", "application/json", json!({"id": id, "status": "created"}).to_string().as_bytes())
         }
         ("POST", "/api/assets/bulk-upload-check") => {
-            let results: Vec<Value> = b["assets"].as_array().into_iter().flatten().map(|x| json!({"id": x["id"], "action": "accept"})).collect();
+            let hex = |c: &str| lcc_hash::Sha1Digest::parse(c).map(|d| d.to_hex());
+            let results: Vec<Value> = b["assets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|x| {
+                    let want = x["checksum"].as_str().and_then(hex);
+                    let have = st.assets.iter().find(|a| st.check_checksums && want.is_some() && a["checksum"].as_str().and_then(hex) == want);
+                    match have {
+                        Some(a) => json!({"id": x["id"], "action": "reject", "reason": "duplicate", "assetId": a["id"]}),
+                        None => json!({"id": x["id"], "action": "accept"}),
+                    }
+                })
+                .collect();
             json(json!({"results": results}))
         }
         ("GET", "/api/albums") => {
@@ -150,14 +196,28 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
                 st.albums.retain(|a| a.0 != id);
                 return json(json!({}));
             }
+            if (m, tail) == ("PUT", "assets") && st.album_add_down {
+                return resp("503 Service Unavailable", "application/json", b"{}");
+            }
+            let refused = st.album_add_refused.clone();
             let Some(al) = st.albums.iter_mut().find(|a| a.0 == id) else { return not_found() };
             match (m, tail) {
                 ("PATCH", "") => al.1 = b["albumName"].as_str().unwrap_or_default().to_string(),
-                ("PUT", "assets") => ids.into_iter().for_each(|i| {
-                    if !al.2.contains(&i) {
-                        al.2.push(i)
+                ("PUT", "assets") => {
+                    // v3: one `{id, success, error?}` per asset, with status 200 either way
+                    let mut out = Vec::new();
+                    for i in ids {
+                        if refused.contains(&i) {
+                            out.push(json!({"id": i, "success": false, "error": "no_permission"}));
+                        } else if al.2.contains(&i) {
+                            out.push(json!({"id": i, "success": false, "error": "duplicate"}));
+                        } else {
+                            out.push(json!({"id": i, "success": true}));
+                            al.2.push(i);
+                        }
                     }
-                }),
+                    return json(json!(out));
+                }
                 ("DELETE", "assets") => al.2.retain(|x| !ids.contains(x)),
                 _ => {}
             }
@@ -270,8 +330,18 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
             st.merged.push(p.to_string());
             json(json!([]))
         }
+        ("GET", p) if p.starts_with("/api/assets/") && (p.ends_with("/original") || p.ends_with("/thumbnail")) => {
+            let id = p.trim_start_matches("/api/assets/").split('/').next().unwrap_or_default();
+            match st.bytes.get(id) {
+                Some(b) => resp("200 OK", "image/png", b),
+                None => not_found(),
+            }
+        }
         (_, p) if p.starts_with("/api/assets/") => {
             let id = p.trim_start_matches("/api/assets/").to_string();
+            if m == "PUT" && st.fail_update.contains(&id) {
+                return resp("503 Service Unavailable", "application/json", b"{}");
+            }
             let now = st.tick();
             let stack = st.stacks.iter().enumerate().find(|(_, s)| s.len() >= 2 && s.contains(&id)).map(|(i, s)| json!({"id": format!("stack-{i}"), "primaryAssetId": s[0], "assetCount": s.len()}));
             let Some(a) = st.asset_mut(&id) else { return not_found() };
@@ -638,25 +708,8 @@ fn publish_to_immich_albums_renders_and_stacks() {
 }
 
 #[test]
-fn albums_sync_both_ways_and_smart_search_maps_results_to_photos() {
-    let Setup { mut s, state, one, two, dir, .. } = setup("albums");
-    let a = s.execute("album.create", &json!({"name": "Holiday"})).unwrap()["id"].as_u64().unwrap();
-    s.execute("album.addPhotos", &json!({"id": a, "ids": [one.0]})).unwrap();
-    let r = s.execute("immich.linkAlbum", &json!({"album": a})).unwrap();
-    assert_eq!(r["ok"], true, "{r}");
-    // Immich already has photo two in it
-    state.lock().unwrap().albums[0].2.push("bbbb-2".into());
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["ok"], true, "{r}");
-    let mut photos = s.catalog.album(lcc_catalog::AlbumId(a)).unwrap().photos.clone();
-    photos.sort();
-    assert_eq!(photos, vec![one, two]);
-    assert!(state.lock().unwrap().albums[0].2.contains(&"aaaa-1".to_string()));
-    // removed in Immich: removed in the catalog
-    state.lock().unwrap().albums[0].2.retain(|x| x != "aaaa-1");
-    s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(s.catalog.album(lcc_catalog::AlbumId(a)).unwrap().photos, vec![two]);
-
+fn smart_search_maps_results_to_photos() {
+    let Setup { mut s, two, dir, .. } = setup("albums");
     // smart search maps Immich's results to photos, and shows or saves them
     let r = s.execute("immich.smartSearch", &json!({"query": "from immich", "show": true, "saveAs": "Immich: from immich"})).unwrap();
     assert_eq!(r["ok"], true, "{r}");
@@ -670,80 +723,6 @@ fn albums_sync_both_ways_and_smart_search_maps_results_to_photos() {
     assert!(s.visible().is_empty());
     assert!(s.execute("immich.smartSearch", &json!({"query": "  "})).is_err());
     assert!(s.execute("immich.smartSearch", &json!({"query": "x", "mode": "nope"})).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// The album rule: every plain album maps by name (creates both ways), renames travel, an album
-/// deleted on one side waits (ask) or follows the policy, photos are never deleted; a background
-/// run holds an activity row.
-#[test]
-fn album_rule_creates_renames_and_deletes_albums() {
-    let Setup { mut s, state, one, two, dir, .. } = setup("albumrule");
-    let album_named = |s: &Session, n: &str| s.catalog.albums().find(|a| a.name == n).map(|a| a.id);
-    let holiday = s.execute("album.create", &json!({"name": "Holiday"})).unwrap()["id"].as_u64().unwrap();
-    s.execute("album.addPhotos", &json!({"id": holiday, "ids": [one.0]})).unwrap();
-    state.lock().unwrap().albums.push(("album-x".into(), "Trip".into(), vec!["bbbb-2".into()]));
-    // off (the default): nothing happens to unlinked albums
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["albums"], 0, "{r}");
-    assert!(album_named(&s, "Trip").is_none());
-
-    s.execute("immich.setSync", &json!({"config": {"albums": {"direction": "twoWay", "policy": "ask"}}})).unwrap();
-    assert_eq!(s.execute("immich.syncStatus", &json!({})).unwrap()["albumRule"]["direction"], "twoWay");
-    // a background run, with the server held: the activity stack shows it
-    let guard = state.lock().unwrap();
-    assert_eq!(s.execute("immich.syncAlbums", &json!({"background": true})).unwrap()["started"], true);
-    assert!(s.activity.list().iter().any(|t| t.kind == "immich" && t.label == "Syncing albums with Immich"));
-    drop(guard);
-    pump_until(&mut s, |s, _| !s.remote.sync.values().any(|e| e.albums_running));
-    assert!(!s.activity.list().iter().any(|t| t.label == "Syncing albums with Immich"));
-    let last = s.execute("immich.syncStatus", &json!({})).unwrap()["albumsLast"].clone();
-    assert_eq!(last["ok"], true, "{last}");
-    assert_eq!(last["created"], 2, "{last}");
-    let trip = album_named(&s, "Trip").expect("Trip created in the catalog");
-    assert_eq!(s.catalog.album(trip).unwrap().photos, vec![two]);
-    {
-        let st = state.lock().unwrap();
-        let h = st.albums.iter().find(|a| a.1 == "Holiday").expect("Holiday created in Immich");
-        assert_eq!(h.2, vec!["aaaa-1".to_string()]);
-    }
-    // renamed in the catalog → renamed in Immich
-    s.execute("album.rename", &json!({"id": holiday, "name": "Summer"})).unwrap();
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["renamed"], 1, "{r}");
-    assert!(state.lock().unwrap().albums.iter().any(|a| a.1 == "Summer"));
-    // deleted in Immich, policy ask: waits; nothing deleted yet
-    state.lock().unwrap().albums.retain(|a| a.0 != "album-x");
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["pending"][0]["deletedOn"], "immich", "{r}");
-    assert!(s.catalog.album(trip).is_some());
-    let st = s.execute("immich.syncStatus", &json!({})).unwrap();
-    assert_eq!(st["albumDeletions"].as_array().unwrap().len(), 1);
-    // the user applies it: the catalog album goes, its photo stays
-    s.execute("immich.resolveAlbumDeletion", &json!({"album": trip.0, "action": "apply"})).unwrap();
-    assert!(s.catalog.album(trip).is_none());
-    assert!(s.catalog.photo(two).is_some_and(|p| !p.deleted));
-    assert!(s.execute("immich.syncStatus", &json!({})).unwrap()["albumDeletions"].as_array().unwrap().is_empty());
-    // policy catalog: a catalog delete removes the Immich album (never its assets)
-    s.execute("immich.setSync", &json!({"config": {"albums": {"direction": "twoWay", "policy": "catalog"}}})).unwrap();
-    s.execute("album.delete", &json!({"id": holiday})).unwrap();
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["deleted"], 1, "{r}");
-    assert!(!state.lock().unwrap().albums.iter().any(|a| a.1 == "Summer"));
-    assert_eq!(remote(&state, "aaaa-1")["isTrashed"], Value::Null);
-    // one-way to Immich: an Immich-only album is not pulled in
-    s.execute("immich.setSync", &json!({"config": {"albums": {"direction": "toImmich"}}})).unwrap();
-    state.lock().unwrap().albums.push(("album-y".into(), "Theirs".into(), vec![]));
-    s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert!(album_named(&s, "Theirs").is_none());
-    // Sync Now runs the album rule too, and a background metadata run holds its own row
-    let guard = state.lock().unwrap();
-    let r = s.execute("immich.sync", &json!({"background": true})).unwrap();
-    assert_eq!(r["albums"]["started"], true, "{r}");
-    let rows: Vec<String> = s.activity.list().into_iter().map(|t| t.label).collect();
-    assert!(rows.iter().any(|l| l == "Syncing metadata with Immich") && rows.iter().any(|l| l == "Syncing albums with Immich"), "{rows:?}");
-    drop(guard);
-    pump_until(&mut s, |s, _| !s.remote.sync.values().any(|e| e.albums_running || e.running));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -840,4 +819,356 @@ fn full_sidecar_push_merges_immichs_sidecar_and_copies_it_back() {
     assert!(xml.contains("other:Secret='keep me'"), "unknown namespaces stay:\n{xml}");
     assert!(d.lc_settings.is_some(), "the develop settings were added:\n{xml}");
     assert!(st.deleted.iter().any(|id| id.starts_with("up-")), "the temporary asset was removed: {:?}", st.deleted);
+}
+
+/// The order a sync run takes the linked pairs in.
+fn pair_order(s: &Session) -> Vec<(PhotoId, String)> {
+    s.catalog.remote_links().iter().filter(|r| r.service == lcc_immich::link::SERVICE).map(|r| (r.photo_id, r.remote_id.clone())).collect()
+}
+
+fn remote_tags(st: &Shared, id: &str) -> Vec<String> {
+    remote(st, id)["tags"].as_array().unwrap().iter().filter_map(|t| t["value"].as_str().map(str::to_string)).collect()
+}
+
+/// A run the server cuts short must not record what it never sent as synced: a pair it did not
+/// reach, and a pair whose tags were still to send, are sent by the next run. Before, their base
+/// moved anyway, so the edit stayed local for good and a later run took the keyword away again.
+#[test]
+fn a_run_cut_short_sends_the_rest_next_time_and_pulls_nothing_back() {
+    let Setup { mut s, state, dir, .. } = setup("sync-cut");
+    assert_eq!(s.execute("immich.sync", &json!({})).unwrap()["ok"], true);
+    let order = pair_order(&s);
+    let ((first, first_asset), (last, last_asset)) = (order.first().unwrap().clone(), order.last().unwrap().clone());
+    assert_ne!(first, last);
+
+    // 1. the last pair's update fails: the run stops before the tag step of the first pair
+    let mut meta = s.catalog.photo(first).unwrap().meta.clone();
+    meta.keywords.push("Trip|Rome".into());
+    s.catalog.apply(Op::SetMeta { id: first, meta: Box::new(meta) }).unwrap();
+    s.execute("photo.rate", &json!({"ids": [last.0], "rating": 2})).unwrap();
+    state.lock().unwrap().fail_update = vec![last_asset.clone()];
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(!remote_tags(&state, &first_asset).contains(&"Trip/Rome".to_string()), "the tag step did not run");
+    state.lock().unwrap().fail_update.clear();
+    // a full run looks at every pair, as any later change in Immich would make a run do
+    let r = s.execute("immich.sync", &json!({"full": true})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(s.catalog.photo(first).unwrap().meta.keywords.contains(&"Trip|Rome".to_string()), "the keyword is still in the catalog");
+    assert!(remote_tags(&state, &first_asset).contains(&"Trip/Rome".to_string()), "and reached Immich");
+    assert_eq!(remote(&state, &last_asset)["exifInfo"]["rating"], 2);
+
+    // 2. the first pair's update fails: the last pair is never reached
+    s.execute("photo.rate", &json!({"ids": [first.0], "rating": 5})).unwrap();
+    s.execute("photo.rate", &json!({"ids": [last.0], "rating": 3})).unwrap();
+    state.lock().unwrap().fail_update = vec![first_asset.clone()];
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(remote(&state, &last_asset)["exifInfo"]["rating"], 2, "not reached");
+    state.lock().unwrap().fail_update.clear();
+    // an ordinary (incremental) run sends both: neither counts as synced
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(remote(&state, &first_asset)["exifInfo"]["rating"], 5);
+    assert_eq!(remote(&state, &last_asset)["exifInfo"]["rating"], 3);
+    assert_eq!((s.catalog.photo(first).unwrap().rating, s.catalog.photo(last).unwrap().rating), (5, 3), "nothing was pulled back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A photo edited while a run is out is not written over, and the change Immich made is not
+/// recorded as taken: the next run takes it. Before, the base moved to Immich's value, so the
+/// next run read the catalog's old text as a new edit and sent it back over Immich's.
+#[test]
+fn a_photo_edited_during_a_run_takes_immichs_change_on_the_next_run() {
+    let Setup { mut s, state, two, dir, .. } = setup("sync-during");
+    assert_eq!(s.execute("immich.sync", &json!({})).unwrap()["ok"], true);
+    assert_eq!(s.catalog.photo(two).unwrap().meta.caption, "From Immich");
+    {
+        let mut st = state.lock().unwrap();
+        let now = st.tick();
+        let b = st.asset_mut("bbbb-2").unwrap();
+        b["exifInfo"]["description"] = json!("Newer from Immich");
+        b["updatedAt"] = json!(now);
+    }
+    // the run is out (the server is held) while the user rates the photo
+    let guard = state.lock().unwrap();
+    assert_eq!(s.execute("immich.sync", &json!({"background": true})).unwrap()["started"], true);
+    s.execute("photo.rate", &json!({"ids": [two.0], "rating": 1})).unwrap();
+    drop(guard);
+    pump_until(&mut s, |s, _| s.remote.sync.values().all(|a| !a.running));
+    assert_eq!(s.catalog.photo(two).unwrap().rating, 1, "the newer edit is not written over");
+    // the next run: Immich's description comes in, the rating goes out
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(s.catalog.photo(two).unwrap().meta.caption, "Newer from Immich");
+    assert_eq!(remote(&state, "bbbb-2")["exifInfo"]["description"], "Newer from Immich", "Immich's edit was not overwritten");
+    assert_eq!(remote(&state, "bbbb-2")["exifInfo"]["rating"], 1);
+    assert_eq!(s.catalog.photo(two).unwrap().rating, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The sync state belongs to one catalog. A second catalog opened in the same session starts
+/// from its own (empty) state: merged against the first one's bases, its freshly imported,
+/// unrated photos read as "the user cleared this" and wiped the values in Immich.
+#[test]
+fn another_catalog_is_not_merged_against_the_first_ones_sync_state() {
+    let Setup { mut s, state, dir, .. } = setup("sync-two-libs");
+    assert_eq!(s.execute("immich.sync", &json!({})).unwrap()["ok"], true);
+    assert_eq!(s.execute("immich.syncStatus", &json!({})).unwrap()["items"], 2);
+
+    s.open_library(dir.join("lib2"), false).unwrap();
+    assert_eq!(s.execute("immich.syncStatus", &json!({})).unwrap()["items"], 0, "a new catalog has no sync state yet");
+    s.execute("library.import", &json!({"paths": [dir.join("one.png").to_string_lossy(), dir.join("two.png").to_string_lossy()]})).unwrap();
+    let two = s.catalog.photos().find(|p| p.file_name == "two.png").unwrap().id;
+    assert_eq!(s.catalog.photo(two).unwrap().rating, 0);
+    // an ordinary link pass: the cursor of the first catalog's pass is not this catalog's (it
+    // was kept per machine, and this pass then listed nothing and linked nothing)
+    assert_eq!(s.execute("immich.status", &json!({})).unwrap()["accounts"][0]["linkedUntil"], Value::Null);
+    s.execute("immich.link", &json!({})).unwrap();
+    pump_until(&mut s, |s, _| lcc_immich::link::link_state(&s.catalog, two) == "linked");
+    assert!(s.execute("immich.status", &json!({})).unwrap()["accounts"][0]["linkedUntil"].is_string());
+    assert!(dir.join("lib2/Immich/link").is_dir(), "the cursor is kept with the catalog");
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    let b = remote(&state, "bbbb-2");
+    assert_eq!(b["exifInfo"]["rating"], 4, "Immich keeps its rating");
+    assert_eq!(b["exifInfo"]["description"], "From Immich");
+    let p = s.catalog.photo(two).unwrap();
+    assert_eq!((p.rating, p.meta.caption.as_str()), (4, "From Immich"), "and the new catalog takes it");
+    assert_eq!(std::fs::read_dir(dir.join("lib2/Immich/sync")).unwrap().count(), 1, "its own state file");
+
+    // back in the first catalog its state is its own again
+    s.open_library(dir.join("lib"), false).unwrap();
+    let st = s.execute("immich.syncStatus", &json!({})).unwrap();
+    assert_eq!(st["items"], 2, "{st}");
+    let r = s.execute("immich.sync", &json!({"full": true})).unwrap();
+    assert_eq!((r["ok"].as_bool(), r["pulled"].as_u64(), r["pushed"].as_u64()), (Some(true), Some(0), Some(0)), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A queued deletion that was undone in Immich (the asset restored from the trash) leaves the
+/// queue, and "apply all queued" never deletes its photo.
+#[test]
+fn a_deletion_undone_in_immich_leaves_the_queue_and_is_never_applied() {
+    let Setup { mut s, state, two, dir, .. } = setup("sync-restore");
+    assert_eq!(s.execute("immich.sync", &json!({})).unwrap()["ok"], true);
+    let trash = |on: bool| {
+        let mut st = state.lock().unwrap();
+        let now = st.tick();
+        let b = st.asset_mut("bbbb-2").unwrap();
+        b["isTrashed"] = json!(on);
+        b["updatedAt"] = json!(now);
+    };
+    trash(true);
+    assert_eq!(s.execute("immich.sync", &json!({})).unwrap()["deletionsQueued"], 1);
+    // restored in Immich; no run since. Applying everything queued looks first
+    trash(false);
+    let r = s.execute("immich.resolveDeletion", &json!({"action": "apply"})).unwrap();
+    assert_eq!((r["resolved"].as_u64(), r["restored"].as_u64()), (Some(0), Some(1)), "{r}");
+    assert!(!s.catalog.photo(two).unwrap().deleted, "the photo of a restored asset is not deleted");
+    assert_eq!(s.execute("immich.syncStatus", &json!({})).unwrap()["deletions"].as_array().map(Vec::len), Some(0));
+    // a run prunes the queue by itself
+    trash(true);
+    assert_eq!(s.execute("immich.sync", &json!({})).unwrap()["deletionsQueued"], 1);
+    trash(false);
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["deletionsQueued"], 0, "{r}");
+    // still trashed: applied as before
+    trash(true);
+    s.execute("immich.sync", &json!({})).unwrap();
+    let r = s.execute("immich.resolveDeletion", &json!({"action": "apply"})).unwrap();
+    assert_eq!(r["resolved"], 1, "{r}");
+    assert!(s.catalog.photo(two).unwrap().deleted);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Immich has no "no location" update. A location cleared in the catalog stays cleared: it is
+/// not pulled back by the next run, and it is not a conflict every run either.
+#[test]
+fn a_location_cleared_in_the_catalog_is_not_pulled_back() {
+    let Setup { mut s, state, one, dir, .. } = setup("sync-gps");
+    let set_gps = |s: &mut Session, gps: Option<(f64, f64)>| {
+        let mut meta = s.catalog.photo(one).unwrap().meta.clone();
+        meta.gps = gps;
+        s.catalog.apply(Op::SetMeta { id: one, meta: Box::new(meta) }).unwrap();
+    };
+    set_gps(&mut s, Some((48.8566, 2.3522)));
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(remote(&state, "aaaa-1")["exifInfo"]["latitude"], 48.8566);
+    set_gps(&mut s, None);
+    for full in [false, true, false] {
+        let r = s.execute("immich.sync", &json!({"full": full})).unwrap();
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(s.catalog.photo(one).unwrap().meta.gps, None, "cleared stays cleared: {r}");
+        assert_eq!(r["openConflicts"], 0, "{r}");
+    }
+    // a new location set in Immich afterwards is a real change on that side: it asks (the rule)
+    {
+        let mut st = state.lock().unwrap();
+        let now = st.tick();
+        let a = st.asset_mut("aaaa-1").unwrap();
+        a["exifInfo"]["latitude"] = json!(10.0);
+        a["exifInfo"]["longitude"] = json!(20.0);
+        a["updatedAt"] = json!(now);
+    }
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["openConflicts"], 1, "{r}");
+    assert_eq!(s.catalog.photo(one).unwrap().meta.gps, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A photo imported after the link pass has passed its asset is still linked: the server is
+/// asked for the new photo's checksum (on a worker). The incremental pass alone never finds it.
+/// The link pass holds an activity row and can be cancelled without moving its cursor.
+#[test]
+fn photos_imported_later_are_linked_by_checksum_and_the_link_pass_shows_in_the_activity_stack() {
+    let Setup { mut s, state, dir, .. } = setup("link-late");
+    let cursor = |s: &mut Session| s.execute("immich.status", &json!({})).unwrap()["accounts"][0]["linkedUntil"].clone();
+    assert!(cursor(&mut s).is_string(), "the first pass is complete");
+    // an asset Immich has had all along; its file reaches the catalog only now
+    let c = png(43);
+    std::fs::write(dir.join("three.png"), &c).unwrap();
+    {
+        let mut st = state.lock().unwrap();
+        let mut a = asset("cccc-3", "three.png", &c, json!({"visibility": "timeline", "tags": []}));
+        a["updatedAt"] = json!("2026-10-01T00:00:00.000Z");
+        st.assets.push(a);
+        st.check_checksums = true;
+    }
+    s.execute("library.import", &json!({"paths": [dir.join("three.png").to_string_lossy()]})).unwrap();
+    let three = s.catalog.photos().find(|p| p.file_name == "three.png").unwrap().id;
+    pump_until(&mut s, |s, _| lcc_immich::link::link_state(&s.catalog, three) == "linked");
+    assert!(s.catalog.remote_of(three).any(|r| r.remote_id == "cccc-3"));
+    pump_until(&mut s, |s, _| !s.remote.link_checking);
+    assert!(!s.activity.list().iter().any(|t| t.label == "Looking up new photos in Immich"));
+
+    // the link pass: a row while it runs; cancelled, its cursor stays where it was
+    let before = cursor(&mut s);
+    state.lock().unwrap().asset_mut("aaaa-1").unwrap()["updatedAt"] = json!("2026-10-20T00:00:00.000Z");
+    let guard = state.lock().unwrap();
+    assert_eq!(s.execute("immich.link", &json!({})).unwrap()["started"], true);
+    let row = s.activity.list().into_iter().find(|t| t.kind == "immich" && t.label == "Linking photos with Immich").expect("the link pass has a row");
+    s.activity.cancel(row.id).unwrap();
+    drop(guard);
+    pump_until(&mut s, |s, _| s.remote.links.values().all(|l| !l.active));
+    assert!(!s.activity.list().iter().any(|t| t.label == "Linking photos with Immich"));
+    assert_eq!(cursor(&mut s), before, "a cancelled pass did not see everything");
+    // run to the end, it moves
+    s.execute("immich.link", &json!({})).unwrap();
+    pump_until(&mut s, |s, _| s.remote.links.values().all(|l| !l.active));
+    assert_eq!(cursor(&mut s), "2026-10-20T00:00:00.000Z");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// "Newest wins" compares when the catalog was edited, not when a sync first noticed: an edit
+/// made before Immich's change loses to it even though the sync runs after both.
+#[test]
+fn newest_wins_goes_by_when_the_catalog_was_edited() {
+    let Setup { mut s, state, one, two, dir, .. } = setup("sync-newest");
+    // the session's clock (when a run "notices") is later than anything the server does
+    s.clock = Box::new(|| "2026-10-10T00:30:00+00:00".to_string());
+    assert_eq!(s.execute("immich.sync", &json!({})).unwrap()["ok"], true);
+    s.clock = Box::new(|| "2026-10-10T09:00:00+00:00".to_string());
+    let sidecar_at = |s: &mut Session, id: PhotoId, secs_after_midnight: u64| {
+        // the photo's metadata written to its sidecar at that time on 2026-10-10 (UTC)
+        s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+        let Source::File { path } = &s.catalog.photo(id).unwrap().source else { panic!() };
+        let xmp = [format!("{path}.xmp"), std::path::Path::new(path).with_extension("xmp").to_string_lossy().to_string()]
+            .into_iter()
+            .find(|p| std::path::Path::new(p).exists())
+            .expect("a sidecar was written");
+        let midnight = std::time::UNIX_EPOCH + Duration::from_secs(1_791_590_400);
+        std::fs::File::options().write(true).open(&xmp).unwrap().set_modified(midnight + Duration::from_secs(secs_after_midnight)).unwrap();
+        s.record_xmp_stamps(&[id], true);
+    };
+    let immich_rates = |asset: &str, rating: u8, at: &str| {
+        let mut st = state.lock().unwrap();
+        let a = st.asset_mut(asset).unwrap();
+        a["exifInfo"]["rating"] = json!(rating);
+        a["updatedAt"] = json!(at);
+    };
+    // photo one: edited here at 02:00, in Immich at 03:00 → Immich's is the newer
+    s.execute("photo.rate", &json!({"ids": [one.0], "rating": 5})).unwrap();
+    sidecar_at(&mut s, one, 2 * 3600);
+    immich_rates("aaaa-1", 1, "2026-10-10T03:00:00.000Z");
+    // photo two: edited in Immich at 03:00, here at 04:00 → the catalog's is the newer
+    s.execute("photo.rate", &json!({"ids": [two.0], "rating": 2})).unwrap();
+    sidecar_at(&mut s, two, 4 * 3600);
+    immich_rates("bbbb-2", 3, "2026-10-10T03:00:00.000Z");
+    let r = s.execute("immich.sync", &json!({})).unwrap();
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["openConflicts"], 0, "{r}");
+    assert_eq!(s.catalog.photo(one).unwrap().rating, 1, "Immich's later change wins over the earlier catalog edit");
+    assert_eq!(remote(&state, "aaaa-1")["exifInfo"]["rating"], 1);
+    assert_eq!(s.catalog.photo(two).unwrap().rating, 2, "the later catalog edit wins");
+    assert_eq!(remote(&state, "bbbb-2")["exifInfo"]["rating"], 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The calls the Connections screen makes while the window is up run on workers with
+/// `background: true`: an activity row while they are out, the result through `immich.answer`.
+/// A dry run in the background leaves its list of changes in `immich.syncStatus` → `preview`.
+#[test]
+fn background_calls_hold_an_activity_row_and_answer_through_the_pump() {
+    let Setup { mut s, state, one, dir, .. } = setup("background");
+    let answer = |s: &mut Session, key: &str| {
+        let t = Instant::now();
+        loop {
+            let v = s.execute("immich.answer", &json!({"key": key})).unwrap();
+            if v["done"] == true {
+                return v["result"].clone();
+            }
+            assert_eq!(v["running"], true, "{v}");
+            assert!(t.elapsed() < Duration::from_secs(10), "timed out: {v}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let rows = |s: &Session| s.activity.list().into_iter().map(|t| t.label).collect::<Vec<_>>();
+    {
+        let mut st = state.lock().unwrap();
+        st.people = vec![json!({"id": "p-ann", "name": "Ann"})];
+        st.faces = vec![(
+            "aaaa-1".into(),
+            json!({"id": "f1", "boundingBoxX1": 4, "boundingBoxY1": 3, "boundingBoxX2": 20, "boundingBoxY2": 15, "imageWidth": 40, "imageHeight": 30, "person": {"id": "p-ann", "name": "Ann"}}),
+        )];
+    }
+    // Import People: the server is read on a worker, the catalog written when it is taken in
+    let guard = state.lock().unwrap();
+    let r = s.execute("immich.importPeople", &json!({"background": true})).unwrap();
+    assert_eq!(r["started"], true, "{r}");
+    let key = r["key"].as_str().unwrap().to_string();
+    assert!(rows(&s).iter().any(|l| l == "Importing people from Immich"), "{:?}", rows(&s));
+    assert_eq!(s.execute("immich.importPeople", &json!({"background": true})).unwrap()["started"], false, "one at a time");
+    assert!(s.catalog.photo(one).unwrap().people().is_empty(), "nothing yet: the call returned at once");
+    drop(guard);
+    let r = answer(&mut s, &key);
+    assert_eq!((r["ok"].as_bool(), r["added"].as_u64()), (Some(true), Some(1)), "{r}");
+    assert_eq!(s.catalog.photo(one).unwrap().people(), vec!["Ann"]);
+    assert!(!rows(&s).iter().any(|l| l == "Importing people from Immich"));
+    assert_eq!(s.execute("immich.answer", &json!({"key": key})).unwrap()["done"], false, "taken once");
+
+    // Send Names, and a server that refuses: the failure is the answer, not a silent nothing
+    let mut meta = s.catalog.photo(one).unwrap().meta.clone();
+    meta.regions[0].name = Some("Ann Lee".into());
+    s.catalog.apply(Op::SetMeta { id: one, meta: Box::new(meta) }).unwrap();
+    let r = s.execute("immich.pushPeople", &json!({"background": true})).unwrap();
+    let r = answer(&mut s, r["key"].as_str().unwrap());
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(state.lock().unwrap().renamed[0]["name"], "Ann Lee");
+    let r = s.execute("immich.libraries", &json!({"background": true})).unwrap();
+    assert_eq!(r["started"], true, "{r}");
+    let r = answer(&mut s, r["key"].as_str().unwrap());
+    assert_eq!(r["ok"], false, "this server has no libraries endpoint: {r}");
+    assert!(r["error"]["message"].is_string());
+
+    // Preview Changes in the background: its changes are kept apart from the last real run
+    s.execute("photo.rate", &json!({"ids": [one.0], "rating": 3})).unwrap();
+    assert_eq!(s.execute("immich.sync", &json!({"dryRun": true, "background": true})).unwrap()["started"], true);
+    pump_until(&mut s, |s, _| s.remote.sync.values().all(|a| !a.running));
+    let st = s.execute("immich.syncStatus", &json!({})).unwrap();
+    assert_eq!(st["preview"]["dryRun"], true, "{st}");
+    assert!(st["preview"]["changes"].as_array().unwrap().iter().any(|c| c["toImmich"]["rating"] == 3), "{st}");
+    assert_eq!(remote(&state, "aaaa-1")["exifInfo"]["rating"], Value::Null, "a preview changes nothing");
+    let _ = std::fs::remove_dir_all(&dir);
 }

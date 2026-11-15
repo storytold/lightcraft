@@ -23,6 +23,19 @@ fn click(h: &mut Headless, id: &str) {
     }
 }
 
+/// Step until `done` (a server call made on a worker answers through the pump), at most 10 s.
+fn wait(h: &mut Headless, what: &str, mut done: impl FnMut(&mut Headless) -> bool) {
+    let t = std::time::Instant::now();
+    loop {
+        h.step();
+        if done(h) {
+            return;
+        }
+        assert!(t.elapsed() < Duration::from_secs(10), "timed out: {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
 fn app(dir: &std::path::Path) -> Headless {
     let mut s = lcc_engine::Session::new();
     s.remote.secrets_file = Some(dir.join("credentials.enc"));
@@ -180,7 +193,7 @@ fn immich_card_is_compact() {
     // (further down the Sync section: scrolled to, as a person would)
     let mut text = h.painted_text().join("\n");
     for _ in 0..12 {
-        if text.contains("Collections ↔ albums") {
+        if text.contains("Favourite means") {
             break;
         }
         h.request("ui.hoverWidget", json!({"id": "settings:rows", "fx": 0.98, "fy": 0.5}), T);
@@ -190,7 +203,8 @@ fn immich_card_is_compact() {
         }
         text = h.painted_text().join("\n");
     }
-    assert!(text.contains("Collections ↔ albums"), "the album rule row");
+    assert!(text.contains("Favourite means"), "the rest of the Sync section");
+    assert!(!text.contains("Collections ↔ albums"), "the name-matching album rule is gone");
     if let Some(p) = lcc_brand::env_os("TEST_SHOTS") {
         h.app.services.png = Some(Box::new(|img: &lcc_raster::Rgba8| {
             lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(img), &lcc_codecs::EncodeMeta::default()).unwrap_or_default()
@@ -325,6 +339,8 @@ fn locked_folders_section_unlocks_with_a_pin() {
         h.step();
         h.app.immich.locked_status()["isElevated"] == true
     };
+    // (the status is read on a worker: the section says "checking" until it is here)
+    wait(&mut h, "the locked-folder status", |h| !h.app.immich.locked_status().is_null());
     assert!(!status(&mut h), "the session starts locked");
 
     // the dialog takes the secret; a wrong one shows the server's refusal
@@ -332,18 +348,15 @@ fn locked_folders_section_unlocks_with_a_pin() {
     assert!(has(&h, "field:immichUnlockSecret"), "the dialog's secret field");
     h.app.immich.type_unlock_secret("9999");
     click(&mut h, "button:immichUnlockGo");
-    assert!(has(&h, "label:immichUnlockError-0"), "the refusal is shown in the dialog");
+    wait(&mut h, "the refusal is shown in the dialog", |h| has(h, "label:immichUnlockError-0"));
     assert!(has(&h, "field:immichUnlockSecret"), "still open for another try");
     assert!(!status(&mut h), "still locked");
 
     // the right PIN unlocks: the dialog closes and the section's status refreshes
     h.app.immich.type_unlock_secret("1357");
     click(&mut h, "button:immichUnlockGo");
-    for _ in 0..4 {
-        h.step();
-    }
-    assert!(!has(&h, "field:immichUnlockSecret"), "the dialog closed");
-    assert!(status(&mut h), "unlocked");
+    wait(&mut h, "the dialog closed", |h| !has(h, "field:immichUnlockSecret"));
+    wait(&mut h, "unlocked", status);
     let st = h.app.session.execute("immich.authStatus", &json!({})).unwrap();
     assert_eq!(st["isElevated"], true, "{st}");
     // the typed secret is gone, and it never reached the journal

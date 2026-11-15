@@ -1,0 +1,84 @@
+---
+title: Device sync
+description: Keep a catalog, or chosen collections, in step between your own devices, with no server.
+sidebar:
+  order: 2
+---
+
+import { Aside } from '@astrojs/starlight/components';
+import NeedsImage from '../../../components/NeedsImage.astro';
+
+Paired devices on the same network sync directly. No account, no cloud.
+
+<NeedsImage what="Settings ▸ Sync: this device's name, a paired device online, the catalog syncing and the Collections table with its choices and pills" />
+
+## Setup
+- Open **Settings ▸ Sync** on both devices; both must be on the same network. Devices appear under *Devices* while the tab is open.
+- **Name**: every device needs its own name. Change it at the top of the tab; a name another device already has is refused, with the reason next to the field.
+- **Pair**: click **Pair** beside the other device. Both screens show a six-digit code; click **Codes Match** on both. **Cancel** ends a pairing at any stage.
+- A paired device shows *Online* or *Offline*. *Not paired on the other device* means it was removed there: pair again.
+- **Remove…** forgets a device (you are asked first). It also stops syncing the open catalog with it.
+- Nothing found after ten seconds? The tab lists what to check: the same network (not a guest Wi-Fi), a firewall letting the app through (UDP port 5353), no VPN.
+
+## Sync a catalog
+Under *This Catalog*, click **Sync with ‹device›…** and choose:
+
+- **The whole catalog**: one catalog on both devices. Choose whose catalog is kept; the other device starts from a new, empty catalog (**New Catalog…** is offered when the open one has photos). Every collection is listed on every device.
+- **Collections only**: each device keeps its own catalog and sees only the collections it is allowed and takes.
+
+The other device gets an invitation under *This Catalog* with **Join** and **Decline**; the cloud in the top bar shows a count while one waits.
+
+While syncing, the tab shows the mode, each device with its last exchange (and its error, if the last one failed), **Sync Now**, **Invite ‹device›** for paired devices not in the sync yet, and **Stop Syncing This Catalog…** (nothing is deleted on any device).
+
+## Choose per collection
+The *Collections* table lists the shared collections, *Not in a collection* (photos in no collection) and this catalog's collections not shared yet. The owner picks what the others may have:
+
+| Choice | Meaning |
+|---|---|
+| None | Not shared. |
+| Allow Preview | Others get previews to develop; only the owner adds photos. |
+| Allow Serve | Others may also fetch the originals; only the owner adds photos. |
+| Allow Sync | Every device keeps the originals and can add photos. |
+
+Every other device picks what it takes, up to what the owner allows: **None**, **Previews** (edits go back), **Full Quality** (originals; edits go back) or **Full Sync** (photos added here go to the others too).
+
+A collection created while the whole catalog syncs is asked about at once: share it with one of the choices above, **Keep on This Device**, or **Decide Later**.
+
+Right-click a collection in the left panel and choose **Sync…** to open this tab.
+
+## Immich albums
+If this device is connected to an Immich server, turn on **Show Immich albums as collections** on the account card in **Settings ▸ Connections**. Every album on the server then appears in the *Collections* table under **Immich**, on every device that has the account.
+
+- **Share with synced devices** on the account card sends the connection, API key included, to the devices this catalog syncs with (over their encrypted link, into their key storage), so they connect to Immich too. Off (the default), the connection and its albums stay on this device. To stop a device that already has the key, revoke the key in Immich.
+- Each device picks per album: **None**, **Previews** (Immich's previews to develop here) or **Full Quality** (the originals, downloaded from Immich).
+- An album you take appears in the left panel inside the collection set **Immich**.
+- Photos come from Immich, not from your other devices; your edits, ratings and labels travel between your devices as usual.
+- Add a photo to such a collection on any device and it goes to the Immich album. If Immich already has it (for example the Immich phone app uploaded it), it is linked, not uploaded again.
+
+## Camera roll
+Turn on **Sync this device's camera roll** under *This Device* (while the catalog syncs). On a computer, choose the folder your phone's photos arrive in; on Android it is the phone's camera roll.
+
+- New photos in the folder are imported as they arrive and go into the collection **Camera Roll - ‹this device's name›**; it is renamed with the device.
+- Share it from the *Collections* table like any other collection.
+- If the Immich app also uploads your camera roll, nothing is stored twice: the same photo is recognised by its checksum, whichever arrives first.
+
+## Pills
+Grid cells (with the other badges) and collection rows show a small pill: two letters and an arrow.
+
+- First letter, where the original is: **L** this device, **R** another device, **I** an Immich server, **E** every device.
+- Second letter, how much is here: **F** full quality, **P** a preview, **N** nothing.
+- **↑** this device has changes still to send; **↓** another device has changes still to fetch; no arrow: in step. The arrow pulses while it syncs.
+
+Hover a pill for the same in words.
+
+## Not built yet
+- Virtual copies, versions and history, and the keyword tree don't travel.
+- Both devices need the same version of the app, and their clocks within five minutes of each other.
+- Local network only. Importing identical bytes a second time doesn't sync as a new photo.
+
+## Privacy
+- Only your paired devices are contacted. Remove every device in **Settings ▸ Sync** to stop. See [Privacy](../../platforms/settings-and-privacy/).
+
+<Aside type="note" title="Modern layout">
+  **Edit ▸ Settings… ▸ Sync**. On Android the Modern layout is the default; the same tab is in its Settings.
+</Aside>

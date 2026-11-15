@@ -81,8 +81,9 @@ pub enum Direction {
 pub enum Policy {
     Catalog,
     Immich,
-    /// The later change (catalog: when the sync first saw the change; Immich: the asset's
-    /// `updatedAt`); unknown times leave a conflict.
+    /// The later change (catalog: when the edit was made where the catalog knows it, i.e. the
+    /// photo's XMP sidecar is in step with it, else when a sync first saw the change; Immich:
+    /// the asset's `updatedAt`); unknown times leave a conflict.
     #[default]
     Newest,
     /// Always a conflict for the user (Sync Conflicts).
@@ -129,19 +130,15 @@ pub struct SyncConfig {
     pub on_publish: bool,
     /// Send names given in the app back to Immich's people (IMM-PEOPLE).
     pub push_people: bool,
-    /// Collections ↔ albums (`crate::albums`); unset: [`SyncConfig::album_rule`]'s default.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// No longer used or written: the old name-matching album rule. An account that had it on
+    /// shows its albums as collections instead ([`crate::accounts::Accounts::load`]).
+    #[serde(skip_serializing)]
     pub albums: Option<FieldRule>,
 }
 
 impl SyncConfig {
     pub fn rule(&self, f: Field) -> FieldRule {
         self.rules.get(&f).copied().unwrap_or_else(|| default_rule(f))
-    }
-
-    /// The album rule: by default only albums linked by hand sync, and album deletes ask.
-    pub fn album_rule(&self) -> FieldRule {
-        self.albums.unwrap_or(FieldRule { direction: Direction::Off, policy: Policy::Ask })
     }
 }
 
@@ -209,7 +206,8 @@ impl Snapshot {
         }
     }
 
-    fn copy_field(&mut self, from: &Snapshot, f: Field) {
+    /// Take field `f` from `from`.
+    pub fn copy_field(&mut self, from: &Snapshot, f: Field) {
         match f {
             Field::Rating => self.rating = from.rating,
             Field::Favorite => self.favorite = from.favorite,
@@ -323,7 +321,8 @@ pub struct Sides<'a> {
     pub stuck: &'a BTreeSet<Field>,
     /// Conflicts the user decided.
     pub forced: &'a BTreeMap<Field, Side>,
-    /// When the sync first saw the catalog side differ from `base` (ISO 8601).
+    /// When the catalog side was edited away from `base` (ISO 8601): the edit's own time where
+    /// the engine knows it, else when a sync first saw the difference.
     pub local_changed_at: Option<&'a str>,
     /// The asset's `updatedAt`.
     pub remote_updated_at: Option<&'a str>,
@@ -344,6 +343,38 @@ pub struct Outcome {
     /// Tags (catalog form) to add to / remove from the asset.
     pub add_tags: BTreeSet<String>,
     pub remove_tags: BTreeSet<String>,
+    /// Fields the catalog cleared that Immich can't clear (location, capture time: its update has
+    /// no "none"). Nothing is sent and nothing is pulled: the catalog's empty value stands as a
+    /// local override, and [`next_base`] leaves the field's base alone so later runs see the same
+    /// one-sided catalog change instead of an Immich change to pull back.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    pub held: BTreeSet<Field>,
+}
+
+/// Fields whose "no value" can't be sent to Immich.
+fn unclearable(f: Field) -> bool {
+    matches!(f, Field::Location | Field::Captured)
+}
+
+/// The values to remember as "both sides had this" after a run.
+///
+/// `o.target` for every field that really is the same on both sides now; a field that is not
+/// keeps what it was, so the next run comes to the same decision again:
+/// - `unapplied`: fields of `o.to_local` the catalog did not take (the photo changed during the
+///   run, or the catalog write failed);
+/// - `o.held`: a cleared location / capture time Immich still holds.
+///
+/// "What it was" is the old base, or with no old base the side that did not change: the
+/// catalog's value at the start of the run for an unapplied pull, Immich's for a held field.
+pub fn next_base(o: &Outcome, old: Option<&Snapshot>, local_used: &Snapshot, remote: &Snapshot, unapplied: &BTreeSet<Field>) -> Snapshot {
+    let mut base = o.target.clone();
+    for f in unapplied {
+        base.copy_field(old.unwrap_or(local_used), *f);
+    }
+    for f in &o.held {
+        base.copy_field(old.unwrap_or(remote), *f);
+    }
+    base
 }
 
 impl Outcome {
@@ -451,6 +482,9 @@ pub fn reconcile(sides: Sides<'_>, cfg: &SyncConfig) -> Outcome {
             }
         };
         match winner {
+            Some(Side::Catalog) if push && unclearable(f) && l.blank(f) => {
+                out.held.insert(f);
+            }
             Some(Side::Catalog) if push => {
                 out.to_remote.insert(f);
             }
@@ -599,7 +633,8 @@ pub fn remote_update(t: &Snapshot, fields: &BTreeSet<Field>, cfg: &SyncConfig, z
             Field::Archived => u.visibility = Some(if t.archived { "archive" } else { "timeline" }.into()),
             Field::Description => u.description = Some(t.description.clone()),
             Field::Location => {
-                // Immich has no "no location" update: clearing is sent as nothing
+                // Immich has no "no location" update: clearing is sent as nothing ([`reconcile`]
+                // holds such a field back instead of sending it)
                 if let Some((a, b)) = t.location {
                     u.latitude = Some(a);
                     u.longitude = Some(b);
@@ -644,7 +679,7 @@ pub struct ItemState {
     pub photo: u64,
     /// The values both sides had after the last sync.
     pub base: Option<Snapshot>,
-    /// When a run first saw the catalog differ from `base`.
+    /// When the catalog was edited away from `base` (the edit's time, else when a run first saw it).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_changed_at: Option<String>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
