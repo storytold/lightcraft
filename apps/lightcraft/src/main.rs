@@ -93,17 +93,38 @@ struct WindowTextures {
     renderer: std::sync::Arc<egui::mutex::RwLock<eframe::egui_wgpu::Renderer>>,
 }
 
+/// The window sampler for a GPU-resident view: the filters the renderer chose for the slot (nearest
+/// magnification for a native-resolution photo past 100 %, #2643), edges clamped as for egui's own
+/// textures.
+fn view_sampler(options: egui::TextureOptions) -> eframe::wgpu::SamplerDescriptor<'static> {
+    let filter = |f: egui::TextureFilter| match f {
+        egui::TextureFilter::Nearest => eframe::wgpu::FilterMode::Nearest,
+        egui::TextureFilter::Linear => eframe::wgpu::FilterMode::Linear,
+    };
+    eframe::wgpu::SamplerDescriptor {
+        label: Some("lightcraft view"),
+        mag_filter: filter(options.magnification),
+        min_filter: filter(options.minification),
+        ..Default::default()
+    }
+}
+
 impl lightcraft_ui_egui::render::ScreenTextures for WindowTextures {
-    fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId> {
+    fn show(
+        &mut self,
+        frame: &lightcraft_engine::media::ScreenFrame,
+        id: Option<egui::TextureId>,
+        options: egui::TextureOptions,
+    ) -> Option<egui::TextureId> {
         let view = frame.texture.create_view(&Default::default());
         let mut r = self.renderer.write();
-        let filter = eframe::wgpu::FilterMode::Linear;
+        let sampler = view_sampler(options);
         Some(match id {
             Some(id) => {
-                r.update_egui_texture_from_wgpu_texture(&self.device, &view, filter, id);
+                r.update_egui_texture_from_wgpu_texture_with_sampler_options(&self.device, &view, sampler, id);
                 id
             }
-            None => r.register_native_texture(&self.device, &view, filter),
+            None => r.register_native_texture_with_sampler_options(&self.device, &view, sampler),
         })
     }
 

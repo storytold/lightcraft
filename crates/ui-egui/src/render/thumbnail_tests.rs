@@ -470,12 +470,28 @@ fn request(app: &mut crate::LightcraftApp) {
     crate::panels::grid::request_thumb(app, PhotoId(1), 256, 10);
 }
 
-/// Draws GPU-resident renders under one fixed id, and reads them back from the test's device.
+/// What a [`TestScreen`] was asked to show: (the id to update, the sampling).
 #[cfg(not(target_arch = "wasm32"))]
-struct TestScreen(lightcraft_engine::gpu::wgpu::Device, lightcraft_engine::gpu::wgpu::Queue, std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>);
+type Shown = std::sync::Arc<std::sync::Mutex<Vec<(Option<egui::TextureId>, egui::TextureOptions)>>>;
+
+/// Draws GPU-resident renders under one fixed id, and reads them back from the test's device;
+/// records the ids it frees and each `show` call.
+#[cfg(not(target_arch = "wasm32"))]
+struct TestScreen(
+    lightcraft_engine::gpu::wgpu::Device,
+    lightcraft_engine::gpu::wgpu::Queue,
+    std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+    Shown,
+);
 #[cfg(not(target_arch = "wasm32"))]
 impl ScreenTextures for TestScreen {
-    fn show(&mut self, _: &lightcraft_engine::media::ScreenFrame, _: Option<egui::TextureId>) -> Option<egui::TextureId> {
+    fn show(
+        &mut self,
+        _: &lightcraft_engine::media::ScreenFrame,
+        id: Option<egui::TextureId>,
+        options: egui::TextureOptions,
+    ) -> Option<egui::TextureId> {
+        self.3.lock().unwrap().push((id, options));
         Some(egui::TextureId::User(7))
     }
     fn free(&mut self, id: egui::TextureId) {
@@ -496,6 +512,7 @@ impl ScreenTextures for TestScreen {
 #[allow(clippy::type_complexity)]
 fn gpu_drawn_fixture(
     freed: std::sync::Arc<std::sync::Mutex<Vec<egui::TextureId>>>,
+    shown: Shown,
 ) -> Option<(crate::LightcraftApp, std::rc::Rc<std::cell::RefCell<Work>>, egui::Context, lightcraft_engine::media::ScreenFrame)> {
     use lightcraft_engine::gpu::wgpu;
     let device = (|| {
@@ -526,7 +543,7 @@ fn gpu_drawn_fixture(
         wgpu::Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },
     );
     let (mut app, work, ctx) = fixture();
-    app.renderer.set_screen_textures(Box::new(TestScreen(device, queue, freed)));
+    app.renderer.set_screen_textures(Box::new(TestScreen(device, queue, freed, shown)));
     Some((app, work, ctx, lightcraft_engine::media::ScreenFrame { texture, width: w, height: h }))
 }
 
@@ -536,7 +553,7 @@ fn gpu_drawn_fixture(
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
-    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default()) else {
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default(), Default::default()) else {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;
     };
@@ -564,7 +581,7 @@ fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
 #[test]
 fn releasing_a_slot_frees_its_gpu_texture() {
     let freed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(freed.clone()) else {
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(freed.clone(), Default::default()) else {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;
     };
@@ -579,6 +596,49 @@ fn releasing_a_slot_frees_its_gpu_texture() {
     app.renderer.release(Slot::Main);
     assert_eq!(*freed.lock().unwrap(), vec![egui::TextureId::User(7)], "the window's texture is freed");
     assert!(app.renderer.natives.is_empty() && app.renderer.native_frames.is_empty());
+}
+
+/// #2643 on the GPU path (the desktop default since #1065): a native-resolution render that stays
+/// on the GPU reaches the host with nearest magnification past 100 %, and the same texture is
+/// registered again with the linear sampler when the zoom goes back to Fit, without a new render.
+/// Before, the host got no sampling choice and drew every GPU-resident view linear.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_gpu_drawn_native_render_reaches_the_host_with_nearest_magnification() {
+    let shown: Shown = Default::default();
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default(), shown.clone()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    let (w, h) = (frame.width, frame.height);
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Percent(400.0));
+    let mut job = app.session.render_job(PhotoId(1), w, w, false, true).unwrap().draft();
+    let source = lightcraft_engine::media::DecodedSource::new(Arc::new(lightcraft_raster::Rgb32f::new(w, h)), None);
+    job.source = lightcraft_engine::media::SourceRef::Loaded(Box::new(source));
+    job.level = lightcraft_engine::SourceLevel::Full;
+    job.info = Default::default();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    // as the GPU path hands it back: the histogram and an empty image, the pixels in `frame`
+    result.rendered.as_mut().unwrap().image = lightcraft_raster::Rgba8 { width: 0, height: 0, data: Vec::new() };
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    let t = app.renderer.textures.get(&Slot::Main).unwrap();
+    assert_eq!(t.id(), egui::TextureId::User(7), "drawn from the GPU");
+    assert!(t.full_res, "a native-resolution render, sized by its frame");
+    let nearest = egui::TextureOptions { magnification: egui::TextureFilter::Nearest, ..egui::TextureOptions::LINEAR };
+    assert_eq!(*shown.lock().unwrap(), vec![(None, nearest)], "registered with nearest magnification");
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Fit);
+    assert_eq!(shown.lock().unwrap().last(), Some(&(Some(egui::TextureId::User(7)), egui::TextureOptions::LINEAR)), "Fit: linear again");
+    // another zoom that stays linear registers nothing new
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Percent(50.0));
+    assert_eq!(shown.lock().unwrap().len(), 2);
+    let cpu = app.renderer.cpu_textures();
+    assert_eq!(cpu[&egui::TextureId::User(7)].magnification, egui::TextureFilter::Linear);
+    app.renderer.set_texture_zoom(Slot::Main, crate::state::Zoom::Percent(200.0));
+    assert_eq!(shown.lock().unwrap().last(), Some(&(Some(egui::TextureId::User(7)), nearest)), "past 100 % again: nearest");
+    assert_eq!(app.renderer.cpu_textures()[&egui::TextureId::User(7)].magnification, egui::TextureFilter::Nearest);
 }
 
 fn relink_destination() -> std::path::PathBuf {

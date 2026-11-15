@@ -130,9 +130,16 @@ impl Tex {
 /// renderer registers their textures. Installed by a host whose GPU renderer runs on the window's
 /// device (the desktop app); without one, every render comes back as pixels.
 pub trait ScreenTextures {
-    /// Show `frame` under `id` (one this returned before, updated in place) or a new id; `None`
-    /// when it can't be shown.
-    fn show(&mut self, frame: &lightcraft_engine::media::ScreenFrame, id: Option<egui::TextureId>) -> Option<egui::TextureId>;
+    /// Show `frame` under `id` (one this returned before, updated in place) or a new id, sampled
+    /// with `options` (nearest magnification for a native-resolution photo zoomed past 100 %,
+    /// #2643); `None` when it can't be shown. Called again with the same frame and id when only
+    /// `options` changed (the zoom crossed 100 % while the render stays).
+    fn show(
+        &mut self,
+        frame: &lightcraft_engine::media::ScreenFrame,
+        id: Option<egui::TextureId>,
+        options: egui::TextureOptions,
+    ) -> Option<egui::TextureId>;
     /// Release `id` (and the texture it shows).
     fn free(&mut self, id: egui::TextureId);
     /// The pixels `frame` holds, read back from the GPU: only for a headless screenshot of a view
@@ -211,7 +218,9 @@ impl PhotoSampling {
             let win = win.clamped(fw, fh);
             (win.w, win.h)
         });
-        (fw, fh) == native && r.rendered.as_ref().is_ok_and(|x| (x.image.width, x.image.height) == expected)
+        // a render that stayed on the GPU holds an empty image: its size is the frame's
+        let size = r.frame.as_ref().map(|f| (f.width, f.height)).or_else(|| r.rendered.as_ref().ok().map(|x| (x.image.width, x.image.height)));
+        (fw, fh) == native && r.rendered.is_ok() && size == Some(expected)
     }
 }
 
@@ -410,6 +419,9 @@ pub struct Renderer {
     /// screenshot reads it back ([`Self::cpu_textures`]) instead of finding no pixels (a white
     /// photo, review of PR #1065).
     native_frames: HashMap<Slot, lightcraft_engine::media::ScreenFrame>,
+    /// The GPU-resident render each view slot shows and the sampling it was shown with, so a zoom
+    /// that crosses 100 % re-registers it with the other sampler without a new render (#2643).
+    native_sampling: HashMap<Slot, (lightcraft_engine::media::ScreenFrame, egui::TextureOptions)>,
 }
 
 /// How many [`Slot::QuickAhead`] stand-ins the loupe keeps ready.
@@ -530,6 +542,7 @@ impl Renderer {
             screen: None,
             natives: HashMap::new(),
             native_frames: HashMap::new(),
+            native_sampling: HashMap::new(),
         }
     }
 }
@@ -558,9 +571,18 @@ impl Renderer {
         let old = self.texture_zoom.insert(slot, zoom).unwrap_or_default();
         if let Some(t) = self.textures.get_mut(&slot) {
             let options = slot.texture_options(t.full_res, zoom);
-            if options != slot.texture_options(t.full_res, old)
-                && let Some(pixel) = t.first_pixel
-            {
+            if options == slot.texture_options(t.full_res, old) {
+                return;
+            }
+            if let Some(id) = t.native {
+                // drawn from the GPU: the host registers the same texture with the other sampler
+                if let (Some((frame, shown)), Some(screen)) = (self.native_sampling.get_mut(&slot), self.screen.as_mut())
+                    && *shown != options
+                    && screen.show(frame, Some(id), options).is_some()
+                {
+                    *shown = options;
+                }
+            } else if let Some(pixel) = t.first_pixel {
                 t.tex.set_partial([0, 0], egui::ColorImage::filled([1, 1], pixel), options);
             }
         }
@@ -789,6 +811,7 @@ impl Renderer {
     /// kept for headless screenshots.
     fn free_native(&mut self, slot: Slot) {
         self.native_frames.remove(&slot);
+        self.native_sampling.remove(&slot);
         if let Some(id) = self.natives.remove(&slot)
             && let Some(screen) = self.screen.as_mut()
         {
@@ -1114,6 +1137,7 @@ impl Renderer {
         }
         self.natives.clear();
         self.native_frames.clear();
+        self.native_sampling.clear();
         // a view drawn from a freed texture would show nothing: it is rendered again, as pixels
         self.textures.retain(|_, t| t.native.is_none());
     }
@@ -1370,9 +1394,10 @@ impl Renderer {
         }
     }
 
-    /// The jobs the pool and the offload finished: (slot, result, texture pixels, look, ms).
+    /// The jobs the pool and the offload finished: (slot, result, texture pixels, look, native
+    /// resolution, ms).
     #[allow(clippy::type_complexity)]
-    fn take_finished(&mut self, inline_ms: f64) -> Vec<(Slot, RenderResult, Option<Arc<egui::ColorImage>>, Option<(u64, bool)>, f64)> {
+    fn take_finished(&mut self, inline_ms: f64) -> Vec<(Slot, RenderResult, Option<Arc<egui::ColorImage>>, Option<(u64, bool)>, bool, f64)> {
         let mut finished = Vec::new();
         while let Some(done) = self.pool.try_recv() {
             finished.push((
@@ -1435,11 +1460,13 @@ impl Renderer {
     }
 
     /// Show a render that stayed on the GPU (`r.frame`) in `slot`; whether it could be. When it
-    /// can't, views come back as pixels from then on.
-    fn show_frame(&mut self, ctx: &egui::Context, slot: Slot, r: &RenderResult, look: Option<(u64, bool)>, ms: f64) -> bool {
+    /// can't, views come back as pixels from then on. `full_res` picks the sampler as for pixels:
+    /// the host registers the texture with nearest magnification past 100 % (#2643).
+    fn show_frame(&mut self, ctx: &egui::Context, slot: Slot, r: &RenderResult, look: Option<(u64, bool)>, full_res: bool, ms: f64) -> bool {
         let (Some(frame), Ok(rendered)) = (r.frame.as_ref(), r.rendered.as_ref()) else { return false };
         self.failed.remove(&slot);
-        let shown = self.screen.as_mut().and_then(|s| s.show(frame, self.natives.get(&slot).copied()));
+        let options = self.texture_options(slot, full_res);
+        let shown = self.screen.as_mut().and_then(|s| s.show(frame, self.natives.get(&slot).copied(), options));
         let Some(id) = shown else {
             // can't be shown: from now on views come back as pixels
             log::warn!("render {slot:?}: a GPU-resident render can't be shown; rendering pixels");
@@ -1448,6 +1475,7 @@ impl Renderer {
             return false;
         };
         self.natives.insert(slot, id);
+        self.native_sampling.insert(slot, (frame.clone(), options));
         if self.keep_pixels {
             self.native_frames.insert(slot, frame.clone());
         }
@@ -1455,8 +1483,7 @@ impl Renderer {
         match self.textures.get_mut(&slot) {
             Some(t) => {
                 t.show_native(id);
-                // (the host samples GPU-resident views linear: no nearest choice to keep)
-                t.full_res = false;
+                t.full_res = full_res;
                 t.first_pixel = None;
                 t.look = look;
                 t.key = r.key;
@@ -1479,7 +1506,7 @@ impl Renderer {
                     histogram: Some(histogram),
                     ms,
                     quick: None,
-                    full_res: false,
+                    full_res,
                     first_pixel: None,
                     pixels: None,
                     native: Some(id),
@@ -1545,7 +1572,7 @@ impl Renderer {
             slot = self.stand_in_slot(slot, &r);
             // a render that stayed on the GPU: drawn from its texture
             if r.frame.is_some() && r.rendered.is_ok() {
-                changed |= self.show_frame(ctx, slot, &r, look, ms);
+                changed |= self.show_frame(ctx, slot, &r, look, full_res, ms);
                 continue;
             }
             let rendered = match r.rendered {
