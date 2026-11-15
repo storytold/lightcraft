@@ -99,37 +99,29 @@ pub fn is_heif(bytes: &[u8]) -> bool {
 
 /// The Exif and XMP blocks of a HEIF file. Anything malformed is left out rather than reported:
 /// a file whose items can't be located simply has no metadata, as before this reader existed.
+///
+/// A HEIF can hold several XMP items, one per image they describe, each tied to its image by a `cdsc` reference
+/// (iPhones write one for the depth map, the mattes and the gain map before the photo's own). The photo's packet is
+/// the one that describes the primary item (`pitm`); without such a reference, the first packet that describes no
+/// other item, which is every packet of a file without `iref` (issue #4336).
 pub fn metadata(bytes: &[u8]) -> Embedded {
     let mut out = Embedded::default();
-    let mut budget = MAX_BOXES;
-    let Some(meta) = boxes(bytes, 0, bytes.len(), &mut budget).into_iter().find(|b| &b.kind == b"meta") else {
-        return out;
+    let Some(s) = structure(bytes) else { return out };
+    let describes = |id: u32| s.refs.iter().filter(move |&&(kind, from, _)| &kind == b"cdsc" && from == id).map(|&(_, _, to)| to);
+    // the item of `kind` that describes the photo, by the rule above
+    let pick = |want: &dyn Fn(&[u8; 4], &str) -> bool| {
+        let candidates = || s.items.iter().filter(|(_, kind, ct)| want(kind, ct)).map(|(id, ..)| *id);
+        let of_primary = s.primary.and_then(|p| candidates().find(|&id| describes(id).any(|to| to == p)));
+        of_primary.or_else(|| candidates().find(|&id| describes(id).next().is_none()))
     };
-    // `meta` is a FullBox: a version and flags before its children
-    let (mut items, mut locs, mut idat) = (Vec::new(), Vec::new(), None);
-    for b in boxes(bytes, meta.body.saturating_add(4), meta.end, &mut budget) {
-        match &b.kind {
-            b"iinf" => items = item_infos(bytes, &b, &mut budget),
-            b"iloc" => locs = item_locations(bytes.get(b.body..b.end).unwrap_or_default()),
-            b"idat" => idat = bytes.get(b.body..b.end),
-            _ => {}
-        }
+    let block = |id: u32| s.locs.iter().find(|l| l.id == id).and_then(|loc| item_bytes(bytes, s.idat, loc));
+    if let Some(exif) = pick(&|kind, _| kind == b"Exif").and_then(block) {
+        // ISO/IEC 23008-12 A.2.1: a four-byte offset from the end of itself to the TIFF header
+        let skip = be32(&exif, 0).and_then(|v| usize::try_from(v).ok()).and_then(|v| v.checked_add(4));
+        out.exif = skip.and_then(|at| exif.get(at..)).filter(|b| !b.is_empty()).map(<[u8]>::to_vec);
     }
-    for (id, kind, content_type) in items {
-        let want_exif = &kind == b"Exif" && out.exif.is_none();
-        let want_xmp = &kind == b"mime" && content_type == "application/rdf+xml" && out.xmp.is_none();
-        if !want_exif && !want_xmp {
-            continue;
-        }
-        let Some(loc) = locs.iter().find(|l| l.id == id) else { continue };
-        let Some(block) = item_bytes(bytes, idat, loc) else { continue };
-        if want_exif {
-            // ISO/IEC 23008-12 A.2.1: a four-byte offset from the end of itself to the TIFF header
-            let skip = be32(&block, 0).and_then(|v| usize::try_from(v).ok()).and_then(|v| v.checked_add(4));
-            out.exif = skip.and_then(|at| block.get(at..)).filter(|b| !b.is_empty()).map(<[u8]>::to_vec);
-        } else {
-            out.xmp = Some(String::from_utf8_lossy(&block).trim_end_matches('\0').to_string());
-        }
+    if let Some(xmp) = pick(&|kind, ct| kind == b"mime" && ct == "application/rdf+xml").and_then(block) {
+        out.xmp = Some(String::from_utf8_lossy(&xmp).trim_end_matches('\0').to_string());
     }
     out
 }
@@ -755,5 +747,41 @@ mod tests {
         for end in 0..file.len() {
             let _ = crate::extract(&file[..end]);
         }
+    }
+
+    /// Issue #4336: an iPhone writes the depth map's and mattes' XMP before the photo's own. The photo's packet (51,
+    /// describing the primary item 36) is the one read, with what it says: here a title.
+    #[test]
+    fn the_photos_own_xmp_is_read_not_the_first_one() {
+        let photo = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title><rdf:Alt><rdf:li xml:lang="x-default">Harbour</rdf:li></rdf:Alt></dc:title></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let depth = packet("<depthBlurEffect:SimulatedAperture>2.8</depthBlurEffect:SimulatedAperture>");
+        let portrait = Aux { primary: Some(36), auxl: &[(38, 36), (40, 36)], props: &[MATTE, DEPTH], assoc: &[(40, 1), (38, 2)], wide: false };
+        let file = aux_heic_with_xmp(&portrait, &[(39, 38, &depth), (41, 40, &packet("")), (51, 36, photo)]);
+        assert_eq!(embedded(&file).xmp.as_deref(), Some(photo));
+        let m = crate::extract(&file);
+        assert_eq!(m.title.as_deref(), Some("Harbour"));
+        assert_eq!(m.portrait_aperture, Some(2.8), "the depth map's packet still gives the Portrait aperture");
+    }
+
+    /// Without a packet for the photo: one that describes no item is the photo's (as in a file without `iref`), and
+    /// one that describes only another image is never taken for it.
+    #[test]
+    fn a_packet_of_another_image_is_never_the_photos() {
+        let portrait = Aux { primary: Some(36), auxl: &[(38, 36)], props: &[DEPTH], assoc: &[(38, 1)], wide: false };
+        let (depth, loose) = (packet("<depthBlurEffect:SimulatedAperture>2.8</depthBlurEffect:SimulatedAperture>"), packet(""));
+        assert_eq!(embedded(&aux_heic_with_xmp(&portrait, &[(39, 38, &depth)])).xmp, None);
+        let unreferenced = aux_heic_with_xmp(&portrait, &[(39, 38, &depth), (60, 0, &loose)]);
+        // item 60's `cdsc` points at item 0, which doesn't exist: drop the reference to describe nothing
+        let unreferenced = drop_reference_to_item_0(unreferenced);
+        assert_eq!(embedded(&unreferenced).xmp.as_deref(), Some(loose.as_str()));
+    }
+
+    /// Turns a `cdsc` reference to item 0 into a `free` box, so the XMP item it came from describes nothing.
+    fn drop_reference_to_item_0(mut file: Vec<u8>) -> Vec<u8> {
+        let needle = [&b"cdsc"[..], &60u16.to_be_bytes(), &1u16.to_be_bytes(), &0u16.to_be_bytes()].concat();
+        if let Some(at) = file.windows(needle.len()).position(|w| w == needle.as_slice()) {
+            file[at..at + 4].copy_from_slice(b"free");
+        }
+        file
     }
 }
