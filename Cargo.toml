@@ -27,7 +27,7 @@ craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbf
 # HDR gain maps: ISO 21496-1 and hdrgm metadata, compute and apply (moved from crates/codecs; craft-libs#904).
 craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93" }
 # PSD/PSB: the header, colour mode data and image resources (craft-libs#885).
-craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93" }
+craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "c94ab7a3f00588f1654afe18d981939c95b6d14c" }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }

@@ -237,50 +237,13 @@ pub(crate) fn encode(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
     if w > MAX_SIDE || h > MAX_SIDE {
         return Err(Error::Encode(format!("{w} × {h} is larger than a PSD can hold ({MAX_SIDE} px a side): use TIFF")));
     }
-    let gray = img.channels <= 2;
-    let input_channels = usize::from(img.channels);
-    let output_channels = if gray { 2 } else { 4 };
-    let pixels = (w as usize).checked_mul(h as usize).ok_or_else(|| Error::Encode("image too large".into()))?;
-    let size = pixels.checked_mul(output_channels).ok_or_else(|| Error::Encode("image too large".into()))?;
-    let (depth, data) = match img.samples {
-        Samples::U8(src) => {
-            let mut values = Vec::new();
-            values.try_reserve_exact(size).map_err(|_| Error::Encode("image too large".into()))?;
-            for pixel in src.chunks_exact(input_channels).take(pixels) {
-                values.extend_from_slice(&pixel[..output_channels - 1]);
-                values.push(u8::MAX);
-            }
-            (8, if gray { craft_psd::PixelData::GrayA8(values) } else { craft_psd::PixelData::Rgba8(values) })
-        }
-        Samples::U16(src) => {
-            let mut values = Vec::new();
-            values.try_reserve_exact(size).map_err(|_| Error::Encode("image too large".into()))?;
-            for pixel in src.chunks_exact(input_channels).take(pixels) {
-                values.extend_from_slice(&pixel[..output_channels - 1]);
-                values.push(u16::MAX);
-            }
-            (16, if gray { craft_psd::PixelData::GrayA16(values) } else { craft_psd::PixelData::Rgba16(values) })
-        }
+    let samples = match img.samples {
+        Samples::U8(s) => craft_psd::flat::Samples::U8(s),
+        Samples::U16(s) => craft_psd::flat::Samples::U16(s),
         Samples::F32(_) => return Err(Error::Encode("32-bit float PSD is not supported: use TIFF".into())),
     };
-    let mut builder = craft_psd::PsdBuilder::new(w, h)
-        .color_mode(if gray { craft_psd::ColorMode::Grayscale } else { craft_psd::ColorMode::Rgb })
-        .depth(depth)
-        .compression(if depth == 8 { craft_psd::Compression::Rle } else { craft_psd::Compression::Raw });
-    if let Some(ppi) = meta.ppi.filter(|p| *p > 0) {
-        builder = builder.resolution(f64::from(ppi));
-    }
-    if let Some(icc) = meta.icc {
-        builder = builder.icc_profile(icc.to_vec());
-    }
-    if let Some(exif) = meta.exif {
-        builder = builder.resource(craft_psd::ImageResource::new(1058, exif.to_vec()));
-    }
-    if let Some(xmp) = meta.xmp {
-        builder = builder.resource(craft_psd::ImageResource::new(1060, xmp.as_bytes().to_vec()));
-    }
-    builder.composite(data);
-    builder.to_bytes().map_err(|e| Error::Encode(e.to_string()))
+    let metadata = craft_psd::flat::Metadata { icc: meta.icc, exif: meta.exif, xmp: meta.xmp, ppi: meta.ppi };
+    craft_psd::flat::write(w, h, img.channels, samples, metadata).map_err(|error| Error::Encode(error.to_string()))
 }
 
 /// Stored dimensions and EXIF orientation (resource 1058) from the header and image resources,
