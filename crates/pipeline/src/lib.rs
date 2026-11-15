@@ -1064,7 +1064,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     // film dust: the infrared pass's marks filled in before anything reads the pixels
     let sampled = if s.film_dust.on() && info.infrared.is_some() {
         let mut img = (*sampled).clone();
-        film_dust::stage(&mut img, info, s, frame);
+        film_dust::stage(&mut img, src_img, info, s, frame);
         lap("film dust", &mut t);
         Arc::new(img)
     } else {
@@ -1172,7 +1172,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     lap("histogram", &mut t);
     let mut image = image;
     let mask = if matches!(req.overlay, Overlay::FilmDust | Overlay::Infrared) {
-        film_dust::mask_for(info, s, frame, w, h)
+        film_dust::mask_for(info, src_img, s, frame, w, h)
     } else {
         overlay_alpha(req.overlay, &plan, &prep)
     };

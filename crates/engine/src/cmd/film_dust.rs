@@ -42,6 +42,9 @@ const EXPAND_RANGE: (f64, f64) = (-8.0, 40.0);
 struct Read {
     img: lcc_raster::Rgba8,
     infrared: Option<lcc_raster::Plane>,
+    /// The photo's red channel through the same geometry, with the pass: what takes the
+    /// picture's leak out of it ([`lcc_pipeline::film_dust::infrared_map`]).
+    red: Option<lcc_raster::Plane>,
     settings: lcc_develop::DevelopSettings,
 }
 
@@ -72,8 +75,8 @@ fn read(s: &mut Session, c: &str, id: crate::PhotoId, source: Source) -> Result<
     let settings = (*s.develop_of(id).unwrap_or_default()).clone();
     // the infrared pass through the same geometry as the picture (orientation, lens, perspective;
     // not the crop), at the picture's size
-    let infrared = if source == Source::Picture {
-        None
+    let (infrared, red) = if source == Source::Picture {
+        (None, None)
     } else {
         // the preview-level decode and the facts of that same decode (a plane the size of another
         // level's pixels would not fit)
@@ -81,22 +84,25 @@ fn read(s: &mut Session, c: &str, id: crate::PhotoId, source: Source) -> Result<
         let decoded = s.media.source_ref(&photo, SourceLevel::Preview).load_source().map_err(|e| bad(c, e))?;
         let src = decoded.image.clone();
         let info = decoded.info_or(crate::media::source_info(&photo));
-        info.infrared.as_deref().and_then(|ir| {
-            let mut uncropped = settings.clone();
-            uncropped.crop.geometry = lcc_geom::CropGeometry::default();
-            let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(edge, edge) };
-            let plane = lcc_pipeline::render_plane(&src, ir, &info, &uncropped, &req)?;
+        let mut uncropped = settings.clone();
+        uncropped.crop.geometry = lcc_geom::CropGeometry::default();
+        let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(edge, edge) };
+        let through = |plane: &lcc_raster::Plane| {
+            let plane = lcc_pipeline::render_plane(&src, plane, &info, &uncropped, &req)?;
             Some(if (plane.width, plane.height) == (img.width, img.height) {
                 plane
             } else {
                 lcc_raster::resample::resize(&plane, img.width, img.height, lcc_raster::resample::Filter::Mitchell)
             })
-        })
+        };
+        let infrared = info.infrared.as_deref().and_then(through);
+        let red = info.infrared.as_deref().and_then(|ir| lcc_pipeline::film_dust::red_of(&src, ir)).and_then(|r| through(&r));
+        (infrared, red)
     };
     if source == Source::Infrared && infrared.is_none() {
         return Err(bad(c, "this photo has no infrared pass: a film scanner's RGBI file (VueScan 64-bit RGBI, SilverFast HDRi) carries one"));
     }
-    Ok(Read { img, infrared, settings })
+    Ok(Read { img, infrared, red, settings })
 }
 
 fn luma_of(img: &lcc_raster::Rgba8) -> lcc_raster::Plane {
@@ -118,10 +124,10 @@ fn find_film_dust(s: &mut Session, p: &Value) -> Result<Value> {
         "heal" => SpotMode::Heal,
         other => return Err(bad(c, format!("`mode` must be fill or heal, not {other:?}"))),
     };
-    let Read { img, infrared, settings } = read(s, c, id, source)?;
+    let Read { img, infrared, red, settings } = read(s, c, id, source)?;
     let mut dd = settings;
     let found_all = match &infrared {
-        Some(ir) => lcc_pipeline::film_dust::detect_infrared(ir, &luma_of(&img), sensitivity),
+        Some(ir) => lcc_pipeline::film_dust::detect_infrared(ir, red.as_ref(), &luma_of(&img), sensitivity),
         None => lcc_pipeline::film_dust::detect(&img, sensitivity),
     };
     // only what's inside the crop: a scan's rebate (edge print, sprocket holes) is usually
@@ -181,9 +187,9 @@ fn film_dust_mask(s: &mut Session, p: &Value) -> Result<Value> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let sensitivity = (f64_or(p, "sensitivity", 50.0) as f32).clamp(0.0, 100.0);
     let expand = expand_param(p);
-    let Read { img, infrared, settings } = read(s, c, id, Source::Infrared)?;
+    let Read { img, infrared, red, settings } = read(s, c, id, Source::Infrared)?;
     let ir = infrared.ok_or_else(|| bad(c, "no infrared pass"))?;
-    let map = lcc_pipeline::film_dust::infrared_map(&ir, sensitivity, expand_px(expand, ir.width.max(ir.height)))
+    let map = lcc_pipeline::film_dust::infrared_map(&ir, red.as_ref(), sensitivity, expand_px(expand, ir.width.max(ir.height)))
         .ok_or_else(|| bad(c, "the infrared pass is too small to read"))?;
     // the stored segmentation covers the uncropped frame stretched to a square, finest grid
     let side = MASK_SIDE.min(map.width.max(map.height)).max(16);

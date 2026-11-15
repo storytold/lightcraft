@@ -199,14 +199,15 @@ pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<FilmDefect> {
 /// (the picture, the same size) only says which side of a line to heal from. Dips of the pass
 /// below its local level are defects, whatever the picture shows there; a blob too large for a
 /// speck or too wide for a line is a patch (one round heal spot over it). Outside the film
-/// (the scanner's gate, where the pass is dark everywhere) nothing is reported.
-pub fn detect_infrared(ir: &Plane, luma: &Plane, sensitivity: f32) -> Vec<FilmDefect> {
+/// (the scanner's gate, where the pass is dark everywhere) nothing is reported. `red`: the photo's
+/// red channel at the pass's size, which takes the picture's leak out ([`infrared_map`]).
+pub fn detect_infrared(ir: &Plane, red: Option<&Plane>, luma: &Plane, sensitivity: f32) -> Vec<FilmDefect> {
     let (w, h) = (ir.width, ir.height);
     if luma.width != w || luma.height != h || luma.data.len() < w * h {
         return Vec::new();
     }
     // (the marks' own shape: a caller that wants them grown grows the spots it makes of them)
-    let Some(map) = infrared_map(ir, sensitivity, 0) else { return Vec::new() };
+    let Some(map) = infrared_map(ir, red, sensitivity, 0) else { return Vec::new() };
     let long = w.max(h) as f32;
     let r = closing_radius(long);
     let margin = 2 * r + 1;
@@ -244,7 +245,15 @@ fn closing_radius(long: f32) -> usize {
 /// along short strokes in a dozen directions (at half size), and a stroke that falls well below
 /// the strips beside it is a line. What [`detect_infrared`] groups into defects, the mask the
 /// develop step fills and the overlay shows.
-pub fn infrared_map(ir: &Plane, sensitivity: f32, expand: i32) -> Option<Plane> {
+///
+/// The pass is not quite blind to the picture: dense dye (the cyan layer most) absorbs a little
+/// infrared, so strong fine detail (a zip's teeth, a sign's border) leaks into it. `reference`,
+/// the photo's red channel at the pass's size, takes that out: its dips, measured the same way,
+/// are subtracted in the proportion the pass follows them, found from the detail that is brighter
+/// than its surroundings (which dust never makes). Only red's dips are subtracted: a line brighter
+/// in red than around it (a thin wire on the negative) is never taken for dust because of it. Dust darkens red as much as infrared, so it
+/// stays; picture detail cancels.
+pub fn infrared_map(ir: &Plane, reference: Option<&Plane>, sensitivity: f32, expand: i32) -> Option<Plane> {
     let (w, h) = (ir.width, ir.height);
     if w < 64 || h < 64 || ir.data.len() < w * h {
         return None;
@@ -284,12 +293,43 @@ pub fn infrared_map(ir: &Plane, sensitivity: f32, expand: i32) -> Option<Plane> 
     let sigma = (0.003 * long).max(3.0);
     let (num, den) = (lcc_raster::blur::gaussian(&kept, sigma), lcc_raster::blur::gaussian(&keep, sigma));
     let film = |i: usize| inside.data.get(i).copied().unwrap_or(0.0) >= 0.5;
-    let drop = Plane::from_fn(w, h, |x, y| {
+    let mut drop = Plane::from_fn(w, h, |x, y| {
         let i = y * w + x;
         let (n, dn, v) = (num.data.get(i).copied().unwrap_or(0.0), den.data.get(i).copied().unwrap_or(0.0), sm.get(x, y));
         let level = if dn > 1e-3 { n / dn } else { lvl0.get(x, y) };
         if !film(i) || level <= 1e-4 { 0.0 } else { 1.0 - v / level }
     });
+    // the picture's leak into the pass, taken out with the red channel's own dips
+    if let Some(red) = reference.filter(|r| r.width == w && r.height == h && r.data.len() >= w * h) {
+        let red = Plane { width: w, height: h, data: red.data.iter().take(w * h).copied().map(clean).collect() };
+        let rs = lcc_raster::blur::gaussian(&red, 1.0);
+        let rkept = Plane { width: w, height: h, data: rs.data.iter().zip(&keep.data).map(|(v, k)| v * k).collect() };
+        let rnum = lcc_raster::blur::gaussian(&rkept, sigma);
+        let rdrop: Vec<f32> = (0..w * h)
+            .map(|i| {
+                let (n, dn, v) =
+                    (rnum.data.get(i).copied().unwrap_or(0.0), den.data.get(i).copied().unwrap_or(0.0), rs.data.get(i).copied().unwrap_or(0.0));
+                if !film(i) || dn <= 1e-3 || n <= 1e-6 { 0.0 } else { 1.0 - v / (n / dn) }
+            })
+            .collect();
+        // how far the pass follows red: fitted on the detail brighter than its surroundings
+        let (mut sxy, mut sxx) = (0.0f64, 0.0f64);
+        for (i, r) in rdrop.iter().enumerate().step_by(2) {
+            if *r < -0.03 && film(i) {
+                let d = f64::from(drop.data.get(i).copied().unwrap_or(0.0));
+                sxy += d * f64::from(*r);
+                sxx += f64::from(*r) * f64::from(*r);
+            }
+        }
+        let leak = if sxx > 1e-6 { (sxy / sxx).clamp(0.0, 0.6) as f32 } else { 0.0 };
+        // only where red darkens: detail brighter in red than around it can't pass for dust, and
+        // where the pass brightens less than red does there, subtracting would make a dip of it
+        if leak > 0.0 {
+            for (d, r) in drop.data.iter_mut().zip(&rdrop) {
+                *d -= leak * r.max(0.0);
+            }
+        }
+    }
     // the grain's width in drop: a robust spread over the film (a dusty frame's specks don't widen it)
     let sigma_d = robust_spread(&drop, film).max(0.004);
     // how many grain widths: a speck's core and the edge joined to it, both wider at low sensitivity
@@ -800,18 +840,31 @@ fn same_both_sides(path: &[(f64, f64)], luma: &Plane, near: f64, depth: f64, str
 /// The long edge `FilmDust::expand` is given at: a mark on a smaller or larger pass is grown by the same fraction.
 pub const EXPAND_EDGE: f64 = 2400.0;
 
+/// The photo's red channel, the reference [`infrared_map`] takes the picture's leak out with, when
+/// `src` is the pass's size.
+pub fn red_of(src: &Rgb32f, ir: &Plane) -> Option<Plane> {
+    ((src.width, src.height) == (ir.width, ir.height) && src.data.len() >= src.width * src.height).then(|| Plane {
+        width: src.width,
+        height: src.height,
+        data: src.data.iter().map(|p| p[0]).collect(),
+    })
+}
+
 /// The defect map of the infrared pass `ir` for `fd` ([`infrared_map`] at `fd`'s sensitivity and
-/// expand), kept for the next render: a photo's pass and settings make the same map every time.
-pub fn cached_map(ir: &Arc<Plane>, fd: &lcc_develop::FilmDust) -> Option<Arc<Plane>> {
+/// expand, with `src`'s red channel as the reference), kept for the next render: a photo's pass and
+/// settings make the same map every time.
+pub fn cached_map(ir: &Arc<Plane>, src: &Rgb32f, fd: &lcc_develop::FilmDust) -> Option<Arc<Plane>> {
     static MAPS: Mutex<Vec<(u64, Arc<Plane>)>> = Mutex::new(Vec::new());
     let long = ir.width.max(ir.height) as f64;
     let expand = if fd.expand.is_finite() { (fd.expand.clamp(-8.0, 40.0) * long / EXPAND_EDGE).round() as i32 } else { 0 };
     let sensitivity = if fd.sensitivity.is_finite() { fd.sensitivity.clamp(0.0, 100.0) as f32 } else { 50.0 };
-    let key = crate::hash_of((Arc::as_ptr(ir) as usize, ir.width, ir.height, ir.data.len(), sensitivity.to_bits(), expand));
+    let key =
+        crate::hash_of((Arc::as_ptr(ir) as usize, ir.width, ir.height, ir.data.len(), sensitivity.to_bits(), expand, src.data.as_ptr() as usize));
     if let Some((_, m)) = MAPS.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
         return Some(m.clone());
     }
-    let map = Arc::new(infrared_map(ir, sensitivity, expand)?);
+    let red = red_of(src, ir);
+    let map = Arc::new(infrared_map(ir, red.as_ref(), sensitivity, expand)?);
     let mut g = MAPS.lock().unwrap_or_else(PoisonError::into_inner);
     if g.len() >= 4 {
         g.remove(0);
@@ -821,21 +874,29 @@ pub fn cached_map(ir: &Arc<Plane>, fd: &lcc_develop::FilmDust) -> Option<Arc<Pla
 }
 
 /// The marks of the photo's infrared pass as the render `frame` of `w`×`h` sees them (0..1), for
-/// `s.film_dust`'s sensitivity and expand; `None` when the photo has no pass.
-pub fn mask_for(info: &crate::SourceInfo, s: &lcc_develop::DevelopSettings, frame: &crate::geometry::Frame, w: usize, h: usize) -> Option<Plane> {
+/// `s.film_dust`'s sensitivity and expand (`src`: the source the pass belongs to); `None` when the
+/// photo has no pass.
+pub fn mask_for(
+    info: &crate::SourceInfo,
+    src: &Rgb32f,
+    s: &lcc_develop::DevelopSettings,
+    frame: &crate::geometry::Frame,
+    w: usize,
+    h: usize,
+) -> Option<Plane> {
     let ir = info.infrared.as_ref()?;
-    let map = cached_map(ir, &s.film_dust)?;
+    let map = cached_map(ir, src, &s.film_dust)?;
     Some(frame.sample_alpha(&map, w, h))
 }
 
 /// The Source-stage step: when `s.film_dust` is on and the photo has an infrared pass, the marked
-/// pixels of `img` (the source as `frame` samples it, `img.width`×`img.height`) are filled in
+/// pixels of `img` (the source `src` as `frame` samples it, `img.width`×`img.height`) are filled in
 /// from their surroundings ([`inpaint`]). True when the image changed.
-pub fn stage(img: &mut Rgb32f, info: &crate::SourceInfo, s: &lcc_develop::DevelopSettings, frame: &crate::geometry::Frame) -> bool {
+pub fn stage(img: &mut Rgb32f, src: &Rgb32f, info: &crate::SourceInfo, s: &lcc_develop::DevelopSettings, frame: &crate::geometry::Frame) -> bool {
     if !s.film_dust.on() || info.infrared.is_none() {
         return false;
     }
-    let Some(mask) = mask_for(info, s, frame, img.width, img.height) else { return false };
+    let Some(mask) = mask_for(info, src, s, frame, img.width, img.height) else { return false };
     inpaint(img, &mask)
 }
 
@@ -1110,7 +1171,7 @@ mod tests {
             ir.data[(y as usize + 1) * w + x as usize] = 0.2;
         }
         dip(&mut ir, 400, 500, 4, 0.1);
-        let found = detect_infrared(&ir, &luma, 50.0);
+        let found = detect_infrared(&ir, None, &luma, 50.0);
         let specks: Vec<_> = found.iter().filter(|d| !d.is_line()).collect();
         for (x, y) in [(100, 100), (300, 80), (500, 200), (650, 120)] {
             let (nx, ny) = (x as f64 / w as f64, y as f64 / h as f64);
@@ -1125,7 +1186,7 @@ mod tests {
         // nothing at the gate's edge, and nothing on a clean pass
         assert!(found.iter().all(|d| d.points.iter().all(|p| p.0 > 0.03 && p.0 < 0.97 && p.1 > 0.03 && p.1 < 0.97)), "{found:?}");
         let clean = Plane::from_fn(w, h, |_, y| 0.6 - 0.1 * y as f32 / h as f32);
-        assert!(detect_infrared(&clean, &luma, 100.0).is_empty());
+        assert!(detect_infrared(&clean, None, &luma, 100.0).is_empty());
     }
 
     /// Expand grows every mark of the map by that many pixels (and a negative value shrinks it),
@@ -1141,7 +1202,7 @@ mod tests {
         }
         // the marked pixels' count and bounding box (x0, y0, x1, y1)
         let marked = |e: i32| {
-            let m = infrared_map(&ir, 50.0, e).unwrap();
+            let m = infrared_map(&ir, None, 50.0, e).unwrap();
             let pts: Vec<(usize, usize)> = (0..w * h).filter(|i| m.data[*i] > 0.0).map(|i| (i % w, i / w)).collect();
             let bbox = pts.iter().fold((usize::MAX, usize::MAX, 0, 0), |b, p| (b.0.min(p.0), b.1.min(p.1), b.2.max(p.0), b.3.max(p.1)));
             (pts.len(), bbox)
@@ -1151,7 +1212,7 @@ mod tests {
         // the speck's own soft edge counts, and growing adds at most the distance on each side
         assert!(pb.0 <= 199 && pb.2 >= 201 && pb.1 <= 149 && pb.3 >= 151, "the speck itself: {pb:?}");
         assert!(gb.0 + 3 >= pb.0 && gb.2 <= pb.2 + 3 && gb.1 + 3 >= pb.1 && gb.3 <= pb.3 + 3, "grown only around the mark: {gb:?} vs {pb:?}");
-        assert_eq!(infrared_map(&Plane::from_fn(w, h, |_, _| 0.6), 50.0, 5).unwrap().data.iter().filter(|v| **v > 0.0).count(), 0);
+        assert_eq!(infrared_map(&Plane::from_fn(w, h, |_, _| 0.6), None, 50.0, 5).unwrap().data.iter().filter(|v| **v > 0.0).count(), 0);
     }
 
     /// A grainy pass with a dark scanner gate along the left edge (its border a few pixels from
@@ -1166,10 +1227,54 @@ mod tests {
                 ir.data[(200 + dy) * w + 300 + dx] = 0.05;
             }
         }
-        let m = infrared_map(&ir, 100.0, 2).unwrap();
+        let m = infrared_map(&ir, None, 100.0, 2).unwrap();
         let in_gate = (0..h).flat_map(|y| (0..24).map(move |x| (x, y))).filter(|(x, y)| m.get(*x, *y) > 0.0).count();
         assert_eq!(in_gate, 0, "marks in the gate");
         assert!(m.get(301, 201) > 0.0, "the speck on the film");
+    }
+
+    /// Picture detail leaks into the pass a little (here a dark grid of lines, an eighth as deep
+    /// in the pass as in red, as dense dye leaks): with red as the reference it isn't marked; dust,
+    /// as dark in red as in the pass, still is. Without the reference the lines are taken for hairs.
+    #[test]
+    fn the_pictures_leak_into_the_pass_is_taken_out_with_red() {
+        let (w, h) = (500, 400);
+        let noise = |x: usize, y: usize| (((x * 7919 + y * 104_729) % 97) as f32 / 97.0 - 0.5) * 0.02;
+        let line = |x: usize, y: usize| (x % 50 < 2 && (100..300).contains(&y)) || (y % 60 < 2 && (100..400).contains(&x));
+        let bright = |x: usize, y: usize| (x / 25 + y / 25).is_multiple_of(2) && (20..90).contains(&y);
+        let speck = |x: usize, y: usize| (x as i64 - 250).pow(2) + (y as i64 - 350).pow(2) <= 4;
+        let red = Plane::from_fn(w, h, |x, y| {
+            let mut v = 0.4 + noise(y, x);
+            if line(x, y) {
+                v *= 0.4;
+            }
+            if bright(x, y) {
+                v *= 1.6;
+            }
+            if speck(x, y) {
+                v *= 0.1;
+            }
+            v
+        });
+        let ir = Plane::from_fn(w, h, |x, y| {
+            let mut v = 0.6 + noise(x, y);
+            if line(x, y) {
+                v *= 1.0 - 0.6 / 8.0;
+            }
+            if bright(x, y) {
+                v *= 1.0 + 0.6 / 8.0;
+            }
+            if speck(x, y) {
+                v *= 0.1;
+            }
+            v
+        });
+        let on_lines = |m: &Plane| (0..w * h).filter(|i| line(i % w, i / w) && m.data[*i] > 0.0).count();
+        let with = infrared_map(&ir, Some(&red), 50.0, 0).unwrap();
+        let without = infrared_map(&ir, None, 50.0, 0).unwrap();
+        assert!(on_lines(&without) > 200, "without red the lines are marked: {}", on_lines(&without));
+        assert!(on_lines(&with) * 10 < on_lines(&without), "with red they aren't: {} vs {}", on_lines(&with), on_lines(&without));
+        assert!(with.get(250, 350) > 0.0, "the speck stays marked");
     }
 
     #[test]
@@ -1182,14 +1287,19 @@ mod tests {
         assert!(detect(&short, 50.0).is_empty());
         let _ = detect(&scene(200, 200), f32::NAN);
         for (w, h) in [(0, 0), (1, 1), (63, 63), (64, 64)] {
-            let _ = detect_infrared(&Plane::new(w, h), &Plane::new(w, h), 50.0);
+            let _ = detect_infrared(&Plane::new(w, h), Some(&Plane::new(w, h)), &Plane::new(w, h), 50.0);
         }
-        let _ = detect_infrared(&Plane::new(100, 100), &Plane::new(90, 100), 50.0);
+        let _ = detect_infrared(&Plane::new(100, 100), None, &Plane::new(90, 100), 50.0);
         let short = Plane { width: 100, height: 100, data: vec![0.0; 10] };
-        assert!(detect_infrared(&short, &Plane::new(100, 100), 50.0).is_empty());
-        assert!(infrared_map(&short, 50.0, 0).is_none());
-        let _ = detect_infrared(&Plane::from_fn(200, 200, |_, _| f32::NAN), &Plane::new(200, 200), f32::NAN);
-        let _ = infrared_map(&Plane::from_fn(200, 200, |_, _| 0.5), 50.0, i32::MIN);
+        assert!(detect_infrared(&short, None, &Plane::new(100, 100), 50.0).is_empty());
+        assert!(infrared_map(&short, None, 50.0, 0).is_none());
+        let _ = detect_infrared(
+            &Plane::from_fn(200, 200, |_, _| f32::NAN),
+            Some(&Plane::from_fn(200, 200, |_, _| f32::NAN)),
+            &Plane::new(200, 200),
+            f32::NAN,
+        );
+        let _ = infrared_map(&Plane::from_fn(200, 200, |_, _| 0.5), Some(&Plane::new(3, 3)), 50.0, i32::MIN);
     }
 
     /// Marked pixels take the tone of their surroundings: a dark speck and a dark line on a smooth
