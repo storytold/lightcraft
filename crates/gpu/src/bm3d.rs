@@ -44,6 +44,8 @@ struct Uniforms {
     lambda: f32,
     sigma: f32,
     pad2: f32,
+    // std140: vec4 members need 16-byte alignment
+    _pad3: [u32; 4],
     /// Each plane's threshold and Wiener sigma (`bm3d::plane_levels`), indexed by the plane.
     lam: [f32; 4],
     sig: [f32; 4],
@@ -344,6 +346,7 @@ impl Bm3dGpu {
             lambda: plan.lambda * sigma,
             sigma,
             pad2: 0.0,
+            _pad3: [0; 4],
             lam: levels.map(|l| l.0),
             sig: levels.map(|l| l.1),
         };
