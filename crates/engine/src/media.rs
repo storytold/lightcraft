@@ -1436,7 +1436,15 @@ impl RenderJob {
         let failed = self.failed(String::new());
         // thumbnails go to the second graphics card when there is one: the editing card keeps the views
         let thumb = self.cache.is_some();
-        let run = || crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed });
+        // a render a newer request replaced stops its plug-in filters; what it made then isn't the
+        // picture asked for, and goes back as superseded (the decode it did is still handed on)
+        let cancel = self.superseded.clone();
+        let run = || {
+            let (r, cut) = lcc_pipeline::with_cancel(cancel, || {
+                crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed })
+            });
+            if cut { RenderResult { rendered: Err(SUPERSEDED.into()), ..r } } else { r }
+        };
         if thumb { lcc_gpu::prefer_helper(run) } else { run() }
     }
 

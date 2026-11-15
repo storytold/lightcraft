@@ -194,15 +194,16 @@
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <Component Id="LccApp" Guid="8A1D3A39-F7C1-47B1-97AE-40C80BF82F4A">
         <File Id="AppExe" Source="$(var.BinDir)\{{binary}}.exe" KeyPath="yes">
-          <!-- Not an advertised shortcut (Advertise="no" + an explicit Target). An advertised one
-               resolves through the installed product's advertisement, so it lives and dies with
-               that product's ProductCode: every upgrade is a MajorUpgrade (new ProductCode), and
-               the Start-menu entry and anything pinned from it stop working once the old product
-               is unregistered. This plain shortcut names the installed exe; the install folder
-               isn't versioned and upgrades keep it, so the same path is valid across upgrades. -->
+          <!-- Not an advertised shortcut (Advertise="no"). An advertised one resolves through the
+               installed product's advertisement, so it lives and dies with that product's
+               ProductCode: every upgrade is a MajorUpgrade (new ProductCode), and the Start-menu
+               entry and anything pinned from it stop working once the old product is unregistered.
+               Nested in the File, a plain shortcut targets that file's installed path ([#AppExe]);
+               WiX rejects an explicit Target here (WIX0062). The install folder isn't versioned and
+               upgrades keep it, so the same path is valid across upgrades. -->
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="{{display_name}}"
               Description="{{display_name}}: {{tagline}}" WorkingDirectory="INSTALLFOLDER" Advertise="no"
-              Target="[INSTALLDIR]{{binary}}.exe" Icon="AppIcon.ico" IconIndex="0" />
+              Icon="AppIcon.ico" IconIndex="0" />
         </File>
 
         <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\{{binary}}.exe" Value="[#AppExe]" Type="string" />
