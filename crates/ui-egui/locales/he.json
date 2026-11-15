@@ -1142,5 +1142,22 @@
   "Keywords of {n} selected photos": "מילות המפתח של {n} תמונות שנבחרו",
   "+{n} more": "עוד {n}+",
   "Create the keyword “{name}”": "יצירת מילת המפתח „{name}”",
-  "new, inside {parent}": "חדשה, בתוך {parent}"
+  "new, inside {parent}": "חדשה, בתוך {parent}",
+  "After 30 days": "לאחר 30 יום",
+  "After 7 days": "לאחר 7 ימים",
+  "After 90 days": "לאחר 90 יום",
+  "After a year": "לאחר שנה",
+  "All Metadata": "כל המטא־נתונים",
+  "All rights reserved": "כל הזכויות שמורות",
+  "All types": "כל הסוגים",
+  "Apply Settings JSON": "החל הגדרות JSON",
+  "Arrange Panel": "סדר את החלונית",
+  "As Shot": "כפי שצולם",
+  "Ascending": "סדר עולה",
+  "Assisted Culling": "סינון תמונות בסיוע",
+  "Assisted Culling…": "סינון תמונות בסיוע…",
+  "Back to Edit (E)": "חזרה לעריכה (E)",
+  "Back to Grid": "חזרה לתצוגת רשת",
+  "Build Smart Previews": "צור תצוגות מקדימות חכמות",
+  "Close file": "סגור קובץ"
 }
