@@ -136,6 +136,47 @@ fn without_crop(s: &DevelopSettings) -> DevelopSettings {
     s
 }
 
+/// The square a face tile shows ([`crate::Session::face_job`]), in the frame after the user's
+/// Rotate Left/Right: the face box carried over to that frame, the square around it (normalized),
+/// its side and the frame's size in pixels.
+struct FaceSquare {
+    face: lcc_geom::Rect,
+    rect: lcc_geom::Rect,
+    side: f64,
+    w: f64,
+    h: f64,
+}
+
+fn face_square(p: &Photo, face: lcc_geom::Rect) -> FaceSquare {
+    // `face` is on the upright (EXIF-oriented) photo; the crop is in the frame after the user's
+    // Rotate Left/Right, so carry the box (and the photo's size) over to it.
+    let orient = p.develop.orientation;
+    let face = orient.map_norm_rect(face);
+    let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+    let (w, h) = if orient.swaps_axes() { (h, w) } else { (w, h) };
+    let side = ((face.x1 - face.x0) * w).max((face.y1 - face.y0) * h) * 1.7;
+    // finite, within the photo, and never wider than its short side (so the clamps below are valid)
+    let side = if side.is_finite() { side.clamp(1.0, w.min(h)) } else { w.min(h) };
+    let (cx, cy) = ((face.x0 + face.x1) / 2.0 * w, (face.y0 + face.y1) / 2.0 * h);
+    let (cx, cy) = (if cx.is_finite() { cx } else { w / 2.0 }, if cy.is_finite() { cy } else { h / 2.0 });
+    let (x0, y0) = (cx.clamp(side / 2.0, w - side / 2.0) - side / 2.0, cy.clamp(side / 2.0, h - side / 2.0) - side / 2.0);
+    let rect = lcc_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
+    FaceSquare { face, rect, side, w, h }
+}
+
+/// `inner` (normalized to the whole frame) as fractions of `outer`, clamped to it: where a box lies
+/// in a picture cut to `outer`. `None` when `outer` is empty or not finite.
+fn rect_within(inner: lcc_geom::Rect, outer: lcc_geom::Rect) -> Option<lcc_geom::Rect> {
+    let (ow, oh) = (outer.x1 - outer.x0, outer.y1 - outer.y0);
+    if !(ow.is_finite() && oh.is_finite() && ow > 0.0 && oh > 0.0) {
+        return None;
+    }
+    let f = |v: f64, o: f64, len: f64| if v.is_finite() { ((v - o) / len).clamp(0.0, 1.0) } else { 0.0 };
+    let r =
+        lcc_geom::Rect { x0: f(inner.x0, outer.x0, ow), y0: f(inner.y0, outer.y0, oh), x1: f(inner.x1, outer.x0, ow), y1: f(inner.y1, outer.y0, oh) };
+    (r.x1 > r.x0 && r.y1 > r.y0).then_some(r)
+}
+
 fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, out_long: usize) -> usize {
     let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
     let r = settings.crop.geometry.rect;
@@ -2572,6 +2613,26 @@ impl crate::Session {
         })
     }
 
+    /// Where `face` (normalized, in the photo's upright frame) lies in its tile ([`Self::face_job`]),
+    /// as fractions of the tile: what a face tile outlines, so a tile with two faces in it says which
+    /// one it is about (issue #1147). `None` for an unknown photo.
+    pub fn face_in_tile(&self, id: PhotoId, face: lcc_geom::Rect) -> Option<lcc_geom::Rect> {
+        let p = self.rendered_photo_of(id)?;
+        let sq = face_square(&p, face);
+        rect_within(sq.face, sq.rect)
+    }
+
+    /// The whole photo a face is in, with the photo's look but without its crop (a face may lie
+    /// outside it), long edge `edge` (≤ 512), and where `face` (normalized, upright frame) lies in
+    /// that picture: the hover preview of a face tile (issue #1147). Cached like [`Self::variant_job`].
+    pub fn face_photo_job(&mut self, id: PhotoId, face: lcc_geom::Rect, edge: usize) -> Option<(RenderJob, lcc_geom::Rect)> {
+        let p = self.rendered_photo_of(id)?;
+        let at = rect_within(p.develop.orientation.map_norm_rect(face), lcc_geom::Rect::UNIT)?;
+        let settings = without_crop(&p.develop);
+        let job = self.variant_job(id, &settings, edge)?;
+        Some((job, at))
+    }
+
     /// A square close-up of `face` (normalized, in the photo's upright frame) for a People card: the
     /// photo's own look with its crop replaced by a square around the face (room for hair and chin),
     /// at least `edge` pixels across (rounded up to [`FACE_EDGE_STEP`], ≤ 512, so a tile size
@@ -2583,19 +2644,7 @@ impl crate::Session {
     /// the content: a later launch shows the tile without reading the original.
     pub fn face_job(&mut self, id: PhotoId, face: lcc_geom::Rect, edge: usize) -> Option<RenderJob> {
         let p = self.rendered_photo_of(id)?;
-        // `face` is on the upright (EXIF-oriented) photo; the crop below is in the frame after the
-        // user's Rotate Left/Right, so carry the box (and the photo's size) over to it.
-        let orient = p.develop.orientation;
-        let face = orient.map_norm_rect(face);
-        let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
-        let (w, h) = if orient.swaps_axes() { (h, w) } else { (w, h) };
-        let side = ((face.x1 - face.x0) * w).max((face.y1 - face.y0) * h) * 1.7;
-        // finite, within the photo, and never wider than its short side (so the clamps below are valid)
-        let side = if side.is_finite() { side.clamp(1.0, w.min(h)) } else { w.min(h) };
-        let (cx, cy) = ((face.x0 + face.x1) / 2.0 * w, (face.y0 + face.y1) / 2.0 * h);
-        let (cx, cy) = (if cx.is_finite() { cx } else { w / 2.0 }, if cy.is_finite() { cy } else { h / 2.0 });
-        let (x0, y0) = (cx.clamp(side / 2.0, w - side / 2.0) - side / 2.0, cy.clamp(side / 2.0, h - side / 2.0) - side / 2.0);
-        let rect = lcc_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
+        let FaceSquare { rect, side, w, h, .. } = face_square(&p, face);
         let mut settings = (*p.develop).clone();
         settings.crop = lcc_develop::Crop { geometry: lcc_geom::CropGeometry { rect, angle: 0.0 }, ..Default::default() };
         let edge = face_edge(edge);
