@@ -336,7 +336,10 @@ fn receive(ch: &mut Channel, w: &Want, size: u64, offset: u64, cancel: &AtomicBo
             // (what arrived stays, and the next exchange carries on from there)
             return Err("syncing photos was cancelled".into());
         }
-        let frame = ch.recv().map_err(|e| e.to_string())?;
+        let frame = match ch.recv_frame().map_err(|e| e.to_string())? {
+            lcc_peer::Frame::Bytes(b) => b,
+            lcc_peer::Frame::Json(_) => return Err("the other device broke off a file".into()),
+        };
         if frame.is_empty() || frame.len() > CHUNK || frame.len() as u64 > size - at {
             return Err("the other device sent a file that doesn't match its size".into());
         }
@@ -400,7 +403,7 @@ fn serve(hub: &Hub, peer: &lcc_peer::Peer, ch: &mut Channel, wants: Vec<Get>) ->
             let slice = buf.get_mut(..want).ok_or("buffer")?;
             // (a file that shrank while it was read: the exchange ends, and the next one starts it over)
             f.read_exact(slice).map_err(|e| format!("couldn't read a file to send: {e}"))?;
-            ch.send(slice).map_err(|e| e.to_string())?;
+            ch.send_bytes(slice).map_err(|e| e.to_string())?;
             at += want as u64;
         }
     }

@@ -35,6 +35,7 @@ fn plain(a: &Album) -> bool {
 
 /// The catalogue's photos by key (and back).
 pub(super) fn index(s: &Session, lib: &mut Lib) {
+    lib.album_sig.clear();
     lib.keys.clear();
     lib.ids.clear();
     for p in s.catalog.photos() {
@@ -54,6 +55,8 @@ fn reindex(s: &Session, lib: &mut Lib, id: PhotoId) {
     if old == key {
         return;
     }
+    // a photo got (or lost) its key: every collection's photos are looked at afresh
+    lib.album_sig.clear();
     if let Some(o) = old {
         lib.ids.remove(&id);
         if lib.keys.get(&o) == Some(&id) {
@@ -429,7 +432,7 @@ pub(super) fn reconcile(s: &mut Session, lib: &mut Lib) {
             continue;
         }
         let mapped = lib.replica.albums.get(&id).copied().filter(|a| s.catalog.album(AlbumId(*a)).is_some());
-        let listed = !c.gone() && c.listed_for(&me, mode);
+        let listed = !c.gone() && c.listed_for(&me, mode) && (mode == Mode::Catalogue || c.grant.v != Grant::None);
         let want = listed
             && match mode {
                 Mode::Catalogue => true,
@@ -493,7 +496,10 @@ pub(super) fn reconcile(s: &mut Session, lib: &mut Lib) {
         if changed && s.apply_system(Op::SetAlbumPhotos { id: AlbumId(album), photos }).is_err() {
             continue;
         }
-        if let Some(a) = s.catalog.album(AlbumId(album)) {
+        // (a collection `scan` hasn't looked at yet keeps its first look: what is in it now is new to the replica)
+        if lib.base.contains_key(&id)
+            && let Some(a) = s.catalog.album(AlbumId(album))
+        {
             let now = album_keys(lib, a);
             lib.album_sig.insert(album, signature(a));
             lib.base.insert(id, now);

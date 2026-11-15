@@ -22,6 +22,8 @@
 
 pub(crate) mod catalog;
 pub(crate) mod record;
+#[cfg(test)]
+mod tests;
 mod wire;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -400,7 +402,7 @@ fn catalogue_status(s: &Session, online: &HashSet<String>, paired: &[lcc_peer::P
     if let Some(g) = r.group.as_ref().filter(|g| g.has(me)) {
         for (id, e) in &r.collections {
             let c = &e.c;
-            if c.gone() || !c.listed_for(me, g.mode) {
+            if c.gone() || !c.listed_for(me, g.mode) || (g.mode == Mode::Collections && c.owner != me && c.grant.v == Grant::None) {
                 continue;
             }
             let (location, depth) = pill::of_collection(c, me);

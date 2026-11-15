@@ -1,0 +1,188 @@
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use crate::Session;
+
+fn session(dir: &std::path::Path, name: &str, port: u16) -> Session {
+    let mut s = Session::new().with_fs();
+    s.device_sync.store_path = Some(dir.join(format!("{name}.json")));
+    s.device_sync.port = Some(port);
+    s.device_sync.exchange_every = Some(Duration::from_millis(200));
+    s.open_library(dir.join(format!("{name}-lib")), false).unwrap();
+    s
+}
+
+fn write_png(path: &std::path::Path, seed: usize) {
+    let (w, h) = (16usize, 12usize);
+    let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 9 + seed) as u8, (i / w * 13) as u8, 7, 255]).collect();
+    let img = lcc_raster::Rgba8 { width: w, height: h, data };
+    let bytes = lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(&img), &lcc_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(path, bytes).unwrap();
+}
+
+fn status(s: &mut Session) -> Value {
+    s.execute("sync.status", &json!({})).unwrap()
+}
+
+fn device_id(s: &mut Session) -> String {
+    status(s)["deviceId"].as_str().unwrap().to_string()
+}
+
+/// Ticks every session (as their apps would) until `done`.
+fn tick_until(all: &mut [&mut Session], what: &str, done: impl Fn(&mut [&mut Session]) -> bool) {
+    let t = Instant::now();
+    while !done(all) {
+        for s in all.iter_mut() {
+            s.execute("sync.tick", &json!({})).unwrap();
+        }
+        assert!(t.elapsed() < Duration::from_secs(60), "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+
+fn pair_up(a: &mut Session, b: &mut Session) {
+    a.execute("sync.rename", &json!({"name": "Studio"})).unwrap();
+    b.execute("sync.rename", &json!({"name": "Tablet"})).unwrap();
+    a.execute("sync.find", &json!({"on": true})).unwrap();
+    b.execute("sync.find", &json!({"on": true})).unwrap();
+    let b_id = device_id(b);
+    let wait = |s: &mut Session, what: &str, f: &dyn Fn(&Value) -> bool| {
+        let t = Instant::now();
+        loop {
+            let v = status(s);
+            if f(&v) {
+                return;
+            }
+            assert!(t.elapsed() < Duration::from_secs(20), "timed out waiting for {what}: {v}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    wait(a, "a to find b", &|v| v["found"].as_array().is_some_and(|f| f.iter().any(|d| d["deviceId"] == b_id.as_str())));
+    a.execute("sync.pair", &json!({"device": b_id})).unwrap();
+    wait(a, "a's code", &|v| v["pairing"]["stage"] == "confirm");
+    wait(b, "b's code", &|v| v["pairing"]["stage"] == "confirm");
+    a.execute("sync.confirm", &json!({"accept": true})).unwrap();
+    b.execute("sync.confirm", &json!({"accept": true})).unwrap();
+    wait(a, "a paired", &|v| v["paired"].as_array().is_some_and(|p| p.len() == 1));
+    wait(b, "b paired", &|v| v["paired"].as_array().is_some_and(|p| p.len() == 1));
+    a.execute("sync.clearPairing", &json!({})).unwrap();
+    b.execute("sync.clearPairing", &json!({})).unwrap();
+}
+
+fn lan_skipped() -> bool {
+    // LAN discovery times out on the macOS CI runner; checked in person on real Macs instead
+    if cfg!(target_os = "macos") && std::env::var_os("CI").is_some() {
+        lcc_testkit::skip!(System, "LAN discovery on the macOS CI runner (tested in person)");
+        return true;
+    }
+    false
+}
+
+fn collection<'a>(v: &'a Value, name: &str) -> Option<&'a Value> {
+    v["catalogue"]["collections"].as_array()?.iter().find(|c| c["name"] == name)
+}
+
+/// Collections only, two catalogues: the owner allows a collection, the other device takes it in
+/// full; the photo, its original and its edits arrive; an edit made there comes back; a photo
+/// added there reaches the owner with its file; what the owner doesn't allow stays home.
+#[test]
+fn a_shared_collection_brings_photos_files_and_edits_both_ways() {
+    if lan_skipped() {
+        return;
+    }
+    let dir = lcc_testkit::TempDir::new("lcc-engine-device-sync");
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let (p1, p2, p3) = (dir.join("src/one.png"), dir.join("src/two.png"), dir.join("src/three.png"));
+    write_png(&p1, 1);
+    write_png(&p2, 2);
+    write_png(&p3, 3);
+    let port = 23000 + (std::process::id() % 8000) as u16;
+    let (mut a, mut b) = (session(&dir, "a", port), session(&dir, "b", port));
+    let ids = a.execute("library.import", &json!({"paths": [p1.to_string_lossy(), p2.to_string_lossy()]})).unwrap();
+    let (one, two) = (ids["imported"][0].as_u64().unwrap(), ids["imported"][1].as_u64().unwrap());
+    let trip = a.execute("album.create", &json!({"name": "Trip"})).unwrap()["id"].as_u64().unwrap();
+    let private = a.execute("album.create", &json!({"name": "Private"})).unwrap()["id"].as_u64().unwrap();
+    // (album.addPhotos wants a selection)
+    a.selection = crate::Selection::single(lcc_catalog::PhotoId(one));
+    a.execute("album.addPhotos", &json!({"id": trip, "ids": [one]})).unwrap();
+    a.execute("album.addPhotos", &json!({"id": private, "ids": [two]})).unwrap();
+    assert_eq!(a.catalog.album(lcc_catalog::AlbumId(trip)).unwrap().photos.len(), 1);
+    a.execute("photo.rate", &json!({"ids": [one], "rating": 4})).unwrap();
+    pair_up(&mut a, &mut b);
+    let (a_id, b_id) = (device_id(&mut a), device_id(&mut b));
+
+    // A starts a collections-only sync and allows Trip in full; Private stays its own
+    a.execute("sync.setup", &json!({"device": b_id, "mode": "collections"})).unwrap();
+    a.execute("sync.allow", &json!({"album": trip, "allow": "sync"})).unwrap();
+    assert!(a.execute("sync.take", &json!({"album": trip, "take": "previews"})).is_err(), "the owner allows, it doesn't take");
+    tick_until(&mut [&mut a, &mut b], "the invitation", |all| status(all[1])["offers"].as_array().is_some_and(|o| !o.is_empty()));
+    b.execute("sync.answer", &json!({"device": a_id, "accept": true})).unwrap();
+    tick_until(&mut [&mut a, &mut b], "b to see Trip", |all| collection(&status(all[1]), "Trip").is_some());
+    let v = status(&mut b);
+    assert!(collection(&v, "Private").is_none(), "a collection that isn't allowed isn't listed: {v}");
+    assert_eq!(b.catalog.photos().count(), 0, "nothing comes before it is taken");
+    assert!(b.execute("sync.take", &json!({"collection": collection(&v, "Trip").unwrap()["id"], "take": "fullSync"})).is_ok());
+
+    // the photo arrives with its rating, then its original, checked against its key
+    tick_until(&mut [&mut a, &mut b], "the photo at b", |all| all[1].catalog.photos().count() == 1);
+    let pb = b.catalog.photos().next().unwrap().clone();
+    assert_eq!(pb.rating, 4);
+    let lcc_catalog::Source::File { path } = &pb.source else { panic!("a file") };
+    let path = std::path::PathBuf::from(path);
+    tick_until(&mut [&mut a, &mut b], "the original at b", |_| path.is_file());
+    assert_eq!(std::fs::read(&path).unwrap(), std::fs::read(&p1).unwrap());
+    assert!(b.catalog.albums().any(|al| al.name == "Trip" && al.photos == vec![pb.id]));
+    tick_until(&mut [&mut a, &mut b], "b's pill to settle", |all| all[1].sync_pill(pb.id).is_some_and(|p| p.text() == "EF"));
+    assert_eq!(a.sync_pill(lcc_catalog::PhotoId(one)).map(|p| p.letters()), Some("EF".into()));
+    assert_eq!(a.sync_pill(lcc_catalog::PhotoId(two)), None, "a photo in no shared collection has no pill");
+
+    // an edit on B comes back to A, as a change of that field only
+    let mut d = (*pb.develop).clone();
+    d.light.exposure = 0.5;
+    b.set_develop(pb.id, d, "test").unwrap();
+    a.execute("photo.rate", &json!({"ids": [one], "rating": 2})).unwrap();
+    tick_until(&mut [&mut a, &mut b], "edits both ways", |all| {
+        let (pa, pb) = (all[0].catalog.photo(lcc_catalog::PhotoId(one)).unwrap(), all[1].catalog.photos().next().unwrap());
+        pa.develop.light.exposure == 0.5 && pb.rating == 2 && pa.rating == 2 && pb.develop.light.exposure == 0.5
+    });
+    assert!(a.undo.is_empty() || a.undo.iter().all(|u| !u.label.contains("Sync")), "another device's edit is not an undo step");
+
+    // a photo B adds to the collection reaches A, file and all
+    let added = b.execute("library.import", &json!({"paths": [p3.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap();
+    let trip_b = b.catalog.albums().find(|al| al.name == "Trip").unwrap().id.0;
+    b.selection = crate::Selection::single(lcc_catalog::PhotoId(added));
+    b.execute("album.addPhotos", &json!({"id": trip_b, "ids": [added]})).unwrap();
+    tick_until(&mut [&mut a, &mut b], "b's photo at a", |all| all[0].catalog.photos().count() == 3);
+    let pa = a.catalog.photos().find(|p| p.file_name == "three.png").unwrap().clone();
+    let lcc_catalog::Source::File { path } = &pa.source else { panic!("a file") };
+    let path = std::path::PathBuf::from(path);
+    tick_until(&mut [&mut a, &mut b], "b's original at a", |_| path.is_file());
+    assert!(a.catalog.album(lcc_catalog::AlbumId(trip)).unwrap().photos.contains(&pa.id));
+
+    // the owner stops allowing it: B keeps what it has, and later edits stay on A
+    a.execute("sync.allow", &json!({"album": trip, "allow": "none"})).unwrap();
+    tick_until(&mut [&mut a, &mut b], "b to lose the collection", |all| !all[1].catalog.albums().any(|al| al.name == "Trip"));
+    assert_eq!(b.catalog.photos().count(), 2, "stopping a sync never deletes photos");
+    a.execute("photo.rate", &json!({"ids": [one], "rating": 5})).unwrap();
+    for _ in 0..20 {
+        a.execute("sync.tick", &json!({})).unwrap();
+        b.execute("sync.tick", &json!({})).unwrap();
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    assert_eq!(b.catalog.photo(pb.id).unwrap().rating, 2);
+    let _ = private;
+    // bad parameters are errors, not panics
+    for (cmd, p) in [
+        ("sync.setup", json!({"device": "nobody", "mode": "collections"})),
+        ("sync.setup", json!({"device": b_id, "mode": "everything"})),
+        ("sync.allow", json!({"album": 999_999, "allow": "sync"})),
+        ("sync.allow", json!({"album": trip, "allow": "all"})),
+        ("sync.take", json!({"collection": "nope", "take": "previews"})),
+        ("sync.answer", json!({"device": "nobody", "accept": true})),
+        ("sync.rename", json!({"name": "Tablet"})),
+    ] {
+        assert!(a.execute(cmd, &p).is_err(), "{cmd} {p}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

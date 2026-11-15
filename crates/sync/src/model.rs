@@ -198,7 +198,8 @@ impl Collection {
 
     /// Whether `device` is told the collection exists.
     pub fn listed_for(&self, device: &str, mode: Mode) -> bool {
-        self.owner == device || mode == Mode::Catalogue || self.grant.v != Grant::None
+        // (a device that took it is told when the owner stops sharing)
+        self.owner == device || mode == Mode::Catalogue || self.grant.v != Grant::None || self.takes.contains_key(device)
     }
 
     /// Whether the collection's photos (their records and which ones they are) go to `device`.
