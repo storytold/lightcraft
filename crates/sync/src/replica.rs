@@ -671,6 +671,76 @@ impl Replica {
         }
     }
 
+    /// Photo `old` is known as `new` from now on (its original's SHA-1 became known, so its key
+    /// moved from the content hash to `sha1:<hex>`; `docs/sync.md` ▸ Photo identity). Its record
+    /// and its places in collections move with it; when `new` is already known (another device
+    /// told of it under the new key first) the two merge field by field, each keeping its later
+    /// write. Both keys' items go out again under the new key. Says whether anything moved.
+    pub fn rekey(&mut self, old: &str, new: &str) -> bool {
+        if old == new || !ok_id(new) {
+            return false;
+        }
+        let mut moved = false;
+        if let Some(o) = self.photos.remove(old) {
+            moved = true;
+            self.by_seq.remove(&o.seq);
+            match self.photos.get_mut(new) {
+                None => {
+                    self.photos.insert(new.to_string(), PhotoEntry { seq: 0, via: None, ..o });
+                }
+                Some(n) => {
+                    n.have = n.have.max(o.have);
+                    for (name, f) in &o.fields {
+                        if n.fields.get(name).is_some_and(|m| f.s <= m.s) {
+                            continue;
+                        }
+                        n.fields.insert(name.clone(), *f);
+                        match (&o.ghost, &mut n.ghost) {
+                            (Some(og), Some(ng)) => {
+                                if let Some(v) = og.values.get(name) {
+                                    ng.values.insert(name.clone(), v.clone());
+                                }
+                            }
+                            // the catalogue holds the later value: the told one mustn't overwrite it
+                            (None, Some(ng)) => {
+                                ng.values.remove(name);
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let (Some(og), Some(ng)) = (&o.ghost, &mut n.ghost)
+                        && ng.info.is_null()
+                    {
+                        ng.info = og.info.clone();
+                    }
+                }
+            }
+            self.touch_photo(new, None);
+        }
+        let colls: Vec<String> = self.members.iter().filter(|(_, m)| m.contains_key(old)).map(|(c, _)| c.clone()).collect();
+        for coll in colls {
+            let Some(m) = self.members.get_mut(&coll) else { continue };
+            let Some(o) = m.remove(old) else { continue };
+            moved = true;
+            self.by_seq.remove(&o.seq);
+            let e = m.entry(new.to_string()).or_insert_with(|| MemberEntry { on: o.on.clone(), seq: 0, via: None });
+            e.on.merge(&o.on);
+            self.touch_member(&coll, new, None);
+        }
+        for c in self.cursors.values_mut() {
+            let stale: Vec<Ref> =
+                c.resend.iter().filter(|r| matches!(r, Ref::Photo(k) | Ref::Member(_, k) if k == old)).cloned().collect();
+            for r in stale {
+                c.resend.remove(&r);
+                c.resend.insert(match r {
+                    Ref::Member(coll, _) => Ref::Member(coll, new.to_string()),
+                    _ => Ref::Photo(new.to_string()),
+                });
+            }
+        }
+        moved
+    }
+
     /// The photos told of that the catalogue doesn't hold.
     pub fn ghosts(&self) -> impl Iterator<Item = &String> {
         self.photos.iter().filter(|(_, e)| e.ghost.is_some()).map(|(k, _)| k)

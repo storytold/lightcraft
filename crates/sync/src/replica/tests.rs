@@ -300,3 +300,50 @@ fn a_second_group_is_refused_and_names_are_unique() {
     assert!(!a.r.in_group_with("b"), "the others learn that a device left");
     assert!(a.r.outgoing("b", 10).refs.iter().all(|r| *r == Ref::Group), "a device that left is told no more than that");
 }
+
+#[test]
+fn a_photo_rekeyed_to_its_sha1_keeps_its_record_and_collections() {
+    let (mut a, mut b) = (Dev::new("a"), Dev::new("b"));
+    group(Mode::Catalogue, Grant::Sync, &mut a, &mut [&mut b]);
+    let now = b.tick();
+    b.r.set_take("c", Take::FullSync, now).unwrap();
+    both(&mut a, &mut b);
+    both(&mut b, &mut a);
+    a.edit("p", "rating", json!(3));
+    both(&mut a, &mut b);
+    // A learns the original's SHA-1 first: its key moves; B still uses the old one
+    let row = a.cat.remove("p").unwrap();
+    a.cat.insert("sha1:x".into(), row);
+    assert!(a.r.rekey("p", "sha1:x"));
+    assert!(!a.r.photos.contains_key("p") && a.r.members_of("c").any(|k| k == "sha1:x"));
+    assert_eq!(a.r.collections_of("sha1:x").count(), 1);
+    // B edits under the old key meanwhile, and is told of the new key before it rekeys
+    b.edit("p", "develop", json!({"exposure": 1.0}));
+    send(&mut a, &mut b);
+    assert!(b.r.photos.get("sha1:x").is_some_and(|e| e.ghost.is_some()));
+    let row = b.cat.remove("p").unwrap();
+    b.cat.insert("sha1:x".into(), row);
+    assert!(b.r.rekey("p", "sha1:x"));
+    // B's own later edit isn't overwritten by what it was told
+    let g = b.r.photos["sha1:x"].ghost.clone().unwrap();
+    assert!(!g.values.contains_key("develop"));
+    // the catalogue takes what it was told that is later (as the engine's adopt does)
+    for (f, v) in &g.values {
+        b.cat.get_mut("sha1:x").unwrap().insert(f.clone(), v.clone());
+    }
+    let digests: Vec<(String, u64)> = b.cat["sha1:x"].iter().map(|(n, v)| (n.clone(), crate::digest(v))).collect();
+    let refs: Vec<(&str, u64)> = digests.iter().map(|(n, d)| (n.as_str(), *d)).collect();
+    b.r.adopt("sha1:x", &refs, Depth::Full);
+    for _ in 0..3 {
+        both(&mut a, &mut b);
+    }
+    for d in [&a, &b] {
+        assert_eq!((d.value("sha1:x", "rating"), d.value("sha1:x", "develop")), (json!(3), json!({"exposure": 1.0})), "{}", d.r.device);
+    }
+    assert!(!a.r.has_outgoing("b") && !b.r.has_outgoing("a"), "settled");
+    assert!(!a.r.photos.contains_key("p") && !b.r.photos.contains_key("p"));
+    assert!(b.r.members_of("c").any(|k| k == "sha1:x") && !b.r.members_of("c").any(|k| k == "p"));
+    // a rekey to nothing, to itself or of an unknown key changes nothing
+    assert!(!a.r.rekey("sha1:x", "sha1:x") && !a.r.rekey("nope", "sha1:y") && !a.r.rekey("sha1:x", ""));
+    assert!(!a.r.rekey("sha1:x", &"k".repeat(500)));
+}
