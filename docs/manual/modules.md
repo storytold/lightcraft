@@ -9,6 +9,8 @@ actions are commands, so the CLI, control channel and MCP can do everything the 
 ## Library
 
 Photo Grid and Square Grid (View menu), loupe (`E`), compare (`C`) and survey (`N`) views of the folder, collection or filter in view.
+Press `F` for the full-screen preview of the active photo: arrows step, `I` cycles the info overlay (at Off the photo is clear of all
+text, the shot-info strip with the pixel size included), `G` returns to the grid, `Esc` goes back.
 
 - **Organise:** folders, collections and smart collections (Library → New Collection… `Cmd+N`, New Smart Collection…), collection sets,
   stacks (`Cmd+G`), virtual copies (`Cmd+'`), people (face regions from XMP or the opt-in face detector).

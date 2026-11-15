@@ -1791,7 +1791,9 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         all_masks_pill(app, ui, canvas, img_rect);
     }
     info_overlay(app, &p, canvas, &photo, pill);
-    if app.ui.shot_info {
+    // In the full-screen preview the shot-info strip follows the info overlay: with I set to Off
+    // the photo carries no text at all, and it stays that way from photo to photo.
+    if app.ui.shot_info && (!fullscreen || app.ui.info_overlay != crate::state::InfoOverlay::Off) {
         // zoomed in, it sits over the photo's bottom edge: not while a tool works on the pixels
         let busy = super::surface_osd::on_photo_tool(app, ui.ctx());
         shot_info_strip(ui, canvas, img_rect, &shot_info(&photo.meta, native), busy);
