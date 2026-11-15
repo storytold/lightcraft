@@ -10,7 +10,7 @@
 use lightcraft_develop::LocalAdjustments;
 use serde_json::{Map, Value, json};
 
-use super::mask_effects::{MaskEffect, upsert};
+use super::mask_effects::MaskEffect;
 use super::{bad, str_param};
 use crate::preset_import::{Lua, group_from_dir, parse_lua, read_zip};
 use crate::{Result, Session};
@@ -397,8 +397,25 @@ pub fn add_found(s: &mut Session, found: Vec<Found>, group: Option<&str>, dry: b
         return Ok((rows, div_rows));
     }
     s.mask_effects.retain(|e| !(e.is_empty() && dividers.iter().any(|(d, _)| d.effect.name.eq_ignore_ascii_case(&e.name))));
+    // as `upsert`, with the names indexed once: a file of many effects doesn't scan the list per effect
+    // (the first of two same-named effects, as `upsert` and readers find it)
+    let mut by_name: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, x) in s.mask_effects.iter().enumerate() {
+        by_name.entry(x.name.trim().to_ascii_lowercase()).or_insert(i);
+    }
     for f in effects {
-        upsert(s, f.effect);
+        let e = f.effect;
+        let key = e.name.trim().to_ascii_lowercase();
+        match by_name.get(&key).and_then(|&i| s.mask_effects.get_mut(i)) {
+            Some(x) => {
+                let favorite = x.favorite || e.favorite;
+                *x = MaskEffect { favorite, ..e };
+            }
+            None => {
+                by_name.insert(key, s.mask_effects.len());
+                s.mask_effects.push(e);
+            }
+        }
     }
     s.save_prefs()?;
     Ok((rows, div_rows))

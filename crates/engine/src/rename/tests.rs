@@ -622,3 +622,14 @@ fn photos_sharing_a_target_name_do_not_rescan_the_suffixes_already_claimed() {
     assert_eq!(names.len(), 300);
     assert!(checks.get() <= 3 * 300, "{} disk checks", checks.get());
 }
+
+/// A token repeated many times with a long value is cut at the expansion cap, not multiplied into gigabytes.
+#[test]
+fn token_expansion_stops_at_the_output_cap() {
+    let mut p = sample_photo();
+    p.meta.title = "é".repeat(100_000);
+    let out = expand_tokens(&"{title}".repeat(10_000), &p, 1, 1);
+    assert!(out.len() <= tokens::MAX_EXPANDED_BYTES && out.len() > tokens::MAX_EXPANDED_BYTES - 2, "{}", out.len());
+    p.meta.title = "Harbour".into();
+    assert_eq!(expand_tokens("a-{title}-b", &p, 1, 1), "a-Harbour-b", "ordinary templates are unchanged");
+}
