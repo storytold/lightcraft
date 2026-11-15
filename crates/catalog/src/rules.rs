@@ -85,6 +85,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
             ("longExposure", "Long Exposure"),
             ("screenshot", "Screenshot"),
             ("drone", "Drone"),
+            ("portrait", "Portrait"),
         ]),
     ),
     ("format", "File Format", Kind::Text),

@@ -1,6 +1,6 @@
-//! Photo types: selfies, panoramas, long exposures, screenshots and drone photos, worked out from
-//! what a photo's record already holds (lens and camera names, Exif `CustomRendered`, pixel size,
-//! shutter speed, format, file name). No type is stored: each is derived when asked for, so a photo
+//! Photo types: selfies, panoramas, long exposures, screenshots, drone and Portrait photos, worked out
+//! from what a photo's record already holds (lens and camera names, Exif `CustomRendered`, pixel size,
+//! shutter speed, format, file name, recorded depth). No type is stored: each is derived when asked for, so a photo
 //! whose metadata is corrected changes type with it.
 //!
 //! Long exposure means a long shutter time. Apple Photos' Long Exposure effect, made from a Live
@@ -26,6 +26,9 @@ pub enum PhotoType {
     Screenshot,
     /// Taken by a drone's camera, from its maker.
     Drone,
+    /// A still with recorded depth ([`crate::Meta::has_depth`]): an iPhone Portrait photo, or one the phone gave depth
+    /// to by itself, as recent iPhones do for people and pets.
+    Portrait,
 }
 
 /// A still this many times as long as it is wide counts as a panorama (2.5:1 — wider than 21:9
@@ -44,7 +47,8 @@ const HANDHELD_MODELS: &[&str] = &["osmo", "pocket", "action", "ronin"];
 
 impl PhotoType {
     /// Every type, in the order menus list them.
-    pub const ALL: [PhotoType; 5] = [PhotoType::Selfie, PhotoType::Panorama, PhotoType::LongExposure, PhotoType::Screenshot, PhotoType::Drone];
+    pub const ALL: [PhotoType; 6] =
+        [PhotoType::Selfie, PhotoType::Panorama, PhotoType::LongExposure, PhotoType::Screenshot, PhotoType::Drone, PhotoType::Portrait];
 
     /// The id commands, searches and rules use.
     pub fn id(self) -> &'static str {
@@ -54,6 +58,7 @@ impl PhotoType {
             PhotoType::LongExposure => "longExposure",
             PhotoType::Screenshot => "screenshot",
             PhotoType::Drone => "drone",
+            PhotoType::Portrait => "portrait",
         }
     }
 
@@ -65,6 +70,7 @@ impl PhotoType {
             PhotoType::LongExposure => "Long Exposure",
             PhotoType::Screenshot => "Screenshot",
             PhotoType::Drone => "Drone",
+            PhotoType::Portrait => "Portrait",
         }
     }
 
@@ -114,6 +120,7 @@ impl Photo {
                 // stills only: drone videos come with video import (gap 18)
                 still && DRONE_MAKERS.iter().any(|d| maker.starts_with(d)) && !HANDHELD_MODELS.iter().any(|h| camera.contains(h))
             }
+            PhotoType::Portrait => still && m.has_depth,
         }
     }
 
@@ -247,6 +254,23 @@ mod tests {
         assert!(p.is_type(PhotoType::Drone));
     }
 
+    /// Issue #4331: a still with recorded depth is a Portrait photo, a front-camera one a Portrait selfie too; a
+    /// video never is, and neither is a photo without depth.
+    #[test]
+    fn recorded_depth_makes_a_portrait_photo() {
+        let mut p = jpeg();
+        assert!(!p.is_type(PhotoType::Portrait));
+        p.meta.has_depth = true;
+        assert!(p.is_type(PhotoType::Portrait));
+        p.meta.lens = "iPhone 15 Pro Max front TrueDepth camera 2.69mm f/1.9".into();
+        assert_eq!(p.photo_types(), [PhotoType::Selfie, PhotoType::Portrait]);
+        p.kind = MediaKind::Video;
+        assert!(!p.is_type(PhotoType::Portrait));
+        for s in ["portrait", "Portraits", "PORTRAIT"] {
+            assert_eq!(PhotoType::parse(s), Some(PhotoType::Portrait), "{s}");
+        }
+    }
+
     #[test]
     fn a_photo_can_have_several_types() {
         let mut p = jpeg();
@@ -257,7 +281,7 @@ mod tests {
     }
 
     /// A library with an ordinary photo, a selfie, a panorama and a raw, by name.
-    fn library() -> (crate::Catalog, [PhotoId; 4]) {
+    fn library() -> (crate::Catalog, [PhotoId; 5]) {
         let mut c = crate::Catalog::new();
         let mut add = |mut p: Photo| {
             let id = c.alloc_photo_id();
@@ -270,13 +294,15 @@ mod tests {
         (pano.width, pano.height) = (12000, 4000);
         let mut raw = photo("DSC_0001.ARW", "ARW", 6000, 4000);
         raw.kind = MediaKind::Raw;
-        let ids = [add(jpeg()).unwrap(), add(selfie).unwrap(), add(pano).unwrap(), add(raw).unwrap()];
+        let mut portrait = jpeg();
+        portrait.meta.has_depth = true;
+        let ids = [add(jpeg()).unwrap(), add(selfie).unwrap(), add(pano).unwrap(), add(raw).unwrap(), add(portrait).unwrap()];
         (c, ids)
     }
 
     #[test]
     fn search_finds_photo_types_beside_file_types() {
-        let (c, [_, selfie, pano, raw]) = library();
+        let (c, [_, selfie, pano, raw, portrait]) = library();
         let q = |text: &str| c.query(&crate::Filter { text: text.into(), ..Default::default() }, &crate::Sort::default());
         assert_eq!(q("type:selfie"), [selfie]);
         assert_eq!(q("type:selfies"), [selfie]);
@@ -286,11 +312,13 @@ mod tests {
         assert_eq!(q("type:raw"), [raw]);
         assert_eq!(q("type:selfie type:raw"), []);
         assert_eq!(q("type:nonsense"), []);
+        assert_eq!(q("type:portrait"), [portrait]);
+        assert_eq!(q("type:portraits"), [portrait]);
     }
 
     #[test]
     fn the_photo_type_rule_matches_and_checks_its_value() {
-        let (c, [plain, selfie, pano, raw]) = library();
+        let (c, [plain, selfie, pano, raw, portrait]) = library();
         let rule = |op: &str, value: &str| crate::RuleSet {
             mode: crate::Match::All,
             rules: vec![crate::Rule::Field { field: "photoType".into(), op: op.into(), value: value.into() }],
@@ -300,9 +328,10 @@ mod tests {
         assert_eq!(q(rule("is", "Selfie")), [selfie]);
         let mut not_selfie = q(rule("isNot", "selfie"));
         not_selfie.sort();
-        let mut want = vec![plain, pano, raw];
+        let mut want = vec![plain, pano, raw, portrait];
         want.sort();
         assert_eq!(not_selfie, want);
+        assert_eq!(q(rule("is", "portrait")), [portrait]);
         assert!(rule("is", "longExposure").check(&c).is_empty());
         assert!(!rule("is", "macro").check(&c).is_empty(), "an unknown photo type is a problem");
     }
