@@ -703,7 +703,8 @@ fn read_settings(p: &str) -> Result<SettingsFile, String> {
     use lightcraft_engine::presets::{LCPRESET_EXT, parse_preset_file};
     let bytes = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
     let ext = Path::new(p).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-    let json = serde_json::from_slice::<Value>(&bytes);
+    // Windows text editors and PowerShell can put a UTF-8 BOM before the settings object.
+    let json = serde_json::from_slice::<Value>(bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(&bytes));
     // a settings object never has a top-level `presets` or `settings` key; a preset file always does
     let preset_file =
         ext == LCPRESET_EXT || ext == "xmp" || json.as_ref().is_ok_and(|v| v.is_array() || v.get("presets").is_some() || v.get("settings").is_some());
@@ -1139,6 +1140,27 @@ mod raw_files_tests {
 
 #[cfg(test)]
 mod tests {
+    /// Settings saved with a UTF-8 BOM keep the same values as an ordinary JSON file.
+    #[test]
+    fn render_settings_accepts_a_utf8_bom() {
+        use std::io::{Seek, Write};
+
+        let path = std::env::temp_dir().join(format!("lightcraft-cli-settings-bom-{}.json", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+        let settings = serde_json::json!({"light": {"exposure": 0.7}, "profile": {"id": "\u{feff}kept"}});
+        for prefix in ["", "\u{feff}"] {
+            file.set_len(0).unwrap();
+            file.rewind().unwrap();
+            write!(file, "{prefix}{settings}").unwrap();
+            let super::SettingsFile::Partial(actual) = super::read_settings(path.to_str().unwrap()).unwrap() else {
+                panic!("partial settings were read as a preset");
+            };
+            assert_eq!(actual, settings);
+        }
+        drop(file);
+        std::fs::remove_file(path).unwrap();
+    }
+
     /// `render` and `merge` read the lens database the desktop app downloaded, as the desktop does (the same raw
     /// gets the same profile everywhere), but never fetch it.
     #[test]
