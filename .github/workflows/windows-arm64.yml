@@ -1,6 +1,9 @@
 # Windows on ARM: package the ARM64 release the way release.yml does (built natively on the
 # self-hosted Windows on ARM runner, unsigned here), then install that MSI on a Windows 11 ARM64 runner, check the installed
-# binaries are ARM64, run the CLI natively, and uninstall. (A native ARM64 `cargo test` job is left
+# binaries are ARM64, run the CLI natively, and uninstall. A second MSI, one patch version higher,
+# is packaged too (same binaries): the install job upgrades to it, so the MajorUpgrade sequence
+# and the Start-menu shortcut surviving an upgrade are checked on a real Windows.
+# (A native ARM64 `cargo test` job is left
 # out for now: PdfCraft saw an intermittent access violation in egui UI tests there.)
 name: Windows ARM64
 
@@ -122,16 +125,39 @@ jobs:
         env:
           DIST: ${{ github.workspace }}\dist\arm64
           CRAFT_FONTS_DIR: ${{ github.workspace }}\craft-fonts
-        run: ./packaging/windows/package.ps1 -Arch arm64
+        run: |
+          ./packaging/windows/package.ps1 -Arch arm64
+          # A second MSI one patch version higher (same binaries, a higher ProductVersion) for the
+          # install job's upgrade test: a higher version is what users' updates are, and it takes
+          # the MajorUpgrade path (the old product is unregistered, a new ProductCode installed).
+          # The version is read the way package.ps1 falls back to reading it; PACKAGE_VERSION is
+          # package.ps1's override for it, and -SkipBuild reuses the binaries just built.
+          $ErrorActionPreference = 'Stop'
+          $inPkg = $false; $workspaceVersion = $null
+          foreach ($line in Get-Content Cargo.toml) {
+            if ($line -match '^\s*\[') { $inPkg = ($line.Trim() -eq '[workspace.package]'); continue }
+            if ($inPkg -and $line -match '^\s*version\s*=\s*"([^"]+)"') { $workspaceVersion = $Matches[1]; break }
+          }
+          if (-not $workspaceVersion) { throw 'could not read [workspace.package] version from Cargo.toml' }
+          $n = ($workspaceVersion -split '-')[0] -split '\.'
+          $env:DIST = "${env:DIST}-upgrade"
+          $env:PACKAGE_VERSION = '{0}.{1}.{2}' -f [int]$n[0], [int]$n[1], ([int]$n[2] + 1)
+          ./packaging/windows/package.ps1 -Arch arm64 -SkipBuild
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: app-windows-arm64
           path: dist/arm64/*
           if-no-files-found: error
           retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: app-windows-arm64-upgrade
+          path: dist/arm64-upgrade/*.msi
+          if-no-files-found: error
+          retention-days: 7
 
   install:
-    name: install and run on ARM64
+    name: install, upgrade and run on ARM64
     needs: package
     # Self-hosted Windows on ARM runner (SNAPDRAGON).
     runs-on: [self-hosted, Windows, ARM64, lcc]
@@ -143,7 +169,11 @@ jobs:
         with:
           name: app-windows-arm64
           path: dist
-      - name: Install the MSI, check it, run it, uninstall it
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-windows-arm64-upgrade
+          path: dist-upgrade
+      - name: Install the MSI and check the installed binaries and shortcut
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -162,12 +192,60 @@ jobs:
             if ($machine -ne 0xAA64) { throw "$exe is for machine 0x$('{0:X}' -f $machine), not ARM64" }
             Write-Output "ok $path (ARM64)"
           }
+          # The Start-menu shortcut must be a plain link, not an advertised one: WScript.Shell
+          # reads an empty TargetPath from advertised shortcuts, and a taskbar pin copied from one
+          # stops working after an upgrade unregisters the product it advertises.
+          $lnk = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) "$($Brand.display_name).lnk"
+          if (-not (Test-Path $lnk)) { throw "Start-menu shortcut not installed: $lnk" }
+          $target = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          if (-not $target) { throw "$lnk is advertised (no TargetPath); it must name the installed exe" }
+          if (-not (Test-Path $target)) { throw "$lnk points at '$target', which does not exist" }
+          if ((Resolve-Path $target).Path -ine (Resolve-Path (Join-Path $dir $appExe)).Path) {
+            throw "$lnk points at '$target', expected '$dir\$appExe'"
+          }
+          Write-Output "ok shortcut $lnk -> $target"
           # The installed CLI runs natively on ARM64.
           $cli = Join-Path $dir $cliExe
           $out = & $cli --version 2>&1 | Out-String
           if ($LASTEXITCODE -ne 0) { Write-Output $out; throw "$cliExe --version exited $LASTEXITCODE" }
           Write-Output "ok $cliExe --version: $($out.Trim())"
-          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msi`"", '/qn' -Wait -PassThru
+      - name: Upgrade to the higher-version MSI and check the shortcut survives it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./packaging/windows/brand.ps1
+          $appExe = "$($Brand.binary).exe"
+          $dir = Join-Path $env:ProgramFiles $Brand.display_name
+          $msiB = (Get-ChildItem dist-upgrade/*.msi | Select-Object -First 1).FullName
+          # A higher ProductVersion over the installed one: the MajorUpgrade path every update
+          # takes (old product unregistered, new ProductCode installed).
+          $p = Start-Process msiexec.exe -ArgumentList '/i', "`"$msiB`"", '/qn', '/l*v', 'upgrade.log' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Get-Content upgrade.log -Tail 60; throw "upgrade msiexec /i exited $($p.ExitCode)" }
+          Write-Output "ok upgraded to $(Split-Path $msiB -Leaf)"
+          if (-not (Test-Path (Join-Path $dir $appExe))) { throw "upgrade lost $appExe in $dir" }
+          # The shortcut still resolves, to the installed exe: WScript.Shell reads an empty target
+          # from an advertised shortcut (this is the regression guard), and a taskbar pin copied
+          # from one stops working once the upgrade replaces the product it advertises.
+          $lnk = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) "$($Brand.display_name).lnk"
+          if (-not (Test-Path $lnk)) { throw "Start-menu shortcut lost by the upgrade: $lnk" }
+          $target = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath
+          if (-not $target) { throw "$lnk no longer names its target (advertised again?)" }
+          if (-not (Test-Path $target)) { throw "$lnk points at '$target', which the upgrade left missing" }
+          if ((Resolve-Path $target).Path -ine (Resolve-Path (Join-Path $dir $appExe)).Path) {
+            throw "$lnk points at '$target', expected '$dir\$appExe'"
+          }
+          Write-Output "ok shortcut survives the upgrade: $lnk -> $target"
+      - name: Uninstall and check everything goes
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . ./packaging/windows/brand.ps1
+          $appExe = "$($Brand.binary).exe"
+          $dir = Join-Path $env:ProgramFiles $Brand.display_name
+          $msiB = (Get-ChildItem dist-upgrade/*.msi | Select-Object -First 1).FullName
+          $p = Start-Process msiexec.exe -ArgumentList '/x', "`"$msiB`"", '/qn' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "msiexec /x exited $($p.ExitCode)" }
           if (Test-Path (Join-Path $dir $appExe)) { throw "uninstall left $appExe behind" }
+          $lnk = Join-Path ([Environment]::GetFolderPath('CommonPrograms')) "$($Brand.display_name).lnk"
+          if (Test-Path $lnk) { throw "uninstall left the Start-menu shortcut behind: $lnk" }
           Write-Output 'ok uninstalled'

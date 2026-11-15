@@ -72,6 +72,10 @@ download it for this system and install it; the app restarts afterwards. Things 
   the releases page instead, and tell the project.
 - "This build can't verify updates": the build was made without an update key (a fork or a build from
   source). It still tells you when a new version is out; download it from the releases page.
+- An update installed through the Windows installer (`.msi`): the app quits, the installer runs and
+  the app starts again when it is done. When the installer wants a Windows restart as part of it
+  (rare), the app starts after that restart instead. Start-menu shortcuts — and taskbar entries
+  pinned from them — keep working across updates.
 - A Windows copy unpacked from the portable zip (with or without `portable.txt`) updates itself: the new zip is
   unpacked beside the program, its files replace the copy's own, and the new version starts once the app has quit.
   Only the zip's files are replaced; `portable.txt`, the portable data folder and anything else you put there stay.
