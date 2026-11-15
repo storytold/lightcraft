@@ -347,3 +347,43 @@ fn a_photo_rekeyed_to_its_sha1_keeps_its_record_and_collections() {
     assert!(!a.r.rekey("sha1:x", "sha1:x") && !a.r.rekey("nope", "sha1:y") && !a.r.rekey("sha1:x", ""));
     assert!(!a.r.rekey("sha1:x", &"k".repeat(500)));
 }
+
+#[test]
+fn immich_albums_are_collections_every_device_shares_but_members_come_from_the_server() {
+    let (mut a, mut b) = (Dev::new("a"), Dev::new("b"));
+    group(Mode::Collections, Grant::None, &mut a, &mut [&mut b]);
+    // both devices see the same album on the server: the same ids, one collection
+    for d in [&mut a, &mut b] {
+        let now = d.tick();
+        assert!(d.r.immich_collection("immich:u1", "u1", None, "Immich", None, now));
+        assert!(d.r.immich_collection("immich:u1:al1", "u1", Some("al1"), "Holiday", Some("immich:u1".into()), now));
+        assert!(!d.r.immich_collection("immich:u1:al1", "u1", Some("al1"), "Holiday", Some("immich:u1".into()), now), "nothing new");
+    }
+    both(&mut a, &mut b);
+    let c = b.r.collection("immich:u1:al1").unwrap().clone();
+    assert!(c.is_immich() && c.grant.v == Grant::Sync && c.kind == CollectionKind::Album);
+    assert!(b.r.collection("immich:u1").is_some_and(|c| c.kind == CollectionKind::Set));
+    // takes: none, previews or full quality; never full sync
+    let now = b.tick();
+    assert_eq!(b.r.set_take("immich:u1:al1", Take::FullSync, now), Err(Refused::NotAllowed));
+    b.r.set_take("immich:u1:al1", Take::Previews, now).unwrap();
+    // A's membership (from its own listing) isn't told; the photo's record is, and no file is served
+    let now = a.tick();
+    a.r.set_member("immich:u1:al1", "p", true, now);
+    both(&mut a, &mut b);
+    assert!(b.r.members_of("immich:u1:al1").next().is_none(), "B lists the album's photos itself");
+    assert!(a.r.tells("b", &Ref::Photo("p".into())), "the record travels to a device that takes it");
+    assert!(!a.r.may_fetch("b", "p", Depth::Preview), "files come from Immich");
+    assert_eq!(a.r.depth_from_peers("p"), Depth::Full, "p is also in A's own collection c");
+    // a private connection's collections are never told
+    a.r.private_immich.insert("u1".into());
+    let now = a.tick();
+    a.r.immich_collection("immich:u1:al2", "u1", Some("al2"), "Secret", Some("immich:u1".into()), now);
+    both(&mut a, &mut b);
+    assert!(b.r.collection("immich:u1:al2").is_none());
+    assert!(!a.r.tells("b", &Ref::Coll("immich:u1:al1".into())));
+    // hostile ids change nothing
+    assert!(!a.r.immich_collection("", "u1", None, "x", None, now));
+    assert!(!a.r.immich_collection(&"x".repeat(500), "u1", None, "x", None, now));
+    assert!(!a.r.immich_collection("immich:x", "u\u{0}", None, "x", None, now));
+}

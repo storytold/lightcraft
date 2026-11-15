@@ -179,6 +179,10 @@ pub struct Replica {
     pub photos: HashMap<String, PhotoEntry>,
     #[serde(default)]
     pub cursors: BTreeMap<String, Cursor>,
+    /// Immich accounts (user ids) whose connection this device keeps to itself: their
+    /// collections are never told to another device. Local state; it doesn't travel.
+    #[serde(default)]
+    pub private_immich: BTreeSet<String>,
     #[serde(default)]
     pub clock: Clock,
     #[serde(default)]
@@ -410,6 +414,44 @@ impl Replica {
         Ok(changed)
     }
 
+    /// An Immich album (or the account's set holding them, `album: None`) as this device sees
+    /// it on the server. Every device with the account writes the same id, so their copies merge;
+    /// the name follows the server. Grant is fixed at Sync: every device that takes it may add.
+    #[allow(clippy::too_many_arguments)]
+    pub fn immich_collection(&mut self, id: &str, account: &str, album: Option<&str>, name: &str, parent: Option<String>, now_ms: u64) -> bool {
+        if !ok_id(id) || !ok_id(account) {
+            return false;
+        }
+        let meta = crate::model::CollectionMeta { name: clean(name), parent };
+        match self.collections.get(id) {
+            Some(e) if e.c.meta.v == meta => false,
+            Some(_) => {
+                let before = self.collection(id).cloned();
+                let s = self.stamp(now_ms);
+                if let Some(e) = self.collections.get_mut(id) {
+                    e.c.meta = Lww::new(meta, s);
+                }
+                self.touch_collection(id, None, before.as_ref());
+                true
+            }
+            None => {
+                let s = self.stamp(now_ms);
+                let kind = if album.is_some() { CollectionKind::Album } else { CollectionKind::Set };
+                let owner = format!("{}{account}", crate::model::IMMICH_OWNER);
+                let mut c = Collection::new(id, &owner, kind, &meta.name, meta.parent, Grant::Sync, s);
+                c.immich = Some(crate::model::ImmichRef { account: account.to_string(), album: album.unwrap_or_default().to_string() });
+                self.collections.insert(id.to_string(), CollEntry { c, seq: 0, via: None });
+                self.touch_collection(id, None, None);
+                true
+            }
+        }
+    }
+
+    /// Whether collection `c` is an Immich one this device keeps to itself.
+    pub fn is_private(&self, c: &Collection) -> bool {
+        c.is_immich() && c.immich.as_ref().is_some_and(|r| self.private_immich.contains(&r.account))
+    }
+
     /// The owner says what the other devices may have.
     pub fn set_grant(&mut self, id: &str, grant: Grant, now_ms: u64) -> Result<bool, Refused> {
         self.edit_collection(id, now_ms, |c, s, me| {
@@ -430,7 +472,7 @@ impl Replica {
             if c.owner == me {
                 return Err(Refused::Owner);
             }
-            if take > c.grant.v.most() {
+            if take > c.grant.v.most() || (c.is_immich() && take > Take::FullQuality) {
                 return Err(Refused::NotAllowed);
             }
             let changed = c.takes.get(me).is_none_or(|t| t.v != take);
@@ -760,7 +802,15 @@ impl Replica {
 
     /// Whether `peer` may be sent photo `key` at `depth`.
     pub fn may_fetch(&self, peer: &str, key: &str, depth: Depth) -> bool {
-        self.in_group_with(peer) && self.collections_of(key).any(|c| c.may_fetch(peer, depth))
+        // (an Immich album's files come from the server)
+        self.in_group_with(peer) && self.collections_of(key).any(|c| !c.is_immich() && c.may_fetch(peer, depth))
+    }
+
+    /// How much of photo `key` this device should get from other devices: as
+    /// [`Replica::depth_wanted`], without Immich albums (their files come from the server).
+    pub fn depth_from_peers(&self, key: &str) -> Depth {
+        let me = self.device.as_str();
+        self.collections_of(key).filter(|c| !c.is_immich()).map(|c| c.depth_for(me)).max().unwrap_or(Depth::None)
     }
 
     // ── what to tell a device ──────────────────────────────────────────────────────────────
@@ -773,9 +823,10 @@ impl Replica {
         }
         match r {
             Ref::Group => true,
-            Ref::Coll(id) => self.collection(id).is_some_and(|c| c.listed_for(peer, g.mode)),
-            Ref::Member(coll, _) => self.collection(coll).is_some_and(|c| c.shares_with(peer)),
-            Ref::Photo(key) => self.collections_of(key).any(|c| c.shares_with(peer)),
+            Ref::Coll(id) => self.collection(id).is_some_and(|c| !self.is_private(c) && c.listed_for(peer, g.mode)),
+            // (each device learns an Immich album's photos from the server, not from another device)
+            Ref::Member(coll, _) => self.collection(coll).is_some_and(|c| !c.is_immich() && c.shares_with(peer)),
+            Ref::Photo(key) => self.collections_of(key).any(|c| !self.is_private(c) && c.shares_with(peer)),
         }
     }
 
@@ -887,7 +938,8 @@ impl Replica {
     pub fn reset(&mut self) {
         let device = std::mem::take(&mut self.device);
         let clock = self.clock.clone();
-        *self = Replica { device, clock, ..Default::default() };
+        let private_immich = std::mem::take(&mut self.private_immich);
+        *self = Replica { device, clock, private_immich, ..Default::default() };
     }
 }
 
