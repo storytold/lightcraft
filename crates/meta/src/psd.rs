@@ -130,10 +130,9 @@ mod tests {
     fn try_extract_rejects_trailing_bytes_in_the_resource_section() {
         let file = dated_image(1);
         assert_eq!(crate::extract(&file).gps, dated_metadata().gps, "the fixture embeds EXIF GPS");
-        let colour_length = usize::try_from(u32::from_be_bytes(file[26..30].try_into().unwrap()).unwrap()).unwrap();
+        let colour_length = usize::try_from(u32::from_be_bytes(file[26..30].try_into().unwrap())).unwrap();
         let resource_length_at = 30 + colour_length;
-        let resource_length =
-            usize::try_from(u32::from_be_bytes(file[resource_length_at..resource_length_at + 4].try_into().unwrap()).unwrap()).unwrap();
+        let resource_length = usize::try_from(u32::from_be_bytes(file[resource_length_at..resource_length_at + 4].try_into().unwrap())).unwrap();
         let resource_end = resource_length_at + 4 + resource_length;
         let mut corrupt = file;
         corrupt.splice(resource_end..resource_end, *b"BAD!");
