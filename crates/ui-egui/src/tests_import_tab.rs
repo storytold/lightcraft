@@ -657,6 +657,66 @@ fn the_import_bar_shows_the_folder_as_a_breadcrumb() {
     let _ = std::fs::remove_dir_all(&deep_root);
 }
 
+/// A folder browsed for the first time starts with its subfolders in (a folder picked to import
+/// means the tree under it), the bar carries the Include subfolders toggle the Local folder header
+/// and the import review have, and a re-browse of the same folder keeps the choice the toggle made.
+#[test]
+fn the_tab_browses_subfolders_by_default_and_the_bar_toggle_rebrowses() {
+    let mut h = app([1400.0, 900.0], "classic");
+    h.app.session = lcc_engine::Session::new().with_fs();
+    h.settle(SETTLE);
+    let dir = folder("sub-default", 2);
+    let nested = dir.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
+    let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 99, 255]);
+    std::fs::write(nested.join("deep.png"), lcc_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    assert!(h.app.session.browse.as_ref().is_some_and(|b| b.subfolders), "the default");
+    assert_eq!(h.app.session.visible_cloned().len(), 3, "the nested photo shows");
+    assert!(has_widget(&mut h, "check:includeSubfolders"), "the toggle is in the bar");
+
+    // the toggle re-browses flat; the choice then survives a re-browse of the same folder
+    let r = h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.visible_cloned().len(), 2, "flat");
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    assert_eq!(h.app.session.visible_cloned().len(), 2, "kept across a re-browse");
+    // and back on
+    let r = h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.visible_cloned().len(), 3, "the nested photo is back");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The Import button takes what the browse shows: with subfolders in (the default), importing from
+/// the tab takes the photos in the folder's subfolders too, in place.
+#[test]
+fn importing_from_the_tab_takes_the_nested_photos() {
+    let mut h = app([1400.0, 900.0], "classic");
+    h.app.session = lcc_engine::Session::new().with_fs();
+    h.settle(SETTLE);
+    let dir = folder("sub-import", 1);
+    let nested = dir.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let o = lcc_engine::export::ExportOptions { format: lcc_engine::export::ExportFormat::Png, ..Default::default() };
+    let img = lcc_raster::Rgba8::from_fn(24, 16, |x, y| [(x * 9) as u8, (y * 12) as u8, 99, 255]);
+    std::fs::write(nested.join("deep.png"), lcc_engine::export::encode_image(&img, &o).unwrap()).unwrap();
+
+    exec(&mut h, "library.browse", json!({"path": dir.to_string_lossy()}));
+    assert_eq!(h.app.session.visible_cloned().len(), 2, "the nested photo shows");
+    exec(&mut h, "import.configure", json!({"take": "all", "previews": "none"}));
+    let r = exec(&mut h, "import.start", json!({}));
+    assert_eq!(r["importing"], 2, "{r}");
+    h.step_until(SETTLE, |h| h.app.import.is_none());
+    assert_eq!(h.app.session.catalog.photos().filter(|p| p.in_library()).count(), 2, "both, the nested one included");
+    assert!(nested.join("deep.png").is_file(), "added in place: no file moved");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Hides Local's built-in places (Pictures, Desktop, Downloads, Home), so a test's own Local row
 /// sits where the test expects it. On Windows the temporary folder is inside Home: browsing a
 /// test folder opens Home's tree down to it, and Home's subfolders on that machine push the

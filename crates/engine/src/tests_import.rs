@@ -649,7 +649,8 @@ fn browsing_a_folder_lists_its_photos_without_adding_them() {
     png(&dir.join("sub/c.png"), 3);
     std::fs::write(dir.join("notes.txt"), "x").unwrap();
     let mut s = Session::new().with_fs();
-    let r = s.execute("library.browse", &serde_json::json!({"path": dir.to_string_lossy()})).unwrap();
+    // flat, given: a first browse takes subfolders by default (tests_import_local covers that)
+    let r = s.execute("library.browse", &serde_json::json!({"path": dir.to_string_lossy(), "subfolders": false})).unwrap();
     assert_eq!(r["photos"], 2, "{r}");
     assert_eq!(s.source, LibrarySource::Folder);
     assert_eq!(s.visible_cloned().len(), 2);
