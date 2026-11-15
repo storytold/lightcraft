@@ -409,7 +409,7 @@ mod tests {
             len_field(1, i.as_bytes(), &mut n);
         }
         len_field(2, output.as_bytes(), &mut n);
-        len_field(4, op.as_bytes(), &mut n);
+        len_field(8, op.as_bytes(), &mut n);
         for (name, value) in ints {
             let mut a = Vec::new();
             len_field(1, name.as_bytes(), &mut a);
@@ -467,7 +467,7 @@ mod tests {
             len_field(1, i.as_bytes(), &mut n);
         }
         len_field(2, output.as_bytes(), &mut n);
-        len_field(4, op.as_bytes(), &mut n);
+        len_field(8, op.as_bytes(), &mut n);
         for &(name, values) in ints {
             let mut a = Vec::new();
             len_field(1, name.as_bytes(), &mut a);
@@ -493,7 +493,7 @@ mod tests {
             len_field(1, i.as_bytes(), &mut n);
         }
         len_field(2, output.as_bytes(), &mut n);
-        len_field(4, b"LeakyRelu", &mut n);
+        len_field(8, b"LeakyRelu", &mut n);
         // alpha attribute: field 1=name, field 2=float value (wire type 5), field 20=type=1 (FLOAT)
         let mut a = Vec::new();
         len_field(1, b"alpha", &mut a);
