@@ -5,6 +5,13 @@ use lightcraft_raw::{
 };
 use proptest::prelude::*;
 
+/// The header probe can't see what only the samples tell: a full CR3 decode adds the white headroom
+/// it found to `baseline_exposure`. Everything else must match.
+fn without_baseline(mut info: lightcraft_raw::RawInfo) -> lightcraft_raw::RawInfo {
+    info.color.baseline_exposure = 0.0;
+    info
+}
+
 fn sample(comp: DngCompression) -> Vec<u8> {
     let (w, h) = (24usize, 16usize);
     let data: Vec<u16> = (0..w * h).map(|i| (i * 97 % 4000) as u16).collect();
@@ -90,8 +97,8 @@ fn truncation_at_every_length() {
 #[test]
 fn hostile_dimensions_are_rejected_quickly() {
     // a DNG claiming a 60000 × 60000 16-bit image with 10 bytes of data
-    use lightcraft_tiff::tags as t;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags as t;
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
     let mut ifd = IfdBuilder::new();
     ifd.set(t::DNG_VERSION, Value::Byte(vec![1, 4, 0, 0]));
     ifd.set(t::IMAGE_WIDTH, Value::Long(vec![60000]));
@@ -113,8 +120,8 @@ fn hostile_dimensions_are_rejected_quickly() {
 /// read as 0 and non-finite samples as black: the photo develops to finite numbers.
 #[test]
 fn non_finite_black_levels_and_samples_develop() {
-    use lightcraft_tiff::tags as t;
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags as t;
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value};
     let (w, h) = (32u32, 16u32);
     for black in [Value::Float(vec![f32::NAN]), Value::Double(vec![f64::INFINITY]), Value::Float(vec![64.0, f32::NAN, 64.0, 64.0])] {
         let mut ifd = IfdBuilder::new();
@@ -289,7 +296,7 @@ fn cr3_fixtures_decode() {
     let craw = lightcraft_raw::decode(&cr3::craw_file()).unwrap();
     assert_eq!((craw.width, craw.height, craw.bits), (16, 16, 14));
     assert_eq!(craw.data.get(0), 8192.0);
-    assert_eq!(lightcraft_raw::probe_info(&cr3::craw_file()).unwrap(), craw.info());
+    assert_eq!(without_baseline(lightcraft_raw::probe_info(&cr3::craw_file()).unwrap()), without_baseline(craw.info()));
 }
 
 proptest! {

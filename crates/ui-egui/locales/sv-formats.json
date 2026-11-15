@@ -253,7 +253,7 @@
   "{pct} %": "{pct} %",
   "{photos} catalog records processed; {collections} collections.": "{photos} katalogposter bearbetade; {collections} samlingar.",
   "{pid} (missing)": "{pid} (saknas)",
-  "{sel_n} selected · {counted}": "{sel_n} markerade · {counted}",
+  "{sel_n} selected · {counted}": "Markerade: {sel_n} · {counted}",
   "{size} GB": "{size} GB",
   "{stage}… {:.0}%": "{stage}… {:.0} %",
   "{s} s of AV1 video": "{s} s AV1-video",
@@ -328,5 +328,10 @@
   "Profile: {} (lens database)": "Profil: {} (objektivdatabas)",
   "The drive with this library's previews is almost full: {free} free of {total}. The preview cache takes {cache} and grows as the library does. To keep it smaller, set a size limit in Settings → Performance.": "Enheten med det här bibliotekets förhandsgranskningar är nästan full: {free} ledigt av {total}. Cachen för förhandsgranskningar tar {cache} och växer i takt med biblioteket. Om du vill hålla den mindre anger du en storleksgräns under Inställningar → Prestanda.",
   "The lens database is not installed (about {size} MB).": "Objektivdatabasen är inte installerad (cirka {size} MB).",
-  "{n} photos got their lens profile": "{n} foton fick sin objektivprofil"
+  "{n} photos got their lens profile": "{n} foton fick sin objektivprofil",
+  "Bring photos in with File › Import Photos… ({keys}).": "Importera foton via Fil › Importera foton… ({keys}).",
+  "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
+  "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
 }
