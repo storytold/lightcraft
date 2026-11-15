@@ -284,6 +284,7 @@ fn mask_with(app: &LccApp, op: &str) -> Vec<MenuNode> {
                 "radial" => "Radial Gradient",
                 "luminanceRange" => "Luminance Range",
                 "colorRange" => "Color Range",
+                "depthRange" => "Depth Range",
                 "people" => "People…",
                 "concept" => "Remembered…",
                 _ => label,

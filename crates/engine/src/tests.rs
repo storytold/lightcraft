@@ -1685,6 +1685,52 @@ fn face_job_crops_a_square_inside_the_photo() {
     }
 }
 
+/// Issue #1147: a face tile with two faces in it outlines the one it is about, and its hover
+/// preview shows the whole photo with that face marked; both follow the box through Rotate Right and
+/// never panic on a hostile one.
+#[test]
+fn a_face_tile_says_where_its_face_is_in_the_tile_and_in_the_whole_photo() {
+    use lcc_geom::Rect;
+    let mut s = demo();
+    let id = s.active().unwrap();
+    let inside = |r: Rect| (0.0..=1.0).contains(&r.x0) && (0.0..=1.0).contains(&r.y0) && r.x1 <= 1.0 && r.y1 <= 1.0 && r.x1 > r.x0 && r.y1 > r.y0;
+    // a face with room on every side sits in the middle of its tile, a 1.7x square around it
+    let face = Rect { x0: 0.40, y0: 0.30, x1: 0.50, y1: 0.45 };
+    let t = s.face_in_tile(id, face).unwrap();
+    assert!(inside(t), "{t:?}");
+    assert!((((t.x0 + t.x1) / 2.0) - 0.5).abs() < 1e-6 && (((t.y0 + t.y1) / 2.0) - 0.5).abs() < 1e-6, "{t:?}");
+    assert!(t.x1 - t.x0 < 0.9 && t.y1 - t.y0 < 0.9, "the face leaves room around it: {t:?}");
+    // a face in a corner: the square is pushed inside the photo, so the face is off centre
+    let t = s.face_in_tile(id, Rect { x0: 0.0, y0: 0.0, x1: 0.05, y1: 0.05 }).unwrap();
+    assert!(inside(t) && t.x0 < 0.1 && t.y0 < 0.1, "{t:?}");
+    // the whole photo: the face box as it is (no crop, no rotation), the job without the crop
+    let (job, at) = s.face_photo_job(id, face, 384).unwrap();
+    assert!(job.settings.crop.geometry.is_identity());
+    assert!((at.x0 - face.x0).abs() < 1e-9 && (at.y1 - face.y1).abs() < 1e-9, "{at:?}");
+    // after Rotate Right the left of the photo is at the top: centre (0.45, 0.375) → (0.625, 0.45)
+    s.execute("photo.rotateRight", &json!({})).unwrap();
+    let (_, at) = s.face_photo_job(id, face, 384).unwrap();
+    assert!((((at.x0 + at.x1) / 2.0) - 0.625).abs() < 1e-9 && (((at.y0 + at.y1) / 2.0) - 0.45).abs() < 1e-9, "{at:?}");
+    let t = s.face_in_tile(id, face).unwrap();
+    assert!((((t.x0 + t.x1) / 2.0) - 0.5).abs() < 1e-6, "{t:?}");
+    // hostile boxes: no panic, and whatever comes back lies within the picture
+    for face in [
+        Rect { x0: -5.0, y0: -5.0, x1: 5.0, y1: 5.0 },
+        Rect { x0: 0.5, y0: 0.5, x1: 0.5, y1: 0.5 },
+        Rect { x0: f64::NAN, y0: 0.5, x1: 0.6, y1: f64::INFINITY },
+        Rect { x0: 0.9, y0: 0.9, x1: 0.1, y1: 0.1 },
+    ] {
+        if let Some(t) = s.face_in_tile(id, face) {
+            assert!(inside(t), "{face:?} → {t:?}");
+        }
+        if let Some((_, at)) = s.face_photo_job(id, face, 384) {
+            assert!(inside(at), "{face:?} → {at:?}");
+        }
+    }
+    assert!(s.face_in_tile(lcc_catalog::PhotoId(u64::MAX), face).is_none());
+    assert!(s.face_photo_job(lcc_catalog::PhotoId(u64::MAX), face, 384).is_none());
+}
+
 /// Selecting an id that is not in the library is an error, and the selection stays as it was
 /// (#182: `select_photos {"ids": [9999]}` answered `selected: 1` and the session lost its photo).
 #[test]

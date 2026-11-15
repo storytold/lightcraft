@@ -136,6 +136,47 @@ fn without_crop(s: &DevelopSettings) -> DevelopSettings {
     s
 }
 
+/// The square a face tile shows ([`crate::Session::face_job`]), in the frame after the user's
+/// Rotate Left/Right: the face box carried over to that frame, the square around it (normalized),
+/// its side and the frame's size in pixels.
+struct FaceSquare {
+    face: lcc_geom::Rect,
+    rect: lcc_geom::Rect,
+    side: f64,
+    w: f64,
+    h: f64,
+}
+
+fn face_square(p: &Photo, face: lcc_geom::Rect) -> FaceSquare {
+    // `face` is on the upright (EXIF-oriented) photo; the crop is in the frame after the user's
+    // Rotate Left/Right, so carry the box (and the photo's size) over to it.
+    let orient = p.develop.orientation;
+    let face = orient.map_norm_rect(face);
+    let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
+    let (w, h) = if orient.swaps_axes() { (h, w) } else { (w, h) };
+    let side = ((face.x1 - face.x0) * w).max((face.y1 - face.y0) * h) * 1.7;
+    // finite, within the photo, and never wider than its short side (so the clamps below are valid)
+    let side = if side.is_finite() { side.clamp(1.0, w.min(h)) } else { w.min(h) };
+    let (cx, cy) = ((face.x0 + face.x1) / 2.0 * w, (face.y0 + face.y1) / 2.0 * h);
+    let (cx, cy) = (if cx.is_finite() { cx } else { w / 2.0 }, if cy.is_finite() { cy } else { h / 2.0 });
+    let (x0, y0) = (cx.clamp(side / 2.0, w - side / 2.0) - side / 2.0, cy.clamp(side / 2.0, h - side / 2.0) - side / 2.0);
+    let rect = lcc_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
+    FaceSquare { face, rect, side, w, h }
+}
+
+/// `inner` (normalized to the whole frame) as fractions of `outer`, clamped to it: where a box lies
+/// in a picture cut to `outer`. `None` when `outer` is empty or not finite.
+fn rect_within(inner: lcc_geom::Rect, outer: lcc_geom::Rect) -> Option<lcc_geom::Rect> {
+    let (ow, oh) = (outer.x1 - outer.x0, outer.y1 - outer.y0);
+    if !(ow.is_finite() && oh.is_finite() && ow > 0.0 && oh > 0.0) {
+        return None;
+    }
+    let f = |v: f64, o: f64, len: f64| if v.is_finite() { ((v - o) / len).clamp(0.0, 1.0) } else { 0.0 };
+    let r =
+        lcc_geom::Rect { x0: f(inner.x0, outer.x0, ow), y0: f(inner.y0, outer.y0, oh), x1: f(inner.x1, outer.x0, ow), y1: f(inner.y1, outer.y0, oh) };
+    (r.x1 > r.x0 && r.y1 > r.y0).then_some(r)
+}
+
 fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_crop: bool, out_long: usize) -> usize {
     let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
     let r = settings.crop.geometry.rect;
@@ -1175,6 +1216,10 @@ pub struct RenderJob {
     /// A face tile that can be cut from the raw's embedded preview, tried before `source`
     /// ([`crate::Session::face_job`]; `None` for every other job).
     pub preview_cut: Option<crate::face_tiles::PreviewCut>,
+    /// Don't hand the decoded source back for the session's cache: a grid thumbnail of a tight
+    /// crop decodes a preview-sized source, which must not push the loupe's preview out of the
+    /// few the session keeps (its result goes to the thumbnail cache anyway; issue #1197).
+    pub discard_source: bool,
     /// Shrink a full-quality result to fit this size (physical pixels) with a Lanczos filter once
     /// it is rendered. The loupe renders a little larger than it is drawn (its edge is rounded up
     /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
@@ -1564,6 +1609,8 @@ impl RenderJob {
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
+        // (a source this job decoded goes back for the session to keep, unless the job says not to)
+        let keep_source = !was_loaded && !self.discard_source;
         // The app is closing (issue #620): nobody is left to show this, and quitting waits for the
         // jobs that are running. Without this, one that lost the GPU mid-way would render on the CPU.
         let closing = || lcc_gpu::shutting_down().then(|| "the app is closing".to_string());
@@ -1573,7 +1620,7 @@ impl RenderJob {
         };
         match source {
             Ok(source) if self.superseded.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed)) => {
-                RenderResult { loaded: (!was_loaded).then_some(source), ..self.failed(SUPERSEDED.into()) }
+                RenderResult { loaded: keep_source.then_some(source), ..self.failed(SUPERSEDED.into()) }
             }
             Ok(source) => {
                 // the plain picture, or (Denoise amount above 0 and a denoised picture cached) the mix the amount asks for
@@ -1599,7 +1646,7 @@ impl RenderJob {
                         key: self.key,
                         rendered: Err(e),
                         gpu_fallback: None,
-                        loaded: (!was_loaded).then_some(source),
+                        loaded: keep_source.then_some(source),
                         quick: None,
                         display: None,
                         hdr_texels: None,
@@ -1653,7 +1700,7 @@ impl RenderJob {
                                         alpha: None,
                                     }),
                                     gpu_fallback: None,
-                                    loaded: (!was_loaded).then_some(source),
+                                    loaded: keep_source.then_some(source),
                                     quick: None,
                                     display: None,
                                     hdr_texels: None,
@@ -1739,7 +1786,7 @@ impl RenderJob {
                     key: self.key,
                     rendered: Ok(rendered),
                     gpu_fallback,
-                    loaded: (!was_loaded).then_some(source),
+                    loaded: keep_source.then_some(source),
                     quick: None,
                     display,
                     hdr_texels,
@@ -2393,12 +2440,21 @@ impl crate::Session {
         // drag of either must not re-render it (issue #60)
         let uncropped = !apply_crop && !settings.crop.geometry.is_identity();
         let settings = if uncropped { Arc::new(without_crop(&settings)) } else { settings };
-        let level = SourceLevel::for_size(if thumb_bucket.is_some() {
-            max_w.max(max_h) // (grid thumbnails of tight crops stay cheap)
-        } else {
-            source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
-        });
-        let source = self.media.source_ref(&p, level);
+        let needed = source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h));
+        // a cropped grid thumbnail stretches the thumbnail source up to 2x; past that (issue #1197:
+        // the tighter the crop, the blurrier) it reads a source of the size it needs, at most the
+        // preview, never the original
+        let level = match thumb_bucket {
+            Some(b) if needed <= b.saturating_mul(2) => SourceLevel::Thumb,
+            Some(_) => SourceLevel::Preview,
+            None => SourceLevel::for_size(needed),
+        };
+        let mut source = self.media.source_ref(&p, level);
+        let discard_source = thumb_bucket.is_some() && level == SourceLevel::Preview;
+        if discard_source && let SourceRef::File { max_edge, .. } | SourceRef::Demo { max_edge, .. } | SourceRef::Video { max_edge, .. } = &mut source
+        {
+            *max_edge = needed.min(*max_edge);
+        }
         // previews shrink as exports do once they shrink a lot (full quality only): sharpening tuned in the
         // loupe then matches the export's Lanczos-3 downscale; grid thumbnails stay soft
         let downscale = if thumb_bucket.is_none() { lcc_pipeline::Downscale::Preview } else { lcc_pipeline::Downscale::Smooth };
@@ -2428,7 +2484,10 @@ impl crate::Session {
             ^ salt;
         let version = self.media.thumb_version;
         let sensor = sensor_key(&p);
-        let cache = thumb_bucket.map(|b| (self.media.rendered.clone(), thumb_key(&content_key, settings_hash, b, version, sensor, salt)));
+        // (a thumbnail read from the preview source is cached apart from one read from the thumbnail
+        // source: blurry thumbnails cached for tight crops before issue #1197 render again)
+        let thumb_salt = if level == SourceLevel::Thumb { salt } else { salt ^ (level as u64).wrapping_mul(0x5851_f42d_4c95_7f2d) };
+        let cache = thumb_bucket.map(|b| (self.media.rendered.clone(), thumb_key(&content_key, settings_hash, b, version, sensor, thumb_salt)));
         // a thumbnail of the photo's own settings is its latest grid picture too, and the one its cell
         // keeps showing while the original is missing
         let latest = cache.as_ref().filter(|_| !before).map(|(c, _)| (c.clone(), latest_thumb_key(&p)));
@@ -2441,7 +2500,7 @@ impl crate::Session {
             bucket,
             version,
             sensor,
-            salt,
+            salt: thumb_salt,
         });
         let placement = (!before).then(|| self.placement_with(&p, &settings, apply_crop));
         Some(RenderJob {
@@ -2470,6 +2529,7 @@ impl crate::Session {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source,
         })
     }
 
@@ -2554,10 +2614,31 @@ impl crate::Session {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source: false,
             latest: None,
             kept: None,
             placement: None,
         })
+    }
+
+    /// Where `face` (normalized, in the photo's upright frame) lies in its tile ([`Self::face_job`]),
+    /// as fractions of the tile: what a face tile outlines, so a tile with two faces in it says which
+    /// one it is about (issue #1147). `None` for an unknown photo.
+    pub fn face_in_tile(&self, id: PhotoId, face: lcc_geom::Rect) -> Option<lcc_geom::Rect> {
+        let p = self.rendered_photo_of(id)?;
+        let sq = face_square(&p, face);
+        rect_within(sq.face, sq.rect)
+    }
+
+    /// The whole photo a face is in, with the photo's look but without its crop (a face may lie
+    /// outside it), long edge `edge` (≤ 512), and where `face` (normalized, upright frame) lies in
+    /// that picture: the hover preview of a face tile (issue #1147). Cached like [`Self::variant_job`].
+    pub fn face_photo_job(&mut self, id: PhotoId, face: lcc_geom::Rect, edge: usize) -> Option<(RenderJob, lcc_geom::Rect)> {
+        let p = self.rendered_photo_of(id)?;
+        let at = rect_within(p.develop.orientation.map_norm_rect(face), lcc_geom::Rect::UNIT)?;
+        let settings = without_crop(&p.develop);
+        let job = self.variant_job(id, &settings, edge)?;
+        Some((job, at))
     }
 
     /// A square close-up of `face` (normalized, in the photo's upright frame) for a People card: the
@@ -2571,19 +2652,7 @@ impl crate::Session {
     /// the content: a later launch shows the tile without reading the original.
     pub fn face_job(&mut self, id: PhotoId, face: lcc_geom::Rect, edge: usize) -> Option<RenderJob> {
         let p = self.rendered_photo_of(id)?;
-        // `face` is on the upright (EXIF-oriented) photo; the crop below is in the frame after the
-        // user's Rotate Left/Right, so carry the box (and the photo's size) over to it.
-        let orient = p.develop.orientation;
-        let face = orient.map_norm_rect(face);
-        let (w, h) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
-        let (w, h) = if orient.swaps_axes() { (h, w) } else { (w, h) };
-        let side = ((face.x1 - face.x0) * w).max((face.y1 - face.y0) * h) * 1.7;
-        // finite, within the photo, and never wider than its short side (so the clamps below are valid)
-        let side = if side.is_finite() { side.clamp(1.0, w.min(h)) } else { w.min(h) };
-        let (cx, cy) = ((face.x0 + face.x1) / 2.0 * w, (face.y0 + face.y1) / 2.0 * h);
-        let (cx, cy) = (if cx.is_finite() { cx } else { w / 2.0 }, if cy.is_finite() { cy } else { h / 2.0 });
-        let (x0, y0) = (cx.clamp(side / 2.0, w - side / 2.0) - side / 2.0, cy.clamp(side / 2.0, h - side / 2.0) - side / 2.0);
-        let rect = lcc_geom::Rect { x0: x0 / w, y0: y0 / h, x1: (x0 + side) / w, y1: (y0 + side) / h };
+        let FaceSquare { rect, side, w, h, .. } = face_square(&p, face);
         let mut settings = (*p.develop).clone();
         settings.crop = lcc_develop::Crop { geometry: lcc_geom::CropGeometry { rect, angle: 0.0 }, ..Default::default() };
         let edge = face_edge(edge);
@@ -2616,6 +2685,7 @@ impl crate::Session {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source: false,
             latest: None,
             kept: None,
             placement: None,
@@ -4276,6 +4346,84 @@ mod tests {
         assert_eq!(s.render_job(id, 1600, 1600, false, false).unwrap().level, SourceLevel::Preview);
         // and a crop shown small enough still reads the preview
         assert_eq!(s.render_job(id, 600, 600, false, true).unwrap().level, SourceLevel::Preview);
+    }
+
+    // Issue #1197 (ported from upstream PR #1931): after an edit, a tight crop's
+    // grid thumbnail was cut from the decoded preview shrunk to the 512 px thumbnail source and
+    // stretched back up, so it lost the detail the cropped photo shown at that size has
+    #[test]
+    fn a_tight_crops_thumbnail_is_as_sharp_as_the_crop_rendered_at_its_size() {
+        let mut s = crate::Session::new();
+        let p = Photo::new(PhotoId(1), Source::File { path: "/nowhere/a.ARW".into() }, "a.ARW", "ARW", 5120, 3414, "");
+        s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+        // the preview the loupe decoded while the photo was edited: stripes 2 px wide, detail a
+        // 512 px source can't hold
+        let stripes = |x: usize, _| if (x / 2).is_multiple_of(2) { [0.1, 0.1, 0.1] } else { [0.6, 0.6, 0.6] };
+        s.media.insert(p.id, SourceLevel::Preview, Arc::new(Rgb32f::from_fn(2560, 1707, stripes)));
+        let mut d = (*s.develop_of(p.id).unwrap()).clone();
+        d.crop.geometry.rect = lcc_geom::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 };
+        s.set_develop(p.id, d, "Crop").unwrap();
+        // mean step between neighbouring pixels: what a stretched small source smooths away
+        let detail = |img: &Rgba8| {
+            let (w, h) = (img.width, img.height);
+            let mut sum = 0u64;
+            for y in 0..h - 1 {
+                for x in 0..w - 1 {
+                    let (p, r, b) = (img.data[y * w + x], img.data[y * w + x + 1], img.data[(y + 1) * w + x]);
+                    sum += (0..3).map(|k| u64::from(p[k].abs_diff(r[k])) + u64::from(p[k].abs_diff(b[k]))).sum::<u64>();
+                }
+            }
+            sum as f64 / ((w - 1) * (h - 1)) as f64
+        };
+        let thumb = s.thumb_job(p.id, 512).unwrap().run().rendered.unwrap().image;
+        let reference = s.render_job(p.id, 512, 512, false, true).unwrap().run().rendered.unwrap().image;
+        assert_eq!((thumb.width, thumb.height), (reference.width, reference.height));
+        let (t, r) = (detail(&thumb), detail(&reference));
+        assert!(t >= 0.8 * r, "the thumbnail has {t:.2} of detail, the crop rendered at its size {r:.2}");
+    }
+
+    // Issue #1197: a grid thumbnail stretches the thumbnail source up to 2x before it reads a
+    // larger one, and then decodes only the pixels its crop needs, under a cache key of its own
+    #[test]
+    fn a_cropped_thumbnail_reads_a_larger_source_only_past_twice_its_size() {
+        let mut s = crate::Session::with_demo();
+        let id = s.catalog.photos().next().unwrap().id;
+        let thumb_with_crop = |s: &mut crate::Session, side: f64| {
+            let mut d = (*s.develop_of(id).unwrap()).clone();
+            d.crop.geometry.rect = lcc_geom::Rect { x0: 0.0, y0: 0.0, x1: side, y1: side };
+            s.set_develop(id, d, "Crop").unwrap();
+            s.thumb_job(id, 512).unwrap()
+        };
+        // a slight crop (a straightened horizon, a trimmed edge) keeps the cheap source
+        assert_eq!(thumb_with_crop(&mut s, 0.9).level, SourceLevel::Thumb);
+        assert_eq!(thumb_with_crop(&mut s, 0.6).level, SourceLevel::Thumb);
+        // a crop to 40 % needs 512 / 0.4 = 1280 px of the source: decoded at that, not at 2560
+        let job = thumb_with_crop(&mut s, 0.4);
+        assert_eq!(job.level, SourceLevel::Preview);
+        assert!(job.discard_source);
+        assert!(matches!(job.source, SourceRef::Demo { max_edge, .. } if (1200..=1360).contains(&max_edge)));
+    }
+
+    // Issue #1197: the filmstrip's thumbnails of tightly cropped neighbours must not push the
+    // preview of the photo being edited out of the session, or the next slider move decodes it again
+    #[test]
+    fn thumbnails_of_tight_crops_leave_the_loupes_preview_in_place() {
+        let mut s = crate::Session::with_demo();
+        let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(6).collect();
+        let (shown, others) = ids.split_first().unwrap();
+        s.media.insert(*shown, SourceLevel::Preview, Arc::new(Rgb32f::from_fn(2560, 1707, |_, _| [0.5, 0.5, 0.5])));
+        for &id in others {
+            let mut d = (*s.develop_of(id).unwrap()).clone();
+            d.crop.geometry.rect = lcc_geom::Rect { x0: 0.4, y0: 0.4, x1: 0.6, y1: 0.6 };
+            s.set_develop(id, d, "Crop").unwrap();
+            let job = s.thumb_job(id, 512).unwrap();
+            assert_eq!(job.level, SourceLevel::Preview);
+            let r = job.run();
+            assert!(r.rendered.is_ok());
+            assert!(r.loaded.is_none(), "a thumbnail's preview-sized source is not handed back");
+            s.accept(&r);
+        }
+        assert!(s.media.has_source(*shown, SourceLevel::Preview), "the loupe's preview was evicted by the thumbnails");
     }
 
     // a window whose spot reads from further away than a render can hold is refused

@@ -2294,6 +2294,7 @@ impl Session {
             display_fit: None,
             hdr_texels: None,
             superseded: None,
+            discard_source: false,
             latest: None,
             kept: None,
             placement: None,

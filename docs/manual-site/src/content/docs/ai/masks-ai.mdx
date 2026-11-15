@@ -1,6 +1,6 @@
 ---
 title: AI masks
-description: Object, Describe, Subject, Background, Sky, People and Remembered masks.
+description: Object, Describe, Subject, Background, Sky, People, Remembered and Depth masks.
 sidebar:
   order: 3
 ---
@@ -9,7 +9,7 @@ import Shot from '../../../components/Shot.astro';
 import NeedsImage from '../../../components/NeedsImage.astro';
 import { Aside } from '@astrojs/starlight/components';
 
-<Shot name="ai-mask-types" alt="Create New Mask: Object, Describe, Subject, Sky, Background, People, Remembered and the drawn types" />
+<Shot name="ai-mask-types" alt="Create New Mask: Object, Describe, Subject, Sky, Background, People, Remembered, the drawn types and the ranges, Depth last" />
 
 Open **Masks** and pick a tile. Only masks that use **Subject** run the subject model: Sky, Landscape and Depth masks do not, even when it is installed. Editing a photo with AI masks is faster, because the analysis runs once per photo and slider drags reuse it. All AI tiles are in Create New Mask; the result is a normal mask with the same Light, Colour, Effects and Detail sliders (see [Masks](../../develop/masking/)).
 
@@ -22,6 +22,7 @@ Open **Masks** and pick a tile. Only masks that use **Subject** run the subject 
 | **Sky** | the sky | built-in analysis; optional EoMT |
 | **People** | people and their parts | MediaPipe models, or the file's own mattes |
 | **Remembered** | an object you named earlier | SAM 2.1 |
+| **Depth** | a band of distance from the camera | Depth Anything V2 Small |
 
 ## Object
 
@@ -73,6 +74,15 @@ Open **Masks** and pick a tile. Only masks that use **Subject** run the subject 
 - Learned objects stay in the library. Needs SAM 2.1.
 - Partial: no accuracy measurements yet.
 
+## Depth
+
+<NeedsImage what="A Depth Range mask on the demo photo: the near-to-far track with its range handles, the Smoothness slider, and the overlay on the foreground" />
+
+- **Depth** (the last tile, also **Tools ▸ Create New Mask ▸ Depth Range**, Shift+D) selects what lies at a chosen distance from the camera.
+- Drag the range on the near (left) to far (right) track; **Smoothness** softens where the range starts and ends.
+- Needs **Depth Anything V2 Small**. Without it the tile opens **Settings ▸ AI Models**, where it is offered for download, and no empty mask is made.
+- Partial: the depth is estimated from the picture; the file's own depth map is not read.
+
 <Aside type="note" title="Modern layout">
 **Masks** is in the dock; the tiles are the same. Models: **☰ ▸ Edit ▸ Settings… ▸ AI Models**.
 </Aside>
@@ -80,6 +90,6 @@ Open **Masks** and pick a tile. Only masks that use **Subject** run the subject 
 ## Limits
 
 - Models see the whole uncropped photo at a low grid (288 by 288 for SAM 3); edges are then snapped to the photo, so very small objects can still be rough.
-- **Landscape** classes (Mountains, Architecture, ground) are not offered. **Depth Range** is not built.
+- **Landscape** classes (Mountains, Architecture, ground) are not offered.
 - Not verified against Lightroom's Select Object. No box or brush object mode.
 - AI masks are stored with the photo and render without the model; the web build renders them but cannot make them.
