@@ -1266,13 +1266,15 @@ dependencies = [
 [[package]]
 name = "craft-image-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9#82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9"
 dependencies = [
  "craft-jpeg",
- "craft-metadata",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9)",
+ "crc32fast",
  "exr",
  "flate2",
  "half",
+ "hayro-jpeg2000",
  "image",
  "image-webp",
  "jpeg-encoder",
@@ -1289,7 +1291,7 @@ dependencies = [
 [[package]]
 name = "craft-jpeg"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+source = "git+https://github.com/storytold/craft-libs?rev=82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9#82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9"
 dependencies = [
  "thiserror 2.0.21",
 ]
@@ -1307,11 +1309,23 @@ dependencies = [
 [[package]]
 name = "craft-metadata"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9#82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9"
+dependencies = [
+ "brotli-decompressor 6.0.1",
+ "chrono",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9)",
+ "quick-xml 0.41.0",
+ "serde",
+]
+
+[[package]]
+name = "craft-metadata"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
 dependencies = [
  "brotli-decompressor 6.0.1",
  "chrono",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -1334,8 +1348,8 @@ source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9b
 dependencies = [
  "chrono",
  "craft-crw",
- "craft-metadata",
- "craft-tiff",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "jxl-oxide",
  "miniz_oxide 0.9.1",
  "rayon",
@@ -1343,6 +1357,15 @@ dependencies = [
  "thiserror 2.0.21",
  "zune-core",
  "zune-jpeg",
+]
+
+[[package]]
+name = "craft-tiff"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9#82e258ab6eae4f4d6cd9dfe463a8640fd20c96d9"
+dependencies = [
+ "serde",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3034,6 +3057,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hayro-jpeg2000"
+version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c75ab947623ef4ccaa7acf0579edf7cbb5a73838e3839a7be73335e522f433a1"
+dependencies = [
+ "fearless_simd",
+]
+
+[[package]]
 name = "heck"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3834,7 +3866,7 @@ dependencies = [
  "craft-image-codecs",
  "craft-jxl",
  "craft-psd",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "dhat",
  "jxl-oxide",
  "lightcraft-color",
@@ -3911,7 +3943,7 @@ dependencies = [
  "chrono",
  "craft-docpath",
  "craft-heif",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "crc32fast",
  "fs4",
  "harfrust 0.13.3",
@@ -4068,9 +4100,9 @@ version = "0.21.1"
 dependencies = [
  "chrono",
  "craft-heif",
- "craft-metadata",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "craft-psd",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "lightcraft-geom",
  "proptest",
  "serde",
@@ -4125,7 +4157,7 @@ dependencies = [
  "chrono",
  "craft-image-codecs",
  "craft-raw",
- "craft-tiff",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "dhat",
  "lightcraft-color",
  "lightcraft-geom",

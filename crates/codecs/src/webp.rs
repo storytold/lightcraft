@@ -41,29 +41,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
 /// animation frame), or one that runs past the end of the file (truncated). The compressed data
 /// itself is not checked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let mut p = 12usize;
-    let mut has_image = false;
-    let mut exif_chunk: Option<&[u8]> = None;
-    while let Some(h) = bytes.get(p..p.saturating_add(8)) {
-        let size = u32::from_le_bytes([h[4], h[5], h[6], h[7]]) as usize;
-        let end = p.saturating_add(8).saturating_add(size);
-        if matches!(&h[0..4], b"VP8 " | b"VP8L" | b"ANMF") {
-            if end > bytes.len() {
-                return Err(err("truncated image data"));
-            }
-            has_image = true;
-        } else if &h[0..4] == b"EXIF" && end <= bytes.len() && exif_chunk.is_none() {
-            exif_chunk = Some(&bytes[p + 8..end]);
-        }
-        p = end.saturating_add(size & 1);
-    }
-    if !has_image {
-        return Err(err("no image data"));
-    }
-    let (w, h) = craft_image_codecs::probe_size(bytes).map_err(err)?;
-    let orientation =
-        exif_chunk.map(|e| e.strip_prefix(b"Exif\0\0").unwrap_or(e)).map(crate::exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
-    let (w, h) = if (5..=8).contains(&orientation) { (h, w) } else { (w, h) };
+    let (w, h, orientation) = craft_image_codecs::webp_probe::header(bytes).map_err(err)?;
     check_size(F, w as u64, h as u64, &DecodeOptions::default())?;
     Ok((w, h, orientation))
 }
