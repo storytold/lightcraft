@@ -57,6 +57,53 @@ pub struct Batch {
     /// The sender took in the other side's batches up to this number of theirs.
     #[serde(default)]
     pub ack: Option<u64>,
+    /// Immich connections the sender shares with the group, key and all. Only ever sent over
+    /// the encrypted, authenticated peer channel, to a device of the group; never stored in the
+    /// replica.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub accounts: Vec<SharedAccount>,
+}
+
+/// The most shared Immich connections one batch carries, and the longest field taken.
+pub const MAX_SHARED: usize = 8;
+pub const MAX_SHARED_FIELD: usize = 2048;
+
+/// An Immich connection one device shares with the others of its group.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharedAccount {
+    pub url: String,
+    pub user_id: String,
+    #[serde(default)]
+    pub user_name: String,
+    /// The API key.
+    pub key: String,
+    /// A certificate fingerprint the sharing device confirmed (self-signed servers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<String>,
+}
+
+impl SharedAccount {
+    /// Whether every field is within bounds (a hostile peer's are dropped).
+    pub fn sane(&self) -> bool {
+        let ok = |s: &str| s.len() <= MAX_SHARED_FIELD && !s.chars().any(char::is_control);
+        !self.url.is_empty()
+            && !self.user_id.is_empty()
+            && self.user_id.len() <= 128
+            && !self.key.is_empty()
+            && ok(&self.url)
+            && ok(&self.user_id)
+            && ok(&self.user_name)
+            && ok(&self.key)
+            && self.pinned.as_deref().is_none_or(ok)
+    }
+}
+
+/// Never prints the key.
+impl std::fmt::Debug for SharedAccount {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SharedAccount").field("url", &self.url).field("user_id", &self.user_id).field("key", &"<hidden>").finish()
+    }
 }
 
 /// One file asked for.

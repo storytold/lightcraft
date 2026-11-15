@@ -60,10 +60,13 @@ pub(crate) enum Msg {
     Version(Box<crate::cmd::immich::versions::VersionDone>),
     /// `immich.sync {background}`: a sync run finished.
     Synced(Box<crate::cmd::immich::sync::SyncDone>),
-    /// `immich.syncAlbums {background}`: an album run finished.
-    AlbumsSynced(Box<crate::cmd::immich::publish::AlbumsDone>),
     /// `immich.pullSidecars` / `immich.pushSidecars` {background}: a sidecar run finished.
     Sidecars(Box<SidecarsDone>),
+    /// The Immich albums shown as collections were listed (device sync).
+    ImmichAlbums(Box<crate::cmd::immich::collections::Listing>),
+    /// Photos added to Immich collections here were uploaded (or found) and put into the albums.
+    ImmichPushed(Box<crate::cmd::immich::collections::Pushed>),
+    ImmichPushDone,
     /// `credentials.unlock {background}`: the encrypted file opened (or not).
     FileUnlocked(Result<lcc_credentials::FileStore, CredError>),
     /// `credentials.unlockSystem`: the keychain's own unlock prompt was answered.
@@ -260,6 +263,8 @@ pub struct State {
     /// The SHA-1 back-fill: a batch in flight; files that could not be read (not retried this session).
     pub(crate) sha1_busy: bool,
     pub(crate) sha1_failed: HashSet<PhotoId>,
+    /// Photos to hash before the rest (device sync was told their SHA-1 and checks it here).
+    pub(crate) sha1_first: std::collections::BTreeSet<PhotoId>,
     pub(crate) sha1_done: u64,
     /// Catalog revision when nothing was left to hash (skip the scan until it changes).
     pub(crate) sha1_idle_at: Option<u64>,
@@ -309,6 +314,8 @@ pub struct State {
     pub(crate) sidecars: SidecarProgress,
     /// Finished Edit In version uploads not yet shown (`immich.versionResults`).
     pub(crate) versions: Vec<serde_json::Value>,
+    /// Immich albums as device-sync collections: workers and schedule.
+    pub(crate) coll: crate::cmd::immich::collections::CollState,
 }
 
 impl Default for State {
@@ -319,6 +326,8 @@ impl Default for State {
             rx,
             sha1_busy: false,
             sha1_failed: HashSet::new(),
+            sha1_first: Default::default(),
+            coll: Default::default(),
             sha1_done: 0,
             sha1_idle_at: None,
             connections_path: None,
@@ -363,8 +372,11 @@ impl State {
 /// their master's file and are skipped), minus those that failed this session; at most `limit`
 /// (one batch: a large library is not copied path by path for every batch).
 pub(crate) fn sha1_pending(s: &crate::Session, limit: usize) -> Vec<(PhotoId, String)> {
-    s.catalog
-        .photos()
+    let first = s.remote.sha1_first.iter().filter_map(|id| s.catalog.photo(*id));
+    let mut seen = std::collections::HashSet::new();
+    first
+        .chain(s.catalog.photos())
+        .filter(|p| seen.insert(p.id))
         .filter(|p| p.sha1.is_none() && p.copy_of.is_none() && !p.local && !s.remote.sha1_failed.contains(&p.id))
         .filter(|p| p.preview_only.as_deref() != Some(LINK_ONLY))
         .filter_map(|p| match &p.source {

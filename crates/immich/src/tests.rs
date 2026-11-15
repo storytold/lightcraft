@@ -594,6 +594,16 @@ fn accounts_file_round_trips_without_secrets() {
     std::fs::write(&path, b"{not json").unwrap();
     assert!(crate::Accounts::load(&path).is_err());
     assert_eq!(crate::Accounts::load(&dir.join("missing.json")).unwrap(), crate::Accounts::default());
+    // the old name-matching album rule: on → albums as collections; off → nothing; never written again
+    std::fs::write(
+        &path,
+        br#"{"immich":[{"id":"a#1","url":"http://a","userId":"1","sync":{"albums":{"direction":"twoWay","policy":"ask"}}},{"id":"b#2","url":"http://b","userId":"2","sync":{"albums":{"direction":"off","policy":"ask"}}}]}"#,
+    )
+    .unwrap();
+    let m = crate::Accounts::load(&path).unwrap();
+    assert!(m.immich[0].collections && !m.immich[1].collections);
+    m.save(&path).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("albums"));
 }
 
 // Regression: Immich doesn't hash external-library files (checksum = SHA-1 of `path:` + path),
@@ -759,6 +769,8 @@ fn damaged_connections_file_never_panics() {
         pinned: None,
         path_maps: vec![PathMap { container: "/usr/src/app/upload".into(), local: "/pics".into() }],
         linked_until: None,
+        collections: true,
+        shared: true,
         sync: Default::default(),
     });
     a.save(&path).unwrap();

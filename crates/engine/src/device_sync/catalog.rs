@@ -33,42 +33,104 @@ fn plain(a: &Album) -> bool {
     a.smart.is_none() && !a.quick
 }
 
-/// The catalogue's photos by key (and back).
+/// The catalogue's photos by key (and back), and the content-hash keys other devices may still
+/// use for photos known here by SHA-1. A photo the replica still knows by its content hash moves
+/// to its SHA-1 key (catalogues synced before photos were keyed by SHA-1, and photos hashed while
+/// the catalogue was closed).
 pub(super) fn index(s: &Session, lib: &mut Lib) {
     lib.album_sig.clear();
     lib.keys.clear();
     lib.ids.clear();
+    lib.alias.clear();
+    lib.hints.clear();
     for p in s.catalog.photos() {
-        if let Some(k) = record::key_of(p)
-            && !lib.keys.contains_key(k)
+        if let Some(k) = record::key_of(p, &s.catalog)
+            && !lib.keys.contains_key(&k)
         {
-            lib.keys.insert(k.to_string(), p.id);
-            lib.ids.insert(p.id, k.to_string());
+            if let Some(old) = record::content_key(p).filter(|c| *c != k) {
+                lib.alias.insert(old.to_string(), k.clone());
+                lib.replica.rekey(old, &k);
+            }
+            lib.keys.insert(k.clone(), p.id);
+            lib.ids.insert(p.id, k);
         }
     }
     wanting(lib);
 }
 
 fn reindex(s: &Session, lib: &mut Lib, id: PhotoId) {
-    let key = s.catalog.photo(id).and_then(|p| record::key_of(p)).map(str::to_string);
+    let p = s.catalog.photo(id);
+    let key = p.and_then(|p| record::key_of(p, &s.catalog));
     let old = lib.ids.get(&id).cloned();
     if old == key {
         return;
     }
     // a photo got (or lost) its key: every collection's photos are looked at afresh
     lib.album_sig.clear();
-    if let Some(o) = old {
+    if let Some(o) = &old {
+        // (another device's claim about it is settled by the hash made here)
+        lib.hints.retain(|_, v| v != o);
         lib.ids.remove(&id);
-        if lib.keys.get(&o) == Some(&id) {
-            lib.keys.remove(&o);
+        if lib.keys.get(o) == Some(&id) {
+            lib.keys.remove(o);
         }
     }
     if let Some(k) = key
         && !lib.keys.contains_key(&k)
     {
+        // its original's SHA-1 became known: what the replica holds under the old key moves
+        if let Some(o) = old.as_deref().filter(|o| !o.starts_with(record::SHA1_KEY)) {
+            lib.replica.rekey(o, &k);
+            lib.alias.insert(o.to_string(), k.clone());
+        }
+        if let Some(c) = p.and_then(|p| record::content_key(p)).filter(|c| *c != k) {
+            lib.alias.insert(c.to_string(), k.clone());
+        }
         lib.keys.insert(k.clone(), id);
         lib.ids.insert(id, k);
     }
+}
+
+/// The key this catalogue uses for a key another device sent (it may still name the photo by
+/// its content hash, which is known here by SHA-1).
+pub(super) fn local_key<'a>(lib: &'a Lib, key: &'a str) -> &'a str {
+    if lib.keys.contains_key(key) {
+        return key;
+    }
+    lib.alias.get(key).or_else(|| lib.hints.get(key)).map_or(key, String::as_str)
+}
+
+/// The key to merge an item another device sent under. Beyond [`local_key`]: a photo sent under
+/// its SHA-1 key whose content hash names a photo here that isn't hashed yet is merged under
+/// that photo's key for now, and the photo is hashed next (`remote::State::sha1_first`). The
+/// other device's SHA-1 is only a hint: the key moves when this device's own hash is done, and
+/// only to what it computed (a wrong claim leaves the photo as it is). A photo only told of
+/// (no file here to hash) moves to the key the other device uses.
+fn incoming_key(s: &mut Session, lib: &mut Lib, key: &str, info: &Value) -> String {
+    let k = local_key(lib, key).to_string();
+    if k != key || lib.keys.contains_key(&k) || lib.replica.photos.contains_key(&k) {
+        return k;
+    }
+    let (Some(_), Some(h)) = (record::sha1_of_key(key), info.get("content_hash").and_then(Value::as_str)) else { return k };
+    if h == key || h.len() > 128 {
+        return k;
+    }
+    if let Some(id) = lib.keys.get(h).copied() {
+        let unhashed = s.catalog.photo(id).is_some_and(|p| p.sha1.is_none() && record::content_key(p) == Some(h));
+        if unhashed {
+            lib.hints.insert(key.to_string(), h.to_string());
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                s.remote.sha1_first.insert(id);
+                s.remote.sha1_idle_at = None;
+            }
+            return h.to_string();
+        }
+    } else if lib.replica.photos.contains_key(h) {
+        lib.replica.rekey(h, key);
+        lib.alias.insert(h.to_string(), key.to_string());
+    }
+    key.to_string()
 }
 
 /// The photos this device should hold more of than it does.
@@ -89,7 +151,7 @@ fn in_group(lib: &Lib) -> Option<Mode> {
 
 /// Photos of the catalogue that can't sync yet: not hashed, or a second import of the same bytes.
 pub(super) fn unkeyed(s: &Session) -> usize {
-    s.catalog.photos().filter(|p| !p.deleted && p.copy_of.is_none() && record::key_of(p).is_none()).count()
+    s.catalog.photos().filter(|p| !p.deleted && p.copy_of.is_none() && record::key_of(p, &s.catalog).is_none()).count()
 }
 
 /// New collections of the catalogue the person hasn't said how to share.
@@ -144,8 +206,9 @@ fn scan_photo(s: &Session, lib: &mut Lib, key: &str, now: u64) -> bool {
         // told of before it was imported here: `reconcile` joins the two
         return false;
     }
-    // a photo imported here holds its original
-    let have = known.map_or(Depth::Full, |e| e.have);
+    // a photo imported here holds its original (a link-only one, Immich's preview)
+    let link_only = p.preview_only.as_deref() == Some(crate::remote::LINK_ONLY);
+    let have = if link_only { Depth::Preview } else { known.map_or(Depth::Full, |e| e.have) };
     lib.replica.local_photo(key, &record::digests(p, &s.catalog), have, now)
 }
 
@@ -163,12 +226,20 @@ fn scan_members(s: &Session, lib: &mut Lib, id: &str, cur: BTreeSet<String>, now
                 (cur.iter().filter(|k| !known.contains(k)).cloned().collect(), Vec::new())
             }
         };
+        let immich = lib.replica.collection(id).is_some_and(|c| c.is_immich());
         for k in adds {
             changed |= scan_photo(s, lib, &k, now);
             changed |= lib.replica.set_member(id, &k, true, now);
+            if immich {
+                // to the server: uploaded unless Immich has it, then put into the album
+                lib.immich_out.push((id.to_string(), k, true));
+            }
         }
         for k in removes {
             changed |= lib.replica.set_member(id, &k, false, now);
+            if immich {
+                lib.immich_out.push((id.to_string(), k, false));
+            }
         }
     }
     lib.base.insert(id.to_string(), cur);
@@ -272,15 +343,17 @@ pub(super) fn scan(s: &Session, lib: &mut Lib) -> bool {
     match touched {
         Some(ids) => {
             for id in ids {
+                // (a photo an Immich album lists comes into the replica when it is imported here)
                 if let Some(key) = lib.ids.get(&id).cloned()
-                    && lib.replica.photos.contains_key(&key)
+                    && (lib.replica.photos.contains_key(&key) || lib.replica.collections_of(&key).next().is_some())
                 {
                     changed |= scan_photo(s, lib, &key, now);
                 }
             }
         }
         None => {
-            let keys: BTreeSet<String> = lib.replica.photos.keys().filter(|k| lib.keys.contains_key(*k)).cloned().collect();
+            let members: BTreeSet<&String> = lib.replica.members.values().flat_map(|m| m.iter().filter(|(_, e)| e.on.v).map(|(k, _)| k)).collect();
+            let keys: BTreeSet<String> = lib.replica.photos.keys().chain(members).filter(|k| lib.keys.contains_key(*k)).cloned().collect();
             for key in keys {
                 changed |= scan_photo(s, lib, &key, now);
             }
@@ -313,7 +386,12 @@ pub(super) fn prepare(s: &Session, lib: &Lib, peer: &str) -> (Batch, Outgoing) {
             limit = (limit / 4).max(1);
             continue;
         }
-        return (Batch { items, upto: out.upto, more: out.more, ack: None }, out);
+        // the Immich connections this device shares, once a session to each device of the group
+        let accounts = match &lib.share_out {
+            Some((_, a)) if !left && r.in_group_with(peer) && !lib.share_sent.contains(peer) => a.clone(),
+            _ => Vec::new(),
+        };
+        return (Batch { items, upto: out.upto, more: out.more, ack: None, accounts }, out);
     }
 }
 
@@ -326,6 +404,10 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
         && batch.items.iter().any(|it| matches!(it, Item::Photo { key: k, .. } if k == key))
     {
         return Err("a photo of the batch is being edited".into());
+    }
+    if lib.replica.in_group_with(from) {
+        let room = lcc_sync::proto::MAX_SHARED.saturating_sub(lib.share_in.len());
+        lib.share_in.extend(batch.accounts.iter().filter(|a| a.sane()).take(room).cloned());
     }
     for item in batch.items.iter().take(MAX_ITEMS * 2) {
         if let Item::Group(g) = item {
@@ -344,30 +426,34 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
                 lib.replica.merge_collection(c, from);
             }
             Item::Member { coll, key, on } => {
-                lib.replica.merge_member(coll, key, on, from);
+                let key = local_key(lib, key).to_string();
+                lib.replica.merge_member(coll, &key, on, from);
             }
-            Item::Photo { key, info, fields, .. } => match lib.keys.get(key).copied() {
-                Some(id) if lib.replica.photos.get(key).is_none_or(|e| e.ghost.is_none()) => {
-                    for (name, lww) in fields.iter().take(32) {
-                        if !record::FIELDS.contains(&name.as_str()) || !lib.replica.incoming_wins(key, name, lww) {
-                            continue;
+            Item::Photo { key, info, fields, .. } => {
+                let key = &incoming_key(s, lib, key, info);
+                match lib.keys.get(key).copied() {
+                    Some(id) if lib.replica.photos.get(key).is_none_or(|e| e.ghost.is_none()) => {
+                        for (name, lww) in fields.iter().take(32) {
+                            if !record::FIELDS.contains(&name.as_str()) || !lib.replica.incoming_wins(key, name, lww) {
+                                continue;
+                            }
+                            if name == "develop" && lib.replica.owes(from, key) {
+                                record::keep_version(s, id, &peer.name);
+                            }
+                            if let Err(e) = record::apply(s, id, name, &lww.v) {
+                                // this field stays as it is here (and is not confirmed as taken over)
+                                log::warn!("sync: {e}");
+                                continue;
+                            }
+                            let d = s.catalog.photo(id).map_or(0, |p| record::digest(p, &s.catalog, name));
+                            lib.replica.accept_field(key, name, d, lww.s, from);
                         }
-                        if name == "develop" && lib.replica.owes(from, key) {
-                            record::keep_version(s, id, &peer.name);
-                        }
-                        if let Err(e) = record::apply(s, id, name, &lww.v) {
-                            // this field stays as it is here (and is not confirmed as taken over)
-                            log::warn!("sync: {e}");
-                            continue;
-                        }
-                        let d = s.catalog.photo(id).map_or(0, |p| record::digest(p, &s.catalog, name));
-                        lib.replica.accept_field(key, name, d, lww.s, from);
+                    }
+                    _ => {
+                        lib.replica.merge_ghost(key, info, fields, from);
                     }
                 }
-                _ => {
-                    lib.replica.merge_ghost(key, info, fields, from);
-                }
-            },
+            }
         }
     }
     reconcile(s, lib);
@@ -431,6 +517,9 @@ fn adopt(s: &mut Session, lib: &mut Lib, key: &str) {
             }
             lib.keys.insert(key.to_string(), id);
             lib.ids.insert(id, key.to_string());
+            // a connected Immich server that has the same original links it (no upload, no second asset)
+            #[cfg(not(target_arch = "wasm32"))]
+            s.remote.link_queue.push(id);
             (id, Depth::None)
         }
     };
@@ -448,7 +537,7 @@ fn adopt(s: &mut Session, lib: &mut Lib, key: &str) {
 
 /// Brings the catalogue in line with the replica: the collections other devices own, the photos
 /// they told of that this device takes, and which photos are in each shared collection.
-pub(super) fn reconcile(s: &mut Session, lib: &mut Lib) {
+pub(crate) fn reconcile(s: &mut Session, lib: &mut Lib) {
     let Some(mode) = in_group(lib) else { return };
     let me = lib.replica.device.clone();
     // collections of other devices → collections of the catalogue (sets first)
@@ -461,17 +550,33 @@ pub(super) fn reconcile(s: &mut Session, lib: &mut Lib) {
         }
         let mapped = lib.replica.albums.get(&id).copied().filter(|a| s.catalog.album(AlbumId(*a)).is_some());
         let listed = !c.gone() && c.listed_for(&me, mode) && (mode == Mode::Catalogue || c.grant.v != Grant::None);
-        let want = listed
-            && match mode {
-                Mode::Catalogue => true,
-                Mode::Collections => c.kind != CollectionKind::Set && c.take_of(&me) != Take::None,
-            };
+        let want = if c.is_immich() {
+            // an Immich album is in the catalogue where the account is and the device takes it;
+            // its set ("Immich") as long as one of its albums is
+            let here = c.immich.as_ref().is_some_and(|r| lib.immich_here.contains(&r.account));
+            !c.gone()
+                && here
+                && match c.kind {
+                    CollectionKind::Set => lib
+                        .replica
+                        .collections
+                        .values()
+                        .any(|e| e.c.meta.v.parent.as_deref() == Some(id.as_str()) && !e.c.gone() && e.c.take_of(&me) != Take::None),
+                    _ => c.take_of(&me) != Take::None,
+                }
+        } else {
+            listed
+                && match mode {
+                    Mode::Catalogue => true,
+                    Mode::Collections => c.kind != CollectionKind::Set && c.take_of(&me) != Take::None,
+                }
+        };
         match (want, mapped) {
             (true, None) => {
                 let aid = s.catalog.alloc_album_id();
                 let mut a = Album::new(aid, display_name(lib, &c));
                 a.folder = c.kind == CollectionKind::Set;
-                if mode == Mode::Catalogue {
+                if mode == Mode::Catalogue || c.is_immich() {
                     a.parent = c
                         .meta
                         .v
@@ -558,8 +663,11 @@ pub(super) fn wants(s: &Session, lib: &mut Lib, peer: &str) -> Vec<Want> {
         }
         let Some(p) = lib.keys.get(key).and_then(|id| s.catalog.photo(*id)) else { continue };
         let Source::File { path } = &p.source else { continue };
-        match lib.replica.depth_wanted(key) {
-            Depth::Full if !path.is_empty() => out.push(Want { key: key.clone(), depth: Depth::Full, dest: PathBuf::from(path) }),
+        match lib.replica.depth_from_peers(key) {
+            // (a link-only photo's original comes from Immich, and its file here is the preview)
+            Depth::Full if !path.is_empty() && p.preview_only.as_deref() != Some(crate::remote::LINK_ONLY) => {
+                out.push(Want { key: key.clone(), depth: Depth::Full, dest: PathBuf::from(path) })
+            }
             Depth::Preview => {
                 if let Some(dir) = &smart_dir {
                     out.push(Want { key: key.clone(), depth: Depth::Preview, dest: crate::smart::sharded_file_path(dir, p) });
@@ -579,6 +687,7 @@ pub(super) fn locate(s: &mut Session, lib: &mut Lib, peer: &str, wants: &[(Strin
     let found: Vec<Result<PathBuf, bool>> = wants
         .iter()
         .map(|(key, depth)| {
+            let key = local_key(lib, key);
             if !lib.replica.may_fetch(peer, key, *depth) {
                 return Err(false);
             }

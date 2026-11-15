@@ -1015,6 +1015,7 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
                 });
             }
         });
+        collections_rows(app, ui, t, i, &id, a);
         confirm_box(app, ui, t, i, &id, "card");
         if app.immich.libraries.contains_key(&id) {
             extlib(app, ui, t, &id);
@@ -1031,6 +1032,48 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
     });
     register(ui.ctx(), format!("immichAccount:{i}"), r.response.rect);
     ui.add_space(4.0);
+}
+
+/// The account in device sync: its albums as collections (each device picks what it keeps of
+/// each in Settings ▸ Sync).
+fn collections_rows(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &str, a: &Value) {
+    ui.horizontal_wrapped(|ui| {
+        let mut on = a["collections"] == true;
+        let c = ui.checkbox(&mut on, crate::i18n::tr("Show Immich albums as collections"));
+        register(ui.ctx(), format!("check:immichCollections-{i}"), c.rect);
+        if c.changed() {
+            let r = app.run("immich.collections", json!({"account": id, "on": on}));
+            if report(app, ui.ctx(), r) && on {
+                let _ = app.run("app.settings", json!({"tab": "sync"}));
+            }
+        }
+        if a["collections"] == true && text_button(ui, &format!("immichCollectionsOpen-{i}"), crate::i18n::tr("Choose in Sync…"), false).clicked() {
+            let _ = app.run("app.settings", json!({"tab": "sync"}));
+        }
+    });
+    let mut shared = a["shared"] == true;
+    let c = ui.checkbox(&mut shared, crate::i18n::tr("Share with synced devices"));
+    register(ui.ctx(), format!("check:immichShare-{i}"), c.rect);
+    if c.changed() {
+        let r = app.run("immich.share", json!({"account": id, "on": shared}));
+        report(app, ui.ctx(), r);
+    }
+    ui.label(
+        RichText::new(crate::i18n::tr(
+            "Shared: this server's API key goes to the devices this catalog syncs with, over their encrypted link, into their key storage, and they see its albums too. Off: the connection and its albums stay on this device.",
+        ))
+        .size(11.0)
+        .color(t.text_dim),
+    );
+    if a["collections"] == true {
+        ui.label(
+            RichText::new(crate::i18n::tr(
+                "Each album is a collection in the Immich set; in Settings ▸ Sync each device chooses None, Previews or Full Quality.",
+            ))
+            .size(11.0)
+            .color(t.text_dim),
+        );
+    }
 }
 
 /// IMM-SIDECARS: push the catalog's metadata to Immich (whole sidecars for external-library
@@ -1743,29 +1786,6 @@ const SYNC_FIELDS: &[(&str, &str)] = &[
 const DIRECTIONS: &[(&str, &str)] = &[("twoWay", "Two-way"), ("toImmich", "To Immich"), ("fromImmich", "From Immich"), ("off", "Off")];
 const POLICIES: &[(&str, &str)] = &[("newest", "Newest wins"), ("catalog", "Catalog wins"), ("immich", "Immich wins"), ("ask", "Ask")];
 
-/// The last album run as one short line (and whether it failed); None before any run.
-fn album_summary(v: &Value) -> Option<(String, bool)> {
-    if v.is_null() {
-        return None;
-    }
-    if v["ok"] == false {
-        let msg = v["error"]["message"].as_str().or_else(|| v["errors"][0].as_str()).unwrap_or("failed");
-        return Some((trf!("Albums: {}", msg), true));
-    }
-    let n = |k: &str| v[k].as_u64().unwrap_or(0);
-    Some((
-        trf!(
-            "Albums: {} linked, {} created, {} renamed, {} changed, {} deleted",
-            n("albums"),
-            n("created"),
-            n("renamed"),
-            n("membership"),
-            n("deleted")
-        ),
-        false,
-    ))
-}
-
 fn label_of(list: &[(&str, &'static str)], v: &str) -> &'static str {
     list.iter().find(|(k, _)| *k == v).map(|(_, l)| *l).unwrap_or("?")
 }
@@ -1820,7 +1840,7 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
     let now = ui.input(|x| x.time);
     let stale = match app.immich.sync_view.get(id) {
         None => true,
-        Some((st, _, at)) => (st["running"] == true || st["albumsRunning"] == true) && now - at > 0.5,
+        Some((st, _, at)) => (st["running"] == true) && now - at > 0.5,
     };
     if stale {
         let st = app.session.execute("immich.syncStatus", &json!({"account": id, "log": 1})).unwrap_or_default();
@@ -1828,7 +1848,7 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
         app.immich.sync_view.insert(id.to_string(), (st, cf, now));
     }
     let Some((st, cf, _)) = app.immich.sync_view.get(id).cloned() else { return };
-    let running = st["running"] == true || st["albumsRunning"] == true;
+    let running = st["running"] == true;
     if running {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(300));
     }
@@ -1860,34 +1880,16 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
     } else {
         crate::i18n::tr("Not synced yet.").to_string()
     };
-    let albums_line = album_summary(&st["albumsLast"]);
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new(crate::i18n::tr("Metadata sync")).font(t.semibold(12.0)).color(t.text));
         let l = ui.label(RichText::new(line).size(11.5).color(if last["ok"] == false { t.caution } else { t.text_label }));
         register(ui.ctx(), format!("label:immichSyncStatus-{i}"), l.rect);
-        if let Some((s, bad)) = albums_line {
-            let l = ui.label(RichText::new(s).size(11.5).color(if bad { t.caution } else { t.text_label }));
-            register(ui.ctx(), format!("label:immichAlbumStatus-{i}"), l.rect);
-        }
-        // collections the last album run kept although their Immich album was deleted
-        let kept: Vec<&str> = st["albumsLast"]["kept"].as_array().into_iter().flatten().filter_map(|k| k["name"].as_str()).collect();
-        if !kept.is_empty() {
-            let l = ui
-                .label(RichText::new(trf!("Kept {} collections that hold photos Immich doesn't have", kept.len())).size(11.5).color(t.caution))
-                .on_hover_text(kept.join(", "));
-            register(ui.ctx(), format!("label:immichAlbumKept-{i}"), l.rect);
-        }
     });
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         if text_button(ui, &format!("immichSyncDry-{i}"), crate::i18n::tr("Preview Changes"), false).clicked() {
             // a dry run on a worker; its changes are listed below when it is back
             let r = app.session.execute("immich.sync", &json!({"account": id, "dryRun": true, "background": true})).map_err(|e| e.to_string());
-            report(app, ui.ctx(), r);
-            changed = true;
-        }
-        if text_button(ui, &format!("immichSyncAlbums-{i}"), crate::i18n::tr("Sync Albums"), false).clicked() {
-            let r = app.run("immich.syncAlbums", json!({"account": id, "background": true}));
             report(app, ui.ctx(), r);
             changed = true;
         }
@@ -1902,7 +1904,6 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
     // rules
     let cfg = &st["config"];
     let mut patch = serde_json::Map::new();
-    let mut album_patch: Option<Value> = None;
     egui::Grid::new(("immich-sync-rules", i)).num_columns(3).spacing([8.0, 2.0]).show(ui, |ui| {
         for (row, rule) in st["rules"].as_array().into_iter().flatten().enumerate() {
             let field = rule["field"].as_str().unwrap_or_default();
@@ -1931,40 +1932,10 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
                 patch.insert(field.to_string(), json!({"direction": d2, "policy": p2}));
             }
         }
-        // collections ↔ albums: off = only albums linked by hand
-        let ar = &st["albumRule"];
-        let (dir, pol) = (ar["direction"].as_str().unwrap_or("off").to_string(), ar["policy"].as_str().unwrap_or("ask").to_string());
-        let (mut d2, mut p2) = (dir.clone(), pol.clone());
-        ui.label(RichText::new(crate::i18n::tr("Collections ↔ albums")).color(t.text_label)).on_hover_text(crate::i18n::tr(
-            "Catalog collections map to the Immich albums of the same name: creates, renames, photos added or removed, and deletes. Deleting a collection or an album never deletes photos. Off: only collections linked by hand.",
-        ));
-        egui::ComboBox::from_id_salt(("immich-dir-albums", i)).width(110.0).selected_text(crate::i18n::tr(label_of(DIRECTIONS, &dir))).show_ui(
-            ui,
-            |ui| {
-                for (k, l) in DIRECTIONS {
-                    ui.selectable_value(&mut d2, k.to_string(), crate::i18n::tr(l));
-                }
-            },
-        );
-        egui::ComboBox::from_id_salt(("immich-pol-albums", i)).width(110.0).selected_text(crate::i18n::tr(label_of(POLICIES, &pol))).show_ui(
-            ui,
-            |ui| {
-                for (k, l) in POLICIES {
-                    ui.selectable_value(&mut p2, k.to_string(), crate::i18n::tr(l));
-                }
-            },
-        );
-        ui.end_row();
-        if d2 != dir || p2 != pol {
-            album_patch = Some(json!({"direction": d2, "policy": p2}));
-        }
     });
     let mut cfg_patch = serde_json::Map::new();
     if !patch.is_empty() {
         cfg_patch.insert("rules".into(), Value::Object(patch));
-    }
-    if let Some(a) = album_patch {
-        cfg_patch.insert("albums".into(), a);
     }
     ui.horizontal(|ui| {
         let mut fav = cfg["favorite"].as_str().unwrap_or("pick").to_string();
@@ -2045,43 +2016,6 @@ fn sync_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &
                 }
                 if text_button(ui, &format!("immichDeletion-{i}-{n}-keep"), crate::i18n::tr("Keep"), false).clicked() {
                     let r = app.run("immich.resolveDeletion", json!({"account": id, "assets": [d["asset"]], "action": "keep"}));
-                    report(app, ui.ctx(), r);
-                    changed = true;
-                }
-            });
-        }
-    }
-    // albums deleted on one side, waiting for the user
-    let adels = st["albumDeletions"].as_array().cloned().unwrap_or_default();
-    if !adels.is_empty() {
-        ui.label(RichText::new(trf!("Albums deleted on one side ({})", adels.len())).font(t.semibold(12.0)).color(t.caution));
-        for (n, d) in adels.iter().enumerate() {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let in_catalog = d["deletedOn"] == "catalog";
-                let what = if in_catalog { crate::i18n::tr("deleted in the catalog") } else { crate::i18n::tr("deleted in Immich") };
-                ui.label(RichText::new(format!("{}: {what}", d["name"].as_str().unwrap_or_default())).color(t.text));
-                let apply = if in_catalog { "Delete in Immich Too" } else { "Delete Here Too" };
-                if text_button(ui, &format!("immichAlbumDeletion-{i}-{n}-apply"), crate::i18n::tr(apply), false)
-                    .on_hover_text(crate::i18n::tr("Deletes the album only; its photos stay."))
-                    .clicked()
-                {
-                    let name = d["name"].as_str().unwrap_or_default();
-                    app.immich.confirm = Some(Confirm {
-                        account: id.to_string(),
-                        place: "sync",
-                        text: if in_catalog {
-                            trf!("Delete the album “{}” in Immich? Its photos stay.", name)
-                        } else {
-                            trf!("Delete the collection “{}” here? Its photos stay.", name)
-                        },
-                        button: apply,
-                        command: "immich.resolveAlbumDeletion",
-                        params: json!({"account": id, "album": d["album"], "action": "apply"}),
-                    });
-                }
-                if text_button(ui, &format!("immichAlbumDeletion-{i}-{n}-keep"), crate::i18n::tr("Keep"), false).clicked() {
-                    let r = app.run("immich.resolveAlbumDeletion", json!({"account": id, "album": d["album"], "action": "keep"}));
                     report(app, ui.ctx(), r);
                     changed = true;
                 }

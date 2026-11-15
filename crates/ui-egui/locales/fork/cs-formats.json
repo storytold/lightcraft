@@ -108,6 +108,7 @@
   "Page {page} of {pages}": "Strana {page} z {pages}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Posun zpět nebo opětovné přiblížení úpravy HDR ji zobrazí hned, bez nového vykreslování. Na této obrazovce používá až {need} MB grafické paměti.",
   "Person {n}": "Osoba {n}",
+  "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Fotky ve složce {folder} jdou do sbírky „Camera Roll - název tohoto zařízení“.",
   "Picks to unflag: {n}": "Vybrané k odznačení: {n}",
   "Preset {name} on {n} photos": "Předvolba {name} na fotkách: {n}",
   "Print settings not saved: {e}": "Nastavení tisku nebylo uloženo: {e}",

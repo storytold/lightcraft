@@ -257,8 +257,11 @@ impl Collection {
                 None => {}
             }
         }
-        if self.immich.is_none() && other.immich.is_some() {
-            self.immich = other.immich.clone();
+        let ok = |s: &str| s.len() <= 128 && !s.chars().any(char::is_control);
+        if self.immich.is_none()
+            && let Some(r) = other.immich.as_ref().filter(|r| ok(&r.account) && ok(&r.album) && !r.account.is_empty())
+        {
+            self.immich = Some(r.clone());
             changed = true;
         }
         changed
@@ -408,8 +411,10 @@ mod tests {
             other.takes.insert(format!("d{i}"), Lww::new(Take::FullSync, Stamp { t: 9, c: 0, d: 0 }));
         }
         other.meta = Lww::new(CollectionMeta { name: "x\u{0}".repeat(5000), parent: None }, Stamp { t: 9, c: 0, d: 0 });
+        other.immich = Some(ImmichRef { account: "u".repeat(10_000), album: "a\u{0}".into() });
         c.merge(&other);
         assert!(c.takes.len() <= MAX_DEVICES);
+        assert!(c.immich.is_none(), "an oversized Immich reference is dropped");
         assert!(c.meta.v.name.chars().count() <= MAX_NAME && !c.meta.v.name.contains('\u{0}'));
     }
 }

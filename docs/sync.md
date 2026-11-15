@@ -29,8 +29,81 @@ between. This page describes what is built, how it works, and its known limits. 
   `fullQuality` (originals; edits go back), `fullSync` (photos added there go to the others too).
 - A collection created while the whole catalog syncs is *undecided* until the person answers (`sync.allow` or
   `sync.skip`); the UI asks at once.
-- Photos are keyed by the hash of the original's bytes. A photo's record (develop settings, rating, flag, label,
-  metadata) merges field by field, the later change winning by a hybrid logical clock.
+- A photo's record (develop settings, rating, flag, label, metadata) merges field by field, the later change
+  winning by a hybrid logical clock.
+
+## Photo identity
+
+One rule names a photo on every device (`device_sync::record::key_of`):
+
+- `sha1:<hex>`, the SHA-1 of the original's bytes, as soon as it is known. Imports hash the original, and every
+  catalog back-fills the SHA-1 of older photos in the background. An Immich link-only photo, whose original isn't
+  on the device, uses the checksum Immich reports for the asset, which is the same SHA-1. So a device holding the
+  file and a device holding only the Immich link give the same photo the same key, and Immich and device sync
+  agree on what "the same photo" is.
+- Until then, the catalog's content hash of the original (older replicas used only this).
+- Virtual copies, a second import of the same bytes and link-only photos without a checksum have no key.
+
+When a photo's SHA-1 becomes known its key moves (`Replica::rekey`): its record, its places in collections and
+what is queued for each device move to the new key, and if another device already told of the new key, the two
+merge field by field. Opening a catalog whose replica still uses content-hash keys moves them the same way.
+Each catalog keeps a table of content-hash keys of photos it knows by SHA-1, so a device that hasn't hashed a
+photo yet is still understood. A photo sent under its SHA-1 key carries its content hash. A device that has
+a photo with that content hash but no SHA-1 does not take the other device's word for it: it merges the record
+under its own key for now, hashes that photo next, and moves to the key it computed. A wrong claim so changes
+nothing; a right one ends as one photo with one key on both. A link-only photo is sent without its content hash, SHA-1 or size, which are the preview's.
+
+A photo that arrives from another device and has a SHA-1 key is looked up on the connected Immich servers by
+checksum straight away (the same lookup as for a new import), so an original Immich already has is linked, not
+uploaded again. A link-only photo doesn't ask other devices for its original: it comes from Immich.
+
+## Immich collections
+
+- **Immich ▸ Show Immich albums as collections** (`immich.collections {account, on}`) on a device that holds the
+  account's key: each of its albums becomes a shared collection `immich:<user id>:<album id>` inside the set
+  `immich:<user id>` named "Immich", owner `immich:<user id>`, grant fixed at Sync. Every device with the account
+  writes the same ids, so their copies merge and a renamed album is renamed everywhere.
+- Each device takes **None**, **Previews** (link-only previews from Immich) or **Full Quality** (originals from
+  Immich); Full Sync isn't offered (`Replica::set_take` refuses it). A device that takes an album lists it in the
+  catalog under the album folder "Immich", created on demand.
+- Which photos are in an album comes from the server, on each device that holds the key: the account's albums
+  are listed on a worker about once a minute (`sync.immichRefresh` at once), and what a device takes is brought in
+  with the ordinary Immich import (`link` or `copy`) and `immich.fetchOriginal`. Members of Immich collections are
+  never told to another device (`Replica::tells`) and their files are never fetched from one (`may_fetch`,
+  `depth_from_peers`); the collection items and the photos' records (develop settings, rating, …) travel as usual.
+- A photo added to an Immich collection on any device that takes it is looked up on the server by checksum and
+  linked if Immich has it (the phone's own upload, another device's), else uploaded once, then put into the album.
+  A photo taken out of the collection is taken out of the album. An album removed on the server is removed from
+  every device's list (its photos stay).
+- An album folder named "Immich" holds the account's albums; with two accounts there are two such folders.
+- **Shared or private connection.** An account is private to its device unless **Share with synced devices**
+  (`immich.share {account, on}`) is on. Private: its collections and their photos' records are never told
+  (`Replica::private_immich`, local state). Shared: the account (URL, user id, name, pinned certificate) and its
+  API key go to each device of the group in the next exchange (`Batch::accounts`, over the encrypted,
+  authenticated peer channel only, once per session per device), where the key goes into that device's key
+  storage (`lcc-credentials`) and the account into its settings, shared and shown as collections. The key is
+  never written to the replica, journal, logs or command results. A device that already has an account for the
+  same Immich user keeps its own. Turning sharing off doesn't take the key back from devices that got it:
+  revoke the key in Immich for that.
+- **Account identity.** The catalog's links to Immich stay under the local `<url>#<user id>` account id. Device sync
+  names the account by Immich's user id alone (a UUID), so two devices that reach one server by different URLs
+  (LAN and public) share its collections.
+
+## Camera roll
+
+- **Settings ▸ Sync ▸ This Device ▸ Sync this device's camera roll** (`sync.cameraRoll {on, folder?}`) makes the
+  collection `Camera Roll - {Device Name}` (id `roll:<device>`, kind `cameraRoll`), owned by the device and shared
+  like any other collection (grant None until the person allows it). It follows the device's name.
+- The folder is watched: a worker takes its stamp about every 30 s; when it changed, the folder is imported in place
+  (the ordinary import, which skips what the catalog has) and the collection holds every photo whose file is in the
+  folder (`sync.cameraRollScan` does it now). On a desktop the folder is chosen; on Android the app's camera-roll
+  watch (MediaStore listing of DCIM/Camera through `crates/android-host`) tells the folder with
+  `sync.cameraRollSeen`, so no new platform code was needed.
+- No duplicates with the Immich app: a roll photo is keyed by its SHA-1, as is the Immich app's upload of it. If
+  Immich has it first, the checksum lookup after import links it; if the app uploads it first (added to an Immich
+  collection), the Immich app's later upload is a duplicate Immich refuses; a device that sees it only through
+  Immich (link-only) and a device that gets the file from a peer hold the same key, so the photo is one photo
+  everywhere, and a later import of the file onto a link-only photo makes it take the file.
 
 ## Pills
 
@@ -68,4 +141,3 @@ Tracked in [gaps.md](gaps.md) (gaps 31–33).
   Android NSD.
 - A second import of identical bytes is the same photo, so it doesn't sync as a new one.
 - Not yet tested between real devices; the tests run two devices over loopback on one machine.
-- Next stages: Immich collections (owner `immich:`) and the Android camera roll as collections.

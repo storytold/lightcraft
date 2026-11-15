@@ -265,7 +265,15 @@ fn part_of(dest: &Path) -> PathBuf {
     dest.with_file_name(name)
 }
 
-/// The hash of a file's bytes as the catalogue keys photos by it.
+/// Whether a file's bytes are the original photo `key` names (its SHA-1, or its content hash).
+fn matches_key(path: &Path, key: &str) -> std::io::Result<bool> {
+    match super::record::sha1_of_key(key) {
+        Some(sha1) => Ok(lcc_hash::sha1_file(path)?.to_hex() == sha1),
+        None => Ok(hash_file(path)? == key),
+    }
+}
+
+/// The content hash of a file's bytes, as the catalogue keys photos not hashed by SHA-1 yet.
 fn hash_file(path: &Path) -> std::io::Result<String> {
     let mut f = File::open(path)?;
     let mut h = lcc_preview::Hasher128::new();
@@ -351,7 +359,7 @@ fn receive(ch: &mut Channel, w: &Want, size: u64, offset: u64, cancel: &AtomicBo
     f.sync_all().map_err(io)?;
     drop(f);
     let good = match w.depth {
-        Depth::Full => hash_file(&part).map_err(io)? == w.key,
+        Depth::Full => matches_key(&part, &w.key).map_err(io)?,
         Depth::Preview => crate::smart::is_valid(&part),
         Depth::None => false,
     };

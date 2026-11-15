@@ -238,12 +238,44 @@ fn this_device(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
             RichText::new(tr("Another device nearby has this name too: give this one another.")).size(11.0).color(t.caution),
         );
     }
+    camera_roll_row(app, ui, t, st);
     if flag(st, "pairingsLost") {
         crate::dialog_frame::note(
             ui,
             RichText::new(tr("The saved pairings couldn't be read and were set aside: pair the devices again.")).size(11.0).color(t.caution),
         );
     }
+}
+
+/// This device's camera roll as the collection `Camera Roll - {name}` (while the catalog syncs).
+fn camera_roll_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
+    let cat = &st["catalogue"];
+    if cat["group"].is_null() {
+        return;
+    }
+    let mut on = !cat["cameraRoll"].is_null();
+    let c = ui.checkbox(&mut on, tr("Sync this device's camera roll"));
+    register(ui.ctx(), "check:syncCameraRoll", c.rect);
+    if c.changed() {
+        if !on {
+            run(app, "roll", "sync.cameraRoll", json!({"on": false}));
+        } else if cfg!(target_os = "android") {
+            run(app, "roll", "sync.cameraRoll", json!({"on": true}));
+        } else if let Some(folder) = app.services.pick_folder.as_mut().and_then(|f| f()) {
+            run(app, "roll", "sync.cameraRoll", json!({"on": true, "folder": folder}));
+        }
+        if let Ok(v) = app.session.execute("sync.status", &json!({})) {
+            app.peer_sync.status = v;
+        }
+    }
+    let folder = cat["cameraRoll"].as_str().unwrap_or_default();
+    let line = if folder.is_empty() {
+        tr("Photos in the camera roll go into the collection “Camera Roll - this device's name”.").to_string()
+    } else {
+        tr_format!("Photos in {folder} go into the collection “Camera Roll - this device's name”.", folder = folder)
+    };
+    super::settings::hint(ui, t, &line);
+    error_line(app, ui, t, "roll");
 }
 
 // ── devices ────────────────────────────────────────────────────────────────────────────────
@@ -637,6 +669,8 @@ struct Row {
     letters: String,
     pill: Option<Pill>,
     photos: u64,
+    /// An Immich album (listed under "Immich").
+    immich: bool,
     /// How to address it in `sync.allow`/`sync.take`.
     target: Value,
 }
@@ -679,10 +713,11 @@ fn rows(app: &LccApp, cat: &Value, g: &Value) -> Vec<Row> {
             unfiled = true;
         }
         let name = if s(&c, "kind") == "unfiled" { tr("Not in a collection").to_string() } else { s(&c, "name").to_string() };
+        let owner = if flag(&c, "immich") { "Immich".to_string() } else { s(&c, "ownerName").to_string() };
         out.push(Row {
             key: id.clone(),
             name,
-            owner: s(&c, "ownerName").to_string(),
+            owner,
             mine,
             grant: parse(&c["grant"]).unwrap_or_default(),
             take: parse(&c["take"]).unwrap_or_default(),
@@ -690,6 +725,7 @@ fn rows(app: &LccApp, cat: &Value, g: &Value) -> Vec<Row> {
             letters: s(&c, "letters").to_string(),
             pill: parse(&c["pill"]),
             photos: c["photos"].as_u64().unwrap_or(0),
+            immich: flag(&c, "immich"),
             target: json!({"collection": id}),
         });
     }
@@ -705,6 +741,7 @@ fn rows(app: &LccApp, cat: &Value, g: &Value) -> Vec<Row> {
             letters: "LN".into(),
             pill: None,
             photos: 0,
+            immich: false,
             target: json!({"unfiled": true}),
         });
     }
@@ -723,9 +760,12 @@ fn rows(app: &LccApp, cat: &Value, g: &Value) -> Vec<Row> {
             letters: "LN".into(),
             pill: None,
             photos: app.session.catalog.album_count(a.id) as u64,
+            immich: false,
             target: json!({"album": a.id.0}),
         });
     }
+    // the Immich albums last, under their own heading
+    out.sort_by_key(|r| r.immich);
     out
 }
 
@@ -743,7 +783,15 @@ fn collections(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, cat: &Value, g: 
             ui.label(RichText::new(tr(h)).size(11.0).color(t.text_label));
         }
         ui.end_row();
+        let mut immich_heading = false;
         for r in &rows {
+            if r.immich && !immich_heading {
+                immich_heading = true;
+                let h = ui.label(RichText::new(tr("Immich")).strong().color(t.text));
+                register(ui.ctx(), "text:syncImmichGroup", h.rect);
+                ui.label(RichText::new(tr("Albums on your Immich server: choose what this device keeps of each.")).size(11.0).color(t.text_dim));
+                ui.end_row();
+            }
             let n = ui.label(RichText::new(&r.name).color(t.text));
             register(ui.ctx(), format!("text:syncCollection-{}", r.key), n.rect);
             ui.label(RichText::new(&r.owner).size(11.0).color(t.text_dim));
@@ -794,6 +842,11 @@ fn picker(ui: &mut egui::Ui, r: &Row) -> Option<(Value, &'static str)> {
             }
         } else {
             for (k, label, why) in TAKES.iter().filter(|(k, _, _)| *k <= r.most) {
+                let why = match (r.immich, k) {
+                    (true, Take::Previews) => "Previews from Immich to develop here; edits go to your other devices.",
+                    (true, Take::FullQuality) => "The originals come from Immich; edits go to your other devices.",
+                    _ => why,
+                };
                 if ui.selectable_label(*k == r.take, tr(label)).clicked() && *k != r.take {
                     out = Some((json!(k.id()), "sync.take"));
                 }

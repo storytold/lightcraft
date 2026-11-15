@@ -103,6 +103,7 @@
   "Page {page} of {pages}": "Страница {page} из {pages}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "При возврате панорамирования или повторном увеличении HDR-правка показывается сразу, без повторной отрисовки. Занимает до {need} МБ видеопамяти на этом экране.",
   "Person {n}": "Человек {n}",
+  "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Фото из {folder} попадают в коллекцию «Camera Roll - имя этого устройства».",
   "Picks to unflag: {n}": "Выбранных, с которых снимется отметка: {n}",
   "Preset {name} on {n} photos": "Пресет {name} на {n} фото",
   "Print settings not saved: {e}": "Параметры печати не сохранены: {e}",
@@ -235,6 +236,6 @@
   "{} · {}. Kept in the catalog's “denoise” folder; the oldest ones that no photo uses go first when the limit is reached.": "{} · {}. Хранятся в папке «denoise» каталога; при достижении ограничения первыми удаляются самые старые изображения, которые не использует ни одно фото.",
   "“{name}” added to Camera Profiles": "«{name}» добавлен в профили камеры",
   "“{name}” has its old settings again": "У «{name}» снова прежние настройки",
-  "“{name}” is new. What may the other devices syncing this catalog have of it?": "«{name}» — новая. Что из неё могут получать другие устройства, синхронизирующие этот каталог?",
+  "“{name}” is new. What may the other devices syncing this catalog have of it?": "«{name}»: новая. Что из неё могут получать другие устройства, синхронизирующие этот каталог?",
   "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» получает настройки активного фото. Название, группа, место и отметки сохраняются."
 }

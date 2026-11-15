@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::Session;
 use crate::remote::{LINK_ONLY, MemorySecrets};
 
-const KEY: &str = "engine-test-key-42";
+pub(crate) const KEY: &str = "engine-test-key-42";
 
 /// A folder in Temp that stays (the sync tests keep its path in their `Setup`).
 fn temp_dir(tag: &str) -> PathBuf {
@@ -29,7 +29,7 @@ fn scratch(tag: &str) -> lcc_testkit::TempDir {
     lcc_testkit::TempDir::new(&format!("lcc-immich-{tag}"))
 }
 
-fn png(seed: u8) -> Vec<u8> {
+pub(crate) fn png(seed: u8) -> Vec<u8> {
     let (w, h) = (40usize, 30usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
     let img = lcc_raster::Rgba8 { width: w, height: h, data };
@@ -204,7 +204,7 @@ fn serve(fake: Fake) -> (String, Arc<Mutex<Vec<String>>>) {
     (format!("http://127.0.0.1:{port}"), seen)
 }
 
-fn asset(id: &str, name: &str, bytes: &[u8], extra: Value) -> Value {
+pub(crate) fn asset(id: &str, name: &str, bytes: &[u8], extra: Value) -> Value {
     let mut a = json!({
         "id": id,
         "type": "IMAGE",
@@ -842,4 +842,4 @@ fn pulling_sidecars_needs_a_server_that_lists_them() {
 }
 
 #[path = "tests_immich_sync.rs"]
-mod sync_tests;
+pub(crate) mod sync_tests;

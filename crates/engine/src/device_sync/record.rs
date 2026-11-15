@@ -47,13 +47,55 @@ const META: [&str; 23] = [
     "gps_removed",
 ];
 
-/// The key that names the same photo on every device: the hash of the original's bytes. Virtual
-/// copies, a second import of the same bytes and photos not hashed yet have none.
-pub(super) fn key_of(p: &Photo) -> Option<&str> {
+/// What a photo's key starts with when it is named by its original's SHA-1.
+pub(crate) const SHA1_KEY: &str = "sha1:";
+
+/// The key that names the same photo on every device (`docs/sync.md` ▸ Photo identity):
+///
+/// - `sha1:<hex>`, the SHA-1 of the original's bytes, once it is known: hashed here (every
+///   catalogue hashes its originals in the background), or, for an Immich link-only photo whose
+///   original isn't here, the checksum Immich reported for it. A device holding the file and a
+///   device holding only the Immich link so give the same photo the same key.
+/// - otherwise the catalogue's content hash of the original (a photo not hashed yet); it moves to
+///   the SHA-1 key once that is known ([`lcc_sync::Replica::rekey`]).
+///
+/// Virtual copies, a second import of the same bytes and link-only photos without a checksum
+/// have none.
+pub(crate) fn key_of(p: &Photo, cat: &Catalog) -> Option<String> {
     if p.copy_of.is_some() {
         return None;
     }
-    p.content_hash.as_deref().filter(|h| !h.is_empty() && h.len() <= 128 && !h.contains(":dup"))
+    if p.preview_only.as_deref() == Some(crate::remote::LINK_ONLY) {
+        // the file here is Immich's preview: only the checksum of the original names it
+        return cat.remote_of(p.id).filter(|r| r.service == lcc_immich::link::SERVICE).find_map(|r| r.remote_checksum.as_deref().and_then(sha1_key));
+    }
+    if let Some(k) = p.sha1.as_deref().and_then(sha1_key) {
+        return Some(k);
+    }
+    content_key(p).map(str::to_string)
+}
+
+/// The photo's content-hash key, which another device may still use for it (`None` for a
+/// link-only photo: its content hash is the preview's).
+pub(crate) fn content_key(p: &Photo) -> Option<&str> {
+    if p.copy_of.is_some() || p.preview_only.as_deref() == Some(crate::remote::LINK_ONLY) {
+        return None;
+    }
+    p.content_hash.as_deref().filter(|h| ok_content_key(h))
+}
+
+fn ok_content_key(h: &str) -> bool {
+    !h.is_empty() && h.len() <= 128 && !h.contains(":dup") && !h.starts_with(SHA1_KEY) && !h.chars().any(char::is_control)
+}
+
+/// `sha1:<lowercase hex>` of a SHA-1 given as hex or base64 (`None` if it isn't one).
+pub(crate) fn sha1_key(checksum: &str) -> Option<String> {
+    lcc_hash::Sha1Digest::parse(checksum).map(|d| format!("{SHA1_KEY}{}", d.to_hex()))
+}
+
+/// The SHA-1 (hex) a key names, if it is a SHA-1 key.
+pub(crate) fn sha1_of_key(key: &str) -> Option<String> {
+    key.strip_prefix(SHA1_KEY).and_then(lcc_hash::Sha1Digest::parse).map(|d| d.to_hex())
 }
 
 fn develop_is_default(d: &DevelopSettings) -> bool {
@@ -142,6 +184,12 @@ pub(super) fn info(p: &Photo) -> Value {
     q.rating = 0;
     q.flag = lcc_catalog::Flag::None;
     q.label = None;
+    if q.preview_only.as_deref() == Some(crate::remote::LINK_ONLY) {
+        // what is here is Immich's preview: its hash, size and SHA-1 aren't the original's
+        q.content_hash = None;
+        q.sha1 = None;
+        q.preview_only = None;
+    }
     serde_json::to_value(&q).unwrap_or(Value::Null)
 }
 
@@ -162,7 +210,19 @@ pub(super) fn photo_from(info: &Value, key: &str, id: PhotoId, path: &str, impor
     p.id = id;
     p.source = lcc_catalog::Source::File { path: path.to_string() };
     p.imported = imported.to_string();
-    p.content_hash = Some(key.to_string());
+    match sha1_of_key(key) {
+        // named by its SHA-1: the original's content hash comes with it when the sender knows it
+        Some(sha1) => {
+            p.sha1 = Some(sha1);
+            p.content_hash = p.content_hash.take().filter(|h| ok_content_key(h));
+        }
+        None => {
+            p.content_hash = Some(key.to_string());
+            p.sha1 = p.sha1.take().and_then(|h| lcc_hash::Sha1Digest::parse(&h)).map(|d| d.to_hex());
+        }
+    }
+    // (what the other device shows of it is no business of this one)
+    p.preview_only = None;
     p.copy_of = None;
     p.copy_name = None;
     p.local = false;

@@ -26,6 +26,8 @@ use crate::{Result, Session};
 const LINK_PAGES: u32 = 10_000;
 const PAGE_SIZE: u32 = 1000;
 
+#[path = "immich_collections.rs"]
+pub(crate) mod collections;
 #[path = "immich_publish.rs"]
 pub mod publish;
 #[path = "immich_sidecars.rs"]
@@ -108,6 +110,8 @@ fn account_json(s: &Session, a: &Account) -> Value {
         "permissions": a.permissions,
         "missingPermissions": missing.iter().map(|(f, p)| json!({"feature": f, "permissions": p})).collect::<Vec<_>>(),
         "pinned": a.pinned,
+        "collections": a.collections,
+        "shared": a.shared,
         "pathMaps": a.path_maps,
         "linked": linked,
         "probable": probable,
@@ -840,6 +844,7 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
             Msg::Sha1(done) => {
                 s.remote.sha1_busy = false;
                 for (id, path, h) in done {
+                    s.remote.sha1_first.remove(&id);
                     // the photo may have moved or been relinked meanwhile
                     let same =
                         s.catalog.photo(id).is_some_and(|ph| matches!(&ph.source, Source::File { path: x } if *x == path) && ph.sha1.is_none());
@@ -909,11 +914,11 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             Msg::Downloaded(d) => finish_import(s, *d, &now),
+            Msg::ImmichAlbums(l) => collections::finish_listing(s, *l),
+            Msg::ImmichPushed(p) => collections::finish_push(s, *p),
+            Msg::ImmichPushDone => s.remote.coll.pushing = false,
             Msg::Synced(d) => {
                 sync::finish(s, *d);
-            }
-            Msg::AlbumsSynced(d) => {
-                publish::finish_albums(s, *d);
             }
             Msg::Sidecars(d) => {
                 sidecars::finish(s, *d);
@@ -940,6 +945,7 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
         sync::tick(s);
     }
     start_link_check(s);
+    collections::tick(s);
     // the next SHA-1 batch
     if bool_or(p, "sha1", true) && !s.remote.sha1_busy && s.remote.sha1_idle_at != Some(s.catalog.revision) {
         let todo = remote::sha1_pending(s, remote::SHA1_BATCH);
@@ -1067,6 +1073,51 @@ fn finish_import(s: &mut Session, d: Downloaded, now: &str) {
     }
     s.remote.import =
         remote::ImportProgress { active: false, requested: s.remote.import.requested, imported, skipped: d.skipped, present: have.len(), failed };
+}
+
+/// Newly imported photos whose original an Immich link-only photo already stands for: the
+/// link-only photo takes the file (as when its original is downloaded) and the new entry goes,
+/// so the catalog holds the photo once. → `(new id, the link-only photo that took its file)`.
+pub(crate) fn merge_into_link_only(s: &mut Session, ids: &[PhotoId]) -> Vec<(PhotoId, PhotoId)> {
+    let mut by_sha1: std::collections::HashMap<String, (PhotoId, String)> = std::collections::HashMap::new();
+    for p in s.catalog.photos().filter(|p| p.preview_only.as_deref() == Some(LINK_ONLY) && !p.deleted) {
+        for r in s.catalog.remote_of(p.id).filter(|r| r.service == SERVICE) {
+            if let Some(d) = r.remote_checksum.as_deref().and_then(lcc_hash::Sha1Digest::parse) {
+                by_sha1.entry(d.to_hex()).or_insert((p.id, r.account_id.clone()));
+            }
+        }
+    }
+    if by_sha1.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for id in ids {
+        let Some(ph) = s.catalog.photo(*id) else { continue };
+        if ph.preview_only.is_some() || ph.copy_of.is_some() {
+            continue;
+        }
+        let (Some(sha1), Source::File { path }) = (ph.sha1.clone(), ph.source.clone()) else { continue };
+        let Some((keep, account)) = by_sha1.remove(&sha1) else { continue };
+        let albums = s.catalog.albums_of(*id);
+        if let Err(e) = adopt_original(s, keep, &account, Path::new(&path)) {
+            log::warn!("import: the Immich photo couldn't take `{path}`: {e}");
+            continue;
+        }
+        for a in albums {
+            if let Some(al) = s.catalog.album(a) {
+                let mut photos: Vec<PhotoId> = al.photos.iter().copied().filter(|p| p != id).collect();
+                if !photos.contains(&keep) {
+                    photos.push(keep);
+                }
+                let _ = s.apply_system(Op::SetAlbumPhotos { id: a, photos });
+            }
+        }
+        if let Err(e) = s.apply_system(Op::RemovePhoto { id: *id }) {
+            log::warn!("import: {e}");
+        }
+        out.push((*id, keep));
+    }
+    out
 }
 
 /// A link-only photo's original arrived: point the photo at it.
@@ -1279,6 +1330,24 @@ fn base_specs() -> Vec<CommandSpec> {
             "{account?, forgetLinks?: bool}: remove the account and its stored key → {disconnected, forgotLinks}",
             always,
             disconnect
+        ),
+        cmd!(
+            "immich.collections",
+            "Show Immich Albums as Collections",
+            [],
+            None,
+            "{account?, on: bool}: the account's albums show as collections in device sync (Settings ▸ Sync, under \"Immich\"); each device then picks per album none, previews or fullQuality → {account, collections}",
+            always,
+            collections::set_shown
+        ),
+        cmd!(
+            "immich.share",
+            "Share Immich Connection with Synced Devices",
+            [],
+            None,
+            "{account?, on: bool}: share the connection with the devices this catalog syncs with: its API key goes to them over the encrypted device-sync channel into their key storage (never the catalog, replica, logs or results), and its albums' collections are told to them. off: the connection stays on this device and its collections are not told (devices that already got the key keep it: revoke the key in Immich to stop them) → {account, shared}",
+            always,
+            collections::set_shared
         ),
         cmd!(query "immich.status", "Immich Status", [], None, "{check?: bool (also contact each server), background?: bool (do that on workers; results in later calls' `server`)} → {accounts: [{id, url, userName, version, permissions, linked, probable, link, server?, checking}], secretStore, connecting, connected?}", always, status),
         cmd!(query "immich.answer", "Immich Background Result", [], None, "{key, keep?: bool}: the result of a call made with background: true (immich.libraries, immich.authStatus, immich.unlockSession, immich.scanLibraries, immich.importPeople, immich.pushPeople; they return {started, key}); taken once unless keep → {done: true, result} or {done: false, running}; remote.pump lists the waiting keys in `answers`", always, answer),

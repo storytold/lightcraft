@@ -22,6 +22,8 @@
 
 pub(crate) mod catalog;
 pub(crate) mod record;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod roll;
 #[cfg(test)]
 mod tests;
 mod wire;
@@ -145,6 +147,26 @@ pub(crate) struct Lib {
     pub revision: Option<u64>,
     pub keys: HashMap<String, PhotoId>,
     pub ids: HashMap<PhotoId, String>,
+    /// Content-hash keys of photos known here by SHA-1 (another device may not have hashed them yet).
+    pub alias: HashMap<String, String>,
+    /// SHA-1 keys another device uses for a photo here that isn't hashed yet (a hint until this
+    /// device's own hash is done) → this catalogue's key for it.
+    pub hints: HashMap<String, String>,
+    /// The Immich accounts (user ids) shown as collections on this device.
+    pub immich_here: BTreeSet<String>,
+    /// Photos added to (true) or taken out of (false) Immich collections here, still to send to
+    /// the server: (collection, key, in).
+    pub immich_out: Vec<(String, String, bool)>,
+    /// The Immich connections this device shares with the group (user ids, and each with its
+    /// key, read once from the key store). Memory only: never in the replica file.
+    pub share_out: Option<(Vec<String>, Vec<lcc_sync::proto::SharedAccount>)>,
+    /// The devices already sent them in this session.
+    pub share_sent: HashSet<String>,
+    /// Connections other devices of the group shared, to store (`immich::collections::tick`).
+    pub share_in: Vec<lcc_sync::proto::SharedAccount>,
+    /// The camera-roll folder's watch.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub roll: roll::RollWatch,
     /// Each shared collection's photos as the catalogue had them when last looked at.
     pub base: HashMap<String, BTreeSet<String>>,
     /// The photos this device should hold more of than it does.
@@ -251,7 +273,7 @@ impl State {
         self.service.as_ref().map(|s| s.device_id()).or_else(|| self.stored().map(|s| s.identity.device_id))
     }
 
-    fn device_name(&self) -> String {
+    pub(crate) fn device_name(&self) -> String {
         self.service.as_ref().map(|s| s.status().name).or_else(|| self.stored().map(|s| s.identity.name)).unwrap_or_else(default_device_name)
     }
 
@@ -422,7 +444,9 @@ fn catalogue_status(s: &Session, online: &HashSet<String>, paired: &[lcc_peer::P
                 "immich": c.is_immich(),
                 "grant": c.grant.v,
                 "take": c.take_of(me),
-                "most": c.grant.v.most(),
+                // (an Immich album is taken up to full quality: its files come from the server)
+                "most": if c.is_immich() { c.grant.v.most().min(Take::FullQuality) } else { c.grant.v.most() },
+                "private": r.is_private(c),
                 "takes": takes,
                 "photos": r.members_of(id).count(),
                 "letters": format!("{}{}", location.letter(), depth.letter()),
@@ -436,6 +460,7 @@ fn catalogue_status(s: &Session, online: &HashSet<String>, paired: &[lcc_peer::P
         "collections": collections,
         "undecided": catalog::undecided(s, lib),
         "unkeyed": catalog::unkeyed(s),
+        "cameraRoll": r.camera_roll,
         "photos": s.catalog.photos().count(),
     })
 }
@@ -568,6 +593,8 @@ pub(crate) fn rename(s: &mut Session, name: &str) -> Result<Value> {
     }
     let a = s.activity.clone();
     s.device_sync.ensure(&a)?.rename(&name).map_err(other)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    roll::renamed(s, &name);
     status(s)
 }
 
@@ -662,6 +689,15 @@ pub(crate) fn ensure_lib(s: &mut Session) {
         revision: None,
         keys: HashMap::new(),
         ids: HashMap::new(),
+        alias: HashMap::new(),
+        hints: HashMap::new(),
+        immich_here: BTreeSet::new(),
+        immich_out: Vec::new(),
+        share_out: None,
+        share_sent: HashSet::new(),
+        share_in: Vec::new(),
+        #[cfg(not(target_arch = "wasm32"))]
+        roll: Default::default(),
         base: HashMap::new(),
         wanting: BTreeSet::new(),
         missing: HashMap::new(),
@@ -887,6 +923,8 @@ pub(crate) fn tick(s: &mut Session) -> Result<Value> {
         }
         s.device_sync.lib = Some(lib);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    roll::tick(s);
     let jobs = std::mem::take(&mut *lock(&hub.jobs));
     let mut handled = 0;
     for job in jobs {
@@ -1000,6 +1038,11 @@ fn answer_job(s: &mut Session, hub: &Arc<Hub>, job: Job) {
                 Some(lib) => catalog::prepare(s, lib, &peer),
                 None => (Batch::default(), Outgoing::default()),
             };
+            if !out.0.accounts.is_empty()
+                && let Some(lib) = &mut s.device_sync.lib
+            {
+                lib.share_sent.insert(peer.clone());
+            }
             let _ = reply.send(out);
         }
         Job::Confirm { peer, out } => {
