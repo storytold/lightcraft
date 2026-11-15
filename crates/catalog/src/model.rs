@@ -197,6 +197,11 @@ pub struct Meta {
     /// The camera body's serial number.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub serial_number: String,
+    /// Exif `CustomRendered` ([`lightcraft_meta::Metadata::custom_rendered`]): Apple's panoramas say so
+    /// here ([`lightcraft_meta::CUSTOM_RENDERED_PANORAMA`]). Left out of the catalog JSON when unknown, so
+    /// older catalogs read unchanged; photos imported before it was read get it at Reload from Disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_rendered: Option<u16>,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,

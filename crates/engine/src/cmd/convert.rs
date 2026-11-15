@@ -250,6 +250,7 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     m.iso = m.iso.or(src.iso);
     m.flash = m.flash.or(src.flash);
     m.exposure_bias = m.exposure_bias.or(src.exposure_bias);
+    m.custom_rendered = m.custom_rendered.or(src.custom_rendered);
     if m.serial_number.is_empty() {
         m.serial_number = src.serial_number.clone();
     }

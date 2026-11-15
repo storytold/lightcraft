@@ -53,6 +53,8 @@ pub(crate) fn from_craft(m: craft_metadata::Metadata) -> Metadata {
         exposure_program: m.exposure_program,
         metering_mode: m.metering_mode,
         white_balance: m.white_balance,
+        // read by `exif::custom_rendered`: the shared reader doesn't keep it
+        custom_rendered: None,
         orientation: m.orientation.map(orientation_from_craft),
         gps: m.gps,
         width: m.width,
