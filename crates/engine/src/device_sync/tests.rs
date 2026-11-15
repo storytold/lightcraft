@@ -257,7 +257,7 @@ fn offline_group(a: &mut Session, ap: &lcc_peer::Peer, b: &mut Session, bp: &lcc
 }
 
 fn key_of(s: &Session, id: u64) -> Option<String> {
-    s.device_sync.lib.as_ref().unwrap().ids.get(&lcc_catalog::PhotoId(id)).cloned()
+    super::record::key_of(s.catalog.photo(lcc_catalog::PhotoId(id))?, &s.catalog)
 }
 
 /// The same original on two devices, one of which hasn't hashed it (or synced before photos were
@@ -310,5 +310,129 @@ fn one_original_has_one_key_whichever_device_hashed_it() {
     assert!(b.catalog.albums().any(|al| al.name == "Trip" && al.photos == vec![lcc_catalog::PhotoId(ib)]));
     let rb = &b.device_sync.lib.as_ref().unwrap().replica;
     assert!(!rb.photos.contains_key(&old_key), "nothing is left under the old key");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A link-only Immich photo (made here as `immich.import` with `mode: link` makes it) of `src`'s
+/// bytes, on account `account`, the checksum given as Immich gives it (base64).
+fn link_only(s: &mut Session, src: &std::path::Path, account: &str) -> lcc_catalog::PhotoId {
+    let preview = src.with_file_name(format!("preview-{}.png", s.catalog.photos().count()));
+    write_png(&preview, 99);
+    let id = s.execute("library.import", &json!({"paths": [preview.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap();
+    let id = lcc_catalog::PhotoId(id);
+    let ph = s.catalog.photo(id).unwrap().clone();
+    let sha1 = lcc_hash::sha1_file(src).unwrap();
+    let ops = vec![
+        lcc_catalog::Op::SetSha1 { id, sha1: None },
+        lcc_catalog::Op::SetContent {
+            id,
+            width: ph.width,
+            height: ph.height,
+            file_size: ph.file_size,
+            content_hash: ph.content_hash.clone(),
+            preview_only: Some(crate::remote::LINK_ONLY.into()),
+            preview_checked: lcc_catalog::APP_VERSION.to_string(),
+        },
+        lcc_catalog::Catalog::link_remote_op(lcc_catalog::RemoteIdentity {
+            photo_id: id,
+            service: "immich".into(),
+            account_id: account.into(),
+            remote_id: "asset-1".into(),
+            remote_checksum: Some(sha1.to_base64()),
+            remote_updated_at: None,
+            last_synced_at: None,
+            sync_state: lcc_catalog::SyncState::Synced,
+        }),
+    ];
+    s.apply_system(lcc_catalog::Op::Batch { ops }).unwrap();
+    let mut l = s.device_sync.lib.take().unwrap();
+    super::catalog::index(s, &mut l);
+    s.device_sync.lib = Some(l);
+    id
+}
+
+/// The phone's camera roll uploaded straight to Immich by the Immich app, a desktop that has only
+/// Immich's link-only photo of it, and the phone itself with the file: device sync sees one
+/// photo, keyed alike on both, and never asks the phone for an original Immich serves.
+#[test]
+fn a_link_only_immich_photo_and_the_file_are_one_photo() {
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-linkonly");
+    let src = dir.join("roll.png");
+    write_png(&src, 7);
+    let (mut phone, pp) = offline(&dir, "phone");
+    let (mut desk, dp) = offline(&dir, "desk");
+    let ip = lcc_catalog::PhotoId(phone.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap());
+    let idk = link_only(&mut desk, &src, "http://immich#u1");
+    assert_eq!(key_of(&phone, ip.0), key_of(&desk, idk.0), "the same key from the file and from Immich's checksum");
+    assert!(key_of(&desk, idk.0).is_some_and(|k| k.starts_with("sha1:")));
+    // the link-only photo's record carries none of the preview's identity
+    let info = super::record::info(desk.catalog.photo(idk).unwrap());
+    assert!(info["content_hash"].is_null() && info["sha1"].is_null() && info["preview_only"].is_null());
+
+    let roll = phone.execute("album.create", &json!({"name": "Roll"})).unwrap()["id"].as_u64().unwrap();
+    phone.selection = crate::Selection::single(ip);
+    phone.execute("album.addPhotos", &json!({"id": roll, "ids": [ip.0]})).unwrap();
+    phone.execute("photo.rate", &json!({"ids": [ip.0], "rating": 5})).unwrap();
+    offline_group(&mut phone, &pp, &mut desk, &dp);
+    phone.execute("sync.allow", &json!({"album": roll, "allow": "sync"})).unwrap();
+    let cid = phone.device_sync.lib.as_ref().unwrap().replica.collection_of_album(roll).unwrap().to_string();
+    swap(&mut phone, &pp, &mut desk, &dp);
+    desk.execute("sync.take", &json!({"collection": cid, "take": "fullQuality"})).unwrap();
+    swap(&mut phone, &pp, &mut desk, &dp);
+    assert_eq!(desk.catalog.photos().count(), 1, "no second photo for the phone's copy");
+    assert_eq!(desk.catalog.photo(idk).unwrap().rating, 5);
+    assert!(desk.catalog.albums().any(|a| a.name == "Roll" && a.photos == vec![idk]));
+    // the desktop's edit goes back to the phone's photo
+    desk.execute("photo.rate", &json!({"ids": [idk.0], "rating": 2})).unwrap();
+    swap(&mut phone, &pp, &mut desk, &dp);
+    assert_eq!(phone.catalog.photo(ip).unwrap().rating, 2);
+    assert_eq!(phone.catalog.photos().count(), 1);
+    // its original comes from Immich, not from the phone
+    let mut l = desk.device_sync.lib.take().unwrap();
+    let wants = super::catalog::wants(&desk, &mut l, &pp.device_id);
+    desk.device_sync.lib = Some(l);
+    assert!(wants.iter().all(|w| w.depth != lcc_sync::pill::Depth::Full), "{:?}", wants.iter().map(|w| &w.key).collect::<Vec<_>>());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Keys from another device are hostile: a bad SHA-1 key, a content hash naming nothing, an
+/// oversized or empty one change nothing here and never panic.
+#[test]
+fn hostile_photo_keys_change_nothing() {
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-hostile-keys");
+    let src = dir.join("x.png");
+    write_png(&src, 3);
+    let (mut a, ap) = offline(&dir, "a");
+    let (mut b, bp) = offline(&dir, "b");
+    b.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    offline_group(&mut a, &ap, &mut b, &bp);
+    let long = "k".repeat(10_000);
+    for (key, info) in [
+        ("sha1:zz", json!({"content_hash": "nothing"})),
+        ("sha1:", json!({})),
+        (long.as_str(), json!({"content_hash": long})),
+        ("", json!(null)),
+        ("sha1:a9993e364706816aba3e25717850c26c9cd0d89d", json!({"content_hash": "sha1:a9993e364706816aba3e25717850c26c9cd0d89d"})),
+        ("sha1:a9993e364706816aba3e25717850c26c9cd0d89d", json!({"content_hash": 5})),
+    ] {
+        let batch = lcc_sync::proto::Batch {
+            items: vec![
+                lcc_sync::replica::Item::Photo { key: key.into(), info, fields: Default::default(), here: Default::default() },
+                lcc_sync::replica::Item::Member {
+                    coll: "c".into(),
+                    key: key.into(),
+                    on: lcc_sync::clock::Lww::new(true, lcc_sync::clock::Stamp::ZERO),
+                },
+            ],
+            upto: 1,
+            more: false,
+            ack: None,
+        };
+        let mut l = b.device_sync.lib.take().unwrap();
+        let _ = super::catalog::apply(&mut b, &mut l, &ap, &batch);
+        b.device_sync.lib = Some(l);
+    }
+    assert_eq!(b.catalog.photos().count(), 1);
+    assert!(b.catalog.photos().all(|p| p.sha1.as_deref().is_some_and(|h| h.len() == 40)));
     let _ = std::fs::remove_dir_all(&dir);
 }
