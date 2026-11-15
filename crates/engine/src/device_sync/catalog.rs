@@ -42,6 +42,7 @@ pub(super) fn index(s: &Session, lib: &mut Lib) {
     lib.keys.clear();
     lib.ids.clear();
     lib.alias.clear();
+    lib.hints.clear();
     for p in s.catalog.photos() {
         if let Some(k) = record::key_of(p, &s.catalog)
             && !lib.keys.contains_key(&k)
@@ -67,6 +68,8 @@ fn reindex(s: &Session, lib: &mut Lib, id: PhotoId) {
     // a photo got (or lost) its key: every collection's photos are looked at afresh
     lib.album_sig.clear();
     if let Some(o) = &old {
+        // (another device's claim about it is settled by the hash made here)
+        lib.hints.retain(|_, v| v != o);
         lib.ids.remove(&id);
         if lib.keys.get(o) == Some(&id) {
             lib.keys.remove(o);
@@ -94,28 +97,34 @@ pub(super) fn local_key<'a>(lib: &'a Lib, key: &'a str) -> &'a str {
     if lib.keys.contains_key(key) {
         return key;
     }
-    lib.alias.get(key).map_or(key, String::as_str)
+    lib.alias.get(key).or_else(|| lib.hints.get(key)).map_or(key, String::as_str)
 }
 
-/// The key to merge an item another device sent under. Beyond [`local_key`]: a photo sent
-/// under its SHA-1 key whose content hash names a photo here not hashed yet is that photo (the
-/// same bytes), which takes the SHA-1 and moves to the new key; one only told of moves too.
+/// The key to merge an item another device sent under. Beyond [`local_key`]: a photo sent under
+/// its SHA-1 key whose content hash names a photo here that isn't hashed yet is merged under
+/// that photo's key for now, and the photo is hashed next (`remote::State::sha1_first`). The
+/// other device's SHA-1 is only a hint: the key moves when this device's own hash is done, and
+/// only to what it computed (a wrong claim leaves the photo as it is). A photo only told of
+/// (no file here to hash) moves to the key the other device uses.
 fn incoming_key(s: &mut Session, lib: &mut Lib, key: &str, info: &Value) -> String {
     let k = local_key(lib, key).to_string();
     if k != key || lib.keys.contains_key(&k) || lib.replica.photos.contains_key(&k) {
         return k;
     }
-    let (Some(sha1), Some(h)) = (record::sha1_of_key(key), info.get("content_hash").and_then(Value::as_str)) else { return k };
+    let (Some(_), Some(h)) = (record::sha1_of_key(key), info.get("content_hash").and_then(Value::as_str)) else { return k };
     if h == key || h.len() > 128 {
         return k;
     }
     if let Some(id) = lib.keys.get(h).copied() {
         let unhashed = s.catalog.photo(id).is_some_and(|p| p.sha1.is_none() && record::content_key(p) == Some(h));
         if unhashed {
-            match s.apply_system(Op::SetSha1 { id, sha1: Some(sha1) }) {
-                Ok(()) => reindex(s, lib, id),
-                Err(e) => log::warn!("sync: {e}"),
+            lib.hints.insert(key.to_string(), h.to_string());
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                s.remote.sha1_first.insert(id);
+                s.remote.sha1_idle_at = None;
             }
+            return h.to_string();
         }
     } else if lib.replica.photos.contains_key(h) {
         lib.replica.rekey(h, key);

@@ -48,9 +48,10 @@ When a photo's SHA-1 becomes known its key moves (`Replica::rekey`): its record,
 what is queued for each device move to the new key, and if another device already told of the new key, the two
 merge field by field. Opening a catalog whose replica still uses content-hash keys moves them the same way.
 Each catalog keeps a table of content-hash keys of photos it knows by SHA-1, so a device that hasn't hashed a
-photo yet is still understood. A photo sent under its SHA-1 key carries its content hash; a device that has
-that content hash but no SHA-1 takes the SHA-1 (the same bytes) and moves to the new key, so the two never
-become two photos. A link-only photo is sent without its content hash, SHA-1 or size, which are the preview's.
+photo yet is still understood. A photo sent under its SHA-1 key carries its content hash. A device that has
+a photo with that content hash but no SHA-1 does not take the other device's word for it: it merges the record
+under its own key for now, hashes that photo next, and moves to the key it computed. A wrong claim so changes
+nothing; a right one ends as one photo with one key on both. A link-only photo is sent without its content hash, SHA-1 or size, which are the preview's.
 
 A photo that arrives from another device and has a SHA-1 key is looked up on the connected Immich servers by
 checksum straight away (the same lookup as for a new import), so an original Immich already has is linked, not

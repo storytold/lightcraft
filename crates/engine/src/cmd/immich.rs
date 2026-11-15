@@ -840,6 +840,7 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
             Msg::Sha1(done) => {
                 s.remote.sha1_busy = false;
                 for (id, path, h) in done {
+                    s.remote.sha1_first.remove(&id);
                     // the photo may have moved or been relinked meanwhile
                     let same =
                         s.catalog.photo(id).is_some_and(|ph| matches!(&ph.source, Source::File { path: x } if *x == path) && ph.sha1.is_none());

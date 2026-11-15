@@ -260,6 +260,19 @@ fn key_of(s: &Session, id: u64) -> Option<String> {
     super::record::key_of(s.catalog.photo(lcc_catalog::PhotoId(id))?, &s.catalog)
 }
 
+/// Runs the SHA-1 back-fill until nothing is left to hash.
+fn hash_all(s: &mut Session) {
+    let t = Instant::now();
+    loop {
+        s.execute("remote.pump", &json!({"sync": false})).unwrap();
+        if !s.remote.sha1_busy && super::super::remote::sha1_pending(s, 1).is_empty() {
+            return;
+        }
+        assert!(t.elapsed() < Duration::from_secs(20), "hashing timed out");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// The same original on two devices, one of which hasn't hashed it (or synced before photos were
 /// keyed by SHA-1): it ends as one photo with one key on both, the edits of both kept, and a
 /// replica that still knew it by its content hash moves to the new key.
@@ -301,8 +314,12 @@ fn one_original_has_one_key_whichever_device_hashed_it() {
     for s in [&a, &b] {
         assert_eq!(s.catalog.photos().count(), 1, "one photo, not a second one for the other key");
     }
+    assert_eq!(b.catalog.photo(lcc_catalog::PhotoId(ib)).unwrap().sha1, None, "another device's SHA-1 is only a hint");
+    // B hashes the photo itself (first in line), and then moves to the key
+    hash_all(&mut b);
+    swap(&mut a, &ap, &mut b, &bp);
     let pb = b.catalog.photo(lcc_catalog::PhotoId(ib)).unwrap();
-    assert_eq!(pb.sha1.as_deref(), Some(sha1.as_str()), "B takes the SHA-1 of the same bytes");
+    assert_eq!(pb.sha1.as_deref(), Some(sha1.as_str()), "B's own hash of the same bytes");
     assert_eq!(key_of(&b, ib), key_of(&a, ia));
     assert_eq!(pb.develop.light.exposure, 0.7);
     let (ra, rb) = (a.catalog.photo(lcc_catalog::PhotoId(ia)).unwrap().rating, pb.rating);
@@ -435,5 +452,43 @@ fn hostile_photo_keys_change_nothing() {
     }
     assert_eq!(b.catalog.photos().count(), 1);
     assert!(b.catalog.photos().all(|p| p.sha1.as_deref().is_some_and(|h| h.len() == 40)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Another device claims a wrong SHA-1 for a photo here that isn't hashed: the photo is hashed
+/// here, keeps what it computed, and the claim changes nothing in the catalogue.
+#[test]
+fn a_wrong_claimed_sha1_changes_nothing() {
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-wrong-sha1");
+    let src = dir.join("x.png");
+    write_png(&src, 11);
+    let (mut a, ap) = offline(&dir, "a");
+    let (mut b, bp) = offline(&dir, "b");
+    let ib = lcc_catalog::PhotoId(b.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap());
+    let real = b.catalog.photo(ib).unwrap().sha1.clone().unwrap();
+    b.apply_system(lcc_catalog::Op::SetSha1 { id: ib, sha1: None }).unwrap();
+    offline_group(&mut a, &ap, &mut b, &bp);
+    let h = b.catalog.photo(ib).unwrap().content_hash.clone().unwrap();
+    let wrong = "sha1:a9993e364706816aba3e25717850c26c9cd0d89d".to_string();
+    let batch = lcc_sync::proto::Batch {
+        items: vec![lcc_sync::replica::Item::Photo { key: wrong.clone(), info: json!({"content_hash": h}), fields: Default::default(), here: Default::default() }],
+        upto: 1,
+        more: false,
+        ack: None,
+    };
+    let mut l = b.device_sync.lib.take().unwrap();
+    super::catalog::apply(&mut b, &mut l, &ap, &batch).unwrap();
+    b.device_sync.lib = Some(l);
+    assert_eq!(b.catalog.photo(ib).unwrap().sha1, None, "the claim isn't written");
+    assert!(b.remote.sha1_first.contains(&ib), "but the photo is hashed next");
+    hash_all(&mut b);
+    let mut l = b.device_sync.lib.take().unwrap();
+    super::catalog::scan(&b, &mut l);
+    b.device_sync.lib = Some(l);
+    assert_eq!(b.catalog.photo(ib).unwrap().sha1.as_deref(), Some(real.as_str()));
+    assert_eq!(key_of(&b, ib.0), Some(format!("sha1:{real}")));
+    let l = b.device_sync.lib.as_ref().unwrap();
+    assert!(!l.keys.contains_key(&wrong) && l.hints.is_empty(), "the claimed key names nothing here");
+    assert_eq!(b.catalog.photos().count(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
