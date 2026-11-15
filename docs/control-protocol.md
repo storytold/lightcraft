@@ -1,11 +1,13 @@
 # Control protocol
 
 `lightcraft --control 7980` (or `LIGHTCRAFT_CONTROL_PORT=7980`) starts a JSON-lines server on
-`127.0.0.1:7980` (loopback only). One request per line, one reply per line, in order:
+`127.0.0.1:7980` (loopback only). One request per line, one reply per line, in order.
+The example assumes exactly one photo is selected:
 
 ```text
 → {"id": 1, "method": "engine.execute", "params": {"command": "photo.rate", "params": {"rating": 4}}}
-← {"id": 1, "ok": true, "result": null}
+← {"id": 1, "ok": true, "result": {"changed": 1}}
+→ {"id": 2, "method": "engine.execute", "params": {"command": "nope"}}
 ← {"id": 2, "ok": false, "error": "unknown command `nope`"}
 ```
 
