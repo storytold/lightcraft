@@ -20,7 +20,8 @@ craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "d6cd7836d3
 jixel = "=0.3.4"
 # Photo metadata: EXIF, IPTC-IIM, XMP packets and GPX track logs (craft-libs#949)
 craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
-craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "d6cd7836d364177661b0ae17f48a0805e83a5f32" }
+# AVIF EXIF, alpha quality and BT.2408 HLG levels (craft-libs#1448).
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d3c6fad3d613af2a30b35c3bc9f4c0f" }
 craft-video = { git = "https://github.com/storytold/craft-libs", rev = "662e906ef928655031c1f021a01da4979f6a3a35", features = ["av1", "av1-large-encode"] }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
