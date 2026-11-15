@@ -18,7 +18,7 @@ const SCENE_MODELS: &[(&str, &str)] = &[("analysis", "Photo analysis"), ("eomt",
 pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let key = egui::Id::new("ai-models-error");
     let mut error: Option<String> = ui.data(|d| d.get_temp(key)).unwrap_or_default();
-    super::settings::heading(ui, t, "AI Models");
+    super::settings::heading_help(ui, t, "AI Models", "aiModels");
     body(app, ui, &mut error);
     ui.data_mut(|d| d.insert_temp(key, error));
     sam3_folder(app, ui, t);
@@ -48,7 +48,7 @@ pub fn sam3_folder_command(app: &mut LccApp, p: &serde_json::Value) -> Result<se
 
 /// Where the SAM 3 model is kept: the folder it downloads to, or is installed by hand into.
 fn sam3_folder(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
-    super::settings::heading(ui, t, "SAM 3 model folder");
+    super::settings::heading_help(ui, t, "SAM 3 model folder", "sam3");
     let current = app.session.segmenter.dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
     let custom = !app.ui.settings.sam3_dir.is_empty();
     super::settings::hint(ui, t, "SAM 3 is large. Choose another folder (another drive, say), or point to one that already holds it.");

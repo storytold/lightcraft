@@ -53,6 +53,10 @@ pub struct Filter {
     /// Any of these labels (the filter bar's multi-select); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<ColorLabel>,
+    /// Only photos with no colour label (the filter bar's hollow swatch, the Classic menu's "No
+    /// Label"); ANDs with `label` / `labels`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub labels_none: bool,
     pub kind: Option<MediaKind>,
     /// Virtual copies only (`Some(true)`) or master photos only (`Some(false)`); Classic's Filter by Kind.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -767,7 +771,13 @@ fn token_matches(p: &Photo, tok: &str, kept: Option<&[Box<str>]>) -> bool {
         return match field {
             "rating" | "stars" => cmp(p.rating as f64, val),
             "flag" => Flag::parse(val) == Some(p.flag),
-            "label" | "color" => p.label.is_some_and(|l| format!("{l:?}").eq_ignore_ascii_case(val)),
+            "label" | "color" => {
+                if val.eq_ignore_ascii_case("none") || val.eq_ignore_ascii_case("no") {
+                    p.label.is_none()
+                } else {
+                    p.label.is_some_and(|l| format!("{l:?}").eq_ignore_ascii_case(val))
+                }
+            }
             "iso" => p.meta.iso.is_some_and(|i| cmp(i as f64, val)),
             "f" | "aperture" => p.meta.aperture.is_some_and(|a| cmp32(a, val)),
             "focal" => p.meta.focal_mm.is_some_and(|a| cmp32(a, val)),
@@ -872,7 +882,16 @@ impl Filter {
     /// This filter without the quick culling filters (stars, flags, colour labels): what the filter
     /// bar counts its photos in, so "Picked 47" stays readable while only the picks are shown.
     pub fn without_quick(&self) -> Filter {
-        Filter { rating: 0, rating_op: RatingOp::default(), flag: None, flags: Vec::new(), label: None, labels: Vec::new(), ..self.clone() }
+        Filter {
+            rating: 0,
+            rating_op: RatingOp::default(),
+            flag: None,
+            flags: Vec::new(),
+            label: None,
+            labels: Vec::new(),
+            labels_none: false,
+            ..self.clone()
+        }
     }
 
     /// The flags that `flag` and `flags` let through together; `None` when neither is set.
@@ -932,6 +951,9 @@ impl Filter {
         }
         if !self.labels.is_empty() {
             v.push(format!("label {}", self.labels.iter().map(|l| format!("{l:?}").to_lowercase()).collect::<Vec<_>>().join(" or ")));
+        }
+        if self.labels_none {
+            v.push("label none".into());
         }
         if let Some(k) = self.kind {
             v.push(format!("kind {}", format!("{k:?}").to_lowercase()));
@@ -1083,6 +1105,9 @@ impl Filter {
             return false;
         }
         if !self.labels.is_empty() && !p.label.is_some_and(|l| self.labels.contains(&l)) {
+            return false;
+        }
+        if self.labels_none && p.label.is_some() {
             return false;
         }
         if !self.facets.iter().all(|f| f.matches(p, cat)) {

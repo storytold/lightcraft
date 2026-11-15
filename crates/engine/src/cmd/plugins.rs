@@ -435,28 +435,33 @@ fn inspect_file(_: &mut Session, p: &Value) -> Result<Value> {
             "unknownFields": unknown, "dropped": f.manifest().dropped,
         }));
     }
-    let plugin = lcc_plugins::Plugin::load(&bytes, lcc_plugins::Limits::default()).map_err(|e| plugin_err(C, e))?;
-    let mut manifest = serde_json::to_value(plugin.manifest()).map_err(|e| bad(C, e.to_string()))?;
+    // a stamped file is read from its section without running it, unless `verify` asks for lcc_manifest
+    let inspected =
+        lcc_plugins::Plugin::inspect(&bytes, lcc_plugins::Limits::default(), bool_or(p, "verify", false)).map_err(|e| plugin_err(C, e))?;
+    let (source, verified, digest, plugin_manifest) = (inspected.source.as_str(), inspected.verified(), inspected.digest, inspected.manifest);
+    let mut manifest = serde_json::to_value(&plugin_manifest).map_err(|e| bad(C, e.to_string()))?;
     if let Some(o) = manifest.as_object_mut() {
-        o.insert("about".into(), plugin.manifest().about.info());
+        o.insert("about".into(), plugin_manifest.about.info());
     }
     // an update: what is granted now, so the dialog can show what the new version adds; and what
     // would stop the install, so the dialog can say so before the user approves anything
     with_manager(|m| {
         // one that stopped loading counts too: installing over it replaces it
+        let id = plugin_manifest.id.as_str();
         let installed = m
-            .get(plugin.id())
+            .get(id)
             .map(|i| {
-                let same = i.plugin.manifest().version == plugin.manifest().version && i.plugin.digest() == plugin.digest();
+                let same = i.plugin.manifest().version == plugin_manifest.version && i.plugin.digest() == &digest;
                 json!({"version": i.plugin.manifest().version, "granted": i.effective(), "same": same})
             })
-            .or_else(|| m.unloaded(plugin.id()).map(|(version, grant)| json!({"version": version, "granted": grant, "loaded": false})));
-        let (missing, version_error, downgrade) = m.install_check(plugin.manifest());
-        let conflict = filter_has_id(plugin.id());
-        let (unknown, dropped) = (&plugin.manifest().unknown_fields, &plugin.manifest().dropped);
+            .or_else(|| m.unloaded(id).map(|(version, grant)| json!({"version": version, "granted": grant, "loaded": false})));
+        let (missing, version_error, downgrade) = m.install_check(&plugin_manifest);
+        let conflict = filter_has_id(id);
+        let (unknown, dropped) = (&plugin_manifest.unknown_fields, &plugin_manifest.dropped);
         Ok(json!({
             "manifest": manifest, "installed": installed, "missing": missing, "versionError": version_error,
             "downgrade": downgrade.is_some(), "conflict": conflict, "unknownFields": unknown, "dropped": dropped,
+            "source": source, "verified": verified,
         }))
     })
 }
@@ -661,7 +666,7 @@ fn commands(_: &mut Session, _: &Value) -> Result<Value> {
                 pm.commands.iter().map(move |c| {
                     let values = m.command_values(&pm.id, &c.id, &c.dialog);
                     json!({"plugin": pm.id, "pluginName": pm.name, "command": c.id, "label": c.label, "menu": c.menu, "dialog": c.dialog,
-                        "prepare": c.prepare, "values": values})
+                        "prepare": c.prepare, "quickAction": c.quick_action, "values": values})
                 })
             })
             .collect();
@@ -1367,7 +1372,7 @@ pub(crate) fn sync_fields_with(s: &mut Session, write_sidecars: bool) -> usize {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "plugin.list", "Plug-ins", [], None, "{} → {dir, host: {abi, features}, plugins: [{id, name, version, requires, enabled, requested, granted, requests: [{group, value?: host, folder or program id, write?: (fs), state: allowed|denied|never|refused, deniedOn?: YYYY-MM-DD, reason?: why a folder can't be granted}], commands, hooks, publish, about: {homepage?, repository?, changelog?, license?, issues?: the GitHub repository's issues page}, moduleHash: sha256 of the module, settingsRevision: changes when a setting does, previousVersion: the version plugin.rollback goes back to | null}], failed: [{file, error, id?: to remove it with plugin.uninstall, missing?: features this version lacks}], skipped: modules in the folder past the most it loads (256 plug-ins counting every module, 1,000 pixel filters), not looked at}", always, list),
-        cmd!(query "plugin.inspectFile", "Inspect Plug-in File", [], None, "{path}: loads a .wasm without installing it → {manifest, installed: {version, granted, same: the installed version and code are this file's (installing it changes nothing), loaded?: false (it needs features this version lacks)} | null, missing: [features this version lacks], versionError: why `version` isn't semver | null, downgrade: older than the installed version (pixel filters too), conflict: why a module of the other kind (plug-in or pixel filter) with this id stops it | null, unknownFields: manifest fields this version doesn't know, by path (they're ignored; installing still goes ahead), dropped: manifest values this version can't use, each with why (`homepage: not an https:// link`; left out, installing still goes ahead)}; manifest.about: {homepage?, repository?, changelog?, license?, issues?}; plugin.install refuses each of these (a downgrade only without allowDowngrade). A file over the install size limit is refused as install refuses it. The install dialog lists the permissions it may ask for", always, inspect_file),
+        cmd!(query "plugin.inspectFile", "Inspect Plug-in File", [], None, "{path, verify?: false}: reads a .wasm without installing it. A plug-in stamped with its manifest (a photo-plugin.manifest section) is read from the section without running it: source: \"section\", verified: false (the file's claim; install checks it against lcc_manifest). One without a section, or any plug-in with verify: true, is loaded in the sandbox and read through lcc_manifest (a section that differs is an error naming the fields): source: \"export\", verified: true → {manifest, source, verified, installed: {version, granted, same: the installed version and code are this file's (installing it changes nothing), loaded?: false (it needs features this version lacks)} | null, missing: [features this version lacks], versionError: why `version` isn't semver | null, downgrade: older than the installed version (pixel filters too), conflict: why a module of the other kind (plug-in or pixel filter) with this id stops it | null, unknownFields: manifest fields this version doesn't know, by path (they're ignored; installing still goes ahead), dropped: manifest values this version can't use, each with why (`homepage: not an https:// link`; left out, installing still goes ahead)}; manifest.about: {homepage?, repository?, changelog?, license?, issues?}; plugin.install refuses each of these (a downgrade only without allowDowngrade). A file over the install size limit is refused as install refuses it. The install dialog inspects with verify: true and lists the permissions it may ask for", always, inspect_file),
         cmd!(query "plugin.install", "Install Plug-in", [], None, "{path: .wasm, grant?: {catalog, metadataWrite, network: [hosts], fs: [{path, write}], programs: [entries as plugin.list gives them]}, allowDowngrade?: bool = false}: installs or updates. Nothing is granted: a fresh install has no permissions, and the plug-in asks the user for each as it needs it; an update keeps what the user allowed (cut back to what the new version asks for) and what they denied. `grant` may repeat or leave out what the installed version has, never add to it (an error, nothing installed): only the user allows. A module whose code differs from the installed one keeps none of its programs (its log says so). Refused: features in `requires` this version lacks, a `version` that isn't semver, an older version than the installed one unless allowDowngrade (pixel filters too), an id an installed module of the other kind (plug-in or pixel filter) has → plugin", always, install),
         cmd!(query "plugin.uninstall", "Remove Plug-in", [], None, "{id} | {file}, keepData?: bool = false: removes the module and its data (with keepData its data and settings stay, for a later install of the same id; a pixel filter keeps none); also a plug-in listed under plugin.list → failed (by its id there). With `file` (a plugin.list → failed row's): only that module file when another module has its id (the first by file name loads), else the plug-in as by its id", always, uninstall),
         cmd!(query "plugin.rollback", "Go Back to Previous Plug-in Version", [], None, "{id}: goes back to the version the plug-in's last update replaced (plugin.list → previousVersion), with its settings as they were before that update; one level deep. Its grant is kept, cut back to what that version asks for, without programs (only the user keeps those, from the plug-in's page). An error when no version is kept; nothing changes when the old module can't be written → the plug-in, as plugin.list lists it", always, rollback),
@@ -1376,7 +1381,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "plugin.revoke", "Revoke Plug-in Permission", [], None, "{id, group: catalog|metadataWrite|libraryAdd|pixels|crop|virtualCopy|network|fs|programs, value?: the host, folder or program id (none: all of the group)}: takes back one permission; the plug-in may ask for it again → granted", always, revoke),
         cmd!(query "plugin.picture", "Plug-in Picture", [], None, "{id, picture?: header|icon (header), theme?: dark|light (dark)}: a plug-in's or pixel filter's own picture: its header for that interface theme, or its icon (the manifest's `header` and `icon`) → {svg: SVG text | null}", always, picture),
         cmd!(query "plugin.log", "Plug-in Log", [], None, "{id} → [lines]", always, log),
-        cmd!(query "plugin.commands", "Plug-in Commands", [], None, "{} → [{plugin, pluginName, command, label, menu, dialog, prepare, values: what the dialog opens with (the last-run values of fields that remember, else defaults)}] of enabled plug-ins", always, commands),
+        cmd!(query "plugin.commands", "Plug-in Commands", [], None, "{} → [{plugin, pluginName, command, label, menu, dialog, prepare, quickAction, values: what the dialog opens with (the last-run values of fields that remember, else defaults)}] of enabled plug-ins", always, commands),
         cmd!(query "plugin.prepare", "Prepare Plug-in Command", [], None, "{plugin, command, ids?, source?: {kind: album|smartAlbum|folder|allPhotos|other, id?, name?, path?} (default: the Library source shown)}: asks a command with `prepare` how to run on ids / the selection (others: their dialog as declared) → {dialog: [field + value], error: why the plug-in's own options are missing | null} | {run: args} | {message}; runs nothing", always, prepare),
         cmd!(query "plugin.run", "Run Plug-in Command", [], None, "{plugin, command, args?: dialog values, ids?, source?: as plugin.prepare, wait?: a job runs to its end}: runs a plug-in menu command on ids / the selection, telling it the Library source it was started from (`source`, default: the one shown) → its result; args given are remembered for its dialog. A command with `prepare` is asked first: a message → {message, ran: false} and nothing runs; its own args are used when `args` is missing; args are checked against its dialog as prepared. A job (a command with `job`) runs on a worker with a row in the activity stack and returns at once → {job: its activity id (activity.list, activity.cancel), running: true, plugin, command}; with `wait: true` it runs here to its end → its result (a cancelled job is an error). Headless sessions answer a job's catalog reads only with `wait`", always, run),
         cmd!(query "plugin.settings", "Plug-in Settings", [], None, "{id} → {id, fields: [field + value], values: {key: value}, error: why the plug-in's own options are missing | null}; kept for the whole app, defaults for what was never set", always, settings),

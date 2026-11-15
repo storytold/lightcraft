@@ -158,19 +158,25 @@ fn mask_id(mask: &Mask) -> Option<u32> {
     (mask.id != 0).then_some(mask.id)
 }
 
-/// The Effect menu above the mask's sliders.
-pub fn effect_row(app: &mut LccApp, ui: &mut egui::Ui, mask: &Mask) {
+/// The Effect menu above the mask's sliders. `enabled = false` (issue #1190: the settings for the
+/// next mask with no masks on the photo yet) dims it and ignores clicks.
+pub fn effect_row(app: &mut LccApp, ui: &mut egui::Ui, mask: &Mask, enabled: bool) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 4 }, 2, 3)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Effect")).font(t.font(12.0)).color(t.text_label));
+            let dim = if enabled { t.text_label } else { t.text_disabled };
+            ui.label(egui::RichText::new(crate::i18n::tr("Effect")).font(t.font(12.0)).color(dim));
             let current = fx::matching_effect(&app.session, &mask.adjust);
             let label = current.as_deref().map(display_name).unwrap_or_else(|| crate::i18n::tr("Custom").to_string());
-            let r = crate::widgets::dropdown(ui, "maskEffect", &label, t.font(12.0), t.text);
-            if r.clicked() {
+            let r = crate::widgets::dropdown(ui, "maskEffect", &label, t.font(12.0), if enabled { t.text } else { t.text_disabled });
+            if enabled && r.clicked() {
                 ui.data_mut(|d| d.insert_temp(state_id(), MenuState::default()));
             }
-            egui::Popup::menu(&r).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| menu(app, ui, mask, current.as_deref()));
+            if enabled {
+                egui::Popup::menu(&r)
+                    .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                    .show(|ui| menu(app, ui, mask, current.as_deref()));
+            }
         });
     });
 }

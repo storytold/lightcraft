@@ -424,6 +424,11 @@ fn group_key(ui: &Ui) -> Id {
 /// [`group_begin`] or [`group_end`]. Lets a long, linear form be grouped without nesting closures
 /// (Settings' tabs); use [`group`] where a closure is handy.
 pub fn group_begin(ui: &mut Ui, title: Option<&str>) {
+    group_begin_help(ui, title, None);
+}
+
+/// [`group_begin`] with a help link (`crate::help_link`, `help:{topic}`) just after the title.
+pub fn group_begin_help(ui: &mut Ui, title: Option<&str>, help: Option<&str>) {
     group_end(ui);
     let t = Tokens::get(ui.ctx());
     if in_form(ui) && plain(ui) {
@@ -434,7 +439,10 @@ pub fn group_begin(ui: &mut Ui, title: Option<&str>) {
                 if !first {
                     ui.add_space(10.0);
                 }
-                ui.label(RichText::new(crate::i18n::tr(title)).font(t.semibold(12.5)).color(t.text));
+                let r = ui.label(RichText::new(crate::i18n::tr(title)).font(t.semibold(12.5)).color(t.text));
+                if let Some(topic) = help {
+                    crate::help_link::beside(ui, r.rect, topic);
+                }
                 let y = ui.cursor().top() - ui.spacing().item_spacing.y / 2.0;
                 ui.painter().hline(ui.available_rect_before_wrap().x_range(), y, egui::Stroke::new(1.0, t.divider));
                 ui.add_space(2.0);
@@ -446,7 +454,10 @@ pub fn group_begin(ui: &mut Ui, title: Option<&str>) {
     }
     if !in_form(ui) {
         if let Some(title) = title.filter(|s| !s.is_empty()) {
-            ui.label(RichText::new(crate::i18n::tr(title)).font(t.semibold(12.0)).color(t.text));
+            let r = ui.label(RichText::new(crate::i18n::tr(title)).font(t.semibold(12.0)).color(t.text));
+            if let Some(topic) = help {
+                crate::help_link::beside(ui, r.rect, topic);
+            }
         }
         return;
     }
@@ -455,12 +466,18 @@ pub fn group_begin(ui: &mut Ui, title: Option<&str>) {
         // unboxed
         ui.add_space(2.0);
         if let Some(title) = title.filter(|s| !s.is_empty()) {
-            band(ui, title);
+            let r = band(ui, title);
+            if let Some(topic) = help {
+                crate::help_link::beside(ui, r, topic);
+            }
         }
     } else {
         ui.add_space(6.0);
         if let Some(title) = title.filter(|s| !s.is_empty()) {
-            heading(ui, title);
+            let r = heading(ui, title);
+            if let Some(topic) = help {
+                crate::help_link::beside(ui, r, topic);
+            }
         }
     }
     let shape = ui.painter().add(Shape::Noop);
@@ -510,7 +527,8 @@ pub fn esc_closes(app_dialog_open: bool, ctx: &egui::Context) -> bool {
 
 /// A group's header in the Compact layout: a flat band across the form (past the group padding),
 /// a divider on top, the title at the left in small semibold text.
-fn band(ui: &mut Ui, title: &str) {
+/// Returns the title's rect.
+fn band(ui: &mut Ui, title: &str) -> Rect {
     let t = Tokens::get(ui.ctx());
     let rect = ui.max_rect();
     let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 18.0), egui::Sense::hover());
@@ -519,17 +537,20 @@ fn band(ui: &mut Ui, title: &str) {
     p.rect_filled(bar, 0.0, t.inset);
     p.hline(bar.x_range(), bar.top(), egui::Stroke::new(1.0, t.divider));
     let g = p.layout_no_wrap(crate::i18n::tr(title).to_string(), t.semibold(11.0), t.text_label);
-    p.galley(egui::pos2(bar.left() + GROUP_PAD, bar.center().y - g.size().y / 2.0), g, t.text_label);
+    let at = egui::pos2(bar.left() + GROUP_PAD, bar.center().y - g.size().y / 2.0);
+    let text = Rect::from_min_size(at, g.size());
+    p.galley(at, g, t.text_label);
     crate::widgets::register(ui.ctx(), format!("formBand:{title}"), bar);
+    text
 }
 
-/// A group's heading: small spaced capitals in the dim text colour, above its card.
-fn heading(ui: &mut Ui, title: &str) {
+/// A group's heading: small spaced capitals in the dim text colour, above its card. Returns its rect.
+fn heading(ui: &mut Ui, title: &str) -> Rect {
     let t = Tokens::get(ui.ctx());
     let text = crate::i18n::tr(title).to_uppercase();
     let mut job = egui::text::LayoutJob::default();
     job.append(&text, 4.0, egui::TextFormat { font_id: t.semibold(10.5), color: t.text_dim, extra_letter_spacing: 1.0, ..Default::default() });
-    ui.label(job);
+    ui.label(job).rect
 }
 
 /// Closes the open group (if any), painting its panel.

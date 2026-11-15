@@ -180,7 +180,7 @@ pub fn local_get(a: &LocalAdjustments, key: &str) -> f64 {
 
 /// Every kind of mask, in Create New Mask's order, with its tile label (OneSlips 1138a5edd): the tiles and the Add /
 /// Subtract / Intersect menus offer all of them, in the same order, with the same icons.
-pub(crate) const MASK_KINDS: [(&str, &str); 12] = [
+pub(crate) const MASK_KINDS: [(&str, &str); 13] = [
     ("object", "Object"),
     ("prompt", "Describe"),
     ("subject", "Subject"),
@@ -193,6 +193,8 @@ pub(crate) const MASK_KINDS: [(&str, &str); 12] = [
     ("radial", "Radial"),
     ("luminanceRange", "Luminance"),
     ("colorRange", "Color"),
+    // (Depth Anything V2 Small; without it the AI Models settings offer its download, issue #1144)
+    ("depthRange", "Depth"),
 ];
 
 /// The icon of a mask kind, by its `mask.add` kind id: the one table the Create New Mask tiles and
@@ -873,7 +875,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             divider(ui);
             object_settings(app, ui);
         }
-        next_mask_settings(app, ui);
+        next_mask_settings(app, ui, !d.masks.is_empty());
         return;
     };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
@@ -890,7 +892,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         object_settings(app, ui);
     }
     divider(ui);
-    super::mask_effects::effect_row(app, ui, &m);
+    super::mask_effects::effect_row(app, ui, &m, true);
     for (key, title, ids) in GROUPS {
         if !section_header(app, ui, key, title, group_changed(&m.adjust, ids)) {
             continue;
@@ -974,8 +976,10 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
 
 /// With no mask selected: the effect menu and sliders for the next new mask (set the look first,
 /// then draw; `mask.adjust` / `mask.applyEffect` with no mask set them), and Reset Settings on New
-/// Mask.
-fn next_mask_settings(app: &mut LccApp, ui: &mut egui::Ui) {
+/// Mask. With no masks on the photo at all (`enabled = false`, issue #1190: the sliders look like
+/// the image's own and changing them does nothing to it) they are dimmed and inert; the
+/// "No masks yet" hint above says to create one first.
+fn next_mask_settings(app: &mut LccApp, ui: &mut egui::Ui, enabled: bool) {
     let t = Tokens::get(ui.ctx());
     divider(ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 12, right: 16, top: 4, bottom: 0 }).show(ui, |ui| {
@@ -990,7 +994,7 @@ fn next_mask_settings(app: &mut LccApp, ui: &mut egui::Ui) {
     });
     // (id 0: no mask; the effect menu then sets the next mask's settings)
     let shown = lcc_develop::Mask { id: 0, adjust: app.session.mask_next, ..Default::default() };
-    super::mask_effects::effect_row(app, ui, &shown);
+    super::mask_effects::effect_row(app, ui, &shown, enabled);
     for (key, title, ids) in GROUPS {
         if !section_header(app, ui, key, title, group_changed(&shown.adjust, ids)) {
             continue;
@@ -998,7 +1002,7 @@ fn next_mask_settings(app: &mut LccApp, ui: &mut egui::Ui) {
         for s in LOCAL.iter().filter(|s| ids.contains(&s.id)).map(|s| local_spec(s, app.ui.settings.expanded_sliders)).collect::<Vec<_>>() {
             let s = &s;
             let v = local_get(&shown.adjust, s.id);
-            let out = slider(ui, s, v, true, None);
+            let out = slider(ui, s, v, enabled, None);
             apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
         }
     }
@@ -2185,6 +2189,7 @@ fn component_menu(app: &mut LccApp, ui: &mut egui::Ui, op: &str) {
             "radial" => "Radial Gradient",
             "luminanceRange" => "Luminance Range",
             "colorRange" => "Color Range",
+            "depthRange" => "Depth Range",
             "people" => "People…",
             "concept" => "Remembered…",
             _ => label,

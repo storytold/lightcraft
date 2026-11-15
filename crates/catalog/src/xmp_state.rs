@@ -80,8 +80,13 @@ impl Photo {
         XmpStamp { fingerprint: self.xmp_fingerprint(), file }
     }
 
-    /// The badge, given the sidecar's stat now (`None`: no sidecar).
+    /// The badge, given the sidecar's stat now (`None`: no sidecar). A virtual copy has no sidecar of its own (the
+    /// file next to the original is the original's), so it has none: a write of the original's sidecar is no news
+    /// for the copy, and reading that sidecar would put the original's metadata on it.
     pub fn xmp_status(&self, file_now: Option<SidecarStat>) -> XmpStatus {
+        if self.copy_of.is_some() {
+            return XmpStatus::Unknown;
+        }
         let Some(stamp) = self.xmp else { return XmpStatus::Unknown };
         let catalog = stamp.fingerprint != self.xmp_fingerprint();
         let disk = stamp.file != file_now;
@@ -115,5 +120,17 @@ mod tests {
         p.rating = 0;
         p.file_size = 99;
         assert_eq!(p.xmp_status(Some(st)), XmpStatus::InSync);
+    }
+
+    /// A virtual copy made after a sidecar sync carries the original's stamp; the original's sidecar changing (a
+    /// write of its own metadata) must not flag the copy as changed on disk, or an automatic read would put the
+    /// original's metadata on the copy.
+    #[test]
+    fn a_virtual_copy_never_reads_the_originals_sidecar_as_its_own() {
+        let mut p = Photo::new(PhotoId(2), Source::Demo { scene: 0 }, "a.jpg", "JPEG", 10, 10, "2026-01-01T00:00:00");
+        let st = SidecarStat { mtime: 100, size: 2000 };
+        p.xmp = Some(p.xmp_stamp_now(Some(st)));
+        p.copy_of = Some(PhotoId(1));
+        assert_eq!(p.xmp_status(Some(SidecarStat { mtime: 101, size: 2100 })), XmpStatus::Unknown);
     }
 }

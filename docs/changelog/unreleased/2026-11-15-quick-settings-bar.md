@@ -1,0 +1,3 @@
+## Interface
+
+- **Quick settings bar:** the module bar's blank stretch fades in a row of switches on hover (info overlay, on-screen overlay, eye focus strip, clipping, focus point, face boxes, filmstrip), clear of the activity progress bars; hovering dismisses the status line's message. Entries are a small registry of commands (`view.quickSettings` lists them). The eye focus strip gains a hover ✕ (hides it and flashes its switch in the bar) and an eye that zooms to 100 % on the eye, plus a setting in Settings ▸ Interface. Plug-ins can add buttons with `quickAction: true` on a command (host feature `quickActions`, ABI v1 unchanged).

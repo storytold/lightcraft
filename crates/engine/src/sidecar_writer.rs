@@ -190,6 +190,8 @@ fn run(shared: &Shared, activity: &crate::activity::Activity) {
             }
         };
         // a panic here must not end the thread with its job counted as busy forever
+        #[cfg(all(test, unix))]
+        stall::wait(&job.preferred);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::sidecar::write_job(&job)))
             .unwrap_or_else(|_| Err(format!("{}: writing the sidecar failed", job.preferred.display())));
         let mut s = lock(shared);
@@ -212,7 +214,7 @@ fn run(shared: &Shared, activity: &crate::activity::Activity) {
 mod tests {
     use super::*;
 
-    /// A write that never finishes (a network share that stopped answering; here a FIFO nobody writes to) doesn't
+    /// A write that never finishes (a network share that stopped answering; here a held write) doesn't
     /// hold up whoever drops the writer for longer than the shutdown limit; the queued write is still made once the
     /// share answers again.
     /// A batch of writes holds one row in the activity stack ("Writing XMP sidecars", n of N, no ✕) for as long as it
@@ -232,9 +234,9 @@ mod tests {
             let original = dir.join(format!("{i}.png"));
             std::fs::write(&original, b"x").unwrap();
             let sidecar = dir.join(format!("{i}.xmp"));
-            // the first write blocks on a FIFO until the test lets it go
-            if i == 0 && !std::process::Command::new("mkfifo").arg(&sidecar).status().is_ok_and(|s| s.success()) {
-                return;
+            // the first write is held until the test lets it go
+            if i == 0 {
+                crate::sidecar_writer::stall::hold(&sidecar);
             }
             w.submit(Job {
                 id: PhotoId(i),
@@ -253,7 +255,7 @@ mod tests {
         let rows = activity.list();
         assert_eq!(rows.len(), 1, "one row for the batch: {rows:?}");
         assert_eq!((rows[0].kind, rows[0].label.as_str(), rows[0].total, rows[0].cancellable), ("sidecars", "Writing XMP sidecars", 3, false));
-        drop(std::fs::OpenOptions::new().write(true).open(&sidecars[0]).unwrap());
+        crate::sidecar_writer::stall::release(&sidecars[0]);
         assert!(w.wait_idle(Duration::from_secs(10)));
         let until = Instant::now() + Duration::from_secs(5);
         while !activity.list().is_empty() && Instant::now() < until {
@@ -273,9 +275,7 @@ mod tests {
         let original = dir.join("a.png");
         std::fs::write(&original, b"x").unwrap();
         let sidecar = dir.join("a.xmp");
-        if !std::process::Command::new("mkfifo").arg(&sidecar).status().is_ok_and(|s| s.success()) {
-            return;
-        }
+        crate::sidecar_writer::stall::hold(&sidecar);
         let mut w = Writer::start(crate::activity::Activity::default()).unwrap();
         let packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".to_string();
         w.submit(Job {
@@ -287,7 +287,7 @@ mod tests {
             packets: crate::sidecar::Packets { with_gps: packet.clone(), without_gps: packet },
             stamp: "s".into(),
         });
-        // the write has started (and is stuck reading the FIFO)
+        // the write has started (and is held)
         while lock(&w.shared).busy == 0 {
             std::thread::sleep(Duration::from_millis(2));
         }
@@ -295,14 +295,42 @@ mod tests {
         w.shutdown(Duration::from_millis(200));
         assert!(start.elapsed() < Duration::from_secs(5), "returned after {:?}", start.elapsed());
         // the share answers: the write goes on and lands
-        drop(std::fs::OpenOptions::new().write(true).open(&sidecar).unwrap());
+        crate::sidecar_writer::stall::release(&sidecar);
         let until = Instant::now() + Duration::from_secs(30);
-        while std::fs::symlink_metadata(&sidecar).is_ok_and(|m| !m.is_file()) && Instant::now() < until {
+        while !std::fs::symlink_metadata(&sidecar).is_ok_and(|m| m.is_file()) && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(5));
         }
-        // (still the FIFO, reading it would wait for a writer forever: a slow machine fails here instead)
-        assert!(std::fs::symlink_metadata(&sidecar).is_ok_and(|m| m.is_file()), "the queued write replaced the FIFO");
+        assert!(std::fs::symlink_metadata(&sidecar).is_ok_and(|m| m.is_file()), "the queued write landed");
         assert!(std::fs::read_to_string(&sidecar).is_ok_and(|s| s.contains("xmpmeta")), "the queued write was made");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// Tests hold a sidecar's write as a share that stopped answering would (a FIFO no longer does: sidecar reads
+/// refuse anything but a regular file), and let it go when the share "answers".
+#[cfg(all(test, unix))]
+pub(crate) mod stall {
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    static HELD: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+    fn held() -> std::sync::MutexGuard<'static, Vec<PathBuf>> {
+        HELD.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The write of the sidecar at `path` waits until [`release`].
+    pub(crate) fn hold(path: &Path) {
+        held().push(path.to_path_buf());
+    }
+
+    pub(crate) fn release(path: &Path) {
+        held().retain(|p| p != path);
+    }
+
+    pub(super) fn wait(path: &Path) {
+        while held().iter().any(|p| p == path) {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
     }
 }

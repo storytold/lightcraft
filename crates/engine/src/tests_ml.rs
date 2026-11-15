@@ -528,3 +528,88 @@ fn clip_on_the_gpu_matches_the_cpu() {
     assert!(cosine(&ct, &gt) > 0.999);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Pump background indexing until `cond` holds for its result (or 30 s pass); the last result.
+fn pump_ml_until(s: &mut Session, mut cond: impl FnMut(&Value) -> bool) -> Value {
+    let start = Instant::now();
+    loop {
+        let v = s.execute("ml.pump", &json!({"pace": "full"})).unwrap();
+        if cond(&v) || start.elapsed() > Duration::from_secs(30) {
+            return v;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Search indexing pauses (saved: a new session is paused too), its row then offering resume and Settings ▸ AI Models;
+/// it resumes, Clear empties the index and leaves indexing paused, Restart indexes everything again; and switching
+/// semantic search off stops indexing and refuses searches, clearing a description filter.
+#[test]
+fn search_indexing_pauses_resumes_clears_restarts_and_semantic_search_switches_off() {
+    let d = temp_dir("pause");
+    let lib_dir = d.join("lib");
+    let models_dir = d.join("ml-models");
+    let src = d.join("synthetic-src");
+    lcc_ml::Clip::write_synthetic_dir(&src, "test-clip").unwrap();
+    let (warm, cool) = (d.join("photos").join("sunset.png"), d.join("photos").join("ocean.png"));
+    write_solid_png(&warm, [240, 30, 20, 255]);
+    write_solid_png(&cool, [20, 50, 240, 255]);
+    let mut s = Session::new().with_fs();
+    s.ml_models_dir = Some(models_dir.clone());
+    s.open_library(&lib_dir, false).unwrap();
+    s.execute("library.import", &json!({"paths": [warm.to_string_lossy(), cool.to_string_lossy()]})).unwrap();
+    s.execute("ml.models.install", &json!({"path": src.to_string_lossy(), "acknowledged": true})).unwrap();
+
+    // paused before anything runs: pumping indexes nothing, and a row offers resume
+    assert_eq!(s.execute("ml.pause", &json!({})).unwrap()["paused"], true);
+    for _ in 0..40 {
+        s.execute("ml.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let st = s.execute("ml.indexStatus", &json!({})).unwrap();
+    assert_eq!((st["state"].clone(), st["done"].clone(), st["total"].clone()), (json!("paused"), json!(0), json!(2)), "{st}");
+    let rows: Vec<_> = s.activity.list().into_iter().filter(|t| t.kind == ROW_KIND).collect();
+    assert_eq!(rows.len(), 1, "a paused index with photos left keeps its row");
+    let c = rows[0].controls.clone().expect("the indexing row has controls");
+    assert!(c.paused);
+    assert_eq!((c.resume, c.settings_tab, c.settings_section), ("ml.resume", "ai", Some("semanticSearch")));
+    let mut again = Session::new().with_fs();
+    again.ml_models_dir = Some(models_dir.clone());
+    assert_eq!(again.execute("ml.indexStatus", &json!({})).unwrap()["paused"], true, "the pause is saved");
+    drop(again);
+
+    // resumed through the row: it indexes to the end
+    s.execute("activity.pause", &json!({"id": rows[0].id, "paused": false})).unwrap();
+    let v = pump_ml_until(&mut s, |v| v["indexedPhotos"] == 2);
+    assert_eq!(v["indexedPhotos"], 2, "{v}");
+    assert_eq!(s.execute("ml.indexStatus", &json!({})).unwrap()["state"], "complete");
+
+    // Clear: empty, paused, and it stays empty
+    let st = s.execute("ml.clearIndex", &json!({})).unwrap();
+    assert_eq!((st["paused"].clone(), st["indexedPhotos"].clone()), (json!(true), json!(0)), "{st}");
+    for _ in 0..40 {
+        s.execute("ml.pump", &json!({"pace": "full"})).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(s.execute("ml.indexStatus", &json!({})).unwrap()["indexedPhotos"], 0);
+
+    // Restart: indexes everything again
+    assert_eq!(s.execute("ml.restart", &json!({})).unwrap()["paused"], false);
+    let v = pump_ml_until(&mut s, |v| v["indexedPhotos"] == 2);
+    assert_eq!(v["indexedPhotos"], 2, "{v}");
+
+    // semantic search switched off: a description filter goes, searches are refused, nothing is indexed
+    s.execute("library.filter", &json!({"semantic": "golden sunset"})).unwrap();
+    assert!(s.filter.semantic.is_some());
+    s.execute("ml.enable", &json!({"enabled": false})).unwrap();
+    assert!(s.filter.semantic.is_none(), "the description filter is cleared");
+    assert!(s.execute("search.semantic", &json!({"text": "sunset"})).is_err());
+    assert!(s.execute("library.filter", &json!({"semantic": "sunset"})).is_err());
+    let v = s.execute("ml.pump", &json!({})).unwrap();
+    assert_eq!((v["active"].clone(), v["enabled"].clone()), (json!(false), json!(false)), "{v}");
+    assert_eq!(s.execute("ml.indexStatus", &json!({})).unwrap()["state"], "off");
+    assert!(!s.semantic_search_on());
+    s.execute("ml.enable", &json!({"enabled": true})).unwrap();
+    assert!(s.execute("search.semantic", &json!({"text": "sunset"})).is_ok());
+    let _ = std::fs::remove_dir_all(&d);
+}

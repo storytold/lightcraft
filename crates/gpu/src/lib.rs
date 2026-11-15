@@ -1574,7 +1574,13 @@ fn try_render_inner(
         let s: &DevelopSettings = &effective;
         let device_proof = req.proof.is_some_and(|p| lcc_pipeline::proof_profile(p.profile).is_some());
         // pixel-filter plug-ins run in the CPU pipeline
-        if !allowed() || gate::cpu_only() || !handles(req.depth, device_proof, req.overlay) || lcc_pipeline::plugin_filters::any_active(s) {
+        // and film dust removal from a scanner's infrared pass (the step, and its views)
+        if !allowed()
+            || gate::cpu_only()
+            || !handles(req.depth, device_proof, req.overlay)
+            || lcc_pipeline::plugin_filters::any_active(s)
+            || lcc_pipeline::film_dust::needs_cpu(info, s, req.overlay)
+        {
             return Err(Fallback::NotTried);
         }
         let s = &*lcc_pipeline::settings_for(s, req);

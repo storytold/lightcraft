@@ -80,16 +80,19 @@ pub fn platform_dirs() -> Option<&'static PlatformDirs> {
     PLATFORM_DIRS.get()
 }
 
-/// Whether this process is a test binary: Cargo builds every crate's unit and integration tests into
-/// `target/<profile>/deps/`, where no app or tool it builds for running lives.
+/// Whether this process is a test binary: Cargo names every crate's unit and integration test binaries
+/// `<crate>-<hash>`, a name no app or tool it builds for running has.
 pub fn is_test_binary() -> bool {
     static TEST: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *TEST.get_or_init(|| {
         cfg!(test)
             || std::env::current_exe().ok().is_some_and(|exe| {
-                let parent = exe.parent();
-                parent.and_then(|p| p.file_name()).is_some_and(|n| n == "deps")
-                    && parent.and_then(|p| p.parent()).and_then(|p| p.parent()).and_then(|p| p.file_name()).is_some_and(|n| n == "target")
+                // cargo names test binaries `<crate>-<16 hex digits>`, wherever its layout puts them
+                // (`target/<profile>/deps/` or `<build-dir>/<profile>/build/<crate>/<hash>/out/`)
+                exe.file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.rsplit_once('-'))
+                    .is_some_and(|(_, hash)| hash.len() == 16 && hash.bytes().all(|b| b.is_ascii_hexdigit()))
             })
     })
 }

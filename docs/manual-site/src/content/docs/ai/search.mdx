@@ -14,7 +14,9 @@ import { Aside } from '@astrojs/starlight/components';
 - **Where**: the **AI** button in the search box, top bar (Modern: the search pill). Type a phrase such as "moody studio portraits" and press Return. A removable **AI search: "..."** chip shows in the filter bar.
 - **How it works**: a CLIP image-text model turns each photo and your phrase into numbers and ranks photos by similarity. Results appear in similarity order and combine with ratings, flags, colour labels, keywords, folders and smart albums.
 - **Needs** the CLIP model (`clip-vit-b32-laion2b`, MIT): download it in Settings ▸ **AI Models** (Semantic search section) after accepting its licence. Choose the device there too (Automatic, a named graphics card or CPU).
-- **Indexing** runs in the background (an activity row "Indexing photos") and can be paused with the Settings toggle. A big library takes a while; unindexed photos do not appear in results yet. As batches finish an active search refreshes.
+- **Indexing** runs in the background (an activity row "Indexing photos" with a pause button and a gear that opens these settings). A big library takes a while; unindexed photos do not appear in results yet. As batches finish an active search refreshes.
+- **On or off**: Settings ▸ AI Models ▸ Semantic search ▸ **Semantic search: search photos by description** (on unless switched off). Off, nothing is indexed, the **AI** button leaves the search box and an AI search filter is cleared; the index already made is kept.
+- **Status and controls**: the same section shows how far indexing is (not started, indexing, paused, complete, photos done) with **Pause** / **Resume** (kept across restarts), **Clear…** (deletes the index and leaves indexing paused) and **Restart…** (deletes it and indexes every photo again). Both ask first.
 - **Local**: embeddings are cached in a rebuildable file beside the library, not in the catalog.
 - The demo screenshot is empty because no model is installed and nothing is indexed.
 

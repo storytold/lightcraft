@@ -24,7 +24,7 @@ use ls::runtime::Shown;
 use ls::settings::{OsdMode, OsdPosition};
 use serde_json::{Value, json};
 
-use super::settings::{choices, heading, hint, row};
+use super::settings::{choices, hint, row};
 use crate::LccApp;
 use crate::i18n::{tr, tr_format};
 use crate::theme::Tokens;
@@ -343,7 +343,7 @@ pub fn settings_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     crate::surface::ensure_loaded(app);
     let mut s = app.surface.settings().osd.clone();
     let before = s.clone();
-    heading(ui, t, "On-Screen Overlay");
+    super::settings::heading_help(ui, t, "On-Screen Overlay", "changeOverlay");
     let mut mode = s.effective_mode();
     row(ui, t, "Show changes", |ui| {
         if choices(ui, "osdMode", MODES, &mut mode) {

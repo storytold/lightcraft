@@ -508,6 +508,8 @@ fn tile(app: &mut LccApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: 
     {
         p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
+    // which face this tile is about, when another shares it (#1147)
+    super::face_preview::outline(app, p, r, f.photo, f.rect);
     if hovered {
         p.rect_stroke(r, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Outside);
     }
@@ -547,7 +549,7 @@ fn tile(app: &mut LccApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: 
     }
     if more {
         let tip = format!("Looks like {name} (similarity {:.2}). Click to confirm.", f.score);
-        let _ = resp.clone().on_hover_text(tip);
+        super::face_preview::on_hover(app, &resp, f.photo, f.rect, Some(tip));
         if let Some(above) = above_resp.as_ref() {
             let _ = above.clone().on_hover_text(format!(
                 "All above: confirm {above_count} faces as {name} (this face and every shown face with equal or higher similarity). Press A."
@@ -576,7 +578,8 @@ fn tile(app: &mut LccApp, ui: &mut egui::Ui, r: Rect, f: &Face, ppp: f32, more: 
             hit = Hit::Confirm;
         }
     } else {
-        let _ = resp.clone().on_hover_text(crate::i18n::tr_format!("{name}: click to open this photo", name = name));
+        let tip = crate::i18n::tr_format!("{name}: click to open this photo", name = name);
+        super::face_preview::on_hover(app, &resp, f.photo, f.rect, Some(tip));
         if resp.clicked() {
             hit = Hit::Open;
         }

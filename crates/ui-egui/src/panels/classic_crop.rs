@@ -160,6 +160,10 @@ pub(crate) fn transform_body(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         for spec in lcc_develop::controls::in_section(lcc_develop::Section::Geometry).filter(|c| c.id != "crop.angle") {
+            // (in the Edit panel's Transform: the tool profile in use may hide it)
+            if !super::super::edit::shown_here(app, ui, spec.id) {
+                continue;
+            }
             let v = lcc_develop::controls::get(&d, spec.id).unwrap_or(spec.default);
             let out = slider(ui, spec, v, true, None);
             super::super::edit::apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": spec.id, "value": v})));

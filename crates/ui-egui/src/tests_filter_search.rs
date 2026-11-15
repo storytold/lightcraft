@@ -395,3 +395,25 @@ fn apply_settings_adopts_saved_ml_device_and_retries_on_error() {
 
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Semantic search switched off (Settings ▸ AI Models ▸ Semantic search): the search box loses its AI button, an AI
+/// search mode left on falls back to text search, and switching it on again brings the button back.
+#[test]
+fn switching_semantic_search_off_takes_the_ai_button_away() {
+    let app = LccApp::new(lcc_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
+    h.app.ui.view = crate::state::ViewMode::PhotoGrid;
+    h.settle(SETTLE);
+    let has_ai = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "search:ai");
+    ok(&mut h, "ui.clickWidget", json!({"id": "search:ai"}));
+    assert!(h.app.ui.semantic_search);
+    ok(&mut h, "engine.execute", json!({"command": "ml.enable", "params": {"enabled": false}}));
+    h.step();
+    h.step();
+    assert!(!has_ai(&h), "no AI button while semantic search is off");
+    assert!(!h.app.ui.semantic_search, "the search box searches the text");
+    ok(&mut h, "engine.execute", json!({"command": "ml.enable", "params": {"enabled": true}}));
+    h.step();
+    h.step();
+    assert!(has_ai(&h), "the button is back");
+}

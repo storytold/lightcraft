@@ -354,6 +354,10 @@ pub struct DevelopSettings {
     /// it is the default (on), so settings from before it existed keep their JSON and hash.
     #[serde(skip_serializing_if = "Sensor::is_default")]
     pub sensor: Sensor,
+    /// Film dust removal from a scanner's infrared pass (dust, hairs and scratches filled in before the picture is
+    /// converted). Not written while it is the default (off), so settings from before it existed keep their JSON and hash.
+    #[serde(default, skip_serializing_if = "FilmDust::is_default")]
+    pub film_dust: FilmDust,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
     #[serde(deserialize_with = "capped::<MAX_DISABLED_SECTIONS, _, _>")]
     pub disabled_sections: Vec<String>,
@@ -453,6 +457,7 @@ impl Default for DevelopSettings {
             retouch: crate::Retouch::default(),
             retouch_analysis: None,
             sensor: Sensor::default(),
+            film_dust: FilmDust::default(),
             disabled_sections: Vec::new(),
             plugin_filters: Vec::new(),
         }
@@ -472,6 +477,38 @@ pub struct Sensor {
 impl Default for Sensor {
     fn default() -> Self {
         Self { pixel_fix: 1.0 }
+    }
+}
+
+/// Film dust removal from a film scanner's infrared pass (the pass is dark under dust, hairs and
+/// scratches, which block infrared while the dyes pass it): the marked pixels are filled in from
+/// their surroundings at the Source stage, before plug-in filters and the develop adjustments, as
+/// a scanner's own infrared cleaning does. Nothing happens on a photo without the pass.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FilmDust {
+    /// 1 = on, 0 = off (a number so it is a develop control, `filmDust.remove`).
+    pub remove: f64,
+    /// How far below its local level the pass must fall to count, 0..100 (`filmDust.sensitivity`).
+    pub sensitivity: f64,
+    /// Pixels each mark is grown (shrunk when negative) at a 2400 px long edge, −8..40 (`filmDust.expand`).
+    pub expand: f64,
+}
+
+impl Default for FilmDust {
+    fn default() -> Self {
+        Self { remove: 0.0, sensitivity: 50.0, expand: 1.0 }
+    }
+}
+
+impl FilmDust {
+    pub fn is_default(&self) -> bool {
+        *self == FilmDust::default()
+    }
+
+    /// Whether the marks are filled in.
+    pub fn on(&self) -> bool {
+        self.remove >= 0.5
     }
 }
 
@@ -2169,6 +2206,8 @@ impl Spot {
 pub enum AutoSpotKind {
     /// Sensor dust.
     Dust,
+    /// Dust, a hair or a scratch on scanned film (Find Film Dust and Hair).
+    FilmDust,
 }
 
 /// A spot an automatic finder added: what it is and how sure it was.

@@ -45,6 +45,29 @@ pub(crate) fn control(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, 
 /// [`control`] under a shorter name, for a slider whose section already says what it belongs to
 /// (issue #346: "Hue" under "Red Primary", not "Red Hue").
 pub(crate) fn control_as(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool, label: Option<&str>) {
+    // the tool profile in use hides it, or holds it in its Custom group
+    if !shown_here(app, ui, id) {
+        return;
+    }
+    draw_control(app, ui, d, id, enabled, label);
+}
+
+/// Whether the Edit panel's tool profile lets a slider or option (`option:*`) show where it is drawn: always outside
+/// the full Edit panel (a Modern card, the profile browser), and in it unless the profile hides it or moved it to its
+/// Custom group.
+pub(crate) fn shown_here(app: &LccApp, ui: &egui::Ui, item: &str) -> bool {
+    !ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new(TOOL_FILTER))).unwrap_or(false) || crate::tool_profiles::item_shown(app, item)
+}
+
+/// [`shown_here`] for a whole group (an Edit section).
+fn shown_here_group(app: &LccApp, ui: &egui::Ui, group: &str) -> bool {
+    !ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::new(TOOL_FILTER))).unwrap_or(false) || crate::tool_profiles::group_shown(app, group)
+}
+
+/// Set while the full Edit panel draws: the tool profile in use filters its sliders.
+const TOOL_FILTER: &str = "edit-tool-profile-filter";
+
+fn draw_control(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, enabled: bool, label: Option<&str>) {
     let Some(spec) = controls::find(id) else { return };
     let v = controls::get(d, id).unwrap_or(spec.default);
     // Compact: the short name under its group's caption, so the section's name column stays narrow
@@ -183,21 +206,43 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     if app.ui.soft_proof && only.is_none() {
         soft_proofing(app, ui, id);
     }
-    // Compact: no header above the sections; the rows above Basic open Basic itself (as Lightroom
-    // Classic's Basic panel has its Treatment and Profile rows), see `basic_head`
-    let dense = t.dense && only.is_none();
-    if shows("profile") && !dense {
-        header_rows(app, ui, id, &d, preview_only.as_deref());
+    // the full panel: the tool profile in use picks its groups and sliders (a Modern card shows its section whole)
+    let full = only.is_none();
+    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::new(TOOL_FILTER), full));
+    let dense = t.dense && full;
+    // the Modern layout's Profile & Treatment card: the rows above the sliders alone, with the way to the profiles
+    if !full && shows("profile") {
+        header_rows(app, ui, id, &d, preview_only.as_deref(), true);
     }
-
+    // no header above the sections: the tool profile's row, then the rows above the sliders open Basic itself (as
+    // Lightroom Classic's Basic panel has its Treatment row); with Basic switched off they stand on their own
+    let basic = crate::tool_profiles::group_shown(app, "light");
+    if full {
+        tool_profile_row(app, ui);
+        if !basic {
+            header_rows(app, ui, id, &d, preview_only.as_deref(), false);
+        }
+    }
     let video = crate::video_ui::photo_is_video(app, id);
+    // the profile's Custom group: its sliders, in its order, first
+    let custom = app.ui.settings.tool_profiles.active().custom.clone();
+    if full && !custom.is_empty() {
+        section_with(app, ui, &d, crate::tool_profiles::CUSTOM, "Custom", false, None, |app, ui, d| {
+            ui.push_id("toolProfileCustom", |ui| {
+                for c in &custom {
+                    custom_control(app, ui, d, c, raw);
+                }
+            });
+            ui.add_space(8.0);
+        });
+    }
     // Lightroom Classic's Basic panel: white balance, then Tone (with Auto), then Presence
     // (Lightroom Classic's Basic has no on/off switch: it shows only while an older edit has Basic or Color switched off,
     // so that edit can be switched back on)
     let basic_switch = !d.section_enabled("light") || !d.section_enabled("color");
     section_with(app, ui, &d, "light", "Basic", basic_switch, None, |app, ui, d| {
-        if dense {
-            header_rows(app, ui, id, d, preview_only.as_deref());
+        if full {
+            header_rows(app, ui, id, d, preview_only.as_deref(), false);
         }
         wb_rows(app, ui, d, raw);
         sub_title(ui, "Tone");
@@ -205,7 +250,9 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
             control(app, ui, d, c, true);
         }
-        contrast_mode_row(app, ui, d);
+        if shown_here(app, ui, "option:contrastMode") {
+            contrast_mode_row(app, ui, d);
+        }
         ui.add_space(6.0);
         sub_title(ui, crate::i18n::tr("Presence"));
         // video takes no local-contrast effects
@@ -258,7 +305,7 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     // then the colourist's Primaries wheels and HSL curves) before Lightroom's own panels — in
     // Eboda all three are away; the histogram's own mode menu (its scopes included) stays
     // Lightroom's way, and the two Witchcraft sections carry the mode's pill beside their titles
-    if app.ui.settings.grading_mode == crate::state::GradingMode::Witchcraft {
+    if crate::tool_profiles::witchcraft_shown(app) {
         if shows("primaries") {
             section_with(app, ui, &d, "primaries", "Primaries", true, Some("Witchcraft"), |app, ui, d| {
                 super::witchcraft::primaries(app, ui, d);
@@ -316,13 +363,15 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, c, c == "detail.sharpenAmount" || d.detail.sharpen_amount > 0.0);
         }
         // AI Denoise is its own tool, apart from the manual noise reduction sliders below it
-        sub_title(ui, crate::i18n::tr("AI Denoise"));
-        // AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that picture is doing
-        let applicable = !matches!(app.session.denoise_photo_state(id), lcc_engine::denoise::PhotoState::NotApplicable);
-        let on = d.enhance.denoise_enabled();
-        super::denoise::detail_toggle(app, ui, id, on, applicable);
-        control(app, ui, d, "enhance.denoise", applicable && on);
-        super::denoise::detail_status(app, ui, id, if on { d.enhance.denoise } else { 0.0 });
+        if shown_here(app, ui, "option:aiDenoise") {
+            sub_title(ui, crate::i18n::tr("AI Denoise"));
+            // AI Denoise: how much of the photo's cleaned picture to mix in (raw files only), and what that picture is doing
+            let applicable = !matches!(app.session.denoise_photo_state(id), lcc_engine::denoise::PhotoState::NotApplicable);
+            let on = d.enhance.denoise_enabled();
+            super::denoise::detail_toggle(app, ui, id, on, applicable);
+            control(app, ui, d, "enhance.denoise", applicable && on);
+            super::denoise::detail_status(app, ui, id, if on { d.enhance.denoise } else { 0.0 });
+        }
         sub_title(ui, crate::i18n::tr("Noise Reduction"));
         // under "Noise Reduction", as in Lightroom Classic: Luminance, Detail, Contrast, Color, …
         for (c, label) in [
@@ -336,7 +385,7 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             control_as(app, ui, d, c, true, label);
         }
         // single outlier photosites, replaced in the raw mosaic (#1345): raws only
-        if app.session.catalog.photo(id).is_some_and(|p| p.develops_raw()) {
+        if app.session.catalog.photo(id).is_some_and(|p| p.develops_raw()) && shown_here(app, ui, "option:hotPixels") {
             egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 4, bottom: 0 }, 3, 0)).show(
                 ui,
                 |ui| {
@@ -408,37 +457,41 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         // What photos imported from now on start from, and one action that makes these settings it
         // (issue #148: the two checkboxes above reset on every photo, so a batch wants a default).
         // One quiet line under the lens controls (issue #346: it used to split them from the sliders).
-        egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 4 }, 2, 3)).show(
-            ui,
-            |ui| {
-                let photo_camera = app.session.catalog.photo(id).map(|p| p.meta.camera.trim().to_string()).unwrap_or_default();
-                let current = {
-                    let defaults = &app.session.import_defaults;
-                    if defaults.per_camera && !photo_camera.is_empty() {
-                        defaults.cameras.iter().find(|c| c.camera.eq_ignore_ascii_case(&photo_camera)).and_then(|c| c.preset.clone())
-                    } else {
-                        defaults.raw_preset.clone()
-                    }
-                };
-                // the preset the default points at: its name for the row, and — when it is one of the
-                // user's own — the name the naming dialog starts from (a built-in's would make a twin)
-                let (starts_from, suggested) = match current.as_deref().and_then(|pid| app.session.presets.iter().find(|p| p.id == pid)) {
-                    Some(p) => (crate::i18n::builtin_label(&p.name, p.builtin).to_string(), if p.builtin { String::new() } else { p.name.clone() }),
-                    None => (crate::i18n::tr("{app} Default").to_string(), String::new()),
-                };
-                // which photos it reaches, said on hover rather than as a line of its own
-                let reach = crate::i18n::tr("Photos imported from now on; photos already in the catalog keep theirs.");
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(crate::i18n::tr("New photos start from")).small().weak()).on_hover_text(reach);
-                    ui.label(RichText::new(starts_from).small()).on_hover_text(reach);
-                    // "Save as…": the name is the user's, so several named optics defaults can live side
-                    // by side (one per camera, say) instead of one fixed entry
-                    if text_button(ui, "opticsNewPhotoDefault", "Save as…", false).on_hover_text(reach).clicked() {
-                        app.ui.dialog = Some(crate::state::Dialog::NewPhotoDefault { name: suggested });
-                    }
-                });
-            },
-        );
+        if shown_here(app, ui, "option:newPhotoDefault") {
+            egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 4 }, 2, 3)).show(
+                ui,
+                |ui| {
+                    let photo_camera = app.session.catalog.photo(id).map(|p| p.meta.camera.trim().to_string()).unwrap_or_default();
+                    let current = {
+                        let defaults = &app.session.import_defaults;
+                        if defaults.per_camera && !photo_camera.is_empty() {
+                            defaults.cameras.iter().find(|c| c.camera.eq_ignore_ascii_case(&photo_camera)).and_then(|c| c.preset.clone())
+                        } else {
+                            defaults.raw_preset.clone()
+                        }
+                    };
+                    // the preset the default points at: its name for the row, and — when it is one of the
+                    // user's own — the name the naming dialog starts from (a built-in's would make a twin)
+                    let (starts_from, suggested) = match current.as_deref().and_then(|pid| app.session.presets.iter().find(|p| p.id == pid)) {
+                        Some(p) => {
+                            (crate::i18n::builtin_label(&p.name, p.builtin).to_string(), if p.builtin { String::new() } else { p.name.clone() })
+                        }
+                        None => (crate::i18n::tr("{app} Default").to_string(), String::new()),
+                    };
+                    // which photos it reaches, said on hover rather than as a line of its own
+                    let reach = crate::i18n::tr("Photos imported from now on; photos already in the catalog keep theirs.");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new(crate::i18n::tr("New photos start from")).small().weak()).on_hover_text(reach);
+                        ui.label(RichText::new(starts_from).small()).on_hover_text(reach);
+                        // "Save as…": the name is the user's, so several named optics defaults can live side
+                        // by side (one per camera, say) instead of one fixed entry
+                        if text_button(ui, "opticsNewPhotoDefault", "Save as…", false).on_hover_text(reach).clicked() {
+                            app.ui.dialog = Some(crate::state::Dialog::NewPhotoDefault { name: suggested });
+                        }
+                    });
+                },
+            );
+        }
         sub_title(ui, crate::i18n::tr("Manual"));
         for c in ["optics.distortion", "optics.vignetting"] {
             control(app, ui, d, c, true);
@@ -472,7 +525,7 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
     section(app, ui, &d, "geometry", "Transform", |app, ui, _| super::right::transform_body(app, ui, id));
     section(app, ui, &d, "effects", "Effects", |app, ui, d| {
         sub_title(ui, crate::i18n::tr("Vignette"));
-        {
+        if shown_here(app, ui, "option:vignetteStyle") {
             use lcc_develop::VignetteStyle as V;
             let styles = [
                 (V::HighlightPriority, "Highlight", "highlightPriority"),
@@ -528,26 +581,119 @@ pub fn show_controls(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
         super::plugin_filters::show(app, ui, &d);
     }
     ui.add_space(40.0);
+    ui.ctx().data_mut(|m| m.remove::<bool>(egui::Id::new(TOOL_FILTER)));
 }
 
-/// The rows above the Develop sections: in Classic the "Edit" title, the Auto · B&W | HDR row,
-/// the notices, Auto Sync and the profile row; in the Compact layout (at the top of Basic) the same
-/// rows without the title and with the panels' shared margins and heights (LAYOUT-DENSE, ported
-/// from OneSlips).
-fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings, preview_only: Option<&str>) {
+/// The tool profile row at the head of the Edit panel: the profile in use, a menu of the others, and the gear to
+/// Settings ▸ Develop where they are made (`view.toolProfile`). A low row, below a slider's height.
+fn tool_profile_row(app: &mut LccApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let m = crate::widgets::row_margin;
+    let name = app.ui.settings.tool_profiles.active().label();
+    egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 12, top: 4, bottom: 4 }, 2, 2)).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.set_height(crate::widgets::DENSE_ROW_H - 4.0);
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(egui::RichText::new(crate::i18n::tr("Tools:")).font(t.font(11.0)).color(t.text_dim));
+            let gear = 20.0;
+            let max = ui.available_width() - gear - ui.spacing().item_spacing.x;
+            let r = crate::widgets::dropdown_within(ui, "toolProfile", &name, t.font(12.0), t.text_label, max)
+                .on_hover_text(crate::i18n::tr("Tool profile: which groups and sliders the panel shows"));
+            egui::Popup::menu(&r).show(|ui| {
+                ui.set_min_width(160.0);
+                let active = app.ui.settings.tool_profiles.active().id.clone();
+                let all: Vec<(String, String)> = app.ui.settings.tool_profiles.all().map(|p| (p.id.clone(), p.label())).collect();
+                let mut pick = None;
+                for (pid, label) in &all {
+                    let r = ui.selectable_label(*pid == active, label);
+                    register(ui.ctx(), format!("toolProfileMenu:{pid}"), r.rect);
+                    if r.clicked() {
+                        pick = Some(pid.clone());
+                    }
+                }
+                ui.separator();
+                let r = ui.button(crate::i18n::tr("Edit Tool Profiles…"));
+                register(ui.ctx(), "toolProfileMenu:settings", r.rect);
+                if r.clicked() {
+                    let _ = app.run("app.settings", json!({"tab": "develop"}));
+                }
+                if let Some(pid) = pick
+                    && let Err(e) = app.run("view.toolProfile", json!({"id": pid}))
+                {
+                    app.toast(ui.ctx(), e);
+                }
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::widgets::icon_button(
+                    ui,
+                    "toolProfileSettings",
+                    Icon::Gear,
+                    vec2(gear, gear),
+                    false,
+                    true,
+                    crate::i18n::tr("Edit Tool Profiles…"),
+                )
+                .clicked()
+                {
+                    let _ = app.run("app.settings", json!({"tab": "develop"}));
+                }
+            });
+        });
+    });
+    divider(ui);
+}
+
+/// One slider of the tool profile's Custom group: drawn whatever its own group hides, enabled, and with the white
+/// balance on the scale the photo's sliders use (Kelvin for a raw, relative for a rendered file).
+fn custom_control(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &str, raw: bool) {
+    match id {
+        "wb.temp" if !raw => {
+            let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
+            apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
+        }
+        "wb.tint" if !raw => {
+            let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
+            apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
+        }
+        _ => draw_control(app, ui, d, id, true, None),
+    }
+}
+
+/// The rows at the top of Basic: Lightroom Classic's Auto · B&W | HDR buttons, the notices, Auto Sync, the profile's
+/// Amount and the file's colour options. `browse`: with Browse Profiles at the buttons' left (the Modern layout's
+/// Profile & Treatment card; elsewhere it is in the tool row above the panels).
+fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings, preview_only: Option<&str>, browse: bool) {
+    // Lightroom Classic's Basic button row: Auto, B&W | HDR (issue #124), right-aligned on one row of the panel's row
+    // height; no title (the tool row says which panel this is). Reset sits in the bar under the panels (issue #116).
+    if browse || shown_here(app, ui, "option:treatment") {
+        treatment_row(app, ui, id, d, browse);
+    }
+    header_notices(app, ui, id, d, preview_only);
+}
+
+/// [`header_rows`]' Auto · B&W | HDR row.
+fn treatment_row(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings, browse: bool) {
     let t = Tokens::get(ui.ctx());
     let dense = t.dense;
     let m = crate::widgets::row_margin;
-    // header: Edit (Reset sits in the bar under the panels, issue #116), then Lightroom Classic's Basic button row:
-    // Auto, B&W | HDR (issue #124). Compact: no title (the tool row says which panel this is), the
-    // buttons on one row of the panel's row height
-    // (Classic: the title shares the buttons' row, as Camera Raw's does — issue #530)
-    egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 12, bottom: 14 }, 3, 3)).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 6, bottom: 6 }, 3, 3)).show(ui, |ui| {
         ui.horizontal(|ui| {
-            if dense {
-                ui.set_height(crate::widgets::DENSE_ROW_H - 2.0);
-            } else {
-                ui.label(egui::RichText::new(crate::i18n::tr("Edit")).font(t.semibold(15.0)).color(t.text));
+            ui.set_height(crate::widgets::DENSE_ROW_H - 2.0);
+            if browse {
+                let size = if dense { 20.0 } else { 24.0 };
+                if crate::widgets::icon_button(
+                    ui,
+                    "profileBrowser",
+                    Icon::ProfileGrid,
+                    vec2(size, size),
+                    false,
+                    true,
+                    crate::i18n::tr("Browse Profiles"),
+                )
+                .clicked()
+                {
+                    let _ = app.run("panel.profiles", json!({}));
+                }
             }
             ui.spacing_mut().item_spacing.x = 8.0;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -571,6 +717,13 @@ fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSett
             });
         });
     });
+}
+
+/// [`header_rows`]' notices and the profile's options under the treatment row.
+fn header_notices(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSettings, preview_only: Option<&str>) {
+    let t = Tokens::get(ui.ctx());
+    let dense = t.dense;
+    let m = crate::widgets::row_margin;
     if let Some(why) = &preview_only {
         let reload = egui::Frame::NONE
             .inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 0, bottom: 12 }, 0, 4))
@@ -596,51 +749,6 @@ fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSett
             });
         });
     }
-    if !dense {
-        divider(ui);
-    }
-    // profile row (Compact: "Profile:" in the label column's small type, the name, the browser at the
-    // right margin, one row; room under it for the camera profile the look sits on)
-    // the camera profile the look sits on (OneSlips, LR-PROF-LAYERS): named in the row when the photo develops
-    // with its own look ("As profile"), else on a line of its own under the look
-    let (shown_look, on) = profile_row_names(app, id, d);
-    egui::Frame::NONE.inner_margin(m(ui, egui::Margin { left: 12, right: 16, top: 12, bottom: 12 }, 2, 2)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            if dense {
-                ui.set_height(crate::widgets::DENSE_ROW_H);
-                ui.label(egui::RichText::new(crate::i18n::tr("Profile:")).font(t.font(11.0)).color(t.text_dim));
-            } else {
-                ui.label(egui::RichText::new(crate::i18n::tr("Profile")).font(t.font(13.0)).color(t.text_dim));
-            }
-            // a long name is cut short before Browse Profiles: a wider row would widen the whole panel's
-            // content, and the sliders below would run past its edge
-            let browse = if dense { 20.0 } else { 28.0 };
-            let max = ui.available_width() - browse - ui.spacing().item_spacing.x;
-            let font = t.font(if dense { 12.5 } else { 15.0 });
-            let r = crate::widgets::dropdown_within(ui, "profile", &shown_look, font, t.text_label, max);
-            let below = r.rect.bottom();
-            egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, d, below));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::widgets::icon_button(
-                    ui,
-                    "profileBrowser",
-                    Icon::ProfileGrid,
-                    vec2(browse, browse),
-                    false,
-                    true,
-                    crate::i18n::tr("Browse Profiles"),
-                )
-                .clicked()
-                {
-                    let _ = app.run("panel.profiles", json!({}));
-                }
-            });
-        });
-        if let Some(on) = &on {
-            let r = ui.add(egui::Label::new(egui::RichText::new(on).font(t.font(if dense { 11.0 } else { 12.0 })).color(t.text_dim)).truncate());
-            register(ui.ctx(), "label:profileCalibration", r.rect);
-        }
-    });
     if d.profile.id != "lc.color" {
         control(app, ui, d, "profile.amount", true);
         ui.add_space(if dense { 2.0 } else { 6.0 });
@@ -674,15 +782,8 @@ fn header_rows(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, d: &DevelopSett
             }
         });
     }
-    if !dense {
-        divider(ui);
-    }
 }
 
-/// The profile dropdown: Favorites, Recent, one submenu per group, then favourite toggle and
-/// Browse…. Like the menu bar's menus, the dropdown and each submenu stay inside the window and
-/// scroll when their rows don't fit (issue #2059: a folder of many imported profiles ran past the
-/// window's bottom edge). `below` is the dropdown's bottom edge, which the menu hangs from.
 /// The profile row's name and the line under it (OneSlips, LR-PROF-LAYERS): a photo that develops with its camera
 /// profile's own look ("As profile") shows the camera profile's name and no line; one with a look of the app's on a
 /// camera profile shows the look and "on <camera profile>".
@@ -724,125 +825,6 @@ pub(crate) fn camera_profile_options(camera: &str) -> Vec<(String, String)> {
         options.extend(cal.looks.iter().map(|(pid, p)| (pid.clone(), p.name.clone())));
     }
     options
-}
-
-fn profile_menu(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
-    crate::menu_level::level(ui, 1, Some(below), |ui| profile_menu_rows(app, ui, d, below));
-}
-
-fn profile_menu_rows(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
-    let t = Tokens::get(ui.ctx());
-    ui.set_min_width(200.0);
-    let cur = d.profile.id.as_str();
-    // (clicked, hovered)
-    let mut pick: (Option<String>, Option<String>) = (None, None);
-    let item = |ui: &mut egui::Ui, key: &str, id: &str, name: &str, pick: &mut (Option<String>, Option<String>)| {
-        let r = ui.selectable_label(id == cur, crate::i18n::profile_label(id, name));
-        register(ui.ctx(), format!("profileMenu:{key}:{id}"), r.rect);
-        if r.clicked() {
-            pick.0 = Some(id.to_string());
-        }
-        if r.hovered() {
-            pick.1 = Some(id.to_string());
-        }
-    };
-    let heading = |ui: &mut egui::Ui, s: &str| {
-        ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
-    };
-    for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
-        let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
-        if list.is_empty() {
-            continue;
-        }
-        heading(ui, title);
-        for (id, name) in list {
-            item(ui, key, id, name, &mut pick);
-        }
-        ui.separator();
-    }
-    // every group with the Profile Manager's names, groups and order (hidden and removed ones left out)
-    for g in app.session.shown_groups() {
-        // a built-in group is translated; an imported folder or the user's group keeps its name and its own widget id
-        let label = crate::i18n::builtin_label(&g.name, !g.imported).to_string();
-        let r = crate::widgets::menu_button(ui, label, |ui| {
-            crate::menu_level::level(ui, 2, Some(below), |ui| {
-                ui.set_min_width(170.0);
-                for p in &g.profiles {
-                    item(ui, "group", &p.id, &p.name, &mut pick);
-                }
-            });
-        });
-        let wid = if g.imported { format!("profileMenu:lutGroupMenu:{}", g.name) } else { format!("profileMenu:groupMenu:{}", g.name) };
-        register(ui.ctx(), wid, r.response.rect);
-        if r.inner.is_some() {
-            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
-        }
-    }
-    // the raw's camera profiles (OneSlips, LR-PROF-LAYERS): one with a look of its own comes with it ("As profile")
-    let mut camera_pick: Option<String> = None;
-    if let Some(photo) = app.session.active().and_then(|a| app.session.catalog.photo(a)).filter(|p| p.develops_raw()) {
-        let current = d.profile.camera.clone();
-        let options = shown_camera_profile_options(&app.session.profile_hidden, &photo.meta.camera, &current);
-        let r = crate::widgets::menu_button(ui, crate::i18n::tr("Camera Profiles"), |ui| {
-            crate::menu_level::level(ui, 2, Some(below), |ui| {
-                ui.set_min_width(170.0);
-                for (o, n) in &options {
-                    let r = ui.selectable_label(*o == current, n);
-                    register(ui.ctx(), format!("profileMenu:camera:{o}"), r.rect);
-                    if r.clicked() {
-                        camera_pick = Some(o.clone());
-                    }
-                }
-            });
-        });
-        register(ui.ctx(), "profileMenu:cameraMenu", r.response.rect);
-        if r.inner.is_some() {
-            crate::menu_level::set_anchor(ui.ctx(), 2, r.response.rect);
-        }
-    }
-    ui.separator();
-    if let Some(choice) = camera_pick {
-        // (the camera's default keeps the look: there is no one profile to come with)
-        let c = if choice.is_empty() { "develop.cameraProfile" } else { "develop.profile" };
-        let _ = app.run(c, json!({"id": choice}));
-    }
-    if let Some((name, _)) = app.session.profile_info(cur) {
-        let fav = app.session.profile_favorites.iter().any(|f| f == cur);
-        let label = if fav {
-            crate::i18n::tr_format!("Remove “{}” from Favorites", crate::i18n::profile_label(cur, name))
-        } else {
-            crate::i18n::tr_format!("Add “{}” to Favorites", crate::i18n::profile_label(cur, name))
-        };
-        let r = ui.button(label);
-        register(ui.ctx(), "profileMenu:toggleFavorite", r.rect);
-        if r.clicked() {
-            let _ = app.run("profile.favorite", json!({"id": cur}));
-        }
-    }
-    let r = ui.button(crate::i18n::tr("Browse…"));
-    register(ui.ctx(), "profileMenu:browse", r.rect);
-    if r.clicked() {
-        let _ = app.run("panel.profiles", json!({}));
-    }
-    let r = ui.button(crate::i18n::tr("Manage Profiles…"));
-    register(ui.ctx(), "profileMenu:manage", r.rect);
-    if r.clicked() {
-        let _ = app.run("app.settings", json!({"tab": "profiles"}));
-    }
-    // resting on a profile previews it in the loupe
-    if let Some(hovered_id) = &pick.1
-        && hovered_id != cur
-        && let Some((name, _)) = app.session.profile_info(hovered_id)
-    {
-        let mut s = d.clone();
-        s.profile.id = hovered_id.clone();
-        s.profile.amount = 100.0;
-        app.hover_preview =
-            Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
-    }
-    if let Some(id) = pick.0 {
-        let _ = app.run("develop.profile", json!({"id": id}));
-    }
 }
 
 /// Basic ▸ Tone's title row with Classic's Auto button at its right, greyed out while the tone sliders
@@ -902,6 +884,10 @@ pub(crate) fn section_with(
             let blocked = !crate::video_ui::section_allowed(id) && app.session.active().is_some_and(|p| crate::video_ui::photo_is_video(app, p));
             crate::video_ui::video_gate(ui, blocked, |ui| body(app, ui, d));
         }
+        return;
+    }
+    // the tool profile in use switched the group off
+    if !shown_here_group(app, ui, id) {
         return;
     }
     let open = app.ui.section_open(id);
@@ -2568,57 +2554,67 @@ fn point_color(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings) {
 fn wb_rows(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, raw: bool) {
     let t = Tokens::get(ui.ctx());
     // White balance row
-    egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 2 }, 2, 2)).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            // Lightroom Classic: the selector on the left, then "WB:" and the preset menu
-            let active = app.ui.tool == "wbPicker";
-            // (Compact: the profile row's sizes, so the two rows line up)
-            let dense = t.dense;
-            let icon = if dense { 20.0 } else { 28.0 };
-            if crate::widgets::icon_button(ui, "wbPicker", Icon::Picker, vec2(icon, icon), active, true, "White Balance Selector (W)").clicked() {
-                if active {
-                    app.ui.tool.clear();
-                } else if let Err(e) = app.run("tool.wbPicker", json!({})) {
-                    // the same as W: from Compare, Survey or the grid it opens the photo in Detail
-                    app.toast(ui.ctx(), e);
-                }
-            }
-            if active {
-                // how many pixels a click averages (#644), as Lightroom's selector toolbar offers
-                let n = app.ui.wb_sample;
-                let r = crate::widgets::dropdown(ui, "wbSample", &format!("{n}×{n}"), t.font(13.0), t.text_label)
-                    .on_hover_text(crate::i18n::tr("Sample size: the square of pixels the selector averages"));
-                egui::Popup::menu(&r).show(|ui| {
-                    for s in crate::panels::detail::WB_SAMPLES {
-                        if ui.selectable_label(n == s, format!("{s}×{s}")).clicked() {
-                            app.ui.wb_sample = s;
+    if shown_here(app, ui, "option:wbSelector") {
+        egui::Frame::NONE.inner_margin(crate::widgets::row_margin(ui, egui::Margin { left: 12, right: 16, top: 2, bottom: 2 }, 2, 2)).show(
+            ui,
+            |ui| {
+                ui.horizontal(|ui| {
+                    // Lightroom Classic: the selector on the left, then "WB:" and the preset menu
+                    let active = app.ui.tool == "wbPicker";
+                    // (Compact: the profile row's sizes, so the two rows line up)
+                    let dense = t.dense;
+                    let icon = if dense { 20.0 } else { 28.0 };
+                    if crate::widgets::icon_button(ui, "wbPicker", Icon::Picker, vec2(icon, icon), active, true, "White Balance Selector (W)")
+                        .clicked()
+                    {
+                        if active {
+                            app.ui.tool.clear();
+                        } else if let Err(e) = app.run("tool.wbPicker", json!({})) {
+                            // the same as W: from Compare, Survey or the grid it opens the photo in Detail
+                            app.toast(ui.ctx(), e);
                         }
                     }
+                    if active {
+                        // how many pixels a click averages (#644), as Lightroom's selector toolbar offers
+                        let n = app.ui.wb_sample;
+                        let r = crate::widgets::dropdown(ui, "wbSample", &format!("{n}×{n}"), t.font(13.0), t.text_label)
+                            .on_hover_text(crate::i18n::tr("Sample size: the square of pixels the selector averages"));
+                        egui::Popup::menu(&r).show(|ui| {
+                            for s in crate::panels::detail::WB_SAMPLES {
+                                if ui.selectable_label(n == s, format!("{s}×{s}")).clicked() {
+                                    app.ui.wb_sample = s;
+                                }
+                            }
+                        });
+                    }
+                    ui.label(egui::RichText::new(crate::i18n::tr("WB:")).font(t.font(if dense { 11.0 } else { 13.0 })).color(t.text_dim));
+                    let r = crate::widgets::dropdown(
+                        ui,
+                        "wbMode",
+                        crate::i18n::tr(d.wb.mode.label()),
+                        t.font(if dense { 12.5 } else { 14.0 }),
+                        t.text_label,
+                    );
+                    egui::Popup::menu(&r).show(|ui| {
+                        for m in WbMode::ALL {
+                            if m == WbMode::Custom {
+                                continue;
+                            }
+                            if ui.selectable_label(d.wb.mode == m, crate::i18n::tr(m.label())).clicked() {
+                                let mode = serde_json::to_value(m).unwrap_or_default();
+                                let _ = app.run("develop.wb", json!({"mode": mode}));
+                            }
+                        }
+                    });
                 });
-            }
-            ui.label(egui::RichText::new(crate::i18n::tr("WB:")).font(t.font(if dense { 11.0 } else { 13.0 })).color(t.text_dim));
-            let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(if dense { 12.5 } else { 14.0 }), t.text_label);
-            egui::Popup::menu(&r).show(|ui| {
-                for m in WbMode::ALL {
-                    if m == WbMode::Custom {
-                        continue;
-                    }
-                    if ui.selectable_label(d.wb.mode == m, crate::i18n::tr(m.label())).clicked() {
-                        let mode = serde_json::to_value(m).unwrap_or_default();
-                        let _ = app.run("develop.wb", json!({"mode": mode}));
-                    }
-                }
-            });
-        });
-    });
-    if raw {
-        control(app, ui, d, "wb.temp", true);
-        control(app, ui, d, "wb.tint", true);
-    } else {
-        let out = slider(ui, &REL_TEMP, k_to_rel(d.wb.temp), true, None);
-        apply_slider_out(app, &REL_TEMP, out, |app, v| app.run("develop.set", json!({"control": "wb.temp", "value": rel_to_k(v)})));
-        let out = slider(ui, &REL_TINT, d.wb.tint.clamp(-100.0, 100.0), true, None);
-        apply_slider_out(app, &REL_TINT, out, |app, v| app.run("develop.set", json!({"control": "wb.tint", "value": v})));
+            },
+        );
+    }
+    // (the Kelvin scale for a raw, the relative one for a rendered file)
+    for c in ["wb.temp", "wb.tint"] {
+        if shown_here(app, ui, c) {
+            custom_control(app, ui, d, c, raw);
+        }
     }
 }
 

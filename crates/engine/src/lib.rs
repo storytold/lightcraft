@@ -26,6 +26,7 @@ pub mod bounded_read;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod capture_one_catalog;
+pub mod capture_one_develop;
 pub mod change_report;
 pub mod chart_profiling;
 pub mod cmd;
@@ -42,6 +43,8 @@ pub(crate) mod decode_share;
 pub mod demo;
 pub mod denoise;
 pub mod desktop;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod device_sync;
 pub mod devices;
 pub mod disk_delete;
 pub mod display;
@@ -104,10 +107,6 @@ mod model_download;
 pub mod open_path;
 pub mod originals;
 mod pdf;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod peer_exchange;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod peers;
 mod people_smart;
 pub mod people_store;
 pub mod phash;
@@ -455,9 +454,9 @@ pub struct Session {
     /// Remote services: SHA-1 back-fill and Immich jobs ([`remote`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub remote: remote::State,
-    /// Peer sync: the paired devices and the service that finds them ([`peers`]).
+    /// Sync with the app on other devices ([`device_sync`]).
     #[cfg(not(target_arch = "wasm32"))]
-    pub peers: peers::State,
+    pub device_sync: device_sync::State,
     /// Auto updates: the last check, the download in flight, and the settings ([`update`]).
     #[cfg(not(target_arch = "wasm32"))]
     pub updater: update::Updater,
@@ -686,6 +685,9 @@ pub struct Session {
     pub genfill: genfill::GenfillState,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Builds asked for while one was already running, waiting for their turn
+    /// ([`cmd::previews::drain_queue`] starts the next one when the running build ends).
+    pub preview_queue: std::collections::VecDeque<cmd::previews::QueuedPreview>,
     /// Preparing photos in the background: settings (app-wide and this library's) and the build
     /// it runs ([`prep`]).
     pub prep: prep::PrepState,
@@ -861,7 +863,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             remote: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
-            peers: Default::default(),
+            device_sync: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             updater: Default::default(),
             desktop: desktop::default_desktop(),
@@ -958,6 +960,7 @@ impl Session {
             genfill: Default::default(),
             upright_jobs: Default::default(),
             preview_build: None,
+            preview_queue: Default::default(),
             prep: Default::default(),
             loupe_edge: 0,
             finishing: None,
@@ -2941,6 +2944,8 @@ pub(crate) fn orientation_change(from: lcc_geom::Orientation, to: lcc_geom::Orie
     })
 }
 
+#[cfg(test)]
+mod tests_view_filter;
 #[cfg(test)]
 mod tests_view_follow;
 #[cfg(test)]

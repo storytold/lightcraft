@@ -2441,17 +2441,15 @@ fn a_queued_write_whose_original_went_away_waits_for_a_retry() {
     s.flush_sidecar_writes();
     let id = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).unwrap().id.0;
     let (a, b) = (id(&s, "a.png"), id(&s, "b.png"));
-    // a.png's sidecar is a FIFO: its write blocks the writer until something opens the other end
-    let fifo = src.join("a.xmp");
-    let _ = std::fs::remove_file(&fifo);
-    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|st| st.success()) {
-        return;
-    }
+    // a.png's sidecar write is held: it blocks the writer until released
+    let held = src.join("a.xmp");
+    let _ = std::fs::remove_file(&held);
+    crate::sidecar_writer::stall::hold(&held);
     s.execute("photo.rate", &json!({"ids": [a], "rating": 1})).unwrap();
     s.execute("photo.rate", &json!({"ids": [b], "rating": 2})).unwrap();
     // b's original goes away while its write waits in the queue
     std::fs::rename(src.join("b.png"), src.join("away.png")).unwrap();
-    drop(std::fs::OpenOptions::new().write(true).open(&fifo).unwrap());
+    crate::sidecar_writer::stall::release(&held);
     s.flush_sidecar_writes();
     assert_eq!(s.unsaved_sidecars(), 1, "b's write waits for its original");
     std::fs::rename(src.join("away.png"), src.join("b.png")).unwrap();
@@ -2462,7 +2460,7 @@ fn a_queued_write_whose_original_went_away_waits_for_a_retry() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// While a background sidecar write is stuck (a share that stopped answering; here a FIFO nobody writes to), the file
+/// While a background sidecar write is stuck (a share that stopped answering; here a held write), the file
 /// operations it could race refuse with an error that says so, instead of going ahead after the wait: a rename, a
 /// sidecar read or save on request, a change of the sidecar preferences. Once the write lands they work again.
 #[cfg(unix)]
@@ -2476,11 +2474,9 @@ fn file_operations_refuse_while_a_sidecar_write_is_stuck() {
     s.set_background_sidecar_writes(true);
     s.flush_sidecar_writes();
     s.set_sidecar_flush_limit(std::time::Duration::from_millis(100));
-    let fifo = src.join("a.xmp");
-    let _ = std::fs::remove_file(&fifo);
-    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|st| st.success()) {
-        return;
-    }
+    let held = src.join("a.xmp");
+    let _ = std::fs::remove_file(&held);
+    crate::sidecar_writer::stall::hold(&held);
     let id = s.catalog.photos().next().unwrap().id.0;
     s.execute("photo.rate", &json!({"ids": [id], "rating": 3})).unwrap();
     for (command, params) in [
@@ -2494,7 +2490,7 @@ fn file_operations_refuse_while_a_sidecar_write_is_stuck() {
     }
     assert!(src.join("a.png").exists(), "nothing was renamed");
     // the share answers: the write lands and the rename goes ahead
-    drop(std::fs::OpenOptions::new().write(true).open(&fifo).unwrap());
+    crate::sidecar_writer::stall::release(&held);
     s.set_sidecar_flush_limit(std::time::Duration::from_secs(10));
     s.execute("photo.rename", &json!({"ids": [id], "template": "renamed"})).unwrap();
     assert!(std::fs::read_to_string(src.join("renamed.xmp")).unwrap().contains("<xmp:Rating>3</xmp:Rating>"));
@@ -2503,7 +2499,7 @@ fn file_operations_refuse_while_a_sidecar_write_is_stuck() {
 }
 
 /// Opening another library while a background sidecar write of this one is stuck (a share that stopped answering;
-/// here a FIFO nobody writes to) refuses, as the file operations do: the write's result belongs to this library's
+/// here a held write) refuses, as the file operations do: the write's result belongs to this library's
 /// photos, so switching would lose it or pin it on a photo of the next library. Once the write lands it opens.
 #[cfg(unix)]
 #[test]
@@ -2519,11 +2515,9 @@ fn opening_another_library_refuses_while_a_sidecar_write_is_stuck() {
     s.set_background_sidecar_writes(true);
     s.flush_sidecar_writes();
     s.set_sidecar_flush_limit(std::time::Duration::from_millis(100));
-    let fifo = photos.join("a.xmp");
-    let _ = std::fs::remove_file(&fifo);
-    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|st| st.success()) {
-        return;
-    }
+    let held = photos.join("a.xmp");
+    let _ = std::fs::remove_file(&held);
+    crate::sidecar_writer::stall::hold(&held);
     let id = s.catalog.photos().next().unwrap().id;
     let smart_dir = s.media.smart_dir.clone();
     s.execute("photo.rate", &json!({"ids": [id.0], "rating": 5})).unwrap();
@@ -2531,7 +2525,7 @@ fn opening_another_library_refuses_while_a_sidecar_write_is_stuck() {
     assert!(e.contains("still running"), "{e}");
     assert!(s.catalog.photo(id).is_some(), "still the first library");
     assert_eq!(s.media.smart_dir, smart_dir, "and still its smart previews");
-    drop(std::fs::OpenOptions::new().write(true).open(&fifo).unwrap());
+    crate::sidecar_writer::stall::release(&held);
     s.set_sidecar_flush_limit(std::time::Duration::from_secs(10));
     s.open_library(base.join("two"), false).unwrap();
     assert!(std::fs::read_to_string(photos.join("a.xmp")).unwrap().contains("<xmp:Rating>5</xmp:Rating>"));

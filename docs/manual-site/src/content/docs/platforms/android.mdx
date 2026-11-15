@@ -10,7 +10,7 @@ import { Aside } from '@astrojs/starlight/components';
 Partial: runs and is verified on an emulator, not yet on a phone or tablet.
 
 - **Install** from [Google Play](https://play.google.com/store/apps/details?id=<app_id>), or sideload the `.apk` from Releases (arm64 and x86_64). Play runs a little behind Releases because of Google's review process.
-- **Modern layout** is the default, with touch controls: tap for tools, drag to adjust, hold for the original, swipe to scroll, long-press to multi-select, system Back.
+- **Modern layout** is the default, with touch controls: tap for tools, drag to adjust, hold for the original, swipe to scroll (in the Library, a fast-scroll handle appears on the right edge while the grid moves — drag it to jump to the start or end), long-press to multi-select, system Back.
 - **Import** from the system picker, the camera roll (**Settings ▸ Folders ▸ Camera roll**), or by sharing photos to the app from another app.
 - The **camera roll is a watched source**: it is listed again when the app opens, comes to the front and every few minutes, and new photos are imported in place without the review. Untick **Watch for new photos** on its row in **Settings ▸ Folders** to stop.
 - **HEIC / HEIF** photos (what iPhones shoot) open, with the same pure-Rust decoder as the desktop.
@@ -18,6 +18,6 @@ Partial: runs and is verified on an emulator, not yet on a phone or tablet.
 - **Develop** works with the Basic, Colour, Tone, Detail, Optics and Effects groups. Not yet: pinch in adjust mode, touch UIs for Crop and Masks.
 - **Library** lives in the app's folder, reachable from the Files app, and is removed with the app.
 - **Export** sheet saves to Pictures or opens the share sheet.
-- **Sync** with your desktop: pairing exists (**Settings ▸ Sync**), catalog exchange is limited. See [Device sync](../../sync/peer-sync/).
+- **Sync** with your desktop: pair in **Settings ▸ Sync**, then sync the catalog or chosen collections. See [Device sync](../../sync/devices/).
 - Permissions: photos access, optional All files access (GitHub build only), Wi-Fi/multicast for sync. See [Privacy](../settings-and-privacy/).
 - Classic and Compact layouts are not offered here; **Settings ▸ General ▸ Layout** switches Touch or Desktop.

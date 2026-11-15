@@ -83,6 +83,84 @@ fn a_swipe_scrolls_the_grid_without_picking_or_dragging_a_photo() {
     assert_eq!(h.app.session.active().map(|p| p.0), Some(id));
 }
 
+/// The menu bar, open on a phone-sized window, scrolls sideways under a finger: the open menu
+/// doesn't lock it in place (its title scrolls out of view and stays out), and a tap still picks
+/// the menu that has scrolled into view.
+#[test]
+fn the_open_menu_bar_scrolls_sideways_under_a_finger() {
+    let mut h = library([412.0, 960.0]);
+    exec(&mut h, "modern.menu", json!({"on": true}));
+    let bar = rect(&h, "modern:menubar").expect("the menu bar");
+    let help = rect(&h, "modern:menu:Help").expect("Help's title");
+    assert!(help.left() >= bar.right(), "Help starts off screen to the right ({help:?} in {bar:?})");
+    ask(&mut h, "ui.dragWidget", json!({"id": "modern:menubar", "fx": 0.1, "dx": -400.0, "steps": 10}));
+    let help = rect(&h, "modern:menu:Help").expect("Help's title");
+    assert!(help.left() < 412.0, "the swipe brought Help into view ({help:?})");
+    assert!(h.app.ui.modern.menu.is_some(), "the swipe closed nothing");
+    // and it stays: the open menu doesn't pull the bar back to its own title
+    for _ in 0..3 {
+        h.step();
+    }
+    let stayed = rect(&h, "modern:menu:Help").unwrap();
+    assert!((stayed.left() - help.left()).abs() < 2.0, "no snap-back ({help:?} → {stayed:?})");
+    // a tap still picks the menu now in view
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu:Help"}));
+    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Help"), "the tap picked Help");
+    ask(&mut h, "ui.key", json!({"key": "BrowserBack"}));
+    assert!(h.app.ui.modern.menu.is_none(), "Back closes the bar");
+}
+
+/// The loupe's shot-info strip never sits under the Modern layout's floating dock: it keeps clear
+/// of it, and hides while a group's card is open above the dock.
+#[test]
+fn the_shot_info_strip_keeps_clear_of_the_modern_dock() {
+    // wide: the photo fills the canvas to its bottom edge, where the dock floats
+    let mut h = develop([1280.0, 800.0]);
+    let strip = rect(&h, "loupe:shotInfo").expect("the shot-info strip");
+    let dock = rect(&h, "modern:dock").expect("the dock");
+    assert!(strip.bottom() <= dock.top() + 1.0, "the strip is above the dock ({strip:?} vs {dock:?})");
+    exec(&mut h, "modern.group", json!({"group": "light"}));
+    assert!(rect(&h, "loupe:shotInfo").is_none(), "a card is open over it: the strip hides");
+    exec(&mut h, "modern.group", json!({"group": null}));
+    assert!(rect(&h, "loupe:shotInfo").is_some(), "back with the card away");
+}
+
+/// The library grid's fast-scroll handle: hidden until the view moves, revealed by a swipe, its
+/// thumb never smaller than a finger, and its drag takes the view straight to either end of the
+/// library. It fades away again once the view stops.
+#[test]
+fn the_grid_fast_scroll_handle_appears_and_jumps_to_either_end() {
+    let mut h = library([360.0, 420.0]);
+    assert!(rect(&h, "modern:scrollHandle").is_none(), "hidden before the view moves");
+    // (a request at a time, inside the handle's fade, so it is still there to be grabbed)
+    h.request("ui.dragWidget", json!({"id": "grid:scroll", "fx": 0.3, "fy": 0.5, "dy": -60.0, "steps": 6}), T);
+    let handle = rect(&h, "modern:scrollHandle").expect("a swipe reveals it");
+    assert!(handle.height() >= 43.5, "the thumb is finger-sized ({handle:?})");
+    // and it is drawn: a bright thumb bar on the grid's right edge (the track's 6 points end at
+    // the thumb's right)
+    let img = h.paint();
+    let px = |x: usize, y: usize| {
+        let p = &img[(x, y)];
+        (u32::from(p.r()) + u32::from(p.g()) + u32::from(p.b())) / 3
+    };
+    let y0 = handle.top() as usize + 5;
+    let y1 = handle.bottom() as usize - 5;
+    let col = |x: usize| (y0..y1).map(|y| px(x, y)).sum::<u32>() / (y1.saturating_sub(y0)).max(1) as u32;
+    assert!(col(349) > col(310) + 12, "the thumb is bright on the edge ({}, {})", col(349), col(310));
+    // down its track: the end of the library (no wheel can go further)
+    h.request("ui.dragWidget", json!({"id": "modern:scrollHandle", "dy": 600.0, "steps": 8}), T);
+    let end = h.app.grid_scroll.unwrap_or(0.0);
+    h.request("ui.scroll", json!({"dy": -1.0e4}), T);
+    let bottom = h.app.grid_scroll.unwrap_or(0.0);
+    assert!((end - bottom).abs() < 2.0, "one drag reached the end ({end} vs {bottom})");
+    assert!(end > 100.0, "and it did move somewhere ({end})");
+    // back up its track: the start
+    h.request("ui.dragWidget", json!({"id": "modern:scrollHandle", "dy": -600.0, "steps": 8}), T);
+    assert!(h.app.grid_scroll.unwrap_or(0.0) < 2.0, "and back to the start ({:?})", h.app.grid_scroll);
+    // the view stopped: the handle fades away and stops standing over the grid
+    assert!(h.step_until(SETTLE, |h| rect(h, "modern:scrollHandle").is_none()), "it hides once the view is still");
+}
+
 /// A mouse is not a finger: its drag goes to the widget under it (a scroll bar, a photo), not to
 /// the swipe scroller, so the grid's scroll bar can be dragged on the desktop.
 #[test]

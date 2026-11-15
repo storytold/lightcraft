@@ -5,8 +5,8 @@
 //! this dialog shows what it is and its terms → the user ticks "I accept" → `faces.models.install`.
 //! The app fetches a model only when the user presses Download on a model it has a pinned address for: the
 //! same dialog shows its terms first, and accepting them downloads it (`faces.models.download`: checked against its
-//! size and SHA-256), installs it, starts using it and switches recognition on, with no further question. "Open
-//! page" opens the model's own page in the browser for anything else.
+//! size and SHA-256), installs it and chooses it; recognition stays off until the user switches it on (the scan can
+//! take a long time). "Open page" opens the model's own page in the browser for anything else.
 
 use egui::RichText;
 use serde_json::{Value, json};
@@ -268,7 +268,7 @@ fn open_page(app: &mut LccApp, url: &str) {
 /// The Settings ▸ Faces tab.
 pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     let list = models(app, ui.ctx());
-    heading(ui, t, "Face recognition");
+    super::settings::heading_help(ui, t, "Face recognition", "faces");
     if list["dir"].is_null() {
         hint(ui, t, "This build has nowhere to keep face models, so the model list is not available. (The desktop app has.)");
         return;
@@ -291,12 +291,14 @@ pub fn settings_tab(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     hint(ui, t, "Suggests who is in a photo from the faces you have named. Everything stays on your computer.");
+    hint(ui, t, "Off until you switch it on: scanning a library for faces can take a long time.");
     if !runtime {
         hint(ui, t, "This build cannot run recognition models: they can be added and chosen, not used.");
     } else if !usable {
         hint(ui, t, "Choose a model below (Use) to start.");
-    } else if on && app.caches.faces_active {
-        scan_progress(app, ui, t);
+    }
+    if runtime {
+        scan_section(app, ui, t);
     }
     gpu_section(app, ui, t, &list["gpu"]);
     mirror_section(app, ui, t, &list);
@@ -360,15 +362,28 @@ pub fn models_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
-/// How the scan is going: a bar while photos are left, then how many faces it learned.
-fn scan_progress(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
-    let (left, peak, faces) = (app.caches.faces_pending, app.caches.faces_peak.max(1), app.caches.faces_indexed);
-    if left == 0 {
-        hint(ui, t, &format!("{faces} faces learned."));
-        return;
+/// The face scan: where it stands (`faces.status`), how many faces it learned, and Pause / Resume, Clear… and Restart….
+fn scan_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
+    super::settings::heading_help(ui, t, "Face scan", "faceScan");
+    let status = app.session.execute("faces.status", &json!({})).unwrap_or(Value::Null);
+    let scan = super::index_controls::Indexer {
+        key: "faces",
+        pause: "faces.pause",
+        resume: "faces.resume",
+        clear: "faces.clearIndex",
+        restart: "faces.restart",
+        clear_question: "Delete what the face scan has learned? Named faces stay. The scan stays paused until you resume it.",
+        restart_question: "Delete what the face scan has learned and scan every photo again?",
+    };
+    if super::index_controls::show(app, ui, t, &scan, &status) {
+        app.caches.faces_epoch += 1;
+        // the next frame's pump looks at once, so the row and the status follow the button
+        app.caches.faces_next_pump = 0.0;
     }
-    let text = format!("Scanning photos for faces: {left} left · {faces} faces so far");
-    crate::progress::Progress::new(Some(1.0 - left as f32 / peak as f32)).label(text).widget("faces:scanProgress").show(ui);
+    let faces = status["indexedFaces"].as_u64().unwrap_or(app.caches.faces_indexed);
+    if faces > 0 {
+        hint(ui, t, &crate::i18n::tr_format!("{n} faces learned.", n = faces));
+    }
 }
 
 fn model_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, dl: Option<&Value>, can_run: bool) {
@@ -629,7 +644,7 @@ pub fn install(app: &mut LccApp, path: &str, info: &Value, accepted: bool) -> Re
         app.ui.status = if v["installed"]["role"] == "detector" {
             format!("{name} is installed")
         } else {
-            format!("{name} is installed and in use: face recognition is on")
+            crate::i18n::tr_format!("{name} is installed and chosen: switch on Recognise faces to start", name = name)
         };
         back_to_settings(app);
     }
@@ -820,7 +835,7 @@ fn due(rows: &[Value], watched: Vec<String>) -> (Vec<String>, Vec<String>) {
 }
 
 /// Follows the downloads the user started: keeps redrawing while one runs (the progress bar), and says so when a
-/// model has been installed, is in use and recognition is on (the engine does all of that by itself).
+/// model has been installed and chosen (the engine does that by itself; recognition is switched on by the user).
 fn watch_downloads(app: &mut LccApp, ctx: &egui::Context) {
     if app.caches.faces_dl_watch.is_empty() {
         return;
@@ -848,7 +863,11 @@ fn watch_downloads(app: &mut LccApp, ctx: &egui::Context) {
             .execute("faces.models.list", &json!({}))
             .ok()
             .is_some_and(|l| l["models"].as_array().is_some_and(|a| a.iter().any(|m| m["id"] == id.as_str() && m["role"] == "detector")));
-        let text = if detector { format!("{name} is installed") } else { format!("{name} is installed and in use: face recognition is on") };
+        let text = if detector {
+            format!("{name} is installed")
+        } else {
+            crate::i18n::tr_format!("{name} is installed and chosen: switch on Recognise faces to start", name = name)
+        };
         app.ui.status = text.clone();
         app.toast(ctx, text);
     }

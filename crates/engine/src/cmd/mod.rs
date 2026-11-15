@@ -24,6 +24,8 @@ pub mod curves;
 pub mod dcp_profiles;
 pub(crate) mod denoise;
 pub(crate) mod develop;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod device_sync;
 pub mod duplicates;
 mod edit;
 pub mod edit_in;
@@ -34,6 +36,7 @@ pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
 pub(crate) mod facets;
+pub mod film_dust;
 pub mod filters;
 mod focus;
 pub mod folder_metadata;
@@ -58,8 +61,6 @@ pub mod metadata_files;
 pub mod missing;
 mod ml;
 pub(crate) mod organize;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod peers;
 mod people_recognize;
 mod people_roles;
 pub mod profile_manager;
@@ -288,7 +289,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         #[cfg(not(target_arch = "wasm32"))]
         v.extend(catalog::specs());
         #[cfg(not(target_arch = "wasm32"))]
-        v.extend(peers::specs());
+        v.extend(device_sync::specs());
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(slideshow::specs());
@@ -311,6 +312,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(filters::specs());
         v.extend(denoise::specs());
         v.extend(sensor::specs());
+        v.extend(film_dust::specs());
         v.extend(face_models::specs());
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());

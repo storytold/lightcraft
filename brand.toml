@@ -6,6 +6,11 @@ tagline        = "Photo library and raw development"
 vendor         = "Chromaforge contributors"
 homepage       = "https://github.com/emmertex/chromaforge"
 repository     = "https://github.com/emmertex/chromaforge"
+# The web site (Help menu "<app> Website", About) and the user guide (Help menu "<app> Help"); leave
+# either out for `homepage` / `repository`. Not `homepage` itself: the video sidecar XMP namespace
+# (`lcc_meta::xmp::video_ns`) is built from that, and must not change.
+website        = "https://emmertex.github.io/chromaforge/"
+docs           = "https://emmertex.github.io/chromaforge/"
 # The repository the release manifest (latest.json) names its files under. Installed builds only
 # download files under their own `repository` or a [legacy] `repositories` entry, and GitHub
 # redirects a renamed repository's old URLs: so after a rename this stays the OLD repository

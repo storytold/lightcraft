@@ -14,9 +14,10 @@ use lcc_raster::resample::{Filter, fit};
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, LoadOptions, PairLoader, PreviewLoader, ProbeInfo, ReducedLoader};
 
 fn meta_of(m: &lcc_meta::Metadata) -> (Meta, Option<String>) {
-    // the camera's own wording, to the tenth of a second: `1/250`, `0.4`, `1.3″` (issue #1619: rounding
-    // `1/0.4` to `1/2` both showed and exported the wrong time)
-    let shutter = m.exposure_time.and_then(lcc_meta::exposure_display_of).unwrap_or_default();
+    // the camera's own wording: `1/250`, `1/3`, `0.4`, `0.3571`, `1.3″` (issue #1619: rounding `1/0.4` to `1/2`
+    // both showed and exported the wrong time); the exact time is kept beside it for export (upstream #1692)
+    let exposure_time = m.exposure_time.filter(|t| t.is_finite() && *t > 0.0);
+    let shutter = exposure_time.and_then(lcc_meta::exposure_display_of).unwrap_or_default();
     let camera_make = m.make.clone().unwrap_or_default();
     let camera_model = m.model.clone().unwrap_or_default();
     let meta = Meta {
@@ -30,6 +31,7 @@ fn meta_of(m: &lcc_meta::Metadata) -> (Meta, Option<String>) {
         focal_mm: m.focal_length.map(|f| f as f32),
         aperture: m.f_number.map(|f| f as f32),
         shutter,
+        exposure_time,
         iso: m.iso,
         flash: m.flash.as_ref().map(|f| f.fired),
         exposure_bias: m.exposure_bias.map(|v| v as f32).filter(|v| v.is_finite()),
@@ -923,6 +925,7 @@ fn load_bytes_now(
                 colorimetric,
                 rendered_rgb,
                 alpha: None,
+                infrared: None,
                 generated: None,
                 avoid: None,
                 pixels: Some(pixels),
@@ -949,13 +952,18 @@ fn load_bytes_now(
         let a = if a.width.max(a.height) > max_edge { fit(&a, max_edge, max_edge, Filter::Mitchell) } else { a };
         Arc::new(a.into_oriented(orientation))
     });
+    // a film scanner's infrared pass, fitted and oriented with the pixels (Find Film Dust reads it)
+    let infrared = d.infrared.filter(|p| (p.width, p.height) == (img.width, img.height)).map(|p| {
+        let p = if p.width.max(p.height) > max_edge { fit(&p, max_edge, max_edge, Filter::Mitchell) } else { p };
+        Arc::new(p.into_oriented(orientation))
+    });
     let finish = |img: Rgb32f| {
         let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
         img.into_oriented(orientation)
     };
     let img = finish(img);
     let twin = twin.map(finish).filter(|t| t.width == img.width && t.height == img.height);
-    Ok((img, twin, SourceInfo { alpha, ..SourceInfo::default() }, false))
+    Ok((img, twin, SourceInfo { alpha, infrared, ..SourceInfo::default() }, false))
 }
 
 /// The cached denoised picture of a finished picture (gamma-encoded sRGB at the file's full size, see
@@ -1743,12 +1751,42 @@ pub(crate) mod tests {
             let back = lcc_catalog::parse_shutter_seconds(&shutter(t));
             assert!(back.is_some_and(|s| (s - t).abs() < 0.05), "{t} s → {back:?}");
         }
-        // times the old rounding already got right are unchanged
-        for (t, want) in [(0.004, "1/250"), (0.5, "0.5"), (2.0, "2\u{2033}"), (30.0, "30\u{2033}")] {
+        // times the old rounding already got right are unchanged; a half second reads as cameras show it
+        for (t, want) in [(0.004, "1/250"), (0.5, "1/2"), (2.0, "2\u{2033}"), (30.0, "30\u{2033}")] {
             assert_eq!(shutter(t), want, "{t} s");
         }
         assert_eq!(shutter(f64::NAN), "", "no time, no reading");
         assert_eq!(shutter(-1.0), "", "no time, no reading");
+    }
+
+    /// The catalog shows a short shutter speed, never the raw f64 (`0.35714285714285715`), while the exact time
+    /// survives the catalog JSON into exported metadata and the written file (upstream #1692).
+    #[test]
+    fn imported_shutter_times_survive_catalog_and_export_metadata() {
+        use lcc_catalog::{Catalog, Photo, PhotoId};
+        for (t, shown) in [
+            (0.4, "0.4"),
+            (2.5, "2.5\u{2033}"),
+            (30.0, "30\u{2033}"),
+            (0.625, "0.625"),
+            (1.0 / 2.8, "0.3571"),
+            (1.0 / 3.0, "1/3"),
+            (0.003, "0.003"),
+            (1.0 / 250.0, "1/250"),
+            (1.0 / 8000.0, "1/8000"),
+        ] {
+            let (meta, _) = super::meta_of(&lcc_meta::Metadata { exposure_time: Some(t), ..Default::default() });
+            assert_eq!(meta.shutter, shown, "{t}");
+            let meta: Meta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+            let mut photo = Photo::new(PhotoId(1), lcc_catalog::Source::Demo { scene: 0 }, "capture.jpg", "JPEG", 2, 2, "");
+            photo.meta = meta;
+            let o = crate::export::ExportOptions::default();
+            let exported = crate::export::export_metadata(&photo, &Catalog::new(), &o).unwrap();
+            assert_eq!(exported.exposure_time, Some(t), "{t}");
+            let bytes = crate::export::encode_with_metadata(&lcc_raster::Rgba8::new(2, 2), &o, Some(&exported)).unwrap();
+            let back = lcc_meta::extract(&bytes).exposure_time.unwrap();
+            assert!((back - t).abs() < 0.000001, "{t}: {back}");
+        }
     }
 
     #[test]

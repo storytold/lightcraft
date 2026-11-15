@@ -262,6 +262,15 @@ pub fn show(app: &mut LccApp, outer: &mut egui::Ui) {
             filter(app, json!({"label": Value::Null, "labels": names}));
         }
     }
+    // photos without a label: the hollow swatch; ANDs with the colours above
+    let none_on = f.labels_none;
+    let resp = toggle(ui, "label-none", none_on, "Photos without a colour label", |p, r, c| {
+        p.circle_stroke(r.center(), 5.5, Stroke::new(1.5, c));
+    });
+    count(ui, "filter:count:labelnone", tally.unlabeled);
+    if resp.clicked() {
+        filter(app, json!({"labelsNone": !none_on}));
+    }
     ui.add_space(14.0);
 
     // kind + edited

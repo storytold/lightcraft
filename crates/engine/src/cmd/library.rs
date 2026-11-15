@@ -195,8 +195,25 @@ fn not_browsed(s: &Session, ids: Vec<PhotoId>, c: &str) -> Result<Vec<PhotoId>> 
 pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, mut album: Option<u64>, album_name: Option<&str>) -> Result<Value> {
     let mut report = serde_json::to_value(report).unwrap_or_default();
     // photos an import restored from Recently Deleted take part like new ones (album, selection)
-    let imported: Vec<u64> =
+    let mut imported: Vec<u64> =
         ["imported", "restored"].iter().flat_map(|k| report[*k].as_array().into_iter().flatten().filter_map(Value::as_u64)).collect();
+    // a file an Immich link-only photo stands for: that photo takes it, no second entry
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ids: Vec<PhotoId> = imported.iter().map(|i| PhotoId(*i)).collect();
+        let merged = crate::cmd::immich::merge_into_link_only(s, &ids);
+        if !merged.is_empty() {
+            for (new, keep) in &merged {
+                for i in imported.iter_mut().filter(|i| **i == new.0) {
+                    *i = keep.0;
+                }
+            }
+            let swap = |v: u64| merged.iter().find(|(n, _)| n.0 == v).map_or(v, |(_, k)| k.0);
+            let only: Vec<u64> = report["imported"].as_array().into_iter().flatten().filter_map(Value::as_u64).map(swap).collect();
+            report["imported"] = json!(only);
+            report["mergedIntoImmich"] = json!(merged.iter().map(|(_, k)| k.0).collect::<Vec<_>>());
+        }
+    }
     if album.is_none()
         && let Some(name) = album_name
         && !imported.is_empty()
@@ -214,6 +231,9 @@ pub fn import_batch_done(s: &mut Session, report: crate::import::ImportReport, m
     }
     // the previews the library builds at import (library.previewSettings atImport)
     let ids: Vec<PhotoId> = imported.iter().map(|i| PhotoId(*i)).collect();
+    // connected Immich servers are asked whether they have these photos already (`remote.pump`)
+    #[cfg(not(target_arch = "wasm32"))]
+    s.remote.link_queue.extend(ids.iter().copied());
     crate::cmd::previews::build_after_import(s, &ids);
     Ok(report)
 }
@@ -849,7 +869,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, semantic?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, copy?: true (virtual copies only) | false (master photos only) | null, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, vignettingReference?: reference|none (Vignetting Calibration references in use; a withdrawn one counts as none), edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, lens?, keywords?/people?/cameras?/lenses?: [any of these values], keywordOp?/personOp?/lensOp?: any|all (how each list combines: any = OR, all = AND), labels?: [any of these labels], faces?: count|min+|range}",
+            "partial Filter: {text?, semantic?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, copy?: true (virtual copies only) | false (master photos only) | null, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, vignettingReference?: reference|none (Vignetting Calibration references in use; a withdrawn one counts as none), edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, lens?, keywords?/people?/cameras?/lenses?: [any of these values], keywordOp?/personOp?/lensOp?: any|all (how each list combines: any = OR, all = AND), labels?: [any of these labels], labelsNone?: true (photos with no colour label), faces?: count|min+|range}",
             always,
             |s, p| {
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
@@ -3248,6 +3268,10 @@ mod next_unrated_tests;
 #[cfg(test)]
 #[path = "library/tests_clear_label.rs"]
 mod clear_label_tests;
+
+#[cfg(test)]
+#[path = "library/tests_label_none.rs"]
+mod label_none_tests;
 
 #[cfg(test)]
 #[path = "library/tests_enable_filters.rs"]
