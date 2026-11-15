@@ -33,7 +33,7 @@ avif-serialize = { workspace = true, optional = true }
 
 [features]
 default = ["parallel", "jxl", "avif"]
-parallel = ["dep:rayon", "lightcraft-raster/parallel"]
+parallel = ["dep:rayon", "lightcraft-raster/parallel", "craft-jpeg/parallel"]
 ## JPEG XL decoding and encoding via the shared craft-jxl codec.
 jxl = ["dep:craft-jxl"]
 # HEIC/HEIF decode via the optional craft-heif crate (heic-rs, pure Rust). Off by default so
