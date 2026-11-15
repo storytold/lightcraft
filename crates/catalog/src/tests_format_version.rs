@@ -111,9 +111,9 @@ fn mask_curve_develop(c: &mut Catalog) -> (PhotoId, Op) {
     (id, Op::SetDevelop { id, settings: Arc::new(settings), label: "Mask curve".into(), edited: None })
 }
 
-/// v13 added `Mask.curve`. A v12 library (masks without a curve) opens as it was and is rewritten
-/// as v13; a v13 library with a mask curve keeps the curve across an unrelated op and the next
-/// snapshot. (Builds that don't know `Mask.curve` refuse a v13 library: `newer_snapshot_is_refused_untouched`.)
+/// v14 added `Mask.curve`. A v13 library (masks without a curve) opens as it was and is rewritten
+/// as v14; a v14 library with a mask curve keeps the curve across an unrelated op and the next
+/// snapshot. (Builds that don't know `Mask.curve` refuse a v14 library: `newer_snapshot_is_refused_untouched`.)
 #[test]
 fn mask_curve_survives_open_op_and_snapshot() {
     let mut c = Catalog::new();
@@ -124,12 +124,12 @@ fn mask_curve_survives_open_op_and_snapshot() {
     plain.masks.push(Mask { id: 1, ..Mask::default() });
     c.apply(Op::SetDevelop { id, settings: Arc::new(plain), label: "Mask".into(), edited: None }).unwrap();
 
-    // v12: a mask without a curve is upgraded to the current format
+    // v13: a mask without a curve is upgraded to the current format
     assert!(!serde_json::to_string(&c.photo(id).unwrap().develop.masks[0]).unwrap().contains("curve"), "an empty curve isn't written");
     let m = MemStore::new();
-    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":12,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":13,\"seq\":2,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes());
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!(r.upgraded_from, Some(12));
+    assert_eq!(r.upgraded_from, Some(13));
     assert_eq!(snapshot_version(&m), u64::from(VERSION));
     assert_eq!(loaded.to_snapshot(), c.to_snapshot());
 
@@ -297,10 +297,10 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v13: `Mask.curve` (a mask's local Curve, in the develop settings; v12: `Catalog.grids` and `SegMask.grid`, shared by a
-    /// snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10: `Mask.on_photo`; v9: `Photo.preview_checked` and
-    /// `Op::SetContent.preview_checked`).
-    const NEWEST_FIELDS: u32 = 13;
+    /// v14: `Mask.curve` (a mask's local Curve, in the develop settings); v13: Lens Blur in develop settings and mask
+    /// adjustments; v12: `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`;
+    /// v10: `Mask.on_photo`; v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
+    const NEWEST_FIELDS: u32 = 14;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
