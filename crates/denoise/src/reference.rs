@@ -104,6 +104,16 @@ pub fn run(net: &Net, tile: usize, input: &[f32]) -> Result<Vec<f32>, NetError> 
                 }
                 T { channels: c.cout, side: out_side, data }
             }
+            Op::Add { src, src2 } => {
+                let a = get(&tensors, *src)?;
+                let b = get(&tensors, *src2)?;
+                let (channels, side) = (tensors[a].channels, tensors[a].side);
+                let mut data = tensor(channels, side, &mut total)?;
+                for (d, (&av, &bv)) in data.iter_mut().zip(tensors[a].data.iter().zip(&tensors[b].data)) {
+                    *d = av + bv;
+                }
+                T { channels, side, data }
+            }
             Op::MaxPool2 { src } => {
                 let a = get(&tensors, *src)?;
                 let (channels, side) = (tensors[a].channels, tensors[a].side / 2);
