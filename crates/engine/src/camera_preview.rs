@@ -12,7 +12,7 @@ use lightcraft_raster::{
 };
 use lightcraft_raw::{
     ColorData, RawFormat, RawImage,
-    color::{CameraTransform, camera_transform},
+    color::CameraTransform,
     profile::{HsvTable, ProfileLook, ToneCurve},
 };
 
@@ -56,7 +56,7 @@ pub(crate) fn starting_colour(
     fitted_white(xy, t, look)
 }
 
-/// Recompute the white and transform once the look's fitted matrix is installed.
+/// Fold the look's fitted matrix into the transform once the fit is accepted.
 ///
 /// The look's matrix acts on balanced camera RGB. The as-shot white is derived from the
 /// camera's own neutral through the camera model (t.matrix * diag(t.wb)) WITHOUT the look
