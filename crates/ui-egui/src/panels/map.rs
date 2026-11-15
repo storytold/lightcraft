@@ -4,7 +4,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, Weak};
+use std::time::Duration;
+use web_time::Instant;
 
 use egui::{Align2, Color32, ColorImage, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -31,21 +33,148 @@ struct TileKey {
     layer: u8,
 }
 
+/// At most this many tiles download at once. One connection per visible tile (60 and more on a
+/// large screen) left most of them stuck past the 6 s connect timeout; a small pool loads them all.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))] // the web has no tile fetcher (see `fetch_and_cache_tile`)
+const MAX_TILE_WORKERS: usize = 6;
+
+/// A tile whose load failed is asked for again after this long, not on every frame.
+const TILE_RETRY_AFTER: Duration = Duration::from_secs(5);
+
+/// A finished tile load: the image, or `None` when it could not be fetched or decoded.
+type TileResult = (TileKey, Option<ColorImage>);
+
 struct TileStore {
     textures: HashMap<TileKey, TextureHandle>,
     pending: HashSet<TileKey>,
-    tx: Sender<(TileKey, ColorImage)>,
-    rx: Receiver<(TileKey, ColorImage)>,
-    /// The tile loads in flight, while there are any. Only the workers hold it strongly.
+    /// Tiles whose last load failed, and when; they are retried after [`TILE_RETRY_AFTER`].
+    failed: HashMap<TileKey, Instant>,
+    tx: Sender<TileResult>,
+    rx: Receiver<TileResult>,
+    /// The tile loads in flight, while there are any. Only the queued jobs hold it strongly.
     batch: Weak<TileBatch>,
 }
 
 impl TileStore {
     fn new() -> Self {
         let (tx, rx) = channel();
-        Self { textures: HashMap::new(), pending: HashSet::new(), tx, rx, batch: Weak::new() }
+        Self { textures: HashMap::new(), pending: HashSet::new(), failed: HashMap::new(), tx, rx, batch: Weak::new() }
+    }
+
+    /// Whether `key` should be requested now: not loaded, not in flight, and not failed recently.
+    fn wants(&self, key: &TileKey, now: Instant) -> bool {
+        !self.textures.contains_key(key)
+            && !self.pending.contains(key)
+            && self.failed.get(key).is_none_or(|at| now.saturating_duration_since(*at) >= TILE_RETRY_AFTER)
+    }
+
+    /// Takes in a finished load: a failed one leaves `pending` so it can be retried later.
+    fn finish(&mut self, key: TileKey, ok: bool, now: Instant) {
+        self.pending.remove(&key);
+        if ok {
+            self.failed.remove(&key);
+        } else {
+            if self.failed.len() > 1000 {
+                self.failed.retain(|_, at| now.saturating_duration_since(*at) < TILE_RETRY_AFTER);
+            }
+            self.failed.insert(key, now);
+        }
     }
 }
+
+/// One tile to load. Dropping it (done or never run) counts it as done in the batch's row.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct TileJob {
+    key: TileKey,
+    url: String,
+    disk_path: std::path::PathBuf,
+    tx: Sender<TileResult>,
+    ctx: egui::Context,
+    /// The tile failed before: it waits behind every tile not yet tried (see [`TileQueue::push`]).
+    retry: bool,
+    _counted: TileLoadEnd,
+}
+
+/// A bounded set of worker threads that load tiles, newest first-attempt request first, so the
+/// tiles on screen now come before ones the view has already panned past; retries come last.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct TilePool {
+    queue: Mutex<TileQueue>,
+    wake: Condvar,
+    load: fn(&TileJob) -> Option<ColorImage>,
+    max_workers: usize,
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+struct TileQueue {
+    /// Popped from the end: first attempts are pushed there (newest first), retries go to the
+    /// front, so a tile that keeps failing cannot starve tiles that have never been tried.
+    jobs: Vec<TileJob>,
+    workers: usize,
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+impl TileQueue {
+    /// Queues `job`: a first attempt is taken before every queued job, a retry after all of them.
+    fn push(&mut self, job: TileJob) {
+        if job.retry {
+            self.jobs.insert(0, job);
+        } else {
+            self.jobs.push(job);
+        }
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+impl TilePool {
+    fn new(load: fn(&TileJob) -> Option<ColorImage>, max_workers: usize) -> Arc<Self> {
+        Arc::new(Self { queue: Mutex::new(TileQueue { jobs: Vec::new(), workers: 0 }), wake: Condvar::new(), load, max_workers })
+    }
+
+    fn submit(self: &Arc<Self>, job: TileJob) {
+        let mut q = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+        q.push(job);
+        if q.workers < self.max_workers {
+            let pool = Arc::clone(self);
+            let spawned = std::thread::Builder::new().name("lc-tile-fetch".into()).spawn(move || pool.work()).is_ok();
+            if spawned {
+                q.workers += 1;
+            } else if q.workers == 0 {
+                // no worker to run it: report the jobs as failed so they are retried, not stuck
+                for job in q.jobs.drain(..) {
+                    let _ = job.tx.send((job.key, None));
+                }
+            }
+        }
+        drop(q);
+        self.wake.notify_one();
+    }
+
+    /// Runs jobs until none has come for a while, then ends the thread.
+    fn work(&self) {
+        loop {
+            let mut q = self.queue.lock().unwrap_or_else(PoisonError::into_inner);
+            let job = loop {
+                if let Some(job) = q.jobs.pop() {
+                    break job;
+                }
+                let (guard, timeout) = self.wake.wait_timeout(q, Duration::from_secs(20)).unwrap_or_else(PoisonError::into_inner);
+                q = guard;
+                if timeout.timed_out() && q.jobs.is_empty() {
+                    q.workers = q.workers.saturating_sub(1);
+                    return;
+                }
+            };
+            drop(q);
+            let img = (self.load)(&job);
+            let _ = job.tx.send((job.key, img));
+            job.ctx.request_repaint();
+        }
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+static TILE_POOL: OnceLock<Arc<TilePool>> = OnceLock::new();
 
 /// The tile loads in flight share one activity row. Each worker holds an `Arc` until it ends, so
 /// the last one to finish (fetched, failed or not started) drops the row, whether or not the Map
@@ -288,42 +417,44 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.ui.map = map_ui;
 }
 
-fn fetch_and_cache_tile(
-    key: TileKey,
-    url: String,
-    disk_path: std::path::PathBuf,
-    tx: Sender<(TileKey, ColorImage)>,
-    ctx: egui::Context,
-    batch: Arc<TileBatch>,
-) {
+/// Queues a tile load on the shared pool. On the web there is no fetcher, so the job is dropped.
+fn fetch_and_cache_tile(job: TileJob) {
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = std::thread::Builder::new().name("lc-tile-fetch".into()).spawn(move || {
-        // ends this load in the batch's row however the worker returns
-        let _counted = TileLoadEnd(batch);
-        let bytes = if disk_path.exists() {
-            std::fs::read(&disk_path).ok()
-        } else {
-            match lightcraft_engine::map::fetch_tile_bytes(&url) {
-                Ok(b) => {
-                    if let Some(parent) = disk_path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let _ = std::fs::write(&disk_path, &b);
-                    Some(b)
-                }
-                Err(e) => {
-                    log::debug!("tile fetch error for {url}: {e}");
-                    None
-                }
-            }
-        };
+    TILE_POOL.get_or_init(|| TilePool::new(load_tile, MAX_TILE_WORKERS)).submit(job);
+    #[cfg(target_arch = "wasm32")]
+    drop(job);
+}
 
-        if let Some(rgba) = bytes.and_then(|b| lightcraft_engine::map::decode_tile(&b).ok()) {
-            let img = egui::ColorImage::from_rgba_unmultiplied([rgba.width, rgba.height], &rgba.as_bytes());
-            let _ = tx.send((key, img));
-            ctx.request_repaint();
+/// Reads a tile from the disk cache, or downloads it and caches it, then decodes it.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn load_tile(job: &TileJob) -> Option<ColorImage> {
+    if let Ok(cached) = std::fs::read(&job.disk_path) {
+        if let Some(img) = decode_image(&cached) {
+            return Some(img);
         }
-    });
+        // a cached file that does not decode (truncated, or from a bad response) is replaced, not retried forever
+        let _ = std::fs::remove_file(&job.disk_path);
+    }
+    let bytes = match lightcraft_engine::map::fetch_tile_bytes(&job.url) {
+        Ok(b) => b,
+        Err(e) => {
+            log::debug!("tile fetch error for {}: {e}", job.url);
+            return None;
+        }
+    };
+    // decode before caching, so a bad response is never written to the cache
+    let img = decode_image(&bytes)?;
+    if let Some(parent) = job.disk_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&job.disk_path, &bytes);
+    Some(img)
+}
+
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+fn decode_image(bytes: &[u8]) -> Option<ColorImage> {
+    let rgba = lightcraft_engine::map::decode_tile(bytes).ok()?;
+    Some(ColorImage::from_rgba_unmultiplied([rgba.width, rgba.height], &rgba.as_bytes()))
 }
 
 fn render_tile_grid(
@@ -359,11 +490,18 @@ fn render_tile_grid(
     let mut store_guard = TILES.lock().unwrap_or_else(PoisonError::into_inner);
     let store = store_guard.get_or_insert_with(TileStore::new);
 
+    let now = Instant::now();
     while let Ok((key, img)) = store.rx.try_recv() {
-        let name = format!("tile-{}-{}-{}-{}-{}", key.provider.id(), key.layer, key.z, key.x, key.y);
-        let tex = p.ctx().load_texture(name, img, TextureOptions::LINEAR);
-        store.textures.insert(key, tex);
-        store.pending.remove(&key);
+        let ok = img.is_some();
+        if let Some(img) = img {
+            let name = format!("tile-{}-{}-{}-{}-{}", key.provider.id(), key.layer, key.z, key.x, key.y);
+            let tex = p.ctx().load_texture(name, img, TextureOptions::LINEAR);
+            store.textures.insert(key, tex);
+        } else {
+            // draw again once the failed tile may be retried, even if nothing else moves
+            p.ctx().request_repaint_after(TILE_RETRY_AFTER);
+        }
+        store.finish(key, ok, now);
     }
 
     if store.textures.len() > 300 {
@@ -389,11 +527,22 @@ fn render_tile_grid(
                     p.image(tex.id(), tile_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 } else {
                     all_loaded = false;
-                    if !store.pending.contains(&key) {
+                    if store.wants(&key, now) {
                         store.pending.insert(key);
                         let disk_path = lightcraft_engine::map::tile_cache_path(&cache_root, provider, coord, layer_idx);
                         let batch = join_tile_batch(&mut store.batch, activity);
-                        fetch_and_cache_tile(key, url, disk_path, store.tx.clone(), p.ctx().clone(), batch);
+                        fetch_and_cache_tile(TileJob {
+                            key,
+                            url,
+                            disk_path,
+                            tx: store.tx.clone(),
+                            ctx: p.ctx().clone(),
+                            retry: store.failed.contains_key(&key),
+                            _counted: TileLoadEnd(batch),
+                        });
+                    } else if let Some(failed_at) = store.failed.get(&key).filter(|_| !store.pending.contains(&key)) {
+                        // keep the retry wake-up alive while cooling down; a retry already in flight needs no wake-up
+                        p.ctx().request_repaint_after(TILE_RETRY_AFTER.saturating_sub(now.saturating_duration_since(*failed_at)));
                     }
                 }
             }
@@ -972,5 +1121,116 @@ mod tests {
         assert_eq!(activity.list().len(), 1);
         drop(third);
         assert!(activity.list().is_empty());
+    }
+
+    fn key(x: u32) -> TileKey {
+        TileKey { provider: MapProvider::OpenStreetMap, z: 10, x, y: 0, layer: 0 }
+    }
+
+    /// Loads a 1x1 tile, or fails for odd `x`, while counting how many loads run at once.
+    fn counting_load(job: &TileJob) -> Option<ColorImage> {
+        let now = RUNNING.fetch_add(1, Ordering::SeqCst) + 1;
+        PEAK.fetch_max(now, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(20));
+        RUNNING.fetch_sub(1, Ordering::SeqCst);
+        job.key.x.is_multiple_of(2).then(|| ColorImage::new([1, 1], vec![Color32::WHITE]))
+    }
+    static RUNNING: AtomicU64 = AtomicU64::new(0);
+    static PEAK: AtomicU64 = AtomicU64::new(0);
+
+    /// One connection per visible tile made most of them time out; the pool caps them, and
+    /// reports every job, failed ones included, so none stays pending.
+    #[test]
+    fn tile_pool_caps_concurrent_loads_and_reports_every_job() {
+        let activity = lightcraft_engine::activity::Activity::default();
+        let mut slot = Weak::new();
+        let pool = TilePool::new(counting_load, 3);
+        let (tx, rx) = channel();
+        for x in 0..30 {
+            let job = TileJob {
+                key: key(x),
+                url: String::new(),
+                disk_path: std::path::PathBuf::new(),
+                tx: tx.clone(),
+                ctx: egui::Context::default(),
+                retry: false,
+                _counted: TileLoadEnd(join_tile_batch(&mut slot, &activity)),
+            };
+            pool.submit(job);
+        }
+        let mut results: Vec<TileResult> = (0..30).map(|_| rx.recv_timeout(Duration::from_secs(10)).unwrap()).collect();
+        results.sort_by_key(|(k, _)| k.x);
+        assert!(PEAK.load(Ordering::SeqCst) <= 3, "peak {}", PEAK.load(Ordering::SeqCst));
+        assert!(results.iter().all(|(k, img)| img.is_some() == k.x.is_multiple_of(2)), "failures come back as None");
+        // every job dropped: the row is gone
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !activity.list().is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(activity.list().is_empty());
+    }
+
+    /// Retries used to be queued newest-first like any request, so tiles that kept failing could
+    /// be taken again and again while visible tiles never got a first attempt.
+    #[test]
+    fn retries_wait_behind_tiles_never_tried() {
+        let activity = lightcraft_engine::activity::Activity::default();
+        let mut slot = Weak::new();
+        let (tx, _rx) = channel();
+        let mut job = |x: u32, retry: bool| TileJob {
+            key: key(x),
+            url: String::new(),
+            disk_path: std::path::PathBuf::new(),
+            tx: tx.clone(),
+            ctx: egui::Context::default(),
+            retry,
+            _counted: TileLoadEnd(join_tile_batch(&mut slot, &activity)),
+        };
+        let mut q = TileQueue { jobs: Vec::new(), workers: 0 };
+        q.push(job(1, false));
+        q.push(job(2, true));
+        q.push(job(3, false));
+        q.push(job(4, true));
+        let order: Vec<u32> = std::iter::from_fn(|| q.jobs.pop()).map(|j| j.key.x).collect();
+        assert_eq!(order, vec![3, 1, 2, 4], "first attempts newest first, then retries oldest first");
+    }
+
+    /// A cached file that no longer decodes is deleted, so the next try downloads it again instead of
+    /// failing on the same bytes forever. No network: the URL is unusable on purpose.
+    #[test]
+    fn an_undecodable_cached_tile_is_replaced_not_retried_forever() {
+        let dir = std::env::temp_dir().join(format!("lc-tile-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let disk_path = dir.join("bad.png");
+        std::fs::write(&disk_path, b"not a png").unwrap();
+        let job = TileJob {
+            key: key(1),
+            url: String::new(),
+            disk_path: disk_path.clone(),
+            tx: channel().0,
+            ctx: egui::Context::default(),
+            retry: true,
+            _counted: TileLoadEnd(join_tile_batch(&mut Weak::new(), &lightcraft_engine::activity::Activity::default())),
+        };
+        assert!(load_tile(&job).is_none());
+        assert!(!disk_path.exists(), "the undecodable cache file is removed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A failed tile used to stay pending for good; now it is asked for again after a pause.
+    #[test]
+    fn a_failed_tile_is_retried_after_a_pause() {
+        let mut store = TileStore::new();
+        let t0 = Instant::now();
+        let k = key(1);
+        assert!(store.wants(&k, t0));
+        store.pending.insert(k);
+        assert!(!store.wants(&k, t0), "in flight");
+        store.finish(k, false, t0);
+        assert!(!store.pending.contains(&k));
+        assert!(!store.wants(&k, t0 + Duration::from_secs(1)), "not on every frame");
+        assert!(store.wants(&k, t0 + TILE_RETRY_AFTER), "retried after the pause");
+        store.finish(k, true, t0 + TILE_RETRY_AFTER);
+        assert!(store.failed.is_empty());
     }
 }
