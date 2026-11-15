@@ -311,6 +311,9 @@ pub(crate) fn fill_missing_meta(id: lcc_catalog::PhotoId, ph: &lcc_catalog::Phot
     }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
+        m.exposure_time = src.exposure_time;
+    } else {
+        repair_legacy_shutter(&mut m, src);
     }
     m.focal_mm = m.focal_mm.or(src.focal_mm);
     m.aperture = m.aperture.or(src.aperture);
@@ -334,6 +337,39 @@ pub(crate) fn fill_missing_meta(id: lcc_catalog::PhotoId, ph: &lcc_catalog::Phot
         ops.push(Op::SetCaptured { id, captured: info.captured.clone() });
     }
     ops
+}
+
+/// Repair only the shutter data an older import wrote (a third-stop time rounded, no exact time kept), keeping a
+/// shutter speed set by hand (upstream #1692). `true` when `m` changed.
+fn repair_legacy_shutter(m: &mut lcc_catalog::Meta, src: &lcc_catalog::Meta) -> bool {
+    if m.exposure_time.is_none()
+        && let Some(t) = src.exposure_time
+        && (m.shutter.trim() == src.shutter || legacy_shutter_texts(t).iter().flatten().any(|old| m.shutter.trim() == old))
+    {
+        m.shutter = src.shutter.clone();
+        m.exposure_time = Some(t);
+        true
+    } else {
+        false
+    }
+}
+
+/// The shutter texts imports wrote before the exact exposure time was kept, only for recognising them again: the
+/// first import's whole seconds or `1/n` with `n` rounded, and the tenth-of-a-second wording that followed it
+/// (`0.4`, `1.3″`, issue #1619).
+fn legacy_shutter_texts(t: f64) -> [Option<String>; 2] {
+    if !(t.is_finite() && t > 0.0) {
+        return [None, None];
+    }
+    let first = if t >= 1.0 { format!("{t:.0}") } else { format!("1/{:.0}", 1.0 / t) };
+    let tenth = if t < 0.3 {
+        format!("1/{}", (1.0 / t).round())
+    } else if t < 1.0 {
+        format!("{}", (t * 10.0).round() / 10.0)
+    } else {
+        format!("{}\u{2033}", (t * 10.0).round() / 10.0)
+    };
+    [Some(first), Some(tenth)]
 }
 
 /// Ops that give a photo the lens data its file carries now (`info`, a fresh probe), or none when
@@ -392,8 +428,16 @@ pub(crate) fn reload_ops(
     // A selected copy refreshes its same-file family too, but only the explicit target gets missing descriptive
     // metadata above. Relinked copies keep their own file facts.
     for c in cat.photos().filter(|c| c.id != id && shares_reload_source(c, ph)) {
-        let theirs: Vec<Op> =
-            content_op(c.id, c, info.clone()).into_iter().chain(lens_ops(c.id, c, info)).chain(as_shot_wb_op(c.id, c, info)).collect();
+        // Copies may have independently edited metadata: repair only a recognisable legacy shutter value, not every
+        // missing field on the copy (upstream #1692).
+        let mut meta = c.meta.clone();
+        let shutter_op = repair_legacy_shutter(&mut meta, &info.meta).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) });
+        let theirs: Vec<Op> = content_op(c.id, c, info.clone())
+            .into_iter()
+            .chain(shutter_op)
+            .chain(lens_ops(c.id, c, info))
+            .chain(as_shot_wb_op(c.id, c, info))
+            .collect();
         if !theirs.is_empty() {
             ops.extend(theirs);
             changed.push(c.id);
@@ -918,5 +962,81 @@ mod tests {
         assert!(r["copies"].as_array().unwrap().len() < 6);
         assert!(s.activity.list().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Reload from Disk repairs a shutter speed an older import rounded (0.4 s stored as `1/2`, with no exact
+    /// time): the photo takes the file's exact time and today's text. A shutter speed set by hand that is not what
+    /// an import wrote, and one that already has its exact time, are kept (upstream #1692).
+    #[test]
+    fn reload_repairs_a_shutter_speed_an_older_import_rounded() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.nef".into() }, "x.nef", "NEF", 6000, 4000, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        for (t, legacy, shown) in [
+            (0.4, "1/2", "0.4"),
+            (2.5, "2", "2.5\u{2033}"),
+            (1.0 / 2.8, "1/3", "0.3571"),
+            (1.0 / 2.8, "0.4", "0.3571"),
+            (1.0 / 250.0, "1/250", "1/250"),
+        ] {
+            info.meta.exposure_time = Some(t);
+            info.meta.shutter = lcc_meta::exposure_display_of(t).unwrap();
+            ph.meta.shutter = legacy.into();
+            ph.meta.exposure_time = None;
+            let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+            let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{t}: {ops:?}") };
+            assert_eq!((meta.shutter.as_str(), meta.exposure_time), (shown, Some(t)), "{t}");
+            assert_eq!(meta.shutter_seconds(), Some(t), "{t}");
+            // repaired → nothing more to do
+            ph.meta = (**meta).clone();
+            assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "{t}");
+        }
+        // typed by hand, not what any import wrote for this file
+        info.meta.exposure_time = Some(0.4);
+        info.meta.shutter = "0.4".into();
+        ph.meta.shutter = "1/8".into();
+        ph.meta.exposure_time = None;
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a hand-set shutter speed is kept");
+        // already has an exact time (the text was edited afterwards): kept
+        ph.meta.shutter = "1/2".into();
+        ph.meta.exposure_time = Some(0.4);
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a photo with an exact time is left alone");
+    }
+
+    #[test]
+    fn reload_repairs_legacy_shutter_on_copies_without_replacing_edits() {
+        let mut cat = lcc_catalog::Catalog::new();
+        let mut source = Photo::new(PhotoId(1), Source::File { path: "/x.nef".into() }, "x.nef", "NEF", 6000, 4000, "");
+        source.meta.shutter = "1/2".into();
+        cat.apply(Op::AddPhoto { photo: Box::new(source.clone()) }).unwrap();
+        for (id, text, exact) in [(2, "1/2", None), (3, "0.4", None), (4, "1/8", None), (5, "1/2", Some(0.4))] {
+            let mut copy = source.clone();
+            copy.id = PhotoId(id);
+            copy.copy_of = Some(source.id);
+            copy.meta.shutter = text.into();
+            copy.meta.exposure_time = exact;
+            copy.meta.title = "My copy".into();
+            cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        }
+        let mut info = crate::media::ProbeInfo::default();
+        info.meta.shutter = "0.4".into();
+        info.meta.exposure_time = Some(0.4);
+        info.meta.title = "File title".into();
+        let (mut ops, mut changed) = (Vec::new(), Vec::new());
+        reload_ops(&cat, source.id, &info, &mut ops, &mut changed);
+        for op in ops {
+            cat.apply(op).unwrap();
+        }
+        for id in [1, 2, 3] {
+            let m = &cat.photo(PhotoId(id)).unwrap().meta;
+            assert_eq!((m.shutter.as_str(), m.exposure_time, m.shutter_seconds()), ("0.4", Some(0.4), Some(0.4)), "{id}");
+        }
+        for (id, text, exact) in [(4, "1/8", None), (5, "1/2", Some(0.4))] {
+            let m = &cat.photo(PhotoId(id)).unwrap().meta;
+            assert_eq!((m.shutter.as_str(), m.exposure_time), (text, exact), "{id}");
+        }
+        for id in [2, 3, 4, 5] {
+            assert_eq!(cat.photo(PhotoId(id)).unwrap().meta.title, "My copy", "{id}");
+        }
     }
 }

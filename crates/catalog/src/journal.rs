@@ -20,7 +20,9 @@
 //! - records already covered by the snapshot (crash between writing the snapshot and resetting
 //!   the log) are skipped;
 //! - a bad record **followed by good ones** is real damage: replay stops there, the log is kept
-//!   as `catalog.log.damaged-<seq>`, and a fresh snapshot is written so the library stays usable.
+//!   as `catalog.log.damaged-<seq>` (`catalog.log.damaged-<seq>-2`, `-3`, … when another log's
+//!   copy is already there: one is never replaced), and a fresh snapshot is written so the library
+//!   stays usable.
 //!
 //! **Background compaction** ([`Journal::snapshot_in_background`], when the store offers a
 //! [`Store::background_writer`]): a worker thread writes the snapshot of a copy of the catalog at
@@ -387,6 +389,47 @@ fn checkpoint(db: &mut crate::db::CatalogDb, seq: u64, catalog: &Catalog) -> std
         .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
+/// How many damaged logs for one change number can stand side by side before a further one is
+/// refused (a copy is never replaced to make room).
+const MAX_DAMAGED_COPIES: u32 = 100;
+
+/// Keep the damaged `log` of a library that replayed up to change `seq` as
+/// `catalog.log.damaged-<seq>`, and return that name. A library restored from an older backup can
+/// reach the same change number again with another damaged log: a file already there is never
+/// replaced, the copy goes to `catalog.log.damaged-<seq>-2` (then `-3`, …, up to
+/// [`MAX_DAMAGED_COPIES`] names, then an error). A file with these very bytes is the copy
+/// already (an open whose snapshot then failed is retried at the next open): its name is
+/// returned and nothing is written.
+///
+/// A name is claimed with [`Store::write_new`], which fails when the name is taken, so a copy
+/// that appears between the read and the write (a second open of the same folder) is never
+/// replaced either: that name is read again and, if it holds other bytes, skipped.
+fn keep_damaged_log(store: &mut dyn Store, seq: u64, log: &[u8]) -> std::io::Result<String> {
+    let read = |store: &mut dyn Store, name: &str| store.read(name).map_err(|e| std::io::Error::new(e.kind(), format!("can't read {name}: {e}")));
+    for copy in 1..=MAX_DAMAGED_COPIES {
+        let name = if copy == 1 { format!("{LOG}.damaged-{seq}") } else { format!("{LOG}.damaged-{seq}-{copy}") };
+        match read(store, &name)? {
+            Some(there) if there == log => return Ok(name),
+            Some(_) => continue,
+            None => {}
+        }
+        match store.write_new(&name, log) {
+            Ok(()) => return Ok(name),
+            // taken since the read above: the same log copied by another open is the copy already
+            // (a name that holds nothing readable, such as a dangling link, is taken too)
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if read(store, &name)?.is_some_and(|there| there == log) {
+                    return Ok(name);
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::other(format!(
+        "{MAX_DAMAGED_COPIES} damaged logs kept as {LOG}.damaged-{seq} are already there; nothing was changed: remove some of them and open the library again"
+    )))
+}
+
 /// Just the identification of `catalog.snap` (read before the catalog itself).
 #[derive(serde::Deserialize)]
 struct SnapHeader {
@@ -597,14 +640,7 @@ impl Journal {
 
         if let Some(at) = damaged_at {
             // a free name: a second damage at the same op must not replace the first copy (issue #2140)
-            let mut name = format!("{LOG}.damaged-{}", j.seq);
-            for k in 1..1000 {
-                if j.store.read(&name).map_err(io)?.is_none() {
-                    break;
-                }
-                name = format!("{LOG}.damaged-{}-{k}", j.seq);
-            }
-            j.store.write_atomic(&name, &log).map_err(io)?;
+            let name = keep_damaged_log(&mut *j.store, j.seq, &log).map_err(io)?;
             log::warn!("catalog log damaged at byte {at}; kept as {name}; state recovered up to op {}", j.seq);
             report.damaged = Some(name);
             j.snapshot(&catalog)?;
