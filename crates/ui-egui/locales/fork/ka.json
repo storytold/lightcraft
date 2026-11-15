@@ -3193,7 +3193,7 @@
   "The export watermark, drawn on the photo and sized relative to it.": "ექსპორტის ჭვირნიშანი, ფოტოზე დახატული და მის მიმართ ზომაში მორგებული.",
   "The face models are downloaded and chosen under Settings ▸ AI Models.": "სახის მოდელები ჩამოიტვირთება და აირჩევა აქ: პარამეტრები → AI მოდელები.",
   "The faces in your photos that look like the people you have named wait here, to be confirmed one by one.": "აქ ელოდება თქვენს ფოტოებში იმ ადამიანების მსგავსი სახეები, რომლებსაც სახელი მისეცით, რომ სათითაოდ დაადასტუროთ.",
-  "The faces recognition matches to someone wait under Suggested, and the faces of the people you have named under Confirmed.": "სახეები, რომლებსაც ამოცნობა ვინმეს უთანაბრებს, „შეთავაზებულებში“ ელოდება, ხოლო დასახელებული ადამიანების სახეები — „დადასტურებულებში“.",
+  "The faces recognition matches to someone wait under Suggested, and the faces of the people you have named under Confirmed.": "სახეები, რომლებსაც ამოცნობა ვინმეს უთანაბრებს, „შეთავაზებულებში“ ელოდება, ხოლო დასახელებული ადამიანების სახეები კი „დადასტურებულებში“ არის.",
   "The folder is asked for when the export starts.": "საქაღალდე ექსპორტის დაწყებისას იკითხება.",
   "The folder was moved or renamed outside the app: point its photos at the new place": "საქაღალდე აპის გარეთ გადაიტანეს ან სახელი შეუცვალეს: მიუთითეთ მისი ფოტოებისთვის ახალი ადგილი",
   "The generated pixels are missing from this catalog (moved or deleted): the photo shows through. Generate it again to restore it.": "გენერირებული პიქსელები ამ კატალოგში აღარ არის (გადატანილია ან წაშლილი): ფოტო მოჩანს. აღსადგენად ხელახლა გაუშვით გენერირება.",
