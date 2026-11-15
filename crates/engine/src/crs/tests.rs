@@ -363,6 +363,9 @@ fn lightroom_profile_bookkeeping_is_not_reported() {
 #[test]
 fn only_outright_digests_are_non_rendering() {
     assert!(non_rendering("AutoToneDigest"));
+    // Lightroom writes these beside their digests: checksums too, just not suffix-shaped
+    assert!(non_rendering("AutoToneDigestNoSat"));
+    assert!(non_rendering("InputDigestVersion"));
     assert!(!non_rendering("ColorVariance"), "the Variance slider is an adjustment");
     assert!(!non_rendering("Spot: FutureDigest"), "a dropped spot changes the render");
     assert!(!non_rendering("Mask: FutureDigest"), "so does a dropped mask");
