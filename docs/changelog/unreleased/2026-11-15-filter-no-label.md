@@ -1,3 +1,0 @@
-## Library
-
-- **Filter by "no colour label":** the filter bar's colour-label swatches gain a hollow one at the end that shows only the photos without a label, ANDing with the chosen colours (issue #1192). The Library menu's Filter by Color Label submenu has a matching No Label row, the text search takes `label:none`, and the `library.filter` command takes `labelsNone`. The MCP `query_photos` tool's filter description now names the real filter keys (`rating` with `ratingOp` for the at-least, exactly and at-most comparisons, `labels`, `labelsNone`) instead of a `minRating` example that the filter rejects.
