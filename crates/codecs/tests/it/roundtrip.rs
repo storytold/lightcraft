@@ -80,6 +80,59 @@ fn jpeg_gray_and_scaled_decode() {
 }
 
 #[test]
+fn jpeg_gray_alpha_drops_alpha_and_ignores_surplus_samples() {
+    let (w, h) = (13u32, 9u32);
+    let mut gray_alpha: Vec<u8> = (0..w * h).flat_map(|i| [((i * 37 + 19) % 256) as u8, ((i * 83) % 256) as u8]).collect();
+    // EncodeImage historically permits a surplus tail; the writer must ignore it.
+    gray_alpha.extend_from_slice(&[255, 0, 17]);
+    let bytes = encode_jpeg(&EncodeImage::new(w, h, 2, Samples::U8(&gray_alpha)), 100, ChromaSubsampling::S444, &EncodeMeta::default()).unwrap();
+    let decoded = decode(&bytes, DecodeOptions::default()).unwrap();
+    assert_eq!((decoded.width, decoded.height), (w, h));
+    assert!(decoded.grayscale);
+    assert!(!decoded.has_alpha);
+    let output = decoded.to_srgb8();
+    for (i, pixel) in output.data.iter().enumerate() {
+        let source = gray_alpha[i * 2];
+        assert!(pixel[..3].iter().all(|&channel| channel.abs_diff(source) <= 2), "pixel {i}: source {source}, output {pixel:?}");
+        assert_eq!(pixel[3], 255);
+    }
+}
+
+#[test]
+fn jpeg_422_matches_the_previous_encoder_within_rounding_tolerance() {
+    let img = smooth(97, 61);
+    let rgb: Vec<u8> = img.data.iter().flat_map(|p| p[..3].iter().copied()).collect();
+    let mut reference = Vec::new();
+    let mut encoder = jpeg_encoder::Encoder::new(&mut reference, 90);
+    encoder.set_sampling_factor(jpeg_encoder::SamplingFactor::R_4_2_2);
+    encoder.encode(&rgb, img.width as u16, img.height as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+
+    let shared = encode_jpeg(
+        &EncodeImage::new(img.width as u32, img.height as u32, 3, Samples::U8(&rgb)),
+        90,
+        ChromaSubsampling::S422,
+        &EncodeMeta::default(),
+    )
+    .unwrap();
+    let old = decode(&reference, DecodeOptions::default()).unwrap().to_srgb8();
+    let new = decode(&shared, DecodeOptions::default()).unwrap().to_srgb8();
+    let mut max_delta = 0u8;
+    let mut squared_error = 0u64;
+    for (a, b) in old.data.iter().zip(&new.data) {
+        for c in 0..3 {
+            let delta = a[c].abs_diff(b[c]);
+            max_delta = max_delta.max(delta);
+            squared_error += u64::from(delta) * u64::from(delta);
+        }
+    }
+    let mse = squared_error as f64 / (old.data.len() * 3) as f64;
+    // The shared writer changes DCT rounding relative to jpeg-encoder, but this deterministic
+    // 4:2:2 fixture stays within a six-code maximum and 2.0 mean-squared channel delta.
+    assert!(max_delta <= 6, "max per-channel delta from the prior 4:2:2 output was {max_delta}");
+    assert!(mse <= 2.0, "mean squared channel delta from the prior 4:2:2 output was {mse}");
+}
+
+#[test]
 fn jpeg_cmyk_converts() {
     // 0 = no ink: white, cyan, black.
     let px: Vec<u8> = [[0u8, 0, 0, 0], [255, 0, 0, 0], [0, 0, 0, 255]].iter().flat_map(|p| p.repeat(16 * 16)).collect();

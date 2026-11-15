@@ -27,7 +27,6 @@ pub mod gainmap;
 mod heif;
 pub mod icc;
 mod jpeg;
-pub mod jpeg_par;
 #[cfg(feature = "jxl")]
 mod jxl;
 mod jxl_encode;
