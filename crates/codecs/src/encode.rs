@@ -174,9 +174,9 @@ pub fn encode_jpeg(img: &EncodeImage, quality: u8, subsampling: ChromaSubsamplin
     Ok(out)
 }
 
-/// Encode PNG (8- or 16-bit; float input is rejected — quantize first).
-pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
-    img.validate()?;
+/// `img` (already validated) as a `craft-image-codecs` image. `refuse_float` is the error for
+/// 32-bit float samples, for a format that cannot hold them; `None` converts them too.
+fn shared_image(img: &EncodeImage, refuse_float: Option<&str>) -> Result<craft_image_codecs::Image> {
     let n = img.width as usize * img.height as usize * img.channels as usize;
     let layout = match img.channels {
         1 => craft_image_codecs::ChannelLayout::Gray,
@@ -184,12 +184,19 @@ pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
         3 => craft_image_codecs::ChannelLayout::Rgb,
         _ => craft_image_codecs::ChannelLayout::Rgba,
     };
-    let mut ic_img = match img.samples {
-        Samples::U8(s) => craft_image_codecs::Image::from_u8(img.width, img.height, layout, s[..n].to_vec()),
-        Samples::U16(s) => craft_image_codecs::Image::from_u16(img.width, img.height, layout, &s[..n]),
-        Samples::F32(_) => return Err(Error::Encode("PNG needs 8- or 16-bit samples".into())),
+    match (img.samples, refuse_float) {
+        (Samples::U8(s), _) => craft_image_codecs::Image::from_u8(img.width, img.height, layout, s[..n].to_vec()),
+        (Samples::U16(s), _) => craft_image_codecs::Image::from_u16(img.width, img.height, layout, &s[..n]),
+        (Samples::F32(_), Some(refusal)) => return Err(Error::Encode(refusal.into())),
+        (Samples::F32(s), None) => craft_image_codecs::Image::from_f32(img.width, img.height, layout, &s[..n]),
     }
-    .map_err(|e| Error::Encode(e.to_string()))?;
+    .map_err(|e| Error::Encode(e.to_string()))
+}
+
+/// Encode PNG (8- or 16-bit; float input is rejected — quantize first).
+pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
+    img.validate()?;
+    let mut ic_img = shared_image(img, Some("PNG needs 8- or 16-bit samples"))?;
     ic_img.icc = meta.icc.map(|b| b.to_vec());
     ic_img.meta.exif = meta.exif.map(|b| b.to_vec());
     ic_img.meta.xmp = meta.xmp.map(|x| x.to_string());
@@ -234,19 +241,7 @@ pub enum TiffCompression {
 /// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `craft-tiff`).
 pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &EncodeMeta) -> Result<Vec<u8>> {
     img.validate()?;
-    let n = img.width as usize * img.height as usize * img.channels as usize;
-    let layout = match img.channels {
-        1 => craft_image_codecs::ChannelLayout::Gray,
-        2 => craft_image_codecs::ChannelLayout::GrayA,
-        3 => craft_image_codecs::ChannelLayout::Rgb,
-        _ => craft_image_codecs::ChannelLayout::Rgba,
-    };
-    let mut ic_img = match img.samples {
-        Samples::U8(s) => craft_image_codecs::Image::from_u8(img.width, img.height, layout, s[..n].to_vec()),
-        Samples::U16(s) => craft_image_codecs::Image::from_u16(img.width, img.height, layout, &s[..n]),
-        Samples::F32(s) => craft_image_codecs::Image::from_f32(img.width, img.height, layout, &s[..n]),
-    }
-    .map_err(|e| Error::Encode(e.to_string()))?;
+    let mut ic_img = shared_image(img, None)?;
     ic_img.icc = meta.icc.map(|b| b.to_vec());
     ic_img.meta.xmp = meta.xmp.map(|x| x.to_string());
     ic_img.meta.dpi = meta.ppi.filter(|p| *p > 0).map(|p| (p as f32, p as f32));
@@ -325,19 +320,7 @@ pub fn encode_avif(img: &EncodeImage, quality: u8, speed: u8, meta: &EncodeMeta)
     img.validate()?;
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     {
-        let n = img.width as usize * img.height as usize * img.channels as usize;
-        let layout = match img.channels {
-            1 => craft_image_codecs::ChannelLayout::Gray,
-            2 => craft_image_codecs::ChannelLayout::GrayA,
-            3 => craft_image_codecs::ChannelLayout::Rgb,
-            _ => craft_image_codecs::ChannelLayout::Rgba,
-        };
-        let mut ic_img = match img.samples {
-            Samples::U8(s) => craft_image_codecs::Image::from_u8(img.width, img.height, layout, s[..n].to_vec()),
-            Samples::U16(s) => craft_image_codecs::Image::from_u16(img.width, img.height, layout, &s[..n]),
-            Samples::F32(_) => return Err(Error::Encode("AVIF encoder needs 8- or 16-bit samples".into())),
-        }
-        .map_err(|e| Error::Encode(e.to_string()))?;
+        let mut ic_img = shared_image(img, Some("AVIF encoder needs 8- or 16-bit samples"))?;
         ic_img.meta.exif = meta.exif.map(|e| e.to_vec());
         craft_image_codecs::encode_avif_with_speed(&ic_img, quality, speed).map_err(|e| Error::Encode(e.to_string()))
     }
