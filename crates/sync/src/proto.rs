@@ -87,8 +87,15 @@ impl SharedAccount {
     /// Whether every field is within bounds (a hostile peer's are dropped).
     pub fn sane(&self) -> bool {
         let ok = |s: &str| s.len() <= MAX_SHARED_FIELD && !s.chars().any(char::is_control);
-        !self.url.is_empty() && !self.user_id.is_empty() && self.user_id.len() <= 128 && !self.key.is_empty()
-            && ok(&self.url) && ok(&self.user_id) && ok(&self.user_name) && ok(&self.key) && self.pinned.as_deref().is_none_or(ok)
+        !self.url.is_empty()
+            && !self.user_id.is_empty()
+            && self.user_id.len() <= 128
+            && !self.key.is_empty()
+            && ok(&self.url)
+            && ok(&self.user_id)
+            && ok(&self.user_name)
+            && ok(&self.key)
+            && self.pinned.as_deref().is_none_or(ok)
     }
 }
 

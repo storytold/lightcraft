@@ -78,7 +78,9 @@ fn in_group(s: &Session) -> bool {
 
 /// The accounts shown as collections here: `(local id, user id)`.
 fn shown(s: &mut Session) -> Vec<(String, String)> {
-    s.immich_accounts().map(|a| a.immich.iter().filter(|x| x.collections && !x.user_id.is_empty()).map(|x| (x.id.clone(), x.user_id.clone())).collect()).unwrap_or_default()
+    s.immich_accounts()
+        .map(|a| a.immich.iter().filter(|x| x.collections && !x.user_id.is_empty()).map(|x| (x.id.clone(), x.user_id.clone())).collect())
+        .unwrap_or_default()
 }
 
 /// Every frame from `remote.pump`: starts the listings that are due and the uploads waiting.
@@ -272,7 +274,11 @@ fn start_push(s: &mut Session, accounts: &[(String, String)]) {
         let Some((account, _)) = accounts.iter().find(|(_, u)| *u == r.account) else { continue };
         let Some(p) = lib.keys.get(&key).and_then(|id| s.catalog.photo(*id)) else { continue };
         let linked = s.catalog.remote_of(p.id).find(|x| x.service == SERVICE && x.account_id == *account).map(|x| x.remote_id.clone());
-        let push = by_album.entry((account.clone(), r.album.clone())).or_insert_with(|| Push { album: r.album.clone(), add: Vec::new(), remove: Vec::new() });
+        let push = by_album.entry((account.clone(), r.album.clone())).or_insert_with(|| Push {
+            album: r.album.clone(),
+            add: Vec::new(),
+            remove: Vec::new(),
+        });
         if on {
             let path = match &p.source {
                 Source::File { path } if p.preview_only.is_none() => PathBuf::from(path),
@@ -310,7 +316,12 @@ fn start_push(s: &mut Session, accounts: &[(String, String)]) {
     });
 }
 
-fn push(client: &lcc_immich::Client, device: &str, pushes: Vec<Push>, task: &crate::activity::TaskGuard) -> (Vec<(PhotoId, String, String)>, Option<String>) {
+fn push(
+    client: &lcc_immich::Client,
+    device: &str,
+    pushes: Vec<Push>,
+    task: &crate::activity::TaskGuard,
+) -> (Vec<(PhotoId, String, String)>, Option<String>) {
     let mut links = Vec::new();
     let mut error = None;
     for p in pushes {
@@ -376,7 +387,9 @@ pub(crate) fn finish_push(s: &mut Session, p: Pushed) {
     let ops: Vec<Op> = p
         .links
         .into_iter()
-        .filter(|(photo, _, _)| s.catalog.photo(*photo).is_some() && !s.catalog.remote_of(*photo).any(|r| r.service == SERVICE && r.account_id == p.account))
+        .filter(|(photo, _, _)| {
+            s.catalog.photo(*photo).is_some() && !s.catalog.remote_of(*photo).any(|r| r.service == SERVICE && r.account_id == p.account)
+        })
         .map(|(photo, asset, sha1)| {
             lcc_catalog::Catalog::link_remote_op(lcc_catalog::RemoteIdentity {
                 photo_id: photo,
@@ -467,9 +480,9 @@ fn take_shared(s: &mut Session) {
             continue;
         }
         let id = lcc_immich::Account::make_id(&url, &a.user_id);
-        let stored = s.secret_store().and_then(|st| {
-            st.set(&lcc_immich::accounts::secret_key(&id), &lcc_credentials::Secret::new(a.key.clone())).map_err(|e| e.to_string())
-        });
+        let stored = s
+            .secret_store()
+            .and_then(|st| st.set(&lcc_immich::accounts::secret_key(&id), &lcc_credentials::Secret::new(a.key.clone())).map_err(|e| e.to_string()));
         if let Err(e) = stored {
             log::warn!("sync: a shared Immich connection couldn't be stored: {e}");
             continue;

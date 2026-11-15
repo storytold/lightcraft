@@ -55,6 +55,13 @@ If this device is connected to an Immich server, turn on **Show Immich albums as
 - Photos come from Immich, not from your other devices; your edits, ratings and labels travel between your devices as usual.
 - Add a photo to such a collection on any device and it goes to the Immich album. If Immich already has it (for example the Immich phone app uploaded it), it is linked, not uploaded again.
 
+## Camera roll
+Turn on **Sync this device's camera roll** under *This Device* (while the catalog syncs). On a computer, choose the folder your phone's photos arrive in; on Android it is the phone's camera roll.
+
+- New photos in the folder are imported as they arrive and go into the collection **Camera Roll - ‹this device's name›**; it is renamed with the device.
+- Share it from the *Collections* table like any other collection.
+- If the Immich app also uploads your camera roll, nothing is stored twice: the same photo is recognised by its checksum, whichever arrives first.
+
 ## Pills
 Grid cells (with the other badges) and collection rows show a small pill: two letters and an arrow.
 
@@ -68,7 +75,6 @@ Hover a pill for the same in words.
 - Virtual copies, versions and history, and the keyword tree don't travel.
 - Both devices need the same version of the app, and their clocks within five minutes of each other.
 - Local network only. Importing identical bytes a second time doesn't sync as a new photo.
-- The Android camera roll as a collection is the next stage.
 
 ## Privacy
 - Only your paired devices are contacted. Remove every device in **Settings ▸ Sync** to stop. See [Privacy](../../platforms/settings-and-privacy/).

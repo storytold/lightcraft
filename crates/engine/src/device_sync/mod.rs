@@ -22,6 +22,8 @@
 
 pub(crate) mod catalog;
 pub(crate) mod record;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod roll;
 #[cfg(test)]
 mod tests;
 mod wire;
@@ -162,6 +164,9 @@ pub(crate) struct Lib {
     pub share_sent: HashSet<String>,
     /// Connections other devices of the group shared, to store (`immich::collections::tick`).
     pub share_in: Vec<lcc_sync::proto::SharedAccount>,
+    /// The camera-roll folder's watch.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub roll: roll::RollWatch,
     /// Each shared collection's photos as the catalogue had them when last looked at.
     pub base: HashMap<String, BTreeSet<String>>,
     /// The photos this device should hold more of than it does.
@@ -268,7 +273,7 @@ impl State {
         self.service.as_ref().map(|s| s.device_id()).or_else(|| self.stored().map(|s| s.identity.device_id))
     }
 
-    fn device_name(&self) -> String {
+    pub(crate) fn device_name(&self) -> String {
         self.service.as_ref().map(|s| s.status().name).or_else(|| self.stored().map(|s| s.identity.name)).unwrap_or_else(default_device_name)
     }
 
@@ -455,6 +460,7 @@ fn catalogue_status(s: &Session, online: &HashSet<String>, paired: &[lcc_peer::P
         "collections": collections,
         "undecided": catalog::undecided(s, lib),
         "unkeyed": catalog::unkeyed(s),
+        "cameraRoll": r.camera_roll,
         "photos": s.catalog.photos().count(),
     })
 }
@@ -587,6 +593,8 @@ pub(crate) fn rename(s: &mut Session, name: &str) -> Result<Value> {
     }
     let a = s.activity.clone();
     s.device_sync.ensure(&a)?.rename(&name).map_err(other)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    roll::renamed(s, &name);
     status(s)
 }
 
@@ -688,6 +696,8 @@ pub(crate) fn ensure_lib(s: &mut Session) {
         share_out: None,
         share_sent: HashSet::new(),
         share_in: Vec::new(),
+        #[cfg(not(target_arch = "wasm32"))]
+        roll: Default::default(),
         base: HashMap::new(),
         wanting: BTreeSet::new(),
         missing: HashMap::new(),
@@ -913,6 +923,8 @@ pub(crate) fn tick(s: &mut Session) -> Result<Value> {
         }
         s.device_sync.lib = Some(lib);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    roll::tick(s);
     let jobs = std::mem::take(&mut *lock(&hub.jobs));
     let mut handled = 0;
     for job in jobs {

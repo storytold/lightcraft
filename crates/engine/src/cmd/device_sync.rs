@@ -90,6 +90,41 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"listing": 0, "errors": {}}))
             }
         }),
+        cmd!(
+            "sync.cameraRoll",
+            "Sync the Camera Roll",
+            [],
+            None,
+            "{on: bool, folder?}: this device's camera roll becomes the collection `Camera Roll - {device name}`, owned by this device and shared like any other: `folder` is watched and imported in place, and the collection holds every photo whose file is in it (on Android the folder is the platform's camera roll, learned from its listing) → {on, folder, collection}",
+            always,
+            |s, p| {
+                #[cfg(not(target_arch = "wasm32"))]
+                return sync::roll::set(s, p);
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = (s, p);
+                    Err(bad("sync.cameraRoll", "there is no camera roll here"))
+                }
+            }
+        ),
+        cmd!(query "sync.cameraRollScan", "Look in the Camera Roll Now", [], None, "{}: import what is new in the camera-roll folder and file the collection now (also done when the folder changes) → {folder, photos}", always, |s, _p| {
+            #[cfg(not(target_arch = "wasm32"))]
+            return Ok(sync::roll::scan_now(s));
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = s;
+                Ok(json!({"folder": null, "photos": 0}))
+            }
+        }),
+        cmd!(query "sync.cameraRollSeen", "Camera Roll Listed", [], None, "{paths}: the platform listed its camera roll (Android): on a device whose camera roll syncs without a folder of its own, their folder is the roll → {folder}", always, |s, p| {
+            #[cfg(not(target_arch = "wasm32"))]
+            return sync::roll::seen(s, p);
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = (s, p);
+                Ok(json!({"folder": null}))
+            }
+        }),
         cmd!(query "sync.now", "Sync Now", [], None, "{}: exchange with every device now → sync.status", always, |s, _p| {
             sync::sync_now(s);
             sync::status(s)

@@ -472,7 +472,12 @@ fn a_wrong_claimed_sha1_changes_nothing() {
     let h = b.catalog.photo(ib).unwrap().content_hash.clone().unwrap();
     let wrong = "sha1:a9993e364706816aba3e25717850c26c9cd0d89d".to_string();
     let batch = lcc_sync::proto::Batch {
-        items: vec![lcc_sync::replica::Item::Photo { key: wrong.clone(), info: json!({"content_hash": h}), fields: Default::default(), here: Default::default() }],
+        items: vec![lcc_sync::replica::Item::Photo {
+            key: wrong.clone(),
+            info: json!({"content_hash": h}),
+            fields: Default::default(),
+            here: Default::default(),
+        }],
         upto: 1,
         more: false,
         ..Default::default()
@@ -569,7 +574,9 @@ fn immich_albums_are_collections_each_device_takes_as_it_chose() {
         s.execute("sync.immichRefresh", &json!({})).unwrap();
     }
     pump_both(&mut a, &ap, &mut b, &bp, "the album as a collection", |a, b| {
-        let names = |s: &Session| s.device_sync.lib.as_ref().is_some_and(|l| l.replica.collections.values().any(|e| e.c.is_immich() && e.c.meta.v.name == "Holiday"));
+        let names = |s: &Session| {
+            s.device_sync.lib.as_ref().is_some_and(|l| l.replica.collections.values().any(|e| e.c.is_immich() && e.c.meta.v.name == "Holiday"))
+        };
         names(a) && names(b)
     });
     let v = status(&mut a);
@@ -677,8 +684,55 @@ fn a_shared_immich_connection_reaches_the_other_device_and_a_private_one_does_no
     b.execute("sync.immichRefresh", &json!({})).unwrap();
     pump_both(&mut a, &ap, &mut b, &bp, "the photo at b", |_, b| album_photos(b, "Pets").len() == 1);
     // hostile shared connections are dropped
-    let bad = lcc_sync::proto::SharedAccount { url: "x".repeat(5000), user_id: String::new(), user_name: String::new(), key: "\u{0}".into(), pinned: None };
+    let bad =
+        lcc_sync::proto::SharedAccount { url: "x".repeat(5000), user_id: String::new(), user_name: String::new(), key: "\u{0}".into(), pinned: None };
     assert!(!bad.sane());
-    assert!(!format!("{bad:?}").contains('\u{0}') && format!("{:?}", lcc_sync::proto::SharedAccount { key: "secret-k".into(), ..bad }).contains("<hidden>"));
+    assert!(
+        !format!("{bad:?}").contains('\u{0}')
+            && format!("{:?}", lcc_sync::proto::SharedAccount { key: "secret-k".into(), ..bad }).contains("<hidden>")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The camera roll is a collection `Camera Roll - {Device Name}` owned by the device: the folder
+/// is imported in place, new photos in it join, and the collection follows a rename.
+#[test]
+fn the_camera_roll_is_a_collection_that_follows_the_device_name() {
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-roll");
+    let roll = dir.join("DCIM").join("Camera");
+    std::fs::create_dir_all(&roll).unwrap();
+    write_png(&roll.join("IMG_1.png"), 31);
+    write_png(&roll.join("IMG_2.png"), 32);
+    let (mut a, ap) = offline(&dir, "a");
+    let (mut b, bp) = offline(&dir, "b");
+    assert!(a.execute("sync.cameraRoll", &json!({"on": true, "folder": roll.to_string_lossy()})).is_err(), "only while syncing");
+    offline_group(&mut a, &ap, &mut b, &bp);
+    assert!(a.execute("sync.cameraRoll", &json!({"on": true})).is_err(), "a folder is needed on a desktop");
+    assert!(a.execute("sync.cameraRoll", &json!({"on": true, "folder": dir.join("nope").to_string_lossy()})).is_err());
+    assert!(a.execute("sync.cameraRoll", &json!({"on": true, "folder": "bad\u{0}name"})).is_err());
+    let v = a.execute("sync.cameraRoll", &json!({"on": true, "folder": roll.to_string_lossy()})).unwrap();
+    let name = super::roll::roll_name("a");
+    assert_eq!(album_photos(&a, &name).len(), 2, "{v}");
+    let cid = v["collection"].as_str().unwrap().to_string();
+    let c = a.device_sync.lib.as_ref().unwrap().replica.collection(&cid).unwrap().clone();
+    assert_eq!(c.kind, lcc_sync::CollectionKind::CameraRoll);
+    // shared like any other collection: the other device takes it
+    a.execute("sync.allow", &json!({"collection": cid, "allow": "preview"})).unwrap();
+    swap(&mut a, &ap, &mut b, &bp);
+    assert!(b.device_sync.lib.as_ref().unwrap().replica.collection(&cid).is_some_and(|c| c.meta.v.name == name));
+    // a photo taken later joins
+    write_png(&roll.join("IMG_3.png"), 33);
+    assert_eq!(a.execute("sync.cameraRollScan", &json!({})).unwrap()["photos"], 3);
+    assert_eq!(album_photos(&a, &name).len(), 3);
+    assert_eq!(a.catalog.photos().count(), 3, "nothing imported twice");
+    // the device is renamed: the collection follows, on the other device too
+    super::roll::renamed(&mut a, "Pixel");
+    swap(&mut a, &ap, &mut b, &bp);
+    assert_eq!(album_photos(&a, "Camera Roll - Pixel").len(), 3);
+    assert!(b.device_sync.lib.as_ref().unwrap().replica.collection(&cid).is_some_and(|c| c.meta.v.name == "Camera Roll - Pixel"));
+    // the platform's listing names the folder where none was given (Android)
+    let r = a.execute("sync.cameraRollSeen", &json!({"paths": [5, "", "\u{0}"]})).unwrap();
+    assert_eq!(r["folder"], roll.to_string_lossy().as_ref(), "a folder given stays");
+    assert_eq!(a.execute("sync.cameraRoll", &json!({"on": false})).unwrap()["on"], false);
     let _ = std::fs::remove_dir_all(&dir);
 }

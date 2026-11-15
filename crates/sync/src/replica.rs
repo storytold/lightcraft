@@ -183,6 +183,10 @@ pub struct Replica {
     /// collections are never told to another device. Local state; it doesn't travel.
     #[serde(default)]
     pub private_immich: BTreeSet<String>,
+    /// The folder this device's camera roll is watched in (`""`: the platform says where).
+    /// Local state; it doesn't travel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_roll: Option<String>,
     #[serde(default)]
     pub clock: Clock,
     #[serde(default)]

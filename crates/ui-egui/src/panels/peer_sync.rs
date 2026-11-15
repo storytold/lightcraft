@@ -238,12 +238,44 @@ fn this_device(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
             RichText::new(tr("Another device nearby has this name too: give this one another.")).size(11.0).color(t.caution),
         );
     }
+    camera_roll_row(app, ui, t, st);
     if flag(st, "pairingsLost") {
         crate::dialog_frame::note(
             ui,
             RichText::new(tr("The saved pairings couldn't be read and were set aside: pair the devices again.")).size(11.0).color(t.caution),
         );
     }
+}
+
+/// This device's camera roll as the collection `Camera Roll - {name}` (while the catalog syncs).
+fn camera_roll_row(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, st: &Value) {
+    let cat = &st["catalogue"];
+    if cat["group"].is_null() {
+        return;
+    }
+    let mut on = !cat["cameraRoll"].is_null();
+    let c = ui.checkbox(&mut on, tr("Sync this device's camera roll"));
+    register(ui.ctx(), "check:syncCameraRoll", c.rect);
+    if c.changed() {
+        if !on {
+            run(app, "roll", "sync.cameraRoll", json!({"on": false}));
+        } else if cfg!(target_os = "android") {
+            run(app, "roll", "sync.cameraRoll", json!({"on": true}));
+        } else if let Some(folder) = app.services.pick_folder.as_mut().and_then(|f| f()) {
+            run(app, "roll", "sync.cameraRoll", json!({"on": true, "folder": folder}));
+        }
+        if let Ok(v) = app.session.execute("sync.status", &json!({})) {
+            app.peer_sync.status = v;
+        }
+    }
+    let folder = cat["cameraRoll"].as_str().unwrap_or_default();
+    let line = if folder.is_empty() {
+        tr("Photos in the camera roll go into the collection “Camera Roll - this device's name”.").to_string()
+    } else {
+        tr_format!("Photos in {folder} go into the collection “Camera Roll - this device's name”.", folder = folder)
+    };
+    super::settings::hint(ui, t, &line);
+    error_line(app, ui, t, "roll");
 }
 
 // ── devices ────────────────────────────────────────────────────────────────────────────────

@@ -1067,9 +1067,11 @@ fn collections_rows(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, i
     );
     if a["collections"] == true {
         ui.label(
-            RichText::new(crate::i18n::tr("Each album is a collection in the Immich set; in Settings ▸ Sync each device chooses None, Previews or Full Quality."))
-                .size(11.0)
-                .color(t.text_dim),
+            RichText::new(crate::i18n::tr(
+                "Each album is a collection in the Immich set; in Settings ▸ Sync each device chooses None, Previews or Full Quality.",
+            ))
+            .size(11.0)
+            .color(t.text_dim),
         );
     }
 }

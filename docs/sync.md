@@ -89,6 +89,22 @@ uploaded again. A link-only photo doesn't ask other devices for its original: it
   names the account by Immich's user id alone (a UUID), so two devices that reach one server by different URLs
   (LAN and public) share its collections.
 
+## Camera roll
+
+- **Settings ▸ Sync ▸ This Device ▸ Sync this device's camera roll** (`sync.cameraRoll {on, folder?}`) makes the
+  collection `Camera Roll - {Device Name}` (id `roll:<device>`, kind `cameraRoll`), owned by the device and shared
+  like any other collection (grant None until the person allows it). It follows the device's name.
+- The folder is watched: a worker takes its stamp about every 30 s; when it changed, the folder is imported in place
+  (the ordinary import, which skips what the catalog has) and the collection holds every photo whose file is in the
+  folder (`sync.cameraRollScan` does it now). On a desktop the folder is chosen; on Android the app's camera-roll
+  watch (MediaStore listing of DCIM/Camera through `crates/android-host`) tells the folder with
+  `sync.cameraRollSeen`, so no new platform code was needed.
+- No duplicates with the Immich app: a roll photo is keyed by its SHA-1, as is the Immich app's upload of it. If
+  Immich has it first, the checksum lookup after import links it; if the app uploads it first (added to an Immich
+  collection), the Immich app's later upload is a duplicate Immich refuses; a device that sees it only through
+  Immich (link-only) and a device that gets the file from a peer hold the same key, so the photo is one photo
+  everywhere, and a later import of the file onto a link-only photo makes it take the file.
+
 ## Pills
 
 Two letters and an arrow (`RF ↓`), no colour: where the original is (**L**ocal, **R**emote, **I**mmich,
@@ -125,4 +141,3 @@ Tracked in [gaps.md](gaps.md) (gaps 31–33).
   Android NSD.
 - A second import of identical bytes is the same photo, so it doesn't sync as a new one.
 - Not yet tested between real devices; the tests run two devices over loopback on one machine.
-- Next stage: the Android camera roll as a collection.

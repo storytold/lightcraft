@@ -13,3 +13,5 @@
   go to the Immich album, uploaded only if Immich doesn't have them yet.
 - **Share with synced devices** sends an Immich connection, key included, to your other devices over their
   encrypted link; off, the connection and its albums stay on this device.
+- **Sync this device's camera roll** (Settings ▸ Sync) puts new photos into the collection "Camera Roll - ‹device›",
+  without duplicates when the Immich app uploads them too.

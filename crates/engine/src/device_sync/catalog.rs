@@ -353,8 +353,7 @@ pub(super) fn scan(s: &Session, lib: &mut Lib) -> bool {
         }
         None => {
             let members: BTreeSet<&String> = lib.replica.members.values().flat_map(|m| m.iter().filter(|(_, e)| e.on.v).map(|(k, _)| k)).collect();
-            let keys: BTreeSet<String> =
-                lib.replica.photos.keys().chain(members).filter(|k| lib.keys.contains_key(*k)).cloned().collect();
+            let keys: BTreeSet<String> = lib.replica.photos.keys().chain(members).filter(|k| lib.keys.contains_key(*k)).cloned().collect();
             for key in keys {
                 changed |= scan_photo(s, lib, &key, now);
             }
@@ -558,9 +557,11 @@ pub(crate) fn reconcile(s: &mut Session, lib: &mut Lib) {
             !c.gone()
                 && here
                 && match c.kind {
-                    CollectionKind::Set => lib.replica.collections.values().any(|e| {
-                        e.c.meta.v.parent.as_deref() == Some(id.as_str()) && !e.c.gone() && e.c.take_of(&me) != Take::None
-                    }),
+                    CollectionKind::Set => lib
+                        .replica
+                        .collections
+                        .values()
+                        .any(|e| e.c.meta.v.parent.as_deref() == Some(id.as_str()) && !e.c.gone() && e.c.take_of(&me) != Take::None),
                     _ => c.take_of(&me) != Take::None,
                 }
         } else {
