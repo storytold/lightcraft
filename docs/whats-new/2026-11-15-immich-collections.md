@@ -1,0 +1,8 @@
+### One photo, one identity across devices and Immich
+
+- Device sync now names a photo by the SHA-1 of its original, the same checksum Immich uses. A device that holds
+  the file and a device that holds only an Immich link see the same photo, never two.
+- A device that hasn't hashed a photo yet still matches it with the other devices; synced catalogs move to the new
+  names on their own, keeping every edit.
+- A photo that arrives from another device is looked up on your Immich server first, so an original Immich
+  already has is linked instead of uploaded again.

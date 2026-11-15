@@ -29,8 +29,32 @@ between. This page describes what is built, how it works, and its known limits. 
   `fullQuality` (originals; edits go back), `fullSync` (photos added there go to the others too).
 - A collection created while the whole catalog syncs is *undecided* until the person answers (`sync.allow` or
   `sync.skip`); the UI asks at once.
-- Photos are keyed by the hash of the original's bytes. A photo's record (develop settings, rating, flag, label,
-  metadata) merges field by field, the later change winning by a hybrid logical clock.
+- A photo's record (develop settings, rating, flag, label, metadata) merges field by field, the later change
+  winning by a hybrid logical clock.
+
+## Photo identity
+
+One rule names a photo on every device (`device_sync::record::key_of`):
+
+- `sha1:<hex>`, the SHA-1 of the original's bytes, as soon as it is known. Imports hash the original, and every
+  catalog back-fills the SHA-1 of older photos in the background. An Immich link-only photo, whose original isn't
+  on the device, uses the checksum Immich reports for the asset, which is the same SHA-1. So a device holding the
+  file and a device holding only the Immich link give the same photo the same key, and Immich and device sync
+  agree on what "the same photo" is.
+- Until then, the catalog's content hash of the original (older replicas used only this).
+- Virtual copies, a second import of the same bytes and link-only photos without a checksum have no key.
+
+When a photo's SHA-1 becomes known its key moves (`Replica::rekey`): its record, its places in collections and
+what is queued for each device move to the new key, and if another device already told of the new key, the two
+merge field by field. Opening a catalog whose replica still uses content-hash keys moves them the same way.
+Each catalog keeps a table of content-hash keys of photos it knows by SHA-1, so a device that hasn't hashed a
+photo yet is still understood. A photo sent under its SHA-1 key carries its content hash; a device that has
+that content hash but no SHA-1 takes the SHA-1 (the same bytes) and moves to the new key, so the two never
+become two photos. A link-only photo is sent without its content hash, SHA-1 or size, which are the preview's.
+
+A photo that arrives from another device and has a SHA-1 key is looked up on the connected Immich servers by
+checksum straight away (the same lookup as for a new import), so an original Immich already has is linked, not
+uploaded again. A link-only photo doesn't ask other devices for its original: it comes from Immich.
 
 ## Pills
 

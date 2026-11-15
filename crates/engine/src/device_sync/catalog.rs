@@ -33,42 +33,95 @@ fn plain(a: &Album) -> bool {
     a.smart.is_none() && !a.quick
 }
 
-/// The catalogue's photos by key (and back).
+/// The catalogue's photos by key (and back), and the content-hash keys other devices may still
+/// use for photos known here by SHA-1. A photo the replica still knows by its content hash moves
+/// to its SHA-1 key (catalogues synced before photos were keyed by SHA-1, and photos hashed while
+/// the catalogue was closed).
 pub(super) fn index(s: &Session, lib: &mut Lib) {
     lib.album_sig.clear();
     lib.keys.clear();
     lib.ids.clear();
+    lib.alias.clear();
     for p in s.catalog.photos() {
-        if let Some(k) = record::key_of(p)
-            && !lib.keys.contains_key(k)
+        if let Some(k) = record::key_of(p, &s.catalog)
+            && !lib.keys.contains_key(&k)
         {
-            lib.keys.insert(k.to_string(), p.id);
-            lib.ids.insert(p.id, k.to_string());
+            if let Some(old) = record::content_key(p).filter(|c| *c != k) {
+                lib.alias.insert(old.to_string(), k.clone());
+                lib.replica.rekey(old, &k);
+            }
+            lib.keys.insert(k.clone(), p.id);
+            lib.ids.insert(p.id, k);
         }
     }
     wanting(lib);
 }
 
 fn reindex(s: &Session, lib: &mut Lib, id: PhotoId) {
-    let key = s.catalog.photo(id).and_then(|p| record::key_of(p)).map(str::to_string);
+    let p = s.catalog.photo(id);
+    let key = p.and_then(|p| record::key_of(p, &s.catalog));
     let old = lib.ids.get(&id).cloned();
     if old == key {
         return;
     }
     // a photo got (or lost) its key: every collection's photos are looked at afresh
     lib.album_sig.clear();
-    if let Some(o) = old {
+    if let Some(o) = &old {
         lib.ids.remove(&id);
-        if lib.keys.get(&o) == Some(&id) {
-            lib.keys.remove(&o);
+        if lib.keys.get(o) == Some(&id) {
+            lib.keys.remove(o);
         }
     }
     if let Some(k) = key
         && !lib.keys.contains_key(&k)
     {
+        // its original's SHA-1 became known: what the replica holds under the old key moves
+        if let Some(o) = old.as_deref().filter(|o| !o.starts_with(record::SHA1_KEY)) {
+            lib.replica.rekey(o, &k);
+            lib.alias.insert(o.to_string(), k.clone());
+        }
+        if let Some(c) = p.and_then(|p| record::content_key(p)).filter(|c| *c != k) {
+            lib.alias.insert(c.to_string(), k.clone());
+        }
         lib.keys.insert(k.clone(), id);
         lib.ids.insert(id, k);
     }
+}
+
+/// The key this catalogue uses for a key another device sent (it may still name the photo by
+/// its content hash, which is known here by SHA-1).
+pub(super) fn local_key<'a>(lib: &'a Lib, key: &'a str) -> &'a str {
+    if lib.keys.contains_key(key) {
+        return key;
+    }
+    lib.alias.get(key).map_or(key, String::as_str)
+}
+
+/// The key to merge an item another device sent under. Beyond [`local_key`]: a photo sent
+/// under its SHA-1 key whose content hash names a photo here not hashed yet is that photo (the
+/// same bytes), which takes the SHA-1 and moves to the new key; one only told of moves too.
+fn incoming_key(s: &mut Session, lib: &mut Lib, key: &str, info: &Value) -> String {
+    let k = local_key(lib, key).to_string();
+    if k != key || lib.keys.contains_key(&k) || lib.replica.photos.contains_key(&k) {
+        return k;
+    }
+    let (Some(sha1), Some(h)) = (record::sha1_of_key(key), info.get("content_hash").and_then(Value::as_str)) else { return k };
+    if h == key || h.len() > 128 {
+        return k;
+    }
+    if let Some(id) = lib.keys.get(h).copied() {
+        let unhashed = s.catalog.photo(id).is_some_and(|p| p.sha1.is_none() && record::content_key(p) == Some(h));
+        if unhashed {
+            match s.apply_system(Op::SetSha1 { id, sha1: Some(sha1) }) {
+                Ok(()) => reindex(s, lib, id),
+                Err(e) => log::warn!("sync: {e}"),
+            }
+        }
+    } else if lib.replica.photos.contains_key(h) {
+        lib.replica.rekey(h, key);
+        lib.alias.insert(h.to_string(), key.to_string());
+    }
+    key.to_string()
 }
 
 /// The photos this device should hold more of than it does.
@@ -89,7 +142,7 @@ fn in_group(lib: &Lib) -> Option<Mode> {
 
 /// Photos of the catalogue that can't sync yet: not hashed, or a second import of the same bytes.
 pub(super) fn unkeyed(s: &Session) -> usize {
-    s.catalog.photos().filter(|p| !p.deleted && p.copy_of.is_none() && record::key_of(p).is_none()).count()
+    s.catalog.photos().filter(|p| !p.deleted && p.copy_of.is_none() && record::key_of(p, &s.catalog).is_none()).count()
 }
 
 /// New collections of the catalogue the person hasn't said how to share.
@@ -344,9 +397,12 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
                 lib.replica.merge_collection(c, from);
             }
             Item::Member { coll, key, on } => {
-                lib.replica.merge_member(coll, key, on, from);
+                let key = local_key(lib, key).to_string();
+                lib.replica.merge_member(coll, &key, on, from);
             }
-            Item::Photo { key, info, fields, .. } => match lib.keys.get(key).copied() {
+            Item::Photo { key, info, fields, .. } => {
+                let key = &incoming_key(s, lib, key, info);
+                match lib.keys.get(key).copied() {
                 Some(id) if lib.replica.photos.get(key).is_none_or(|e| e.ghost.is_none()) => {
                     for (name, lww) in fields.iter().take(32) {
                         if !record::FIELDS.contains(&name.as_str()) || !lib.replica.incoming_wins(key, name, lww) {
@@ -367,7 +423,8 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
                 _ => {
                     lib.replica.merge_ghost(key, info, fields, from);
                 }
-            },
+            }
+            }
         }
     }
     reconcile(s, lib);
@@ -431,6 +488,8 @@ fn adopt(s: &mut Session, lib: &mut Lib, key: &str) {
             }
             lib.keys.insert(key.to_string(), id);
             lib.ids.insert(id, key.to_string());
+            // a connected Immich server that has the same original links it (no upload, no second asset)
+            s.remote.link_queue.push(id);
             (id, Depth::None)
         }
     };
@@ -559,7 +618,8 @@ pub(super) fn wants(s: &Session, lib: &mut Lib, peer: &str) -> Vec<Want> {
         let Some(p) = lib.keys.get(key).and_then(|id| s.catalog.photo(*id)) else { continue };
         let Source::File { path } = &p.source else { continue };
         match lib.replica.depth_wanted(key) {
-            Depth::Full if !path.is_empty() => out.push(Want { key: key.clone(), depth: Depth::Full, dest: PathBuf::from(path) }),
+            // (a link-only photo's original comes from Immich, and its file here is the preview)
+            Depth::Full if !path.is_empty() && p.preview_only.as_deref() != Some(crate::remote::LINK_ONLY) => out.push(Want { key: key.clone(), depth: Depth::Full, dest: PathBuf::from(path) }),
             Depth::Preview => {
                 if let Some(dir) = &smart_dir {
                     out.push(Want { key: key.clone(), depth: Depth::Preview, dest: crate::smart::sharded_file_path(dir, p) });
@@ -579,6 +639,7 @@ pub(super) fn locate(s: &mut Session, lib: &mut Lib, peer: &str, wants: &[(Strin
     let found: Vec<Result<PathBuf, bool>> = wants
         .iter()
         .map(|(key, depth)| {
+            let key = local_key(lib, key);
             if !lib.replica.may_fetch(peer, key, *depth) {
                 return Err(false);
             }

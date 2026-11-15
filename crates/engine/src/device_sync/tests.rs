@@ -198,3 +198,117 @@ fn cancel_pairing_without_a_pairing_is_harmless() {
     let v = a.execute("sync.cancelPairing", &json!({})).unwrap();
     assert!(v["pairing"].is_null());
 }
+
+// ── in-process exchanges (no network): the catalogue side of sync ─────────────────────────────
+
+/// A session with a sync identity and its catalogue's replica loaded, without starting the service.
+fn offline(dir: &std::path::Path, name: &str) -> (Session, lcc_peer::Peer) {
+    let mut s = Session::new().with_fs();
+    let store = dir.join(format!("{name}.json"));
+    let st = lcc_peer::Store::load_or_create(&store, name).unwrap();
+    st.save(&store).unwrap();
+    s.device_sync.store_path = Some(store);
+    s.open_library(dir.join(format!("{name}-lib")), false).unwrap();
+    super::ensure_lib(&mut s);
+    let peer = lcc_peer::Peer { device_id: st.identity.device_id, name: name.into(), public_key: String::new(), paired_at: 0 };
+    (s, peer)
+}
+
+/// Everything `from` has for `to`, through JSON as on the wire.
+fn hand_over(from: &mut Session, fp: &lcc_peer::Peer, to: &mut Session, tp: &lcc_peer::Peer) {
+    for _ in 0..50 {
+        let mut lf = from.device_sync.lib.take().unwrap();
+        super::catalog::scan(from, &mut lf);
+        let (batch, out) = super::catalog::prepare(from, &lf, &tp.device_id);
+        from.device_sync.lib = Some(lf);
+        let batch: lcc_sync::proto::Batch = serde_json::from_slice(&serde_json::to_vec(&batch).unwrap()).unwrap();
+        let mut lt = to.device_sync.lib.take().unwrap();
+        super::catalog::scan(to, &mut lt);
+        super::catalog::apply(to, &mut lt, fp, &batch).unwrap();
+        to.device_sync.lib = Some(lt);
+        from.device_sync.lib.as_mut().unwrap().replica.confirmed(&tp.device_id, &out);
+        if !out.more {
+            return;
+        }
+    }
+}
+
+fn swap(a: &mut Session, ap: &lcc_peer::Peer, b: &mut Session, bp: &lcc_peer::Peer) {
+    for _ in 0..3 {
+        hand_over(a, ap, b, bp);
+        hand_over(b, bp, a, ap);
+    }
+}
+
+/// `a` starts a whole-catalogue group that `b` joins.
+fn offline_group(a: &mut Session, ap: &lcc_peer::Peer, b: &mut Session, bp: &lcc_peer::Peer) {
+    let la = a.device_sync.lib.as_mut().unwrap();
+    la.replica.start_group("g", lcc_sync::Mode::Catalogue, Some(ap.device_id.clone()), &ap.name, super::now_ms()).unwrap();
+    la.replica.invited.insert(bp.device_id.clone());
+    let g = la.replica.group.clone().unwrap();
+    let lb = b.device_sync.lib.as_mut().unwrap();
+    lb.replica.join_group(&g, &bp.name, super::now_ms()).unwrap();
+    for s in [&mut *a, &mut *b] {
+        let mut l = s.device_sync.lib.take().unwrap();
+        super::catalog::register_all(s, &mut l);
+        s.device_sync.lib = Some(l);
+    }
+    swap(a, ap, b, bp);
+}
+
+fn key_of(s: &Session, id: u64) -> Option<String> {
+    s.device_sync.lib.as_ref().unwrap().ids.get(&lcc_catalog::PhotoId(id)).cloned()
+}
+
+/// The same original on two devices, one of which hasn't hashed it (or synced before photos were
+/// keyed by SHA-1): it ends as one photo with one key on both, the edits of both kept, and a
+/// replica that still knew it by its content hash moves to the new key.
+#[test]
+fn one_original_has_one_key_whichever_device_hashed_it() {
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-identity");
+    let src = dir.join("one.png");
+    write_png(&src, 5);
+    let (mut a, ap) = offline(&dir, "a");
+    let (mut b, bp) = offline(&dir, "b");
+    let ia = a.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap();
+    let ib = b.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap();
+    let sha1 = a.catalog.photo(lcc_catalog::PhotoId(ia)).unwrap().sha1.clone().expect("import hashes the original");
+    // B hasn't hashed its copy
+    b.apply_system(lcc_catalog::Op::SetSha1 { id: lcc_catalog::PhotoId(ib), sha1: None }).unwrap();
+    let trip = a.execute("album.create", &json!({"name": "Trip"})).unwrap()["id"].as_u64().unwrap();
+    a.selection = crate::Selection::single(lcc_catalog::PhotoId(ia));
+    a.execute("album.addPhotos", &json!({"id": trip, "ids": [ia]})).unwrap();
+    for s in [&mut a, &mut b] {
+        let mut l = s.device_sync.lib.take().unwrap();
+        super::catalog::index(s, &mut l);
+        s.device_sync.lib = Some(l);
+    }
+    assert_eq!(key_of(&a, ia), Some(format!("sha1:{sha1}")));
+    let old_key = key_of(&b, ib).unwrap();
+    assert!(!old_key.starts_with("sha1:"), "an unhashed photo is known by its content hash");
+    offline_group(&mut a, &ap, &mut b, &bp);
+    a.execute("sync.allow", &json!({"album": trip, "allow": "sync"})).unwrap();
+    let cid = a.device_sync.lib.as_ref().unwrap().replica.collection_of_album(trip).unwrap().to_string();
+    swap(&mut a, &ap, &mut b, &bp);
+    b.execute("sync.take", &json!({"collection": cid, "take": "fullSync"})).unwrap();
+    // B edits under the old key before it learns the SHA-1
+    b.execute("photo.rate", &json!({"ids": [ib], "rating": 3})).unwrap();
+    a.execute("photo.rate", &json!({"ids": [ia], "rating": 1})).unwrap();
+    let mut d = (*a.catalog.photo(lcc_catalog::PhotoId(ia)).unwrap().develop).clone();
+    d.light.exposure = 0.7;
+    a.set_develop(lcc_catalog::PhotoId(ia), d, "test").unwrap();
+    swap(&mut a, &ap, &mut b, &bp);
+    for s in [&a, &b] {
+        assert_eq!(s.catalog.photos().count(), 1, "one photo, not a second one for the other key");
+    }
+    let pb = b.catalog.photo(lcc_catalog::PhotoId(ib)).unwrap();
+    assert_eq!(pb.sha1.as_deref(), Some(sha1.as_str()), "B takes the SHA-1 of the same bytes");
+    assert_eq!(key_of(&b, ib), key_of(&a, ia));
+    assert_eq!(pb.develop.light.exposure, 0.7);
+    let (ra, rb) = (a.catalog.photo(lcc_catalog::PhotoId(ia)).unwrap().rating, pb.rating);
+    assert_eq!(ra, rb, "both end with the later rating");
+    assert!(b.catalog.albums().any(|al| al.name == "Trip" && al.photos == vec![lcc_catalog::PhotoId(ib)]));
+    let rb = &b.device_sync.lib.as_ref().unwrap().replica;
+    assert!(!rb.photos.contains_key(&old_key), "nothing is left under the old key");
+    let _ = std::fs::remove_dir_all(&dir);
+}
