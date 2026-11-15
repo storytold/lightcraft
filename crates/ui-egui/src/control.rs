@@ -729,6 +729,13 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
         "ui.pointer" => {
             let Some(img) = app.image_rect else { return Err("no image on screen (switch to Detail view)".into()) };
             let Some(events) = p.get("events").and_then(Value::as_array) else { return Err("missing `events`".into()) };
+            // Check the whole batch first: a mistyped release must not leave a press queued.
+            for event in events {
+                let kind = event.get("kind").and_then(Value::as_str).unwrap_or("move");
+                if !matches!(kind, "down" | "drag" | "move" | "up") {
+                    return Err(format!("ui.pointer: unknown event kind `{kind}` (down, drag, move or up)"));
+                }
+            }
             let m = modifiers(p);
             for e in events {
                 let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.5) as f32;
@@ -910,4 +917,47 @@ fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
         "diskBudget": disk.map(|d| d.budget()),
         "loupeEdge": app.session.loupe_edge,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn unknown_pointer_kind_rejects_the_whole_batch() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        app.image_rect = Some(egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0)));
+        app.synthetic.push(egui::Event::Text("pending".into()));
+        let error = super::gesture_events(&mut app, &egui::Context::default(), "ui.pointer", &json!({"events": [{"kind": "down"}, {"kind": "upp"}]}))
+            .unwrap_err();
+        assert!(error.contains("unknown event kind"), "{error}");
+        assert!(error.contains("upp"), "{error}");
+        assert_eq!(app.synthetic.len(), 1);
+        assert!(matches!(app.synthetic.first(), Some(egui::Event::Text(text)) if text == "pending"));
+    }
+
+    #[test]
+    fn pointer_drag_move_and_default_kinds_keep_their_events() {
+        let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::new(), crate::Services::default());
+        app.image_rect = Some(egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(100.0, 100.0)));
+        let result = super::gesture_events(
+            &mut app,
+            &egui::Context::default(),
+            "ui.pointer",
+            &json!({"events": [{"kind": "down"}, {"kind": "drag"}, {"kind": "move"}, {}, {"kind": "up"}]}),
+        )
+        .unwrap();
+        assert_eq!(result.result["events"], 5);
+        assert!(matches!(
+            app.synthetic.as_slice(),
+            [
+                egui::Event::PointerMoved(_),
+                egui::Event::PointerButton { pressed: true, .. },
+                egui::Event::PointerMoved(_),
+                egui::Event::PointerMoved(_),
+                egui::Event::PointerMoved(_),
+                egui::Event::PointerButton { pressed: false, .. }
+            ]
+        ));
+    }
 }
