@@ -79,7 +79,7 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     if bits < 8 && info.planar == 2 && info.samples_per_pixel > 1 {
         return Err(Error::Unsupported(F, "planar TIFF with samples narrower than a byte"));
     }
-    if !matches!(info.photometric, 0 | 1 | 2 | 3 | 5) && !(info.photometric == 6 && info.compression == 7) {
+    if !(matches!(info.photometric, 0 | 1 | 2 | 3 | 5) || info.photometric == 6 && info.compression == 7) {
         return Err(Error::Unsupported(F, "colour type"));
     }
     // what `craft-image-codecs`'s TIFF decoder decompresses: none, CCITT G4, LZW, JPEG, Deflate, PackBits
