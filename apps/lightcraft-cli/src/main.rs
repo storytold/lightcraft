@@ -1014,6 +1014,9 @@ fn snapshot(args: &[String]) -> Result<(), String> {
 }
 
 fn commands(args: &[String]) -> Result<(), String> {
+    if let Some(arg) = args.iter().find(|arg| arg.as_str() != "--json") {
+        return Err(format!("commands: unexpected argument `{arg}` (expected only --json)"));
+    }
     let mut h = Headless::demo();
     let mut cmds = h.call("engine.commands", json!({}))?;
     // Listed by id so each family (`photo.*`, `mask.*`, …) reads together; the registry keeps its own order.
@@ -1041,6 +1044,9 @@ fn commands(args: &[String]) -> Result<(), String> {
 }
 
 fn controls(args: &[String]) -> Result<(), String> {
+    if let Some(arg) = args.iter().find(|arg| arg.as_str() != "--json") {
+        return Err(format!("controls: unexpected argument `{arg}` (expected only --json)"));
+    }
     let mut s = Session::new();
     let v = s.execute("develop.controls", &json!({})).map_err(|e| e.to_string())?;
     let mut out = std::io::stdout().lock();
