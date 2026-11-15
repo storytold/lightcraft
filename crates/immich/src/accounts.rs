@@ -32,6 +32,13 @@ pub struct Account {
     /// (`<library>/Immich/link/<account>.json`); old files still parse.
     #[serde(skip_serializing)]
     pub linked_until: Option<String>,
+    /// Its albums show as collections in device sync (under a collection set "Immich").
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub collections: bool,
+    /// The connection is shared with the devices this catalog syncs with (its key travels to
+    /// them over the encrypted peer channel); otherwise it stays on this device.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
     /// Two-way metadata sync settings (IMM-SYNC).
     #[serde(skip_serializing_if = "is_default_sync")]
     pub sync: crate::sync::SyncConfig,
@@ -78,6 +85,9 @@ impl Accounts {
             if is_default_sync(&a.sync) {
                 a.sync = std::mem::take(&mut old.sync);
             }
+            // (connecting again keeps how the account is shown and shared)
+            a.collections |= old.collections;
+            a.shared |= old.shared;
             *old = a;
         } else {
             self.immich.push(a);

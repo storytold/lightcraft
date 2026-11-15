@@ -204,6 +204,7 @@ fn cancel_pairing_without_a_pairing_is_harmless() {
 /// A session with a sync identity and its catalogue's replica loaded, without starting the service.
 fn offline(dir: &std::path::Path, name: &str) -> (Session, lcc_peer::Peer) {
     let mut s = Session::new().with_fs();
+    s.set_secret_store(std::sync::Arc::new(crate::remote::MemorySecrets::default()));
     let store = dir.join(format!("{name}.json"));
     let st = lcc_peer::Store::load_or_create(&store, name).unwrap();
     st.save(&store).unwrap();
@@ -513,5 +514,118 @@ fn importing_the_original_of_a_link_only_photo_keeps_one_photo() {
     assert_eq!(p.sha1.as_deref(), Some(lcc_hash::sha1_file(&src).unwrap().to_hex().as_str()));
     assert!(s.catalog.remote_of(keep).any(|r| r.remote_id == "asset-1"));
     assert!(s.catalog.albums().any(|a| a.name == "Import" && a.photos == vec![keep]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── Immich albums as collections ──────────────────────────────────────────────────────────────
+
+/// Pumps both sessions' remote work (Immich workers) and the exchanges between them until `done`.
+fn pump_both(a: &mut Session, ap: &lcc_peer::Peer, b: &mut Session, bp: &lcc_peer::Peer, what: &str, done: impl Fn(&Session, &Session) -> bool) {
+    let t = Instant::now();
+    while !done(a, b) {
+        for s in [&mut *a, &mut *b] {
+            s.execute("remote.pump", &json!({"sync": false})).unwrap();
+        }
+        swap(a, ap, b, bp);
+        assert!(t.elapsed() < Duration::from_secs(30), "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn immich_collection<'a>(v: &'a Value, name: &str) -> Option<&'a Value> {
+    v["catalogue"]["collections"].as_array()?.iter().find(|c| c["name"] == name && c["immich"] == true)
+}
+
+fn album_photos(s: &Session, name: &str) -> Vec<lcc_catalog::PhotoId> {
+    s.catalog.albums().find(|a| a.name == name && !a.folder).map(|a| a.photos.clone()).unwrap_or_default()
+}
+
+/// Two devices with the same Immich account: its album is one collection under "Immich" on both;
+/// each takes what it chose (link-only previews, originals, nothing); the photo has one key and
+/// its edits travel; a photo added on either device is uploaded once.
+#[test]
+fn immich_albums_are_collections_each_device_takes_as_it_chose() {
+    use crate::tests_immich::sync_tests::{Server, serve_state};
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-immich-colls");
+    let x = crate::tests_immich::png(50);
+    let mut server = Server::default();
+    server.real_uploads = true;
+    server.check_checksums = true;
+    server.assets.push(crate::tests_immich::asset("as-1", "beach.png", &x, json!({"visibility": "timeline"})));
+    server.bytes.insert("as-1".into(), x.clone());
+    server.albums.push(("al-1".into(), "Holiday".into(), vec!["as-1".into()]));
+    let state = std::sync::Arc::new(std::sync::Mutex::new(server));
+    let url = serve_state(state.clone(), Default::default(), Default::default());
+    let (mut a, ap) = offline(&dir, "a");
+    let (mut b, bp) = offline(&dir, "b");
+    for s in [&mut a, &mut b] {
+        assert_eq!(s.execute("immich.connect", &json!({"url": url, "apiKey": crate::tests_immich::KEY})).unwrap()["ok"], true);
+    }
+    offline_group(&mut a, &ap, &mut b, &bp);
+    for s in [&mut a, &mut b] {
+        s.execute("immich.collections", &json!({"on": true})).unwrap();
+        s.execute("sync.immichRefresh", &json!({})).unwrap();
+    }
+    pump_both(&mut a, &ap, &mut b, &bp, "the album as a collection", |a, b| {
+        let names = |s: &Session| s.device_sync.lib.as_ref().is_some_and(|l| l.replica.collections.values().any(|e| e.c.is_immich() && e.c.meta.v.name == "Holiday"));
+        names(a) && names(b)
+    });
+    let v = status(&mut a);
+    let c = immich_collection(&v, "Holiday").unwrap().clone();
+    assert_eq!(c["photos"], 1, "{c}");
+    assert_eq!(a.catalog.photos().count(), 0, "nothing comes before it is taken");
+    a.execute("sync.take", &json!({"collection": c["id"], "take": "previews"})).unwrap();
+    b.execute("sync.take", &json!({"collection": c["id"], "take": "fullQuality"})).unwrap();
+    assert!(a.execute("sync.take", &json!({"collection": c["id"], "take": "fullSync"})).is_err(), "Immich albums go up to full quality");
+    for s in [&mut a, &mut b] {
+        s.execute("sync.immichRefresh", &json!({})).unwrap();
+    }
+    pump_both(&mut a, &ap, &mut b, &bp, "the photo on both", |a, b| album_photos(a, "Holiday").len() == 1 && album_photos(b, "Holiday").len() == 1);
+    let pa = a.catalog.photo(album_photos(&a, "Holiday")[0]).unwrap().clone();
+    let pb = b.catalog.photo(album_photos(&b, "Holiday")[0]).unwrap().clone();
+    assert_eq!(pa.preview_only.as_deref(), Some(crate::remote::LINK_ONLY), "previews: a link-only photo");
+    assert_eq!(pb.preview_only, None, "full quality: the original");
+    assert_eq!(key_of(&a, pa.id.0), key_of(&b, pb.id.0));
+    for s in [&a, &b] {
+        let folder = s.catalog.albums().find(|al| al.folder && al.name == "Immich").expect("an Immich set");
+        assert!(s.catalog.albums().any(|al| al.name == "Holiday" && al.parent == Some(folder.id)));
+        assert_eq!(s.catalog.photos().count(), 1);
+    }
+    // the record travels between the devices
+    a.execute("photo.rate", &json!({"ids": [pa.id.0], "rating": 4})).unwrap();
+    swap(&mut a, &ap, &mut b, &bp);
+    assert_eq!(b.catalog.photo(pb.id).unwrap().rating, 4);
+
+    // the same new photo added on both devices: uploaded once, then in the album
+    let y = dir.join("new.png");
+    std::fs::write(&y, crate::tests_immich::png(51)).unwrap();
+    for s in [&mut a, &mut b] {
+        let id = s.execute("library.import", &json!({"paths": [y.to_string_lossy()]})).unwrap()["imported"][0].as_u64().unwrap();
+        let al = s.catalog.albums().find(|al| al.name == "Holiday" && !al.folder).unwrap().id.0;
+        s.selection = crate::Selection::single(lcc_catalog::PhotoId(id));
+        s.execute("album.addPhotos", &json!({"id": al, "ids": [id]})).unwrap();
+        let t = Instant::now();
+        let pid = lcc_catalog::PhotoId(id);
+        while !s.catalog.remote_of(pid).any(|r| r.service == "immich") || s.remote.coll.pushing {
+            let mut l = s.device_sync.lib.take().unwrap();
+            super::catalog::scan(s, &mut l);
+            s.device_sync.lib = Some(l);
+            s.execute("remote.pump", &json!({"sync": false})).unwrap();
+            assert!(t.elapsed() < Duration::from_secs(20), "timed out uploading");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    let st = state.lock().unwrap();
+    assert_eq!(st.uploads, 1, "the second device found it by checksum");
+    assert_eq!(st.albums[0].2.len(), 2);
+    drop(st);
+    for s in [&a, &b] {
+        let p = s.catalog.photos().find(|p| p.file_name == "new.png").unwrap();
+        assert!(s.catalog.remote_of(p.id).any(|r| r.service == "immich"), "linked to the one asset");
+    }
+    // taking nothing removes the collection from the catalogue; its photos stay
+    a.execute("sync.take", &json!({"collection": c["id"], "take": "none"})).unwrap();
+    assert!(album_photos(&a, "Holiday").is_empty() && !a.catalog.albums().any(|al| al.name == "Holiday"));
+    assert_eq!(a.catalog.photos().count(), 2);
     let _ = std::fs::remove_dir_all(&dir);
 }

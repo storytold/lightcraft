@@ -6,17 +6,21 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use super::*;
 
 #[derive(Default)]
-struct Server {
-    assets: Vec<Value>,
+pub(crate) struct Server {
+    /// Asset id → its bytes (`/assets/{id}/original` and `/thumbnail`).
+    pub(crate) bytes: std::collections::HashMap<String, Vec<u8>>,
+    /// Uploads keep their bytes and the SHA-1 of them as checksum (as a real server does).
+    pub(crate) real_uploads: bool,
+    pub(crate) assets: Vec<Value>,
     faces: Vec<(String, Value)>,
     people: Vec<Value>,
     renamed: Vec<Value>,
     merged: Vec<String>,
     clock: u32,
     /// (id, name, asset ids)
-    albums: Vec<(String, String, Vec<String>)>,
+    pub(crate) albums: Vec<(String, String, Vec<String>)>,
     stacks: Vec<Vec<String>>,
-    uploads: u32,
+    pub(crate) uploads: u32,
     /// Uploads whose multipart body carried a `sidecarData` part (IMM-SIDECARS).
     sidecar_uploads: u32,
     /// Asset id → the XMP sidecar the server holds for it.
@@ -33,7 +37,7 @@ struct Server {
     /// `POST /assets/bulk-upload-check` answers like a real server: a checksum it has is rejected
     /// as a duplicate, with the asset's id. (Off by default: the publish tests upload files the
     /// server "has" and count on every upload being accepted.)
-    check_checksums: bool,
+    pub(crate) check_checksums: bool,
 }
 
 impl Server {
@@ -46,9 +50,9 @@ impl Server {
     }
 }
 
-type Shared = Arc<Mutex<Server>>;
+pub(crate) type Shared = Arc<Mutex<Server>>;
 
-fn serve_state(state: Shared, down: Arc<AtomicBool>, hits: Arc<AtomicU32>) -> String {
+pub(crate) fn serve_state(state: Shared, down: Arc<AtomicBool>, hits: Arc<AtomicU32>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
@@ -74,6 +78,17 @@ fn sidecar_part(body: &[u8]) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+/// The bytes of the `assetData` part of a multipart upload.
+fn file_part(body: &[u8]) -> Option<Vec<u8>> {
+    let marker = b"name=\"assetData\"";
+    let i = body.windows(marker.len()).position(|w| w == marker)?;
+    let after = body.get(i..)?;
+    let start = after.windows(4).position(|w| w == b"\r\n\r\n")? + 4;
+    let rest = after.get(start..)?;
+    let end = rest.windows(4).position(|w| w == b"\r\n--")?;
+    rest.get(..end).map(<[u8]>::to_vec)
+}
+
 fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>, body: &[u8]) -> Vec<u8> {
     let json = |v: Value| resp("200 OK", "application/json", v.to_string().as_bytes());
     let not_found = || resp("404 Not Found", "application/json", b"{}");
@@ -97,7 +112,7 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
             let album: Option<Vec<String>> =
                 b["albumIds"][0].as_str().map(|a| st.albums.iter().find(|x| x.0 == a).map(|x| x.2.clone()).unwrap_or_default());
             let items: Vec<Value> = if let Some(ids) = album {
-                ids.iter().map(|i| json!({"id": i})).collect()
+                ids.iter().map(|i| st.assets.iter().find(|a| a["id"] == i.as_str()).cloned().unwrap_or_else(|| json!({"id": i}))).collect()
             } else if b["page"].as_u64().unwrap_or(1) == 1 {
                 st.assets.iter().filter(|a| a["updatedAt"].as_str().unwrap_or("") > after).cloned().collect()
             } else {
@@ -137,7 +152,14 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
             }
             // like the real server, the asset remembers the uploading device (`deviceId` form field)
             let device = text.split("name=\"deviceId\"").nth(1).and_then(|x| x.trim_start().lines().next()).unwrap_or("").trim().to_string();
-            st.assets.push(json!({"id": id, "type": "IMAGE", "deviceId": device, "originalFileName": name, "updatedAt": now, "checksum": format!("name:{name}"), "exifInfo": {}, "tags": []}));
+            let mut checksum = format!("name:{name}");
+            if st.real_uploads
+                && let Some(data) = file_part(body)
+            {
+                checksum = lcc_hash::sha1_bytes(&data).to_base64();
+                st.bytes.insert(id.clone(), data);
+            }
+            st.assets.push(json!({"id": id, "type": "IMAGE", "deviceId": device, "originalFileName": name, "updatedAt": now, "checksum": checksum, "exifInfo": {}, "tags": []}));
             resp("201 Created", "application/json", json!({"id": id, "status": "created"}).to_string().as_bytes())
         }
         ("POST", "/api/assets/bulk-upload-check") => {
@@ -307,6 +329,13 @@ fn handle(state: &Shared, down: &AtomicBool, m: &str, t: &str, key: Option<&str>
         ("POST", p) if p.starts_with("/api/people/") && p.ends_with("/merge") => {
             st.merged.push(p.to_string());
             json(json!([]))
+        }
+        ("GET", p) if p.starts_with("/api/assets/") && (p.ends_with("/original") || p.ends_with("/thumbnail")) => {
+            let id = p.trim_start_matches("/api/assets/").split('/').next().unwrap_or_default();
+            match st.bytes.get(id) {
+                Some(b) => resp("200 OK", "image/png", b),
+                None => not_found(),
+            }
         }
         (_, p) if p.starts_with("/api/assets/") => {
             let id = p.trim_start_matches("/api/assets/").to_string();

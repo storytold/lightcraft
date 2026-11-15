@@ -26,6 +26,8 @@ use crate::{Result, Session};
 const LINK_PAGES: u32 = 10_000;
 const PAGE_SIZE: u32 = 1000;
 
+#[path = "immich_collections.rs"]
+pub(crate) mod collections;
 #[path = "immich_publish.rs"]
 pub mod publish;
 #[path = "immich_sidecars.rs"]
@@ -910,6 +912,9 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
                 }
             }
             Msg::Downloaded(d) => finish_import(s, *d, &now),
+            Msg::ImmichAlbums(l) => collections::finish_listing(s, *l),
+            Msg::ImmichPushed(p) => collections::finish_push(s, *p),
+            Msg::ImmichPushDone => s.remote.coll.pushing = false,
             Msg::Synced(d) => {
                 sync::finish(s, *d);
             }
@@ -941,6 +946,7 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
         sync::tick(s);
     }
     start_link_check(s);
+    collections::tick(s);
     // the next SHA-1 batch
     if bool_or(p, "sha1", true) && !s.remote.sha1_busy && s.remote.sha1_idle_at != Some(s.catalog.revision) {
         let todo = remote::sha1_pending(s, remote::SHA1_BATCH);
@@ -1325,6 +1331,15 @@ fn base_specs() -> Vec<CommandSpec> {
             "{account?, forgetLinks?: bool}: remove the account and its stored key → {disconnected, forgotLinks}",
             always,
             disconnect
+        ),
+        cmd!(
+            "immich.collections",
+            "Show Immich Albums as Collections",
+            [],
+            None,
+            "{account?, on: bool}: the account's albums show as collections in device sync (Settings ▸ Sync, under \"Immich\"); each device then picks per album none, previews or fullQuality → {account, collections}",
+            always,
+            collections::set_shown
         ),
         cmd!(query "immich.status", "Immich Status", [], None, "{check?: bool (also contact each server), background?: bool (do that on workers; results in later calls' `server`)} → {accounts: [{id, url, userName, version, permissions, linked, probable, link, server?, checking}], secretStore, connecting, connected?}", always, status),
         cmd!(query "immich.answer", "Immich Background Result", [], None, "{key, keep?: bool}: the result of a call made with background: true (immich.libraries, immich.authStatus, immich.unlockSession, immich.scanLibraries, immich.importPeople, immich.pushPeople; they return {started, key}); taken once unless keep → {done: true, result} or {done: false, running}; remote.pump lists the waiting keys in `answers`", always, answer),

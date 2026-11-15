@@ -150,6 +150,11 @@ pub(crate) struct Lib {
     /// SHA-1 keys another device uses for a photo here that isn't hashed yet (a hint until this
     /// device's own hash is done) → this catalogue's key for it.
     pub hints: HashMap<String, String>,
+    /// The Immich accounts (user ids) shown as collections on this device.
+    pub immich_here: BTreeSet<String>,
+    /// Photos added to (true) or taken out of (false) Immich collections here, still to send to
+    /// the server: (collection, key, in).
+    pub immich_out: Vec<(String, String, bool)>,
     /// Each shared collection's photos as the catalogue had them when last looked at.
     pub base: HashMap<String, BTreeSet<String>>,
     /// The photos this device should hold more of than it does.
@@ -669,6 +674,8 @@ pub(crate) fn ensure_lib(s: &mut Session) {
         ids: HashMap::new(),
         alias: HashMap::new(),
         hints: HashMap::new(),
+        immich_here: BTreeSet::new(),
+        immich_out: Vec::new(),
         base: HashMap::new(),
         wanting: BTreeSet::new(),
         missing: HashMap::new(),

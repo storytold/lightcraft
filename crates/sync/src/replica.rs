@@ -447,6 +447,20 @@ impl Replica {
         }
     }
 
+    /// An Immich album was removed on the server (or is back): any device with the account says so.
+    pub fn set_immich_gone(&mut self, id: &str, gone: bool, now_ms: u64) -> Result<bool, Refused> {
+        self.edit_collection(id, now_ms, |c, s, _| {
+            if !c.is_immich() {
+                return Err(Refused::NotOwner);
+            }
+            let changed = c.deleted.v != gone;
+            if changed {
+                c.deleted = Lww::new(gone, s);
+            }
+            Ok(changed)
+        })
+    }
+
     /// Whether collection `c` is an Immich one this device keeps to itself.
     pub fn is_private(&self, c: &Collection) -> bool {
         c.is_immich() && c.immich.as_ref().is_some_and(|r| self.private_immich.contains(&r.account))

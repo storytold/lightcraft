@@ -206,8 +206,9 @@ fn scan_photo(s: &Session, lib: &mut Lib, key: &str, now: u64) -> bool {
         // told of before it was imported here: `reconcile` joins the two
         return false;
     }
-    // a photo imported here holds its original
-    let have = known.map_or(Depth::Full, |e| e.have);
+    // a photo imported here holds its original (a link-only one, Immich's preview)
+    let link_only = p.preview_only.as_deref() == Some(crate::remote::LINK_ONLY);
+    let have = if link_only { Depth::Preview } else { known.map_or(Depth::Full, |e| e.have) };
     lib.replica.local_photo(key, &record::digests(p, &s.catalog), have, now)
 }
 
@@ -225,12 +226,20 @@ fn scan_members(s: &Session, lib: &mut Lib, id: &str, cur: BTreeSet<String>, now
                 (cur.iter().filter(|k| !known.contains(k)).cloned().collect(), Vec::new())
             }
         };
+        let immich = lib.replica.collection(id).is_some_and(|c| c.is_immich());
         for k in adds {
             changed |= scan_photo(s, lib, &k, now);
             changed |= lib.replica.set_member(id, &k, true, now);
+            if immich {
+                // to the server: uploaded unless Immich has it, then put into the album
+                lib.immich_out.push((id.to_string(), k, true));
+            }
         }
         for k in removes {
             changed |= lib.replica.set_member(id, &k, false, now);
+            if immich {
+                lib.immich_out.push((id.to_string(), k, false));
+            }
         }
     }
     lib.base.insert(id.to_string(), cur);
@@ -334,15 +343,18 @@ pub(super) fn scan(s: &Session, lib: &mut Lib) -> bool {
     match touched {
         Some(ids) => {
             for id in ids {
+                // (a photo an Immich album lists comes into the replica when it is imported here)
                 if let Some(key) = lib.ids.get(&id).cloned()
-                    && lib.replica.photos.contains_key(&key)
+                    && (lib.replica.photos.contains_key(&key) || lib.replica.collections_of(&key).next().is_some())
                 {
                     changed |= scan_photo(s, lib, &key, now);
                 }
             }
         }
         None => {
-            let keys: BTreeSet<String> = lib.replica.photos.keys().filter(|k| lib.keys.contains_key(*k)).cloned().collect();
+            let members: BTreeSet<&String> = lib.replica.members.values().flat_map(|m| m.iter().filter(|(_, e)| e.on.v).map(|(k, _)| k)).collect();
+            let keys: BTreeSet<String> =
+                lib.replica.photos.keys().chain(members).filter(|k| lib.keys.contains_key(*k)).cloned().collect();
             for key in keys {
                 changed |= scan_photo(s, lib, &key, now);
             }
@@ -517,7 +529,7 @@ fn adopt(s: &mut Session, lib: &mut Lib, key: &str) {
 
 /// Brings the catalogue in line with the replica: the collections other devices own, the photos
 /// they told of that this device takes, and which photos are in each shared collection.
-pub(super) fn reconcile(s: &mut Session, lib: &mut Lib) {
+pub(crate) fn reconcile(s: &mut Session, lib: &mut Lib) {
     let Some(mode) = in_group(lib) else { return };
     let me = lib.replica.device.clone();
     // collections of other devices → collections of the catalogue (sets first)
@@ -530,17 +542,31 @@ pub(super) fn reconcile(s: &mut Session, lib: &mut Lib) {
         }
         let mapped = lib.replica.albums.get(&id).copied().filter(|a| s.catalog.album(AlbumId(*a)).is_some());
         let listed = !c.gone() && c.listed_for(&me, mode) && (mode == Mode::Catalogue || c.grant.v != Grant::None);
-        let want = listed
-            && match mode {
-                Mode::Catalogue => true,
-                Mode::Collections => c.kind != CollectionKind::Set && c.take_of(&me) != Take::None,
-            };
+        let want = if c.is_immich() {
+            // an Immich album is in the catalogue where the account is and the device takes it;
+            // its set ("Immich") as long as one of its albums is
+            let here = c.immich.as_ref().is_some_and(|r| lib.immich_here.contains(&r.account));
+            !c.gone()
+                && here
+                && match c.kind {
+                    CollectionKind::Set => lib.replica.collections.values().any(|e| {
+                        e.c.meta.v.parent.as_deref() == Some(id.as_str()) && !e.c.gone() && e.c.take_of(&me) != Take::None
+                    }),
+                    _ => c.take_of(&me) != Take::None,
+                }
+        } else {
+            listed
+                && match mode {
+                    Mode::Catalogue => true,
+                    Mode::Collections => c.kind != CollectionKind::Set && c.take_of(&me) != Take::None,
+                }
+        };
         match (want, mapped) {
             (true, None) => {
                 let aid = s.catalog.alloc_album_id();
                 let mut a = Album::new(aid, display_name(lib, &c));
                 a.folder = c.kind == CollectionKind::Set;
-                if mode == Mode::Catalogue {
+                if mode == Mode::Catalogue || c.is_immich() {
                     a.parent = c
                         .meta
                         .v
@@ -627,7 +653,7 @@ pub(super) fn wants(s: &Session, lib: &mut Lib, peer: &str) -> Vec<Want> {
         }
         let Some(p) = lib.keys.get(key).and_then(|id| s.catalog.photo(*id)) else { continue };
         let Source::File { path } = &p.source else { continue };
-        match lib.replica.depth_wanted(key) {
+        match lib.replica.depth_from_peers(key) {
             // (a link-only photo's original comes from Immich, and its file here is the preview)
             Depth::Full if !path.is_empty() && p.preview_only.as_deref() != Some(crate::remote::LINK_ONLY) => {
                 out.push(Want { key: key.clone(), depth: Depth::Full, dest: PathBuf::from(path) })

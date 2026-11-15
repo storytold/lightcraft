@@ -64,6 +64,11 @@ pub(crate) enum Msg {
     AlbumsSynced(Box<crate::cmd::immich::publish::AlbumsDone>),
     /// `immich.pullSidecars` / `immich.pushSidecars` {background}: a sidecar run finished.
     Sidecars(Box<SidecarsDone>),
+    /// The Immich albums shown as collections were listed (device sync).
+    ImmichAlbums(Box<crate::cmd::immich::collections::Listing>),
+    /// Photos added to Immich collections here were uploaded (or found) and put into the albums.
+    ImmichPushed(Box<crate::cmd::immich::collections::Pushed>),
+    ImmichPushDone,
     /// `credentials.unlock {background}`: the encrypted file opened (or not).
     FileUnlocked(Result<lcc_credentials::FileStore, CredError>),
     /// `credentials.unlockSystem`: the keychain's own unlock prompt was answered.
@@ -311,6 +316,8 @@ pub struct State {
     pub(crate) sidecars: SidecarProgress,
     /// Finished Edit In version uploads not yet shown (`immich.versionResults`).
     pub(crate) versions: Vec<serde_json::Value>,
+    /// Immich albums as device-sync collections: workers and schedule.
+    pub(crate) coll: crate::cmd::immich::collections::CollState,
 }
 
 impl Default for State {
@@ -322,6 +329,7 @@ impl Default for State {
             sha1_busy: false,
             sha1_failed: HashSet::new(),
             sha1_first: Default::default(),
+            coll: Default::default(),
             sha1_done: 0,
             sha1_idle_at: None,
             connections_path: None,

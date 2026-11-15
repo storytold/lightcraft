@@ -81,6 +81,15 @@ pub fn specs() -> Vec<CommandSpec> {
             let album = p.get("album").and_then(Value::as_u64).ok_or_else(|| bad("sync.skip", "missing `album`"))?;
             sync::skip(s, album)
         }),
+        cmd!(query "sync.immichRefresh", "List Immich Albums Now", [], None, "{}: list the albums of the Immich accounts shown as collections now (also done about once a minute) → {listing, errors}", always, |s, _p| {
+            #[cfg(not(target_arch = "wasm32"))]
+            return Ok(crate::cmd::immich::collections::refresh(s));
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = s;
+                Ok(json!({"listing": 0, "errors": {}}))
+            }
+        }),
         cmd!(query "sync.now", "Sync Now", [], None, "{}: exchange with every device now → sync.status", always, |s, _p| {
             sync::sync_now(s);
             sync::status(s)
