@@ -68,7 +68,6 @@
   "Go Back to Version {version}": "Voltar para a versão {version}",
   "Goes into the group “{group}” that exists already.": "Vai para o grupo “{group}”, que já existe.",
   "Healed {n} blemishes": "{n} imperfeições corrigidas",
-  "Healed {n} film dust spot{}": "Grãos de poeira do filme corrigidos: {n}{:.0}",
   "Healed {n} mark{} from the infrared pass": "Marcas corrigidas a partir da passagem infravermelha: {n}{:.0}",
   "Import {n} Selected": "Importar {n} selecionadas",
   "Import {n} into {library}": "Importar {n} para {library}",

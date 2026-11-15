@@ -74,7 +74,6 @@
   "Go Back to Version {version}": "Kembali ke Versi {version}",
   "Goes into the group “{group}” that exists already.": "Masuk ke grup “{group}” yang sudah ada.",
   "Healed {n} blemishes": "{n} noda diperbaiki",
-  "Healed {n} film dust spot{}": "Bintik debu film yang diperbaiki: {n}{:.0}",
   "Healed {n} mark{} from the infrared pass": "Tanda yang diperbaiki dari lintasan inframerah: {n}{:.0}",
   "Import {n} Selected": "Impor {n} yang Dipilih",
   "Import {n} into {library}": "Impor {n} ke {library}",

@@ -77,7 +77,6 @@
   "Go Back to Version {version}": "Gå tillbaka till version {version}",
   "Goes into the group “{group}” that exists already.": "Hamnar i den befintliga gruppen ”{group}”.",
   "Healed {n} blemishes": "Läkte {n} hudfläckar",
-  "Healed {n} film dust spot{}": "Lagade dammfläckar på filmen: {n}{:.0}",
   "Healed {n} mark{} from the infrared pass": "Lagade märken från det infraröda passet: {n}{:.0}",
   "Import {n} Selected": "Importera {n} markerade",
   "Import {n} into {library}": "Importera {n} till {library}",

@@ -68,7 +68,6 @@
   "Go Back to Version {version}": "返回版本 {version}",
   "Goes into the group “{group}” that exists already.": "將放入已存在的群組「{group}」。",
   "Healed {n} blemishes": "已修復 {n} 處瑕疵",
-  "Healed {n} film dust spot{}": "已修復底片灰塵：{n}{:.0}",
   "Healed {n} mark{} from the infrared pass": "已依紅外線通道修復痕跡：{n}{:.0}",
   "Import {n} Selected": "匯入 {n} 張選取的照片",
   "Import {n} into {library}": "將 {n} 張匯入 {library}",

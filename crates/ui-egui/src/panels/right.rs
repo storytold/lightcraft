@@ -740,26 +740,6 @@ fn mode_segmented_bar(ui: &mut egui::Ui, id: &str, active_key: &str) -> Option<&
     chosen
 }
 
-/// Find Film Dust and Hair (the picture-based search, for a scan without an infrared pass) at the
-/// develop settings' sensitivity and expand, and what it did.
-fn find_film_dust(app: &mut LccApp, ctx: &egui::Context, d: &lcc_develop::DevelopSettings) {
-    let args = json!({"sensitivity": d.film_dust.sensitivity, "expand": d.film_dust.expand, "infrared": "never"});
-    match app.run("spot.findFilmDust", args) {
-        Ok(r) => {
-            let n = r["added"].as_u64().unwrap_or(0);
-            app.toast(
-                ctx,
-                if n == 0 {
-                    crate::i18n::tr("No film dust or hairs found").to_string()
-                } else {
-                    crate::i18n::tr_format!("Healed {n} film dust spot{}", if n == 1 { "" } else { "s" }, n = n)
-                },
-            );
-        }
-        Err(e) => app.toast(ctx, e),
-    }
-}
-
 /// Makes (or remakes) the film-dust mask from the infrared pass at the develop settings' sensitivity and expand.
 fn film_dust_mask(app: &mut LccApp, ctx: &egui::Context, d: &lcc_develop::DevelopSettings) {
     if let Err(e) = app.run("spot.filmDustMask", json!({"sensitivity": d.film_dust.sensitivity, "expand": d.film_dust.expand})) {
@@ -880,15 +860,6 @@ fn remove(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
                         }
                         Err(e) => app.toast(ui.ctx(), e),
                     }
-                }
-                if !has_infrared
-                    && text_button(ui, "findFilmDust", crate::i18n::tr("Film Dust Spots"), false)
-                        .on_hover_text(crate::i18n::tr(
-                            "On a scanned negative or slide without an infrared pass: find the sharp bright marks of dust, hairs and scratches on smooth areas and fill each in",
-                        ))
-                        .clicked()
-                {
-                    find_film_dust(app, ui.ctx(), &d);
                 }
             });
         });
