@@ -61,9 +61,6 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
     }
     s.end_interaction()?;
     if s.selection.ids.len() > 1 {
-        if !s.selection.ids.contains(&id) {
-            s.selection.ids.push(id);
-        }
         s.selection.active = Some(id);
     } else {
         s.selection = Selection::single(id);
@@ -150,7 +147,9 @@ mod next_unrated_tests {
         let result = s.execute("library.nextUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4), PhotoId(3)]);
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
+        assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().rating, 1);
+        assert_eq!(s.catalog.photo(PhotoId(4)).unwrap().rating, 0);
     }
 
     #[test]
@@ -202,7 +201,9 @@ mod next_unrated_tests {
         let result = s.execute("library.prevUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4), PhotoId(3)]);
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
+        assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().rating, 1);
+        assert_eq!(s.catalog.photo(PhotoId(4)).unwrap().rating, 0);
     }
 
     #[test]
@@ -243,8 +244,12 @@ mod next_unrated_tests {
         let result = s.execute("library.nextUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
+        // Navigation keeps the selection unchanged; only the active photo moves.
+        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
         // A rating command with no explicit ids rates the active (jumped-to) photo.
         s.execute("photo.rate", &json!({"rating": 5})).unwrap();
         assert_eq!(s.catalog.photo(PhotoId(3)).unwrap().rating, 5);
+        assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().rating, 1);
+        assert_eq!(s.catalog.photo(PhotoId(4)).unwrap().rating, 0);
     }
 }
