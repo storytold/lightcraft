@@ -10,6 +10,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
+craft-plist = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c17840e099d7a4237770bca99efb2693f1692a8d" }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 # Canon CRW decoder shared with the other Craft apps
