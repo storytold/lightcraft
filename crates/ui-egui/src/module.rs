@@ -725,6 +725,9 @@ pub fn sync(app: &mut LccApp) {
 
 /// `module.switch {module}`.
 pub fn switch(app: &mut LccApp, to: ModuleId) -> Result<Value, String> {
+    // a module switch asks for the module's panels: it leaves the full-screen preview (which drew
+    // the photo alone over whatever module and view were up), even for the module already in use
+    app.leave_fullscreen_preview();
     if app.ui.module == to {
         return Ok(json!({"module": to}));
     }
@@ -1164,6 +1167,7 @@ fn run_inner(app: &mut LccApp, id: &str, p: &Value) -> Result<Value, String> {
             "hiddenModules": app.ui.hidden_modules,
         })),
         "view.loupe" => {
+            app.leave_fullscreen_preview();
             if app.ui.module != ModuleId::Library {
                 switch(app, ModuleId::Library)?;
             }

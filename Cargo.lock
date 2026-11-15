@@ -5248,6 +5248,7 @@ dependencies = [
  "lcc-net",
  "lcc-testkit",
  "log",
+ "plugin-stamp",
  "semver",
  "serde",
  "serde_json",
@@ -7204,6 +7205,14 @@ name = "plain"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+
+[[package]]
+name = "plugin-stamp"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "wasmi",
+]
 
 [[package]]
 name = "png"

@@ -62,6 +62,23 @@ fn g_toggles_the_grids_and_comes_back_to_the_chosen_style() {
     assert_eq!(a.ui.view, ViewMode::PhotoGrid);
 }
 
+/// From the full-screen preview G asks for the grid and leaves the preview: the chosen grid style,
+/// not a flip between the two grids (the view behind the preview is usually a grid already).
+#[test]
+fn g_leaves_the_full_screen_preview_on_the_chosen_grid() {
+    let mut a = app();
+    let first = a.session.visible().first().map(|p| p.0).expect("the demo catalog has photos");
+    a.run("library.select", json!({"ids": [first]})).unwrap();
+    a.run("view.squareGrid", json!({})).unwrap();
+    a.run("view.detail", json!({})).unwrap();
+    a.run("view.fullScreenPreview", json!({})).unwrap();
+    assert!(a.ui.fullscreen);
+    a.run("view.gridToggle", json!({})).unwrap();
+    assert!(!a.ui.fullscreen, "G leaves the full-screen preview");
+    assert_eq!(a.ui.view, ViewMode::SquareGrid, "the grid the user chose, even over a grid view");
+    assert_eq!(a.ui.grid_style, ViewMode::SquareGrid, "the choice is untouched");
+}
+
 /// Esc from a photo goes back to the grid the Library was left in; when a detour through Develop
 /// recorded Detail there instead, the chosen grid style is used rather than Photo Grid (#794).
 #[test]

@@ -25,4 +25,6 @@ lcc-net = { workspace = true }
 # WebAssembly text -> binary for the hostile-module fixtures (Apache-2.0 WITH LLVM-exception).
 wat = "1.228"
 lcc-fuzzkit = { workspace = true }
+# The SDK's manifest stamp tool (sdk/stamp, outside the workspace): stamped plug-ins load as before.
+plugin-stamp = { path = "../../sdk/stamp" }
 lcc-testkit = { workspace = true }
