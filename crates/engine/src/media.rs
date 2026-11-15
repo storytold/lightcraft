@@ -2363,7 +2363,7 @@ fn source_info_plain(p: &Photo) -> SourceInfo {
     // Procedural demo scenes are scene-referred HDR (like raw files): use the filmic tone map.
     // (They are drawn afresh at every size, so they have no original size.)
     if matches!(p.source, Source::Demo { .. }) {
-        return SourceInfo { raw: true, ..Default::default() };
+        return SourceInfo { raw: true, space_origin: Some("demo".into()), bits_per_sample: Some(32), float: true, ..Default::default() };
     }
     // the thumbnail and preview levels are smaller copies: noise reduction works in the original's pixels (#960)
     let native_long = Some(p.width.max(p.height) as usize).filter(|&n| n > 0);

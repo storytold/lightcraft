@@ -412,3 +412,71 @@ fn two_entries_of_one_plugin_measure_the_one_asked_for() {
     assert!(s.execute("develop.pluginFilter.analyze", &json!({"uid": 99, "ids": ids})).is_err());
     s.execute("plugin.uninstall", &json!({"id": "test.engine.twiceroll"})).unwrap();
 }
+
+/// A filter whose `pc_analyze` echoes its `params` JSON (`_image` included) back to the caller.
+fn echo_analyze_module(id: &str) -> Vec<u8> {
+    let manifest = format!(r#"{{"id":"{id}","name":"Echo","version":"1","kind":"filter","params":{{}}}}"#);
+    let src = format!(
+        r#"(module
+  (memory (export "memory") 1)
+  (data (i32.const 16) "{m}")
+  (func (export "pc_abi_version") (result i32) (i32.const 1))
+  (func (export "pc_manifest") (result i64) (i64.or (i64.shl (i64.const {len}) (i64.const 32)) (i64.const 16)))
+  (func (export "pc_alloc") (param $n i32) (result i32) (local $old i32)
+    (local.set $old (memory.grow (i32.shr_u (i32.add (local.get $n) (i32.const 65535)) (i32.const 16))))
+    (if (result i32) (i32.eq (local.get $old) (i32.const -1)) (then (i32.const 0)) (else (i32.mul (local.get $old) (i32.const 65536)))))
+  (func (export "pc_filter") (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32) (i32.const 0))
+  (func (export "pc_analyze") (param i32 i32 i32 i32 i32 i32) (param $pp i32) (param $pl i32) (result i64)
+    (i64.or (i64.shl (i64.extend_i32_u (local.get $pl)) (i64.const 32)) (i64.extend_i32_u (local.get $pp)))))"#,
+        m = manifest.replace('"', "\\\""),
+        len = manifest.len()
+    );
+    wat::parse_str(&src).unwrap()
+}
+
+#[test]
+fn untagged_16bit_tiff_and_raw_propagate_source_provenance_to_filter_and_analyze() {
+    use lcc_codecs::{EncodeImage, EncodeMeta, Samples, TiffCompression, encode_tiff};
+
+    let px16 = vec![12_000u16; 16 * 16 * 3];
+    let tiff16 = encode_tiff(&EncodeImage::new(16, 16, 3, Samples::U16(&px16)), TiffCompression::None, &EncodeMeta::default()).unwrap();
+    let (_, info16) = crate::files::load_bytes(&tiff16, 256).unwrap();
+    assert_eq!(info16.space_origin.as_deref(), Some("untagged"));
+    assert_eq!(info16.bits_per_sample, Some(16));
+    assert!(!info16.float);
+
+    let px32 = vec![0.25f32; 8 * 8 * 3];
+    let tiff32 = encode_tiff(&EncodeImage::new(8, 8, 3, Samples::F32(&px32)), TiffCompression::None, &EncodeMeta::default()).unwrap();
+    let (_, info32) = crate::files::load_bytes(&tiff32, 256).unwrap();
+    assert_eq!(info32.space_origin.as_deref(), Some("untagged"));
+    assert_eq!(info32.bits_per_sample, Some(32));
+    assert!(info32.float);
+
+    let dng = crate::tests_xmp::synthetic_dng_with(None, lcc_meta::Metadata::default());
+    let (_, info_raw) = crate::files::load_bytes(&dng, 256).unwrap();
+    assert_eq!(info_raw.space_origin.as_deref(), Some("raw"));
+    assert!(info_raw.bits_per_sample.is_some());
+    assert!(!info_raw.float);
+
+    // End-to-end through Session: import the untagged 16-bit TIFF and run pc_analyze.
+    let dir = std::env::temp_dir().join(format!("lcc-filter-src-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let lib = dir.join("lib");
+    let tiff_path = dir.join("scan.tif");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&tiff_path, &tiff16).unwrap();
+
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let imp = s.execute("library.import", &json!({"paths": [tiff_path.to_string_lossy()]})).unwrap();
+    let id = imp["imported"][0].as_u64().unwrap();
+    s.execute("library.select", &json!({"ids": [id]})).unwrap();
+
+    install_bytes(&mut s, "test.engine.echo", &echo_analyze_module("test.engine.echo"));
+    let uid = s.execute("develop.pluginFilter.add", &json!({"plugin": "test.engine.echo", "stage": "source"})).unwrap()["uid"].as_u64().unwrap();
+    let r = s.execute("develop.pluginFilter.analyze", &json!({"uid": uid, "wait": true})).unwrap();
+    assert_eq!(r["analysis"]["_image"]["draft"], false);
+    assert_eq!(r["analysis"]["_image"]["source"], json!({"origin": "untagged", "bitsPerSample": 16}));
+    s.execute("plugin.uninstall", &json!({"id": "test.engine.echo"})).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}

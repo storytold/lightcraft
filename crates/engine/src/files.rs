@@ -845,6 +845,8 @@ fn load_bytes_now(
         // the same development from the denoised mosaic, when the photo has been denoised
         let twin = denoise.and_then(|spec| denoised_camera_rgb(&raw, spec, factor)).filter(|d| d.width == img.width && d.height == img.height);
         // the samples aren't needed any more (the colour model below reads only the tags)
+        let raw_float = matches!(raw.data, lcc_raw::RawData::F32(_));
+        let raw_bits = u8::try_from(raw.bits).unwrap_or(16);
         raw.data = lcc_raw::RawData::U16(Vec::new());
         let hue_sat = camera_look.as_ref().and_then(|p| p.hue_sat.as_ref()).and_then(crate::camera_preview::HueSat::new);
         // A DNG's own profile look (hue/saturation map, look table), DNG spec chapter 6.
@@ -934,12 +936,18 @@ fn load_bytes_now(
                 placement: Some(placement),
                 // (the session adds the catalog's maps: `media`, as it adds the generated patches)
                 vignetting_maps: None,
+                space_origin: Some("raw".into()),
+                bits_per_sample: Some(raw_bits),
+                float: raw_float,
             },
             used_reduced,
         ));
     }
     let d = lcc_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
     drop(bytes);
+    let space_origin = Some(d.space.origin.as_str().to_string());
+    let bits_per_sample = Some(d.bit_depth);
+    let float = d.float;
     // the denoised picture of a finished picture, brought to this decode's size and through the same conversion
     let twin = denoise.and_then(|spec| denoised_finished(&d, spec));
     let img = d.to_working();
@@ -963,7 +971,7 @@ fn load_bytes_now(
     };
     let img = finish(img);
     let twin = twin.map(finish).filter(|t| t.width == img.width && t.height == img.height);
-    Ok((img, twin, SourceInfo { alpha, infrared, ..SourceInfo::default() }, false))
+    Ok((img, twin, SourceInfo { alpha, infrared, space_origin, bits_per_sample, float, ..SourceInfo::default() }, false))
 }
 
 /// The cached denoised picture of a finished picture (gamma-encoded sRGB at the file's full size, see
@@ -1245,7 +1253,13 @@ pub fn load_embedded_preview(bytes: &[u8], max_edge: usize) -> Option<(Rgb32f, S
     let d = decode_raw_preview(bytes, fit_box(max_edge), None)?;
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Some((img.oriented(preview_orientation(bytes, d.orientation)), SourceInfo::default()))
+    let info = SourceInfo {
+        space_origin: Some(d.space.origin.as_str().to_string()),
+        bits_per_sample: Some(d.bit_depth),
+        float: d.float,
+        ..SourceInfo::default()
+    };
+    Some((img.oriented(preview_orientation(bytes, d.orientation)), info))
 }
 
 /// The embedded preview of a raw file for display (sRGB, oriented, no larger than `max_edge`): the

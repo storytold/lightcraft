@@ -170,6 +170,13 @@ pub struct SourceInfo {
     /// The flat-field maps the settings may reference by id (`lcc_develop::Optics::vignetting_calibration`), from the catalog: the
     /// session fills it as it fills `generated`. `None`: no map renders.
     pub vignetting_maps: Option<vignetting_calibration::VignettingMapStore>,
+    /// Where the source's colour interpretation came from (`"untagged"`, `"container"`,
+    /// `"iccMatrixTrc"`, `"iccCms"`, `"iccUnsupported"`, `"naive"`, `"raw"`, `"demo"`), when known.
+    pub space_origin: Option<String>,
+    /// Bits per sample in the source file (`8`, `12`, `14`, `16`, `32`), when known.
+    pub bits_per_sample: Option<u8>,
+    /// Whether the source file stored floating-point samples.
+    pub float: bool,
 }
 
 /// Hot, dead and stuck pixels corrected on a raw's mosaic while it was decoded.
@@ -217,6 +224,9 @@ impl Default for SourceInfo {
             identity: None,
             placement: None,
             vignetting_maps: None,
+            space_origin: None,
+            bits_per_sample: None,
+            float: false,
         }
     }
 }
@@ -711,7 +721,17 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         None => (frame, full_w, full_h),
     };
     let u = |v: usize| u32::try_from(v).unwrap_or(u32::MAX);
-    let filter_frame = lcc_filters::FrameInfo { x: u(origin.0), y: u(origin.1), full_w: u(full_w), full_h: u(full_h) };
+    let filter_frame = lcc_filters::FrameInfo {
+        x: u(origin.0),
+        y: u(origin.1),
+        full_w: u(full_w),
+        full_h: u(full_h),
+        draft: req.quality == Quality::Draft,
+        draft_scale: None,
+        native_canvas_w: None,
+        native_canvas_h: None,
+        source: plugin_filters::image_source(info),
+    };
     let source_filters = Arc::new(plugin_filters::Stack::resolve(info, s, lcc_develop::FilterStage::Source));
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
@@ -1149,7 +1169,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         }
     }
     let display_filters = plugin_filters::Stack::resolve(info, s, lcc_develop::FilterStage::Display);
-    let post = finish::Post { stack: &display_filters, frame: plan.filter_frame, warnings: std::cell::RefCell::new(&mut warnings) };
+    let post = finish::Post { stack: &display_filters, frame: plan.filter_frame.clone(), warnings: std::cell::RefCell::new(&mut warnings) };
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof, &post);
         // (a window the joint colour NR grew is cut back to the request)

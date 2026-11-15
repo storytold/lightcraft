@@ -863,9 +863,19 @@ synced and written to XMP with the other settings. Two stages:
 | `source` | after geometry (crop, lens, perspective), before white balance, tone and every other step | linear light, sRGB primaries, `"encoding": "linear"` |
 | `display` (default) | after the develop adjustments, before quantisation | sRGB-curve encoded in the output's primaries, `"encoding": "srgb"`; linear for HDR renders |
 
-Each filter gets its resolved parameters plus `encoding`, `_analysis` (below) and `_image` (the
-band's place in the whole output frame, so a zoomed view and an export line up). Source results
-are cached: dragging other sliders doesn't re-run the filter; a draft while a filter's own
+Each filter gets its resolved parameters plus `encoding`, `_analysis` (below) and `_image`:
+
+| `_image` field | meaning |
+| --- | --- |
+| `x`, `y`, `width`, `height`, `overlap` | the band's top-left and size in the whole output frame (overlap included) |
+| `canvasWidth`, `canvasHeight` | the whole output frame's size (cropped frame bounds when cropped); scaled during a draft |
+| `mode`, `depth`, `alpha`, `channels` | `"rgb"`, `32`, `false`, `3` |
+| `draft` | `true` for interactive drafts (always `false` on `pc_analyze`, exports, 1:1 and native runs) |
+| `draftScale` | present when `draft` is `true` on Source runs: downscale factor `<= 1.0` (`1.0` when not downsampled) |
+| `nativeCanvasWidth`, `nativeCanvasHeight` | present alongside `draftScale`: the unscaled canvas size before draft downsampling |
+| `source` | present when known, on both `pc_filter` and `pc_analyze`: `{origin, bitsPerSample, float?}` (`origin`: `"untagged"`, `"container"`, `"iccMatrixTrc"`, `"iccCms"`, `"iccUnsupported"`, `"naive"`, `"raw"`, or `"demo"`; `bitsPerSample`: `8`, `12`, `14`, `16`, or `32`; `float`: `true` when the source file held floating-point samples, omitted when `false`) |
+
+Source results are cached: dragging other sliders doesn't re-run the filter; a draft while a filter's own
 parameter changes runs it on a reduced copy (at most 0.5 MP), the full render after it is exact.
 Renders with plug-in filters use the CPU pipeline. A filter that isn't installed or fails is
 skipped: the render goes on and reports a warning (logged as `render: …`).
