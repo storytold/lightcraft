@@ -276,7 +276,11 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                     n = n
                 )
             });
-            let cloud_tip = unsaved.as_deref().unwrap_or("Sync: Peer-to-Peer or Immich");
+            let cloud_tip = unsaved.as_deref().unwrap_or("Sync: Devices or Immich");
+            #[cfg(not(target_arch = "wasm32"))]
+            let sync_waiting = super::peer_sync::waiting(app);
+            #[cfg(target_arch = "wasm32")]
+            let sync_waiting = 0usize;
             // Import Photos… beside Export, always one click away, with the key it is bound to now
             let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
             let import_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "dialog.import")
@@ -309,6 +313,12 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                     ui.painter().circle_filled(c, 6.0, t.reject);
                     ui.painter().text(c, Align2::CENTER_CENTER, "!", t.semibold(9.5), t.canvas);
                     register(ui.ctx(), "indicator:unsaved", r);
+                } else if id == "cloud" && sync_waiting > 0 {
+                    // an invitation or a new collection waits for an answer
+                    let c = r.right_top() + vec2(-5.0, 6.0);
+                    ui.painter().circle_filled(c, 6.0, t.accent);
+                    ui.painter().text(c, Align2::CENTER_CENTER, sync_waiting.min(9).to_string(), t.semibold(9.5), t.canvas);
+                    register(ui.ctx(), "indicator:syncWaiting", r);
                 }
                 // a refusal says why (Import while a Lightroom catalog is coming in)
                 if resp.clicked()
@@ -321,7 +331,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                 #[cfg(not(target_arch = "wasm32"))]
                 if id == "cloud" {
                     egui::Popup::menu(&resp).show(|ui| {
-                        for (key, label, tab) in [("peerSync", "Peer-to-Peer Sync…", "sync"), ("immich", "Immich…", "connections")] {
+                        for (key, label, tab) in [("peerSync", "Device Sync…", "sync"), ("immich", "Immich…", "connections")] {
                             let b = ui.button(crate::i18n::tr(label));
                             register(ui.ctx(), format!("menu:cloud-{key}"), b.rect);
                             if b.clicked() {

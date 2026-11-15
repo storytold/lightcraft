@@ -5517,6 +5517,7 @@ dependencies = [
  "lcc-raw",
  "lcc-slideshow",
  "lcc-surface",
+ "lcc-sync",
  "lcc-testkit",
  "lcc-text",
  "lcc-updater",

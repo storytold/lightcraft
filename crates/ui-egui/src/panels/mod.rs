@@ -41,6 +41,8 @@ pub mod navigator;
 pub mod notices;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod peer_sync;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod sync_pill;
 pub mod people;
 pub mod person;
 pub mod plugin_filters;

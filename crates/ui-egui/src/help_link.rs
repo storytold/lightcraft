@@ -80,7 +80,7 @@ pub const TOPICS: &[(&str, &str)] = &[
     ("shortcuts", "reference/settings#shortcuts"),
     ("controls", "reference/settings#controls"),
     ("connections", "sync/immich#connect"),
-    ("sync", "sync/peer-sync#setup"),
+    ("sync", "sync/devices#setup"),
 ];
 
 /// The manual page and anchor of `topic`.

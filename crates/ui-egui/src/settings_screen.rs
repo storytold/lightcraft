@@ -123,7 +123,7 @@ const SECTIONS: &[Section] = &[
         words: "control surfaces hardware console dial dials knob keys keypad dialpad actions ring logi logitech mx creative loupedeck tactilebridge plugin pairing",
     },
     Section { key: "connections", label: "Connections", icon: Icon::Share, tabs: &["connections"], words: "connections keychain" },
-    Section { key: "sync", label: "Sync", icon: Icon::Cloud, tabs: &["sync"], words: "devices peers immich server api key" },
+    Section { key: "sync", label: "Sync", icon: Icon::Cloud, tabs: &["sync"], words: "devices peers pair pairing catalog collections share network" },
 ];
 
 /// How Settings is drawn ([`presentation`]).

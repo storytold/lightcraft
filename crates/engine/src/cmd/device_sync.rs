@@ -66,7 +66,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let accept = bool_req(p, "accept", "sync.answer")?;
             sync::answer(s, &d, accept)
         }),
-        cmd!(query "sync.leave", "Stop Syncing This Catalogue", [], None, "{}: this device leaves the open catalogue's sync; nothing is deleted → sync.status", always, |s, _p| sync::leave(s)),
+        cmd!(query "sync.leave", "Stop Syncing This Catalog", [], None, "{}: this device leaves the open catalogue's sync; nothing is deleted → sync.status", always, |s, _p| sync::leave(s)),
         cmd!(query "sync.allow", "Set What a Collection Allows", [], None, "{album | collection | unfiled: true, allow: none|preview|serve|sync}: what the other devices may have of a collection this device owns. none: not shared; preview: previews only, others can't add; serve: originals too, others can't add; sync: any device adds → sync.status", always, |s, p| {
             const C: &str = "sync.allow";
             let grant = str_param(p, "allow").and_then(Grant::parse).ok_or_else(|| bad(C, "missing `allow` (none|preview|serve|sync)"))?;

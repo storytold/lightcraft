@@ -1147,6 +1147,9 @@ impl Session {
         // the automatic sidecar writes and ML embeddings still queued are saved before the library goes
         self.flush_sidecar_writes();
         self.ml.save_store_now();
+        // the device-sync replica of this catalogue is written now, not on the next tick
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::device_sync::flush(self);
         let persisted = self.persist();
         // a presets.json save on its way finishes first (it is this library's), and a failed one
         // is made here, in the close

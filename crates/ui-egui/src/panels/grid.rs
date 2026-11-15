@@ -1390,8 +1390,15 @@ fn cell(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square: bool,
         ui.interact(br, egui::Id::new(("preview-only-badge", id.0)), Sense::hover())
             .on_hover_text(crate::i18n::tr_format!("Preview only: {}", crate::widgets::preview_only_explanation(why)));
     }
+    // the device-sync pill: bottom right, above the badge bar, with the other badges
     #[cfg(not(target_arch = "wasm32"))]
-    super::connections::grid_badge(app, ui, id, img_rect);
+    if show_badges && let Some(pill) = app.session.sync_pill(id) {
+        let size = super::sync_pill::size(ui, &pill);
+        let at = pos2(img_rect.right() - 6.0 - size.x, img_rect.bottom() - 30.0 - size.y);
+        if img_rect.contains_rect(egui::Rect::from_min_size(at, size)) {
+            super::sync_pill::paint(ui, at, &pill, &format!("badge:sync:{}", id.0));
+        }
+    }
     if photo.flag == Flag::Reject && !under {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }

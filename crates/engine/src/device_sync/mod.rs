@@ -1005,7 +1005,7 @@ fn answer_job(s: &mut Session, hub: &Arc<Hub>, job: Job) {
         Job::Wants { peer, reply } => {
             let wants = match &mut s.device_sync.lib {
                 Some(lib) if lib.replica.in_group_with(&peer) => {
-                    let mut lib = std::mem::replace(&mut s.device_sync.lib, None);
+                    let mut lib = s.device_sync.lib.take();
                     let w = lib.as_mut().map(|l| catalog::wants(s, l, &peer)).unwrap_or_default();
                     s.device_sync.lib = lib;
                     w

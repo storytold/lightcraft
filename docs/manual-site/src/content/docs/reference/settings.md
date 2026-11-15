@@ -219,5 +219,5 @@ sidebar:
   Keychain** or **Encrypted File**). See [Immich](../../sync/immich/#connect).
 
 ## Sync
-- This device's name, finding devices on your network, paired devices and offers to sync a catalog. See
-  [Peer sync](../../sync/peer-sync/#setup).
+- This device's name, finding and pairing devices on your network, syncing the open catalog (the whole catalog or
+  collections only), invitations, and what each collection allows or takes. See [Device sync](../../sync/devices/#setup).

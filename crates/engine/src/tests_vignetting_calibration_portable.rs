@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use lcc_catalog::{Op, Photo, PhotoId, Source, VignettingMapRecord, reference_photo};
 use lcc_develop::{EmbeddedVignettingMap, VignettingMapId, VignettingMapOrigin};
-use serde_json::{Value, json};
+use serde_json::json;
 
 const REF_SHA: &str = "a9993e364706816aba3e25717850c26c9cd0d89d";
 
