@@ -822,6 +822,9 @@ fn bar(app: &mut LccApp, ui: &mut egui::Ui, wide: bool, pane: &mut Pane) {
         if layout.take {
             take_segments(app, ui);
         }
+        if layout.sub {
+            subfolders_check(app, ui);
+        }
     });
 }
 
@@ -836,6 +839,8 @@ pub(crate) struct BarLayout {
     pub take: bool,
     /// Show All / Show Not Imported.
     pub show: bool,
+    /// Include subfolders.
+    pub sub: bool,
     /// What the right-hand group leaves the breadcrumb and the folder's label.
     pub room: f32,
     /// The folder's own name, which the breadcrumb never takes (0 when nothing is browsed).
@@ -843,7 +848,7 @@ pub(crate) struct BarLayout {
 }
 
 /// Lay out the import bar's right-hand group in `row`: in order, Picks / Selected / All (also under Import
-/// Settings) and Show All / Show Not Imported go
+/// Settings), Show All / Show Not Imported and Include subfolders go
 /// until what is left holds the browsed folder's whole name with "…" for its parents. Nothing is laid
 /// out past the row, so the bar never runs over the panel beside it.
 fn bar_layout(row: &egui::Ui, import_label: &str, name: Option<&str>, folder: Option<&str>, wide: bool) -> BarLayout {
@@ -864,16 +869,22 @@ fn bar_layout(row: &egui::Ui, import_label: &str, name: Option<&str>, folder: Op
     let develop_w = if browsing { button(crate::i18n::tr("Develop"), false) + gap } else { 0.0 };
     let show_w = crate::widgets::segments_width(row, &SHOW_LABELS) + gap;
     let take_w = crate::widgets::segments_width(row, &TAKE_LABELS) + gap;
-    let mut l = BarLayout { take: wide, show: browsing, room: 0.0, name_w };
-    let right = |l: &BarLayout| import_w + develop_w + if l.show { show_w } else { 0.0 } + if l.take { take_w } else { 0.0 } + gap;
+    // the checkbox in its own text style (egui's Button), the icon and the gap between them
+    let button_font = egui::TextStyle::Button.resolve(row.style());
+    let sub_w = row.painter().layout_no_wrap(crate::i18n::tr("Include subfolders").to_string(), button_font, t.text).size().x + 26.0 + gap;
+    let mut l = BarLayout { take: wide, show: browsing, sub: browsing, room: 0.0, name_w };
+    let right = |l: &BarLayout| {
+        import_w + develop_w + if l.show { show_w } else { 0.0 } + if l.take { take_w } else { 0.0 } + if l.sub { sub_w } else { 0.0 } + gap
+    };
     let fits = |l: &BarLayout| avail - right(l) >= name_w + crumb_min;
-    for step in 0..2 {
+    for step in 0..3 {
         if fits(&l) {
             break;
         }
         match step {
             0 => l.take = false,
-            _ => l.show = false,
+            1 => l.show = false,
+            _ => l.sub = false,
         }
     }
     l.room = (avail - right(&l)).max(0.0);
@@ -966,6 +977,21 @@ fn show_segments(app: &mut LccApp, ui: &mut egui::Ui) {
     let show = if i == 0 { "all" } else { "notImported" };
     if (i == 1) != b.not_imported
         && let Err(e) = app.run("library.browse", json!({"path": b.path, "subfolders": b.subfolders, "show": show}))
+    {
+        app.toast(ui.ctx(), e);
+    }
+}
+
+/// Include subfolders: whether the browse reaches into the folder's subfolders (`library.browse`'s
+/// `subfolders`), as the Local folder header and the import review offer it. A change re-browses
+/// the folder with the choice given, so the view — and the import that follows — take it at once.
+fn subfolders_check(app: &mut LccApp, ui: &mut egui::Ui) {
+    let Some(b) = app.session.browse.clone() else { return };
+    let mut sub = b.subfolders;
+    let c = ui.checkbox(&mut sub, crate::i18n::tr("Include subfolders"));
+    register(ui.ctx(), "check:includeSubfolders", c.rect);
+    if c.changed()
+        && let Err(e) = app.run("library.browse", json!({"path": b.path, "subfolders": sub}))
     {
         app.toast(ui.ctx(), e);
     }

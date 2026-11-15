@@ -830,11 +830,13 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             Ok(json!({"on": on, "where": if app.importing() { "import" } else { "library" }}))
         }
         "view.photoGrid" => {
+            app.leave_fullscreen_preview();
             app.ui.view = ViewMode::PhotoGrid;
             app.ui.grid_style = ViewMode::PhotoGrid;
             Ok(Value::Null)
         }
         "view.squareGrid" => {
+            app.leave_fullscreen_preview();
             app.ui.view = ViewMode::SquareGrid;
             app.ui.grid_style = ViewMode::SquareGrid;
             Ok(Value::Null)
@@ -928,6 +930,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             app.run("library.select", json!({"ids": [active.0], "active": active.0}))
         }
         "view.loupeToggle" => {
+            app.leave_fullscreen_preview();
             if app.ui.module == crate::module::ModuleId::Library && app.ui.view == ViewMode::Detail {
                 app.ui.view = if app.ui.grid_style.is_grid() { app.ui.grid_style } else { ViewMode::PhotoGrid };
                 Ok(Value::Null)
@@ -977,15 +980,23 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
         "view.gridToggle" => {
             // G between the two grids; from a photo view it comes back to the grid style the user
             // chose last (#794), not always to Photo Grid
-            app.ui.view = if app.ui.view.is_grid() {
-                if app.ui.view == ViewMode::PhotoGrid { ViewMode::SquareGrid } else { ViewMode::PhotoGrid }
+            if app.ui.fullscreen {
+                // the full-screen preview sits over a view that is usually a grid already: G asks
+                // for the grid the user chose, not a flip between the two grid styles
+                app.leave_fullscreen_preview();
+                app.ui.view = app.ui.grid_style;
             } else {
-                app.ui.grid_style
-            };
-            app.ui.grid_style = app.ui.view;
+                app.ui.view = if app.ui.view.is_grid() {
+                    if app.ui.view == ViewMode::PhotoGrid { ViewMode::SquareGrid } else { ViewMode::PhotoGrid }
+                } else {
+                    app.ui.grid_style
+                };
+                app.ui.grid_style = app.ui.view;
+            }
             Ok(Value::Null)
         }
         "view.detail" => {
+            app.leave_fullscreen_preview();
             app.ui.view = ViewMode::Detail;
             Ok(Value::Null)
         }
@@ -1026,6 +1037,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
         }
         "view.people" => {
             // Everyone; the page just left stays one click away (the chip next to the title)
+            app.leave_fullscreen_preview();
             if let Some(name) = app.ui.person_page.take() {
                 app.ui.last_person = Some(name);
             }
@@ -1040,12 +1052,14 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             let Some(name) = p.get("name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()) else {
                 return Some(Err("view.person: missing `name`".into()));
             };
+            app.leave_fullscreen_preview();
             app.ui.view = ViewMode::People;
             app.ui.person_from = None;
             app.ui.person_page = Some(name.to_string());
             Ok(json!({"person": name}))
         }
         "view.survey" => {
+            app.leave_fullscreen_preview();
             app.ui.view = ViewMode::Survey;
             Ok(json!({"photos": crate::panels::compare::survey_photos(app).len()}))
         }
@@ -1068,6 +1082,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
             {
                 let _ = app.session.execute("library.select", &json!({"ids": [next.0]}));
             }
+            app.leave_fullscreen_preview();
             app.ui.view = ViewMode::Reference;
             Ok(json!({"reference": r, "active": app.session.active().map(|a| a.0)}))
         }

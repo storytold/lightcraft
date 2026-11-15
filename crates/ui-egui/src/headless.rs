@@ -3625,7 +3625,8 @@ mod tests {
         assert_eq!(h.app.session.source, lcc_engine::LibrarySource::Folder);
         h.settle(SETTLE);
         assert!(h.app.scan.is_none() && h.app.import.is_none());
-        assert_eq!(h.app.session.visible_cloned().len(), 1);
+        // subfolders come with a first browse of a folder: both photos
+        assert_eq!(h.app.session.visible_cloned().len(), 2);
         assert!(h.settle(SETTLE), "a thumbnail that can't load must not keep the renderer busy");
         // this test session has no file hooks: the thumbnail fails once, is remembered, and isn't retried
         let id = h.app.session.visible_cloned()[0];
@@ -3637,6 +3638,10 @@ mod tests {
         assert_eq!(h.app.renderer.completed, done, "no retry loop");
         let w = h.request("ui.widgets", json!({"filter": "crumb:"}), t);
         assert!(w["result"].as_array().is_some_and(|a| !a.is_empty()), "breadcrumb: {w}");
+        // the toggle browses flat, and back
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), t)["ok"], true);
+        h.settle(SETTLE);
+        assert_eq!(h.app.session.visible_cloned().len(), 1, "off: only the folder's own file");
         assert_eq!(h.request("ui.clickWidget", json!({"id": "check:includeSubfolders"}), t)["ok"], true);
         h.settle(SETTLE);
         assert_eq!(h.app.session.visible_cloned().len(), 2);
@@ -5918,7 +5923,9 @@ mod tests {
     }
 
     /// F: full-screen preview (arrows step, I cycles the info overlay, Esc exits); ⌘I cycles the
-    /// overlay in Detail; ⇧⌘F asks the host for window full screen.
+    /// overlay in Detail; ⇧⌘F asks the host for window full screen. I to Off clears the photo of
+    /// all text (the shot-info strip and its pixel size go with the overlay, from photo to photo),
+    /// and G leaves the preview for the grid.
     #[test]
     fn full_screen_preview_covers_the_screen_and_f11_toggles_full_screen() {
         // issue #2: F must take the window full screen (over the taskbar) and give it back after
@@ -5964,6 +5971,30 @@ mod tests {
             assert!(c.r() < 8 && c.g() < 8 && c.b() < 8, "({x},{y}) = {c:?}");
         }
         assert!(h.app.widgets.iter().any(|(w, _)| w == "canvas:infoOverlay"));
+        // the shot-info strip follows the overlay: with it on, the strip and its pixel size show
+        let strip = |h: &Headless| h.app.widgets.iter().any(|(w, _)| w == "loupe:shotInfo");
+        let pixel_size = |h: &Headless| h.painted_text().iter().any(|s| s.contains('×'));
+        h.settle(SETTLE);
+        assert!(strip(&h), "the shot-info strip is up with the overlay on");
+        assert!(pixel_size(&h), "the strip ends in the pixel size: {:?}", h.painted_text());
+        // I to Off clears the photo of all text — the strip and the pixel size with it
+        h.request("ui.key", json!({"key": "i"}), t);
+        h.request("ui.key", json!({"key": "i"}), t);
+        assert_eq!(h.app.ui.info_overlay, InfoOverlay::Off);
+        h.settle(SETTLE);
+        assert!(!strip(&h), "I to Off hides the shot-info strip too");
+        assert!(!pixel_size(&h), "the pixel size is gone with the rest");
+        // and it stays hidden from photo to photo
+        h.request("ui.key", json!({"key": "right"}), t);
+        assert_eq!(h.app.session.active().map(|p| p.0), Some(vis[2]));
+        h.settle(SETTLE);
+        assert!(!strip(&h), "the next photo is clear of text without pressing I again");
+        assert!(!pixel_size(&h));
+        // cycling the overlay back brings the strip back
+        h.request("ui.key", json!({"key": "i"}), t);
+        assert_eq!(h.app.ui.info_overlay, InfoOverlay::Basic);
+        h.settle(SETTLE);
+        assert!(strip(&h), "the strip returns with the overlay");
         h.request("ui.key", json!({"key": "escape"}), t);
         assert!(!h.app.ui.fullscreen);
         assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid, "Esc leaves full screen only, back to where it was entered");
@@ -5972,6 +6003,18 @@ mod tests {
         assert_eq!(h.app.ui.info_overlay, InfoOverlay::Exposure);
         h.request("ui.key", json!({"key": "i", "cmd": true}), t);
         assert_eq!(h.app.ui.info_overlay, InfoOverlay::Off);
+        h.settle(SETTLE);
+        // the overlay state carries into the next preview: entered with it Off, no strip shows
+        h.request("ui.key", json!({"key": "f"}), t);
+        assert!(h.app.ui.fullscreen);
+        h.settle(SETTLE);
+        assert!(!strip(&h), "the preview opened with the overlay Off has no strip");
+        // G leaves the preview for the grid
+        h.request("ui.key", json!({"key": "g"}), t);
+        assert!(!h.app.ui.fullscreen, "G leaves the full-screen preview");
+        assert!(h.app.ui.view.is_grid(), "the grid is showing: {:?}", h.app.ui.view);
+        h.settle(SETTLE);
+        assert!(h.app.widgets.iter().any(|(w, _)| w == "gridArea"), "the grid draws after G from the preview");
         h.settle(SETTLE);
     }
 

@@ -19,7 +19,9 @@ File → Import Photos… (`Cmd+Shift+I`) or Import from Folder… (`library.imp
   keywords to arriving photos (`library.autoImport`). On Android the camera roll is a watched source (Settings → Folders,
   Watch for new photos).
 - **Browse** (the Import tab, Settings → Import → Import as a tab): the bar's **Import** button imports the picks, the
-  selection or all; **Develop** opens the selected photo without importing it. Develop, Print, Export and Slideshow
+  selection or all; a folder browsed for the first time includes its sub-folders (**Include subfolders** in the bar
+  re-browses without them; re-browsing the same folder keeps the choice); **Develop** opens the selected photo without
+  importing it. Develop, Print, Export and Slideshow
   chosen while browsing (module picker, shortcuts, File → Export…) work on the browsed selection the same way — export
   writes it with its current edits, print takes it as the only photo — and stay there until you go back to Library;
   a selected file the library already has opens as its library photo. Map, Book and Web switch to the library.

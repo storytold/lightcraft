@@ -1765,6 +1765,16 @@ impl LccApp {
         panels::slideshow::tick(self, ctx);
     }
 
+    /// Leave the full-screen preview: a view or module switch asks for the app's chrome back (Esc
+    /// and F keep their own paths). A running slide show ends with the preview, as Esc ends it
+    /// (releasing its rendered slides).
+    pub(crate) fn leave_fullscreen_preview(&mut self) {
+        if self.ui.slideshow.is_some() {
+            panels::slideshow::end(self);
+        }
+        self.ui.fullscreen = false;
+    }
+
     /// Announce the end of a Build Previews run.
     fn preview_build_status(&mut self, ctx: &egui::Context) {
         use std::sync::atomic::Ordering;
