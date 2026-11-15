@@ -650,6 +650,30 @@ fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8
     craft_jxl::encode(&img, opts, &craft_jxl::Metadata::default()).unwrap()
 }
 
+/// The encoder may return an ISO-BMFF container for a level-10 codestream. Extract its `jxlc`
+/// payload so the tile fixture can deliberately exercise the bare-codestream form too.
+fn bare_jxl_codestream(bytes: &[u8]) -> Vec<u8> {
+    const SIGNATURE: &[u8] = &[0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a];
+    if !bytes.starts_with(SIGNATURE) {
+        return bytes.to_vec();
+    }
+    let mut at = SIGNATURE.len();
+    while let Some(end_header) = at.checked_add(8) {
+        let Some(header) = bytes.get(at..end_header) else { break };
+        let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        if size < 8 {
+            break;
+        }
+        let Some(end) = at.checked_add(size) else { break };
+        let Some(box_bytes) = bytes.get(at..end) else { break };
+        if &header[4..8] == b"jxlc" {
+            return box_bytes[8..].to_vec();
+        }
+        at = end;
+    }
+    panic!("the JPEG XL encoder returned a container without a complete jxlc box");
+}
+
 /// A bare codestream wrapped in the ISO-BMFF container (signature, `ftyp`, `jxlc`).
 fn jxl_container(cs: &[u8]) -> Vec<u8> {
     let mut b = vec![0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a, 0, 0, 0, 0x14];
@@ -679,7 +703,7 @@ fn jxl_tiled(px: &[u16], w: usize, h: usize, cpp: usize, bits: u16, cfa: bool, t
                     }
                 }
             }
-            let cs = jxl_encode(&t, cw, ch, cpp, bits == 8);
+            let cs = bare_jxl_codestream(&jxl_encode(&t, cw, ch, cpp, bits == 8));
             tiles.push(if i % 3 == 1 { jxl_container(&cs) } else { cs });
         }
     }
