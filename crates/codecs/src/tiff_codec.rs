@@ -1,4 +1,4 @@
-//! TIFF decode via `craft-image-codecs` and header/IFD inspection via `craft-tiff`.
+//! TIFF decode and header inspection via `craft-image-codecs`.
 
 use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
 use crate::{DecodeOptions, Decoded, Error, Format, Result};
@@ -10,15 +10,9 @@ fn err(e: impl std::fmt::Display) -> Error {
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    let (tiff, complete) = craft_tiff::Tiff::parse_with_status(bytes, &Default::default()).map_err(err)?;
-    if !complete {
-        return Err(err("truncated TIFF"));
-    }
-    let ifd = tiff.ifds.first().ok_or_else(|| err("no IFD"))?;
-    let info = ifd.image().map_err(err)?;
-    check_size(F, info.width as u64, info.height as u64, opts)?;
-    let orientation = ifd.u16(craft_tiff::tags::ORIENTATION);
-    let bit_depth = info.bits_per_sample.first().copied().unwrap_or(8) as u8;
+    let info = craft_image_codecs::tiff_probe::decode_info(bytes, opts.max_pixels).map_err(probe_error)?;
+    let orientation = info.orientation;
+    let bit_depth = info.bit_depth;
 
     let ic_opts = craft_image_codecs::DecodeOptions {
         limits: craft_image_codecs::Limits {
@@ -68,9 +62,13 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
 /// as a decode would refuse it: a layout or compression we can't decode, or strips/tiles that
 /// start past the end of the file (truncated). The compressed data itself is not checked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    craft_image_codecs::tiff_probe::header(bytes, DecodeOptions::default().max_pixels).map_err(|error| match error {
+    craft_image_codecs::tiff_probe::header(bytes, DecodeOptions::default().max_pixels).map_err(probe_error)
+}
+
+fn probe_error(error: craft_image_codecs::tiff_probe::Error) -> Error {
+    match error {
         craft_image_codecs::tiff_probe::Error::TooLarge { width, height } => Error::TooLarge(u64::from(width), u64::from(height)),
         craft_image_codecs::tiff_probe::Error::Unsupported(reason) => Error::Unsupported(F, reason),
         craft_image_codecs::tiff_probe::Error::Malformed(message) => err(message),
-    })
+    }
 }
