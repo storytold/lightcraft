@@ -16,6 +16,19 @@ pub trait Store: Send {
     /// Replace a file atomically: after a crash either the old or the new content is visible,
     /// never a mix (native: write temp + fsync + rename + fsync directory).
     fn write_atomic(&mut self, name: &str, data: &[u8]) -> io::Result<()>;
+    /// Create a file that doesn't exist yet: `AlreadyExists` when `name` is taken, and a file
+    /// that is there is never replaced, even when another writer creates it at the same moment
+    /// (that is the difference from reading first and then calling [`Store::write_atomic`]). Same
+    /// durability as [`Store::write_atomic`]: the file appears whole or not at all.
+    ///
+    /// The default checks and then writes, which is only as safe as the store is unshared: a store
+    /// that other writers can reach ([`FsStore`], [`MemStore`]) overrides it with one atomic step.
+    fn write_new(&mut self, name: &str, data: &[u8]) -> io::Result<()> {
+        if self.read(name)?.is_some() {
+            return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{name} already exists")));
+        }
+        self.write_atomic(name, data)
+    }
     /// [`Store::write_atomic`] with streamed content: `fill` writes the new content into the
     /// given writer (an error aborts and leaves the old file). Same durability: the file is
     /// replaced only once all of it is written (native: and fsynced). Returns its length.
@@ -167,6 +180,12 @@ impl Store for FsStore {
         std::fs::rename(&tmp, self.path(name))?;
         self.sync_dir();
         Ok(())
+    }
+
+    fn write_new(&mut self, name: &str, data: &[u8]) -> io::Result<()> {
+        // a hard link (or an exclusive create) publishes the complete, synced file under `name`
+        // only if nothing is there; no step replaces it
+        crate::safe_file::write_new(&self.path(name), data)
     }
 
     fn write_atomic_with(&mut self, name: &str, fill: &mut dyn FnMut(&mut dyn io::Write) -> io::Result<()>) -> io::Result<u64> {
@@ -331,6 +350,16 @@ impl Store for MemStore {
     fn write_atomic(&mut self, name: &str, data: &[u8]) -> io::Result<()> {
         self.set(name, data.to_vec());
         Ok(())
+    }
+    fn write_new(&mut self, name: &str, data: &[u8]) -> io::Result<()> {
+        use std::collections::btree_map::Entry;
+        match self.files.lock().unwrap_or_else(|e| e.into_inner()).entry(name.to_string()) {
+            Entry::Occupied(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{name} already exists"))),
+            Entry::Vacant(v) => {
+                v.insert(data.to_vec());
+                Ok(())
+            }
+        }
     }
     fn append(&mut self, name: &str, data: &[u8]) -> io::Result<()> {
         self.files.lock().unwrap_or_else(|e| e.into_inner()).entry(name.to_string()).or_default().extend_from_slice(data);

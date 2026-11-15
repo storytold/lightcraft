@@ -17,7 +17,7 @@ use wasm_bindgen::prelude::*;
 use crate::backend::Backend;
 use crate::backup::{ACTIVE_LIBRARY, DEFAULT_LIBRARY_DIR, valid_library_dir};
 use crate::bench::Bench;
-use crate::files::{Files, FlushOp, LIBRARY_FILES};
+use crate::files::{Files, FlushOp};
 use crate::host::{Incoming, Outgoing};
 use crate::safety::{self, notice};
 use crate::store::{Originals, content_hash, download_name, storage_key};
@@ -431,25 +431,17 @@ async fn boot(opts: Options, bridge: Option<crate::host::Bridge>) -> Boot {
             Err(e) => load_error = Some(format!("couldn't read which library is in use from browser storage ({e})")),
         }
         if load_error.is_none() {
-            // the damaged logs kept before are read with the library files: the catalog store
-            // sees only what is read here, and would give their names to a new copy
-            match b.list(&lib_dir).await {
-                Ok(listed) => {
-                    let kept = crate::files::damaged_logs(listed);
-                    let mut reads = Vec::new();
-                    for name in LIBRARY_FILES.into_iter().chain(kept.iter().map(String::as_str)) {
-                        reads.push((name, b.read(&library_key(&lib_dir, name)).await));
-                    }
-                    if let Err(e) = crate::files::preload_library(&files, reads) {
-                        log::error!("{e}");
-                        load_error = Some(e);
-                    }
-                }
-                Err(e) => {
-                    let e = format!("couldn't list the library in browser storage ({e})");
-                    log::error!("{e}");
-                    load_error = Some(e);
-                }
+            // the damaged logs kept before are known to the catalog store too: it sees only what is
+            // read here, and would give their names to a new copy (a bounded number is read in full)
+            let listed = b.list(&lib_dir).await;
+            let read = |name: String| {
+                let key = library_key(&lib_dir, &name);
+                let b = &b;
+                async move { b.read(&key).await }
+            };
+            if let Err(e) = crate::files::preload_start_up(&files, listed, read).await {
+                log::error!("{e}");
+                load_error = Some(e);
             }
         }
         let index_read = b.read(THUMB_INDEX).await;

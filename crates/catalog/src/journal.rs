@@ -424,17 +424,29 @@ const MAX_DAMAGED_COPIES: u32 = 100;
 /// [`MAX_DAMAGED_COPIES`] names, then an error). A file with these very bytes is the copy
 /// already (an open whose snapshot then failed is retried at the next open): its name is
 /// returned and nothing is written.
+///
+/// A name is claimed with [`Store::write_new`], which fails when the name is taken, so a copy
+/// that appears between the read and the write (a second open of the same folder) is never
+/// replaced either: that name is read again and, if it holds other bytes, skipped.
 fn keep_damaged_log(store: &mut dyn Store, seq: u64, log: &[u8]) -> std::io::Result<String> {
+    let read = |store: &mut dyn Store, name: &str| store.read(name).map_err(|e| std::io::Error::new(e.kind(), format!("can't read {name}: {e}")));
     for copy in 1..=MAX_DAMAGED_COPIES {
         let name = if copy == 1 { format!("{LOG}.damaged-{seq}") } else { format!("{LOG}.damaged-{seq}-{copy}") };
-        let there = store.read(&name).map_err(|e| std::io::Error::new(e.kind(), format!("can't read {name}: {e}")))?;
-        match there {
-            None => {
-                store.write_atomic(&name, log)?;
-                return Ok(name);
-            }
+        match read(store, &name)? {
             Some(there) if there == log => return Ok(name),
-            Some(_) => {}
+            Some(_) => continue,
+            None => {}
+        }
+        match store.write_new(&name, log) {
+            Ok(()) => return Ok(name),
+            // taken since the read above: the same log copied by another open is the copy already
+            // (a name that holds nothing readable, such as a dangling link, is taken too)
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                if read(store, &name)?.is_some_and(|there| there == log) {
+                    return Ok(name);
+                }
+            }
+            Err(e) => return Err(e),
         }
     }
     Err(std::io::Error::other(format!(

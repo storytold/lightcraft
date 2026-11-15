@@ -256,7 +256,7 @@ fn a_second_damaged_log_at_the_same_change_is_kept_beside_the_first() {
     m.set(LOG, second.clone());
     let (_, _, r2) = open(&m);
     let name2 = r2.damaged.expect("damage reported again");
-    assert_ne!(name1, name2, "the second copy needs a name of its own");
+    assert_eq!(name2, format!("{name1}-2"), "the second copy takes the next name (the web start-up reads names of this shape)");
     assert_eq!(m.get(&name1).unwrap(), first, "the first copy is untouched");
     assert_eq!(m.get(&name2).unwrap(), second);
 
@@ -264,7 +264,7 @@ fn a_second_damaged_log_at_the_same_change_is_kept_beside_the_first() {
     m.set(LOG, third.clone());
     let (_, _, r3) = open(&m);
     let name3 = r3.damaged.expect("damage reported a third time");
-    assert!(name3 != name1 && name3 != name2);
+    assert_eq!(name3, format!("{name1}-3"));
     assert_eq!(m.get(&name1).unwrap(), first);
     assert_eq!(m.get(&name2).unwrap(), second);
     assert_eq!(m.get(&name3).unwrap(), third);
@@ -333,6 +333,152 @@ fn the_last_free_damaged_log_name_is_used() {
     let (_, _, r) = open(&m);
     assert_eq!(r.damaged, Some(format!("{first}-100")));
     assert_eq!(m.get(&format!("{first}-100")).unwrap(), bad);
+}
+
+/// A store that misbehaves around the damaged-log copies: `rival` appears under its name right
+/// after a read found nothing there (another open of the same folder, between a read and a
+/// write), `damaged_unreadable` fails any read of a copy, `damaged_unwritable` any write of one.
+struct Copies {
+    files: MemStore,
+    rival: Option<(String, Vec<u8>)>,
+    damaged_unreadable: bool,
+    damaged_unwritable: bool,
+}
+
+impl Copies {
+    fn new(files: &MemStore) -> Copies {
+        Copies { files: files.clone(), rival: None, damaged_unreadable: false, damaged_unwritable: false }
+    }
+}
+
+impl Store for Copies {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        if self.damaged_unreadable && name.starts_with("catalog.log.damaged-") {
+            return Err(std::io::Error::other("network drive went away"));
+        }
+        let read = self.files.read(name)?;
+        if read.is_none()
+            && let Some((rival, bytes)) = self.rival.take_if(|r| r.0 == name)
+        {
+            self.files.set(&rival, bytes);
+        }
+        Ok(read)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        if self.damaged_unwritable && name.starts_with("catalog.log.damaged-") {
+            return Err(std::io::Error::other("disk full"));
+        }
+        self.files.write_atomic(name, data)
+    }
+    fn write_new(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        if self.damaged_unwritable && name.starts_with("catalog.log.damaged-") {
+            return Err(std::io::Error::other("disk full"));
+        }
+        self.files.write_new(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.files.truncate(name, len)
+    }
+    fn describe(&self) -> String {
+        self.files.describe()
+    }
+}
+
+/// The name the first damaged copy of a log marked `mark` gets in a library like `m` (found by
+/// keeping it in a scratch copy of its files).
+fn first_copy_name(m: &MemStore, mark: &str) -> String {
+    let scratch = MemStore::new();
+    *scratch.files.lock().unwrap() = m.files.lock().unwrap().clone();
+    scratch.set(LOG, damaged_at_record_three(&m.get(LOG).unwrap(), mark));
+    open(&scratch).2.damaged.expect("damage reported")
+}
+
+/// Another open of the same folder keeps a different damaged log under the name this one just
+/// found free: the copy that appeared is not replaced, this one goes to the next name.
+#[test]
+fn a_damaged_log_kept_by_another_open_meanwhile_is_not_replaced() {
+    let (m, _, _) = sample_catalog_with_log();
+    let clean = m.get(LOG).unwrap();
+    let name1 = first_copy_name(&m, "x");
+    let mine = damaged_at_record_three(&clean, "y");
+    m.set(LOG, mine.clone());
+    let mut store = Copies::new(&m);
+    store.rival = Some((name1.clone(), b"the other open's copy".to_vec()));
+    Journal::open(Box::new(store)).unwrap();
+    assert_eq!(m.get(&name1).unwrap(), b"the other open's copy", "the copy that appeared meanwhile is untouched");
+    assert_eq!(m.get(&format!("{name1}-2")).unwrap(), mine);
+}
+
+/// … and when what appeared is this very log (two opens of the same damaged log), it is the copy.
+#[test]
+fn the_same_damaged_log_kept_by_another_open_meanwhile_is_the_copy() {
+    let (m, _, _) = sample_catalog_with_log();
+    let clean = m.get(LOG).unwrap();
+    let name1 = first_copy_name(&m, "x");
+    let mine = damaged_at_record_three(&clean, "x");
+    m.set(LOG, mine.clone());
+    let mut store = Copies::new(&m);
+    store.rival = Some((name1.clone(), mine.clone()));
+    let (_, _, report) = Journal::open(Box::new(store)).unwrap();
+    assert_eq!(report.damaged, Some(name1.clone()));
+    assert_eq!(m.get(&name1).unwrap(), mine);
+    assert_eq!(m.get(&format!("{name1}-2")), None, "no second copy of the same bytes");
+}
+
+/// The identical copy is found under a later name too, not only under the first.
+#[test]
+fn the_same_damaged_log_is_found_under_a_later_name() {
+    let (m, _, _) = sample_catalog_with_log();
+    let clean = m.get(LOG).unwrap();
+    let name1 = first_copy_name(&m, "x");
+    let bad = damaged_at_record_three(&clean, "y");
+    m.set(&name1, b"another log's copy".to_vec());
+    m.set(&format!("{name1}-2"), bad.clone());
+    m.set(LOG, bad.clone());
+    let (_, _, r) = open(&m);
+    assert_eq!(r.damaged, Some(format!("{name1}-2")));
+    assert_eq!(m.get(&format!("{name1}-3")), None, "no new file");
+    assert_eq!(m.get(&name1).unwrap(), b"another log's copy");
+}
+
+/// … even when every name is taken: the copy that is this log is what the open needs.
+#[test]
+fn the_same_damaged_log_is_found_when_every_name_is_taken() {
+    let (m, _, _) = sample_catalog_with_log();
+    let clean = m.get(LOG).unwrap();
+    let name1 = first_copy_name(&m, "x");
+    let bad = damaged_at_record_three(&clean, "y");
+    m.set(&name1, b"another log's copy".to_vec());
+    take_damaged_names(&m, &name1, 100);
+    m.set(&format!("{name1}-100"), bad.clone());
+    m.set(LOG, bad);
+    let (_, _, r) = open(&m);
+    assert_eq!(r.damaged, Some(format!("{name1}-100")));
+}
+
+/// A copy that can't be read, or written, fails the open and leaves the log and the copies kept
+/// before as they are (the next open tries again).
+#[test]
+fn a_damaged_log_that_cannot_be_kept_fails_the_open_untouched() {
+    let (m, _, _) = sample_catalog_with_log();
+    let clean = m.get(LOG).unwrap();
+    let name1 = first_copy_name(&m, "x");
+    m.set(&name1, b"a copy kept before".to_vec());
+    let bad = damaged_at_record_three(&clean, "y");
+    m.set(LOG, bad.clone());
+    let files_before = m.files.lock().unwrap().clone();
+    for (unreadable, unwritable) in [(true, false), (false, true)] {
+        let mut store = Copies::new(&m);
+        store.damaged_unreadable = unreadable;
+        store.damaged_unwritable = unwritable;
+        let Err(e) = Journal::open(Box::new(store)) else { panic!("the library opened without keeping the damaged log") };
+        let why = e.to_string();
+        assert!(why.contains("network drive went away") || why.contains("disk full"), "{why}");
+        assert_eq!(*m.files.lock().unwrap(), files_before, "no file changed (unreadable {unreadable}, unwritable {unwritable})");
+    }
 }
 
 #[test]
