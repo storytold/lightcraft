@@ -122,8 +122,68 @@ const ALIASES: &[(&str, &str)] = &[
 
 /// Normalize a model name for local profile lookup (case, whitespace, and separator folding).
 fn normalize_for_lookup(model: &str) -> String {
-    normalized_model(model).replace('-', "_").replace(' ', "_")
+    normalized_model(model).replace(['-', ' '], "_")
 }
+=======
+=== FILE crates/engine/src/camera_profiles.rs ===
+<<<<<<< SEARCH
+    let profile = profile.or_else(|| {
+        let needle = normalize_for_local_match(model);
+        directory.clone().and_then(|d| {
+            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
+                let path = e.path();
+                if path.extension().is_some_and(|x| x == "json") {
+                    let stem = normalize_for_local_match(&path.file_stem()?.to_string_lossy());
+                    if stem == needle { load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new) } else { None }
+                } else {
+                    None
+                }
+            })
+        })
+    });
+    // Also try to find a local profile using normalized model name matching (full scan)
+    let profile = profile.or_else(|| {
+        let needle = normalize_for_local_match(model);
+        directory.clone().and_then(|d| {
+            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
+                let path = e.path();
+                if path.extension().is_some_and(|x| x == "json") {
+                    load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new)
+                } else {
+                    None
+                }
+            })
+        })
+    });
+=======
+    let profile = profile.or_else(|| {
+        let needle = normalize_for_local_match(model);
+        directory.and_then(|d| {
+            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
+                let path = e.path();
+                if path.extension().is_some_and(|x| x == "json") {
+                    let stem = normalize_for_local_match(&path.file_stem()?.to_string_lossy());
+                    if stem == needle { load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new) } else { None }
+                } else {
+                    None
+                }
+            })
+        })
+    });
+    // Also try to find a local profile using normalized model name matching (full scan)
+    let profile = profile.or_else(|| {
+        let needle = normalize_for_local_match(model);
+        directory.and_then(|d| {
+            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
+                let path = e.path();
+                if path.extension().is_some_and(|x| x == "json") {
+                    load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new)
+                } else {
+                    None
+                }
+            })
+        })
+    });
 
 /// Normalize a model name for local profile matching (case, whitespace, and separator folding).
 fn normalize_for_local_match(model: &str) -> String {
@@ -135,9 +195,7 @@ fn normalize_for_local_match(model: &str) -> String {
 /// (for example "NIKON Z8" versus "NIKON Z 8") match the same profile.
 fn canonical_model(model: &str) -> &str {
     let needle = normalized_model(model);
-    ALIASES.iter()
-        .find(|(spelling, _)| normalized_model(spelling) == needle)
-        .map_or(model, |(_, canonical)| *canonical)
+    ALIASES.iter().find(|(spelling, _)| normalized_model(spelling) == needle).map_or(model, |(_, canonical)| *canonical)
 }
 
 /// The built-in profile for `model`, if any.
@@ -214,11 +272,7 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
                 let path = e.path();
                 if path.extension().is_some_and(|x| x == "json") {
                     let stem = normalize_for_local_match(&path.file_stem()?.to_string_lossy());
-                    if stem == needle {
-                        load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new)
-                    } else {
-                        None
-                    }
+                    if stem == needle { load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new) } else { None }
                 } else {
                     None
                 }
@@ -418,20 +472,10 @@ mod tests {
         //    LOOK_VERSION reverts (tested in smart/tests.rs)
 
         // After fix: EXIF spellings with different separators should match bundled profile via ALIASES
-        assert!(
-            bundled("Nikon Z 6-2").is_some(),
-            "Nikon Z 6-2 should match bundled NIKON Z 6_2 profile"
-        );
-        assert!(
-            bundled("Nikon Z 6 2").is_some(),
-            "Nikon Z 6 2 should match bundled NIKON Z 6_2 profile"
-        );
+        assert!(bundled("Nikon Z 6-2").is_some(), "Nikon Z 6-2 should match bundled NIKON Z 6_2 profile");
+        assert!(bundled("Nikon Z 6 2").is_some(), "Nikon Z 6 2 should match bundled NIKON Z 6_2 profile");
         // Z8 already works via ALIASES
-        assert_eq!(
-            bundled("Nikon Z8"),
-            bundled("NIKON Z 8"),
-            "Nikon Z8 should continue to match via ALIASES"
-        );
+        assert_eq!(bundled("Nikon Z8"), bundled("NIKON Z 8"), "Nikon Z8 should continue to match via ALIASES");
 
         // After fix: local profile lookup should use normalized matching
         // This would make file_name consistent for variants
@@ -532,11 +576,7 @@ mod tests {
 
         let found = get_from("NIKON Z8", Some(&dir));
         assert!(found.is_some(), "NIKON Z8 should find a NIKON Z 8 profile");
-        assert_eq!(
-            found.unwrap().files,
-            1,
-            "the local NIKON Z 8 profile, not the bundled one, must be used"
-        );
+        assert_eq!(found.unwrap().files, 1, "the local NIKON Z 8 profile, not the bundled one, must be used");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
