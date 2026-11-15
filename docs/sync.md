@@ -76,6 +76,15 @@ uploaded again. A link-only photo doesn't ask other devices for its original: it
   A photo taken out of the collection is taken out of the album. An album removed on the server is removed from
   every device's list (its photos stay).
 - An album folder named "Immich" holds the account's albums; with two accounts there are two such folders.
+- **Shared or private connection.** An account is private to its device unless **Share with synced devices**
+  (`immich.share {account, on}`) is on. Private: its collections and their photos' records are never told
+  (`Replica::private_immich`, local state). Shared: the account (URL, user id, name, pinned certificate) and its
+  API key go to each device of the group in the next exchange (`Batch::accounts`, over the encrypted,
+  authenticated peer channel only, once per session per device), where the key goes into that device's key
+  storage (`lcc-credentials`) and the account into its settings, shared and shown as collections. The key is
+  never written to the replica, journal, logs or command results. A device that already has an account for the
+  same Immich user keeps its own. Turning sharing off doesn't take the key back from devices that got it:
+  revoke the key in Immich for that.
 - **Account identity.** The catalog's links to Immich stay under the local `<url>#<user id>` account id. Device sync
   names the account by Immich's user id alone (a UUID), so two devices that reach one server by different URLs
   (LAN and public) share its collections.

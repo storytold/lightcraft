@@ -1343,6 +1343,15 @@ fn base_specs() -> Vec<CommandSpec> {
             always,
             collections::set_shown
         ),
+        cmd!(
+            "immich.share",
+            "Share Immich Connection with Synced Devices",
+            [],
+            None,
+            "{account?, on: bool}: share the connection with the devices this catalog syncs with: its API key goes to them over the encrypted device-sync channel into their key storage (never the catalog, replica, logs or results), and its albums' collections are told to them. off: the connection stays on this device and its collections are not told (devices that already got the key keep it: revoke the key in Immich to stop them) → {account, shared}",
+            always,
+            collections::set_shared
+        ),
         cmd!(query "immich.status", "Immich Status", [], None, "{check?: bool (also contact each server), background?: bool (do that on workers; results in later calls' `server`)} → {accounts: [{id, url, userName, version, permissions, linked, probable, link, server?, checking}], secretStore, connecting, connected?}", always, status),
         cmd!(query "immich.answer", "Immich Background Result", [], None, "{key, keep?: bool}: the result of a call made with background: true (immich.libraries, immich.authStatus, immich.unlockSession, immich.scanLibraries, immich.importPeople, immich.pushPeople; they return {started, key}); taken once unless keep → {done: true, result} or {done: false, running}; remote.pump lists the waiting keys in `answers`", always, answer),
         cmd!(query "immich.authStatus", "Immich Auth Status", [], None, "{account?, background?: bool (on a worker: {started, key}, the result through immich.answer)}: whether this app's server session is elevated (locked folders visible to its listings), and the unlock secrets the account has → {ok, account, isElevated, password, pinCode, expiresAt?, pinExpiresAt?} or {ok: false, error}", always, auth_status),

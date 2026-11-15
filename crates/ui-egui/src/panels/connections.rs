@@ -1051,6 +1051,20 @@ fn collections_rows(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, i
             let _ = app.run("app.settings", json!({"tab": "sync"}));
         }
     });
+    let mut shared = a["shared"] == true;
+    let c = ui.checkbox(&mut shared, crate::i18n::tr("Share with synced devices"));
+    register(ui.ctx(), format!("check:immichShare-{i}"), c.rect);
+    if c.changed() {
+        let r = app.run("immich.share", json!({"account": id, "on": shared}));
+        report(app, ui.ctx(), r);
+    }
+    ui.label(
+        RichText::new(crate::i18n::tr(
+            "Shared: this server's API key goes to the devices this catalog syncs with, over their encrypted link, into their key storage, and they see its albums too. Off: the connection and its albums stay on this device.",
+        ))
+        .size(11.0)
+        .color(t.text_dim),
+    );
     if a["collections"] == true {
         ui.label(
             RichText::new(crate::i18n::tr("Each album is a collection in the Immich set; in Settings ▸ Sync each device chooses None, Previews or Full Quality."))

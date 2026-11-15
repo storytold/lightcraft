@@ -11,3 +11,5 @@
 - **Show Immich albums as collections** (Settings ▸ Connections) lists every Immich album as a collection in the
   Immich set. On each device choose None, Previews or Full Quality in Settings ▸ Sync; photos added on any device
   go to the Immich album, uploaded only if Immich doesn't have them yet.
+- **Share with synced devices** sends an Immich connection, key included, to your other devices over their
+  encrypted link; off, the connection and its albums stay on this device.

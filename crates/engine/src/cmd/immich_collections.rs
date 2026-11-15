@@ -86,6 +86,8 @@ pub(crate) fn tick(s: &mut Session) {
     if !in_group(s) {
         return;
     }
+    take_shared(s);
+    offer_shared(s);
     let accounts = shown(s);
     if let Some(lib) = &mut s.device_sync.lib {
         let here: BTreeSet<String> = accounts.iter().map(|(_, u)| u.clone()).collect();
@@ -413,6 +415,100 @@ pub(crate) fn set_shown(s: &mut Session, p: &Value) -> crate::Result<Value> {
         s.remote.coll.force = true;
     }
     Ok(json!({"account": id, "collections": on}))
+}
+
+/// The private connections (not shared) are kept from the other devices; the shared ones are
+/// read with their keys once, for the next exchange with each device.
+fn offer_shared(s: &mut Session) {
+    let Ok(accs) = s.immich_accounts().map(|a| a.immich.clone()) else { return };
+    let private: BTreeSet<String> = accs.iter().filter(|a| !a.shared && !a.user_id.is_empty()).map(|a| a.user_id.clone()).collect();
+    let users: Vec<String> = accs.iter().filter(|a| a.shared && !a.user_id.is_empty()).map(|a| a.user_id.clone()).collect();
+    let Some(lib) = &mut s.device_sync.lib else { return };
+    if lib.replica.private_immich != private {
+        lib.replica.private_immich = private;
+        touched(lib);
+    }
+    if lib.share_out.as_ref().is_some_and(|(u, _)| *u == users) {
+        return;
+    }
+    let mut out = Vec::new();
+    if let Ok(store) = s.secret_store() {
+        for a in accs.iter().filter(|a| a.shared && !a.user_id.is_empty()) {
+            if let Ok(Some(key)) = store.get(&lcc_immich::accounts::secret_key(&a.id)) {
+                out.push(lcc_sync::proto::SharedAccount {
+                    url: a.url.clone(),
+                    user_id: a.user_id.clone(),
+                    user_name: a.user_name.clone(),
+                    key: key.expose().to_string(),
+                    pinned: a.pinned.clone(),
+                });
+            }
+        }
+    }
+    if let Some(lib) = &mut s.device_sync.lib {
+        lib.share_out = Some((users, out));
+        // (a newly shared connection goes to every device again)
+        lib.share_sent.clear();
+    }
+}
+
+/// Connections another device of the group shared: the key goes into this device's key store
+/// (never the replica, settings, logs or results), the account into its settings, shared and
+/// shown as collections. An account this device already has (same Immich user) is left alone.
+fn take_shared(s: &mut Session) {
+    let incoming = match &mut s.device_sync.lib {
+        Some(lib) if !lib.share_in.is_empty() => std::mem::take(&mut lib.share_in),
+        _ => return,
+    };
+    for a in incoming {
+        let Ok(url) = lcc_immich::client::normalize_url(&a.url) else { continue };
+        let have = s.immich_accounts().is_ok_and(|x| x.immich.iter().any(|y| y.user_id == a.user_id));
+        if have {
+            continue;
+        }
+        let id = lcc_immich::Account::make_id(&url, &a.user_id);
+        let stored = s.secret_store().and_then(|st| {
+            st.set(&lcc_immich::accounts::secret_key(&id), &lcc_credentials::Secret::new(a.key.clone())).map_err(|e| e.to_string())
+        });
+        if let Err(e) = stored {
+            log::warn!("sync: a shared Immich connection couldn't be stored: {e}");
+            continue;
+        }
+        let acc = lcc_immich::Account {
+            id,
+            url,
+            user_id: a.user_id.clone(),
+            user_name: a.user_name.chars().take(200).collect(),
+            pinned: a.pinned.clone(),
+            collections: true,
+            shared: true,
+            ..Default::default()
+        };
+        if let Ok(x) = s.immich_accounts() {
+            x.upsert(acc);
+        }
+        if let Err(e) = s.save_accounts() {
+            log::warn!("sync: {e}");
+        }
+        s.remote.coll.force = true;
+    }
+}
+
+/// `immich.share {account?, on}`: share the connection (its key included) with the devices this
+/// catalog syncs with, or keep it on this device (its collections are then not told).
+pub(crate) fn set_shared(s: &mut Session, p: &Value) -> crate::Result<Value> {
+    const C: &str = "immich.share";
+    let id = super::account_param(s, p, C)?;
+    let on = p.get("on").and_then(Value::as_bool).ok_or_else(|| super::bad(C, "missing `on` (true or false)"))?;
+    let accounts = s.immich_accounts().map_err(|e| super::bad(C, e))?;
+    let acc = accounts.get_mut(&id).ok_or_else(|| super::bad(C, "no such account"))?;
+    acc.shared = on;
+    s.save_accounts().map_err(|e| super::bad(C, e))?;
+    if let Some(lib) = &mut s.device_sync.lib {
+        lib.share_out = None;
+    }
+    offer_shared(s);
+    Ok(json!({"account": id, "shared": on}))
 }
 
 /// `sync.immichRefresh`: list the Immich albums shown as collections now.

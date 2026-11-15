@@ -445,7 +445,7 @@ fn hostile_photo_keys_change_nothing() {
             ],
             upto: 1,
             more: false,
-            ack: None,
+            ..Default::default()
         };
         let mut l = b.device_sync.lib.take().unwrap();
         let _ = super::catalog::apply(&mut b, &mut l, &ap, &batch);
@@ -475,7 +475,7 @@ fn a_wrong_claimed_sha1_changes_nothing() {
         items: vec![lcc_sync::replica::Item::Photo { key: wrong.clone(), info: json!({"content_hash": h}), fields: Default::default(), here: Default::default() }],
         upto: 1,
         more: false,
-        ack: None,
+        ..Default::default()
     };
     let mut l = b.device_sync.lib.take().unwrap();
     super::catalog::apply(&mut b, &mut l, &ap, &batch).unwrap();
@@ -627,5 +627,56 @@ fn immich_albums_are_collections_each_device_takes_as_it_chose() {
     a.execute("sync.take", &json!({"collection": c["id"], "take": "none"})).unwrap();
     assert!(album_photos(&a, "Holiday").is_empty() && !a.catalog.albums().any(|al| al.name == "Holiday"));
     assert_eq!(a.catalog.photos().count(), 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A private Immich connection's collections stay on its device; shared, its key reaches the
+/// other device's key store (only there) and that device lists and takes the albums itself.
+#[test]
+fn a_shared_immich_connection_reaches_the_other_device_and_a_private_one_does_not() {
+    use crate::tests_immich::sync_tests::{Server, serve_state};
+    let dir = lcc_testkit::TempDir::new("lcc-engine-sync-immich-share");
+    let x = crate::tests_immich::png(60);
+    let mut server = Server::default();
+    server.assets.push(crate::tests_immich::asset("as-1", "dog.png", &x, json!({"visibility": "timeline"})));
+    server.bytes.insert("as-1".into(), x);
+    server.albums.push(("al-1".into(), "Pets".into(), vec!["as-1".into()]));
+    let url = serve_state(std::sync::Arc::new(std::sync::Mutex::new(server)), Default::default(), Default::default());
+    let (mut a, ap) = offline(&dir, "a");
+    let (mut b, bp) = offline(&dir, "b");
+    assert_eq!(a.execute("immich.connect", &json!({"url": url, "apiKey": crate::tests_immich::KEY})).unwrap()["ok"], true);
+    offline_group(&mut a, &ap, &mut b, &bp);
+    a.execute("immich.collections", &json!({"on": true})).unwrap();
+    a.execute("sync.immichRefresh", &json!({})).unwrap();
+    let has = |s: &Session| s.device_sync.lib.as_ref().is_some_and(|l| l.replica.collections.values().any(|e| e.c.meta.v.name == "Pets"));
+    pump_both(&mut a, &ap, &mut b, &bp, "a's collections", |a, _| has(a));
+    for _ in 0..5 {
+        pump_both(&mut a, &ap, &mut b, &bp, "", |_, _| true);
+        a.execute("remote.pump", &json!({"sync": false})).unwrap();
+        swap(&mut a, &ap, &mut b, &bp);
+    }
+    assert!(!has(&b), "a private connection's collections aren't told");
+    assert!(b.immich_accounts().unwrap().immich.is_empty(), "nor its key");
+
+    a.execute("immich.share", &json!({"on": true})).unwrap();
+    pump_both(&mut a, &ap, &mut b, &bp, "the shared connection at b", |_, b| has(b));
+    let acc = b.immich_accounts().unwrap().immich[0].clone();
+    assert!(acc.shared && acc.collections && acc.user_id == "user-1");
+    let key = b.secret_store().unwrap().get(&lcc_immich::accounts::secret_key(&acc.id)).unwrap().unwrap();
+    assert_eq!(key.expose(), crate::tests_immich::KEY, "the key is in b's key store");
+    let replica = serde_json::to_string(&b.device_sync.lib.as_ref().unwrap().replica).unwrap();
+    assert!(!replica.contains(crate::tests_immich::KEY), "never in the replica");
+    for cmd in ["sync.status", "immich.status"] {
+        assert!(!b.execute(cmd, &json!({})).unwrap().to_string().contains(crate::tests_immich::KEY), "never in {cmd}");
+    }
+    // b takes the album and brings the photo in from Immich with its own (shared) key
+    let cid = b.device_sync.lib.as_ref().unwrap().replica.collections.iter().find(|(_, e)| e.c.meta.v.name == "Pets").unwrap().0.clone();
+    b.execute("sync.take", &json!({"collection": cid, "take": "previews"})).unwrap();
+    b.execute("sync.immichRefresh", &json!({})).unwrap();
+    pump_both(&mut a, &ap, &mut b, &bp, "the photo at b", |_, b| album_photos(b, "Pets").len() == 1);
+    // hostile shared connections are dropped
+    let bad = lcc_sync::proto::SharedAccount { url: "x".repeat(5000), user_id: String::new(), user_name: String::new(), key: "\u{0}".into(), pinned: None };
+    assert!(!bad.sane());
+    assert!(!format!("{bad:?}").contains('\u{0}') && format!("{:?}", lcc_sync::proto::SharedAccount { key: "secret-k".into(), ..bad }).contains("<hidden>"));
     let _ = std::fs::remove_dir_all(&dir);
 }

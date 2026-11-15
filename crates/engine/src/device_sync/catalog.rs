@@ -387,7 +387,12 @@ pub(super) fn prepare(s: &Session, lib: &Lib, peer: &str) -> (Batch, Outgoing) {
             limit = (limit / 4).max(1);
             continue;
         }
-        return (Batch { items, upto: out.upto, more: out.more, ack: None }, out);
+        // the Immich connections this device shares, once a session to each device of the group
+        let accounts = match &lib.share_out {
+            Some((_, a)) if !left && r.in_group_with(peer) && !lib.share_sent.contains(peer) => a.clone(),
+            _ => Vec::new(),
+        };
+        return (Batch { items, upto: out.upto, more: out.more, ack: None, accounts }, out);
     }
 }
 
@@ -400,6 +405,10 @@ pub(super) fn apply(s: &mut Session, lib: &mut Lib, peer: &lcc_peer::Peer, batch
         && batch.items.iter().any(|it| matches!(it, Item::Photo { key: k, .. } if k == key))
     {
         return Err("a photo of the batch is being edited".into());
+    }
+    if lib.replica.in_group_with(from) {
+        let room = lcc_sync::proto::MAX_SHARED.saturating_sub(lib.share_in.len());
+        lib.share_in.extend(batch.accounts.iter().filter(|a| a.sane()).take(room).cloned());
     }
     for item in batch.items.iter().take(MAX_ITEMS * 2) {
         if let Item::Group(g) = item {

@@ -155,6 +155,13 @@ pub(crate) struct Lib {
     /// Photos added to (true) or taken out of (false) Immich collections here, still to send to
     /// the server: (collection, key, in).
     pub immich_out: Vec<(String, String, bool)>,
+    /// The Immich connections this device shares with the group (user ids, and each with its
+    /// key, read once from the key store). Memory only: never in the replica file.
+    pub share_out: Option<(Vec<String>, Vec<lcc_sync::proto::SharedAccount>)>,
+    /// The devices already sent them in this session.
+    pub share_sent: HashSet<String>,
+    /// Connections other devices of the group shared, to store (`immich::collections::tick`).
+    pub share_in: Vec<lcc_sync::proto::SharedAccount>,
     /// Each shared collection's photos as the catalogue had them when last looked at.
     pub base: HashMap<String, BTreeSet<String>>,
     /// The photos this device should hold more of than it does.
@@ -678,6 +685,9 @@ pub(crate) fn ensure_lib(s: &mut Session) {
         hints: HashMap::new(),
         immich_here: BTreeSet::new(),
         immich_out: Vec::new(),
+        share_out: None,
+        share_sent: HashSet::new(),
+        share_in: Vec::new(),
         base: HashMap::new(),
         wanting: BTreeSet::new(),
         missing: HashMap::new(),
@@ -1016,6 +1026,11 @@ fn answer_job(s: &mut Session, hub: &Arc<Hub>, job: Job) {
                 Some(lib) => catalog::prepare(s, lib, &peer),
                 None => (Batch::default(), Outgoing::default()),
             };
+            if !out.0.accounts.is_empty()
+                && let Some(lib) = &mut s.device_sync.lib
+            {
+                lib.share_sent.insert(peer.clone());
+            }
             let _ = reply.send(out);
         }
         Job::Confirm { peer, out } => {
