@@ -15,6 +15,7 @@ fn sample() -> CatalogImport {
         history: vec![row(json!({"text":"s = { Exposure2012 = 0.5 }"}))],
         snapshots: Vec::new(),
         original: Original::Local,
+        caption: String::new(),
     };
     let mut copy = photo.clone();
     copy.source_id = 2;
@@ -1393,6 +1394,32 @@ fn photo_tables(root: (&str, &str)) -> Vec<(&'static str, &'static str, Vec<SqlV
             vec![N, T("fixture-image".into()), I(1), T("ARW".into()), I(20), I(10), I(5), I(1)],
         ),
     ]
+}
+
+/// Issue #4043: Lightroom keeps an image's caption in its `AgLibraryIPTC` table, and the XMP packet it caches for
+/// the image may not restate it. The import takes the caption from the table; an empty one leaves the caption alone.
+#[test]
+fn a_catalog_caption_comes_from_lightrooms_iptc_table() {
+    use SqlValue::{Integer as I, Null as N, Text as T};
+    let dir = std::env::temp_dir().join(format!("lightcraft-lrcat-iptc-caption-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let import = |iptc: Option<Vec<SqlValue>>| {
+        let path = dir.join("captions.lrcat");
+        let mut tables = photo_tables((dir.to_str().unwrap(), ""));
+        if let Some(row) = iptc {
+            tables.push(("AgLibraryIPTC", "id_local INTEGER PRIMARY KEY, caption, copyright, image", row));
+        }
+        std::fs::write(&path, native_catalog(&tables)).unwrap();
+        let mut s = crate::Session::new();
+        let imported = s.execute("library.importLightroom", &json!({"path": path})).unwrap();
+        let id = PhotoId(imported["mapping"]["1"].as_u64().unwrap());
+        s.catalog.photo(id).unwrap().meta.caption.clone()
+    };
+    assert_eq!(import(Some(vec![N, T("Harbour at dawn".into()), N, I(1)])), "Harbour at dawn");
+    assert_eq!(import(Some(vec![N, T("  ".into()), N, I(1)])), "", "a blank caption isn't one");
+    assert_eq!(import(Some(vec![N, T("Another image's".into()), N, I(2)])), "", "only the image's own row");
+    assert_eq!(import(None), "", "a catalog without the table imports as before");
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
