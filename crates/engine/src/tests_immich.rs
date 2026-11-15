@@ -439,6 +439,22 @@ fn import_copies_maps_metadata_and_skips_duplicates() {
     let names: Vec<String> = s.catalog.photos().map(|p| p.file_name.clone()).collect();
     assert!(names.contains(&"beach.png".to_string()) && names.contains(&"beach-1.png".to_string()), "{names:?}");
     assert!(s.catalog.albums().any(|al| al.name == "From Immich"));
+    // the asset the catalog already had is not downloaded again, but it is part of what was asked
+    // for: its photo is linked to it (by checksum) and is in the album with the new ones
+    assert_eq!(v["import"]["present"], 1, "{v}");
+    let had = s.catalog.photos().find(|p| p.file_name == "have.png").unwrap();
+    assert_eq!(had.remote_of_test(&s.catalog), Some("c-3".into()), "linked by checksum");
+    assert_eq!(lcc_immich::link::link_state(&s.catalog, had.id), "linked");
+    let album = s.catalog.albums().find(|al| al.name == "From Immich").unwrap();
+    assert_eq!(album.photos.len(), 3, "the two new photos and the one already here");
+    assert!(album.photos.contains(&had.id));
+    assert_eq!(s.catalog.albums().filter(|al| al.name == "From Immich").count(), 1);
+    // importing an album whose assets are all here already still makes the album and fills it
+    s.execute("immich.import", &json!({"assets": ["a-1", "c-3"], "mode": "copy", "destination": dest.to_string_lossy(), "albumName": "Again"}))
+        .unwrap();
+    let v = pump_until(&mut s, |_, v| v["import"]["active"] == false);
+    assert_eq!((v["import"]["imported"].as_u64(), v["import"]["present"].as_u64()), (Some(0), Some(2)), "{v}");
+    assert_eq!(s.catalog.albums().find(|al| al.name == "Again").map(|al| al.photos.len()), Some(2));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

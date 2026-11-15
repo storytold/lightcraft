@@ -13,6 +13,16 @@
 //!   album deletes. A deleted album never deletes photos: only the album on the other side, and
 //!   only as the policy says (`ask`, or a side that also changed it since the last sync, leaves it
 //!   for the user).
+//!
+//! Two rules keep a failed or partial run from costing photos or collections:
+//! - a link's `base` only ever holds assets known to be in the Immich album *and* in the catalog
+//!   album. [`pair`] writes the base it expects after its ops; the engine then takes out what an
+//!   op did not achieve ([`AlbumLink::not_added`], [`AlbumLink::not_removed`]). An asset wrongly
+//!   left in the base would read as "was in both, now missing on one side" on the next run and be
+//!   removed from the other.
+//! - a catalog album that holds photos Immich never had (unlinked ones) is never deleted because
+//!   its Immich album was: it is kept and taken out of the sync ([`AlbumLink::local_only`],
+//!   [`Plan::kept`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -32,6 +42,37 @@ pub struct AlbumLink {
     pub name: Option<String>,
 }
 
+impl AlbumLink {
+    /// The marker for a catalog album that is kept out of the album sync: its Immich album was
+    /// deleted while it held photos that exist only in the catalog. No Immich album is created or
+    /// matched for it again until it is linked by hand (`immich.linkAlbum`).
+    pub fn local_only(name: &str) -> AlbumLink {
+        AlbumLink { immich: String::new(), base: None, name: Some(name.to_string()) }
+    }
+
+    pub fn is_local_only(&self) -> bool {
+        self.immich.is_empty()
+    }
+
+    /// `assets` did not reach the other side's album (an add that failed or was refused): they are
+    /// not common to both sides, so the next run adds them again.
+    pub fn not_added<'a>(&mut self, assets: impl IntoIterator<Item = &'a String>) {
+        if let Some(b) = self.base.as_mut() {
+            for a in assets {
+                b.remove(a);
+            }
+        }
+    }
+
+    /// `assets` are still in the other side's album (a remove that failed): they stay in the base,
+    /// so the next run removes them again instead of reading them as newly added there.
+    pub fn not_removed<'a>(&mut self, assets: impl IntoIterator<Item = &'a String>) {
+        if let Some(b) = self.base.as_mut() {
+            b.extend(assets.into_iter().cloned());
+        }
+    }
+}
+
 /// Catalog album id → its link.
 pub type AlbumLinks = BTreeMap<u64, AlbumLink>;
 
@@ -41,6 +82,9 @@ pub struct LocalAlbum {
     pub id: u64,
     pub name: String,
     pub assets: BTreeSet<String>,
+    /// How many of the album's photos have no (confirmed) link to an Immich asset: photos only
+    /// the catalog has.
+    pub unlinked: usize,
 }
 
 /// An Immich album: its assets that are linked to catalog photos.
@@ -135,6 +179,19 @@ pub struct Plan {
     pub pending: Vec<PendingDelete>,
     /// Albums renamed differently on both sides (left alone; the policy said neither wins).
     pub conflicts: Vec<String>,
+    /// Catalog albums whose Immich album was deleted and that the policy would have deleted too,
+    /// but which hold photos only the catalog has: kept, and no longer synced.
+    pub kept: Vec<KeptAlbum>,
+}
+
+/// A catalog album kept although its Immich album was deleted ([`Plan::kept`]).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptAlbum {
+    pub album: u64,
+    pub name: String,
+    /// The photos in it that Immich never had.
+    pub unlinked: usize,
 }
 
 fn push_allowed(d: Direction) -> bool {
@@ -157,8 +214,11 @@ pub fn plan(rule: FieldRule, local: &[LocalAlbum], remote: &[RemoteAlbum], links
     let mut used_local: BTreeSet<u64> = links.keys().copied().collect();
 
     for (id, link) in links {
-        if waiting.contains(id) {
-            out.links.insert(*id, link.clone());
+        if waiting.contains(id) || link.is_local_only() {
+            // (a local-only album that is gone from the catalog needs no marker any more)
+            if waiting.contains(id) || by_local.contains_key(id) {
+                out.links.insert(*id, link.clone());
+            }
             continue;
         }
         let (l, r) = (by_local.get(id), by_remote.get(link.immich.as_str()));
@@ -177,7 +237,12 @@ pub fn plan(rule: FieldRule, local: &[LocalAlbum], remote: &[RemoteAlbum], links
                 }
             }
             (Some(l), None) => {
-                if deleted(rule, *id, link, l.name.clone(), changed_local(link, l), DeletedOn::Immich, pull, &mut out) {
+                if pull && l.unlinked > 0 && deleter_wins(rule.policy, DeletedOn::Immich, changed_local(link, l)) == Some(true) {
+                    // it holds photos Immich never had: deleting it would lose the only place
+                    // they are collected. Kept, out of the sync, and said so
+                    out.links.insert(*id, AlbumLink::local_only(&l.name));
+                    out.kept.push(KeptAlbum { album: *id, name: l.name.clone(), unlinked: l.unlinked });
+                } else if deleted(rule, *id, link, l.name.clone(), changed_local(link, l), DeletedOn::Immich, pull, &mut out) {
                     used_local.remove(&l.id);
                 }
             }
@@ -222,13 +287,8 @@ fn deleted(rule: FieldRule, id: u64, link: &AlbumLink, name: String, other_chang
     if !allowed {
         return true;
     }
-    let deleter_wins = match (rule.policy, on) {
-        (Policy::Ask, _) => false,
-        (Policy::Newest, _) => !other_changed,
-        (Policy::Catalog, DeletedOn::Catalog) | (Policy::Immich, DeletedOn::Immich) => true,
-        // the survivor's side wins: it is created again on the deleting side
-        (Policy::Catalog, DeletedOn::Immich) | (Policy::Immich, DeletedOn::Catalog) => return true,
-    };
+    // the survivor's side wins: it is created again on the deleting side
+    let Some(deleter_wins) = deleter_wins(rule.policy, on, other_changed) else { return true };
     if deleter_wins {
         match on {
             DeletedOn::Catalog => out.remote.push(RemoteOp::Delete { id: link.immich.clone() }),
@@ -241,7 +301,21 @@ fn deleted(rule: FieldRule, id: u64, link: &AlbumLink, name: String, other_chang
     false
 }
 
+/// Does an album delete on `on` travel to the other side? `Some(true)`: yes; `Some(false)`: the
+/// user decides; `None`: no, the surviving side wins.
+fn deleter_wins(policy: Policy, on: DeletedOn, other_changed: bool) -> Option<bool> {
+    match (policy, on) {
+        (Policy::Ask, _) => Some(false),
+        (Policy::Newest, _) => Some(!other_changed),
+        (Policy::Catalog, DeletedOn::Catalog) | (Policy::Immich, DeletedOn::Immich) => Some(true),
+        (Policy::Catalog, DeletedOn::Immich) | (Policy::Immich, DeletedOn::Catalog) => None,
+    }
+}
+
 /// A linked pair present on both sides: renames and membership → the link after the run.
+///
+/// The link's base is what both sides hold once every op of this pair has worked; the caller
+/// corrects it for ops that did not ([`AlbumLink::not_added`], [`AlbumLink::not_removed`]).
 fn pair(rule: FieldRule, l: &LocalAlbum, r: &RemoteAlbum, link: &AlbumLink, out: &mut Plan) -> AlbumLink {
     let (push, pull) = (push_allowed(rule.direction), pull_allowed(rule.direction));
     let auto = rule.direction != Direction::Off;
@@ -331,7 +405,7 @@ mod tests {
         x.iter().map(|s| s.to_string()).collect()
     }
     fn la(id: u64, name: &str, a: &[&str]) -> LocalAlbum {
-        LocalAlbum { id, name: name.into(), assets: set(a) }
+        LocalAlbum { id, name: name.into(), assets: set(a), unlinked: 0 }
     }
     fn ra(id: &str, name: &str, a: &[&str]) -> RemoteAlbum {
         RemoteAlbum { id: id.into(), name: name.into(), assets: set(a) }
@@ -423,5 +497,61 @@ mod tests {
         let p = plan(rule(Direction::ToImmich, Policy::Immich), &[la(1, "A", &["a"])], &[], &linked(&["a"], "A"), &[]);
         assert!(p.local.is_empty() && p.pending.is_empty());
         assert_eq!(p.remote, vec![RemoteOp::Create { local: 1, name: "A".into(), assets: set(&["a"]) }]);
+    }
+
+    /// An Immich album delete never takes a catalog album that holds photos Immich never had.
+    #[test]
+    fn an_immich_delete_keeps_an_album_with_local_only_photos() {
+        for pol in [Policy::Immich, Policy::Newest] {
+            let mut l = la(1, "A", &["a"]);
+            l.unlinked = 2;
+            let p = plan(rule(Direction::TwoWay, pol), &[l.clone()], &[], &linked(&["a"], "A"), &[]);
+            assert!(p.local.is_empty(), "{pol:?}: the album is not deleted: {:?}", p.local);
+            assert!(p.remote.is_empty(), "{pol:?}: and not created again in Immich: {:?}", p.remote);
+            assert_eq!(p.kept, vec![KeptAlbum { album: 1, name: "A".into(), unlinked: 2 }]);
+            assert!(p.links[&1].is_local_only());
+            // later runs leave it alone: no album is made or matched for it, nothing is reported twice
+            let again = plan(rule(Direction::TwoWay, pol), &[l], &[ra("r7", "A", &["z"])], &p.links, &[]);
+            assert!(again.remote.is_empty() && again.kept.is_empty(), "{again:?}");
+            assert!(!again.local.iter().any(|o| matches!(o, LocalOp::Add { .. } | LocalOp::Delete { .. } | LocalOp::Remove { .. })), "{again:?}");
+            assert!(again.links[&1].is_local_only());
+        }
+        // only linked photos in it: the delete travels as before
+        let p = plan(rule(Direction::TwoWay, Policy::Immich), &[la(1, "A", &["a"])], &[], &linked(&["a"], "A"), &[]);
+        assert_eq!(p.local, vec![LocalOp::Delete { id: 1 }]);
+        // ask still asks (the user may delete it knowingly)
+        let mut l = la(1, "A", &["a"]);
+        l.unlinked = 1;
+        let p = plan(rule(Direction::TwoWay, Policy::Ask), &[l], &[], &linked(&["a"], "A"), &[]);
+        assert!(p.local.is_empty() && p.kept.is_empty() && p.pending.len() == 1);
+    }
+
+    /// The base after a failed add must not hold the asset: else the next run reads "was in both,
+    /// gone from Immich" and removes the photo from the catalog album.
+    #[test]
+    fn a_failed_add_is_added_again_and_never_removes_from_the_catalog() {
+        let r = rule(Direction::TwoWay, Policy::Ask);
+        // first matched by name, the catalog has `a` and `b`, Immich nothing
+        let p = plan(r, &[la(1, "Trip", &["a", "b"])], &[ra("r1", "Trip", &[])], &AlbumLinks::new(), &[]);
+        assert_eq!(p.remote, vec![RemoteOp::Add { id: "r1".into(), assets: vec!["a".into(), "b".into()] }]);
+        // the add of `b` did not work
+        let mut links = p.links.clone();
+        links.get_mut(&1).unwrap().not_added([&"b".to_string()]);
+        assert_eq!(links[&1].base, Some(set(&["a"])));
+        let next = plan(r, &[la(1, "Trip", &["a", "b"])], &[ra("r1", "Trip", &["a"])], &links, &[]);
+        assert!(next.local.is_empty(), "nothing leaves the catalog album: {:?}", next.local);
+        assert_eq!(next.remote, vec![RemoteOp::Add { id: "r1".into(), assets: vec!["b".into()] }]);
+        // …whereas the uncorrected base would have removed it (the bug this guards against)
+        let wrong = plan(r, &[la(1, "Trip", &["a", "b"])], &[ra("r1", "Trip", &["a"])], &p.links, &[]);
+        assert_eq!(wrong.local, vec![LocalOp::Remove { id: 1, assets: vec!["b".into()] }]);
+
+        // a failed remove: the asset stays in the base and is removed again, not pulled back in
+        let p = plan(r, &[la(1, "Trip", &["a"])], &[ra("r1", "Trip", &["a", "b"])], &linked(&["a", "b"], "Trip"), &[]);
+        assert_eq!(p.remote, vec![RemoteOp::Remove { id: "r1".into(), assets: vec!["b".into()] }]);
+        let mut links = p.links.clone();
+        links.get_mut(&1).unwrap().not_removed([&"b".to_string()]);
+        let next = plan(r, &[la(1, "Trip", &["a"])], &[ra("r1", "Trip", &["a", "b"])], &links, &[]);
+        assert!(next.local.is_empty(), "{:?}", next.local);
+        assert_eq!(next.remote, vec![RemoteOp::Remove { id: "r1".into(), assets: vec!["b".into()] }]);
     }
 }
