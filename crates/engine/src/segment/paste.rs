@@ -292,6 +292,11 @@ impl Session {
             polled.messages.push("Cancelled a queued AI mask paste.".into());
         }
         let Some(mut pending) = self.segmenter.paste.take().or_else(|| self.segmenter.paste_queue.pop_front()) else { return };
+        // An unanswered worker must not keep a cancelled paste's row and queue slot alive.
+        if pending.task.is_cancelled() {
+            polled.messages.push("AI mask paste cancelled; no settings were changed.".into());
+            return;
+        }
         let result = if let Some(flight) = pending.flight.take() {
             match flight.rx.try_recv() {
                 Ok(outcome) => {

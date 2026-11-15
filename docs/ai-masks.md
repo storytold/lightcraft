@@ -79,8 +79,10 @@ settings are applied together as one undo step only after all its selections suc
 clicks remain separate undo steps. Cancelling or failing one operation does not discard later ones.
 
 At most 64 operations and 10,000 AI selections can be pending across all pastes. A new paste
-that includes any destination already in a pending AI-mask paste is refused as a whole; wait
-for that paste to finish, or cancel it in Activity before trying that photo again.
+requiring AI-mask recomputation is refused as a whole if any destination already has a pending
+AI-mask paste; wait for that paste to finish, or cancel it in Activity before trying that photo
+again. Pastes excluding Masking still apply immediately; if they change a pending destination,
+that older AI-mask paste is discarded.
 
 Cancel, a missing or damaged model, a destination edited while waiting or computing, or an edit
 interaction still open on any destination when computation finishes leaves the entire paste
@@ -101,9 +103,11 @@ by this paste-specific recomputation yet.
 Control/MCP: `develop.paste` and `develop.pastePrevious` return `{pending: true, changed: 0,
 targets, queued, task}` in the desktop app when inference is pending. `queued` distinguishes a
 waiting operation from one started immediately; `task` is its stable Activity id.
-`activity.list` reports progress (`kind: "segment"`); `activity.cancel` removes a waiting
-operation on the next poll or cancels a running one after its current selection finishes.
-Waiting-mode clients complete the computation before returning `{changed}`.
+`activity.list` reports progress (`kind: "segment"`); `activity.cancel` discards the operation
+and removes its row on the next poll, even if the worker has not replied. Inference already
+submitted to the shared worker may finish in the background, but its result is ignored; later
+pastes keep their place and may still wait for that worker. Waiting-mode clients complete the
+computation before returning `{changed}`.
 
 ## Remote Metal inference
 

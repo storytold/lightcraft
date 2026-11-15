@@ -361,6 +361,47 @@ fn queued_cancellation_does_not_wait_for_or_cancel_the_active_paste() {
 
 #[cfg(feature = "sam")]
 #[test]
+fn active_cancellation_releases_an_unanswered_flight_and_preserves_later_pastes() {
+    let (mut s, source, first) = copied();
+    let second = s.catalog.photos().find(|p| p.id != source && p.id != first).unwrap().id;
+    let before = [s.develop_of(first).unwrap(), s.develop_of(second).unwrap()];
+    let mut active = Pending::new(&s, vec![(first, settings())], "First").unwrap();
+    let selection = active.queue.pop_front().unwrap();
+    let (tx, rx) = mpsc::channel();
+    active.flight = Some(Flight { selection, rx, started: Instant::now() });
+    let active_id = active.task.id();
+    s.segmenter.paste = Some(active);
+    let later = completed_paste(&s, &[second]);
+    let later_id = later.task.id();
+    s.segmenter.paste_queue.push_back(later);
+    let history = (s.commits(), s.undo.len(), s.redo.len(), s.pending_log.len());
+    s.activity.cancel(active_id).unwrap();
+
+    // Keep the sender connected without replying: cancellation must not wait for inference.
+    let polled = s.segment_poll();
+    assert!(!polled.changed);
+    assert_eq!(polled.messages, ["AI mask paste cancelled; no settings were changed."]);
+    assert!(s.segmenter.paste.is_none());
+    assert_eq!(s.segmenter.paste_queue.len(), 1);
+    assert_eq!(s.activity.list().iter().map(|t| t.id).collect::<Vec<_>>(), [later_id]);
+    assert_eq!((s.commits(), s.undo.len(), s.redo.len(), s.pending_log.len()), history);
+    assert_eq!(s.develop_of(first).unwrap(), before[0]);
+    assert_eq!(s.develop_of(second).unwrap(), before[1]);
+    assert!(tx.send(outcome(Ok(Some(SegMask::from_logits(1, &[7.0]))))).is_err(), "late results have no recipient");
+
+    assert!(s.segment_poll().changed, "the next paste can finish without the cancelled worker replying");
+    assert_eq!(s.develop_of(first).unwrap(), before[0]);
+    assert_ne!(s.develop_of(second).unwrap(), before[1]);
+    assert_eq!(s.commits(), history.0 + 1);
+    assert!(s.activity.list().is_empty());
+    assert!(!s.segmenter.busy());
+    s.undo_step().unwrap();
+    assert_eq!(s.develop_of(first).unwrap(), before[0]);
+    assert_eq!(s.develop_of(second).unwrap(), before[1]);
+}
+
+#[cfg(feature = "sam")]
+#[test]
 fn a_failed_paste_does_not_discard_the_next_queued_paste() {
     let (mut s, source, first) = copied();
     let second = s.catalog.photos().find(|p| p.id != source && p.id != first).unwrap().id;
@@ -433,6 +474,34 @@ fn overlapping_queue_requests_are_refused_as_a_whole() {
     assert_eq!(s.segmenter.paste_queue.len(), 1);
     assert_eq!(s.activity.list().len(), 2);
     assert_eq!(s.develop_of(third).unwrap(), before);
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn pastes_excluding_masking_are_allowed_on_pending_ai_paste_destinations() {
+    for command in ["develop.paste", "develop.pastePrevious"] {
+        let (mut s, _, target) = copied();
+        let before = s.develop_of(target).unwrap();
+        s.segmenter.paste = Some(completed_paste(&s, &[target]));
+        let commits = s.commits();
+
+        let out = s.execute(command, &json!({"ids": [target.0], "groups": ["light"]})).unwrap();
+        assert_eq!(out["changed"], 1, "{command}");
+        assert!(out.get("pending").is_none());
+        let after = s.develop_of(target).unwrap();
+        assert_eq!(after.light.exposure, 0.7);
+        assert_eq!(after.masks, before.masks);
+        assert_eq!(s.commits(), commits + 1);
+        assert_eq!(s.activity.list().len(), 1);
+
+        let polled = s.segment_poll();
+        assert!(!polled.changed, "the pending paste must not overwrite this newer edit");
+        assert!(polled.messages[0].contains("destination photo changed"), "{:?}", polled.messages);
+        assert_eq!(s.develop_of(target).unwrap(), after);
+        assert!(s.activity.list().is_empty());
+        s.undo_step().unwrap();
+        assert_eq!(s.develop_of(target).unwrap(), before);
+    }
 }
 
 #[cfg(feature = "sam")]
