@@ -705,6 +705,9 @@ impl Photo {
         let wb = if relative { Some((6500.0, 0.0)) } else { self.as_shot_wb };
         let mut d = match wb {
             Some((t, tint)) => DevelopSettings::for_raw(t, tint),
+            // (a raw edited in Kelvin whose as-shot white hasn't been read from its file yet, e.g. one imported before
+            // its camera was known: still a raw's sharpening, colour noise reduction and Remove Hot Pixels)
+            None if self.develops_raw() => DevelopSettings::for_raw(6500.0, 0.0),
             None => DevelopSettings::default(),
         };
         if self.develops_raw() && !relative {
@@ -777,13 +780,22 @@ impl Photo {
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
     }
-    /// Edited by the user: settings differ from what import gave the photo.
-    pub fn is_edited(&self) -> bool {
-        let mut defaults = self.import_defaults();
-        // As Shot reads the source's current WB; stored numbers can predate a decoder update.
+    /// Whether the photo's settings are `defaults`, As Shot counting as As Shot whatever numbers it stores: it
+    /// reads the source's current white, and stored numbers can predate a decoder update or be on the relative scale
+    /// of a raw imported before its camera was edited in Kelvin.
+    pub fn develop_matches(&self, mut defaults: DevelopSettings) -> bool {
+        self.as_shot_normalised(&mut defaults);
+        *self.develop == defaults
+    }
+    fn as_shot_normalised(&self, defaults: &mut DevelopSettings) {
         if self.develop.wb.mode == WbMode::AsShot && defaults.wb.mode == WbMode::AsShot {
             defaults.wb = self.develop.wb;
         }
+    }
+    /// Edited by the user: settings differ from what import gave the photo.
+    pub fn is_edited(&self) -> bool {
+        let mut defaults = self.import_defaults();
+        self.as_shot_normalised(&mut defaults);
         // Before lens corrections started off, import turned them on for every raw with lens data
         // (a database match too): a photo with no history that differs from its defaults only
         // there is still as imported.
@@ -1035,5 +1047,31 @@ mod edited_tests {
             assert_eq!(p.camera_defaults().wb.mode, WbMode::AsShot);
             assert!(!p.is_edited());
         }
+    }
+
+    /// A raw whose camera is edited in Kelvin but whose as-shot white hasn't been read from its file yet (one imported
+    /// before its camera was known) still starts from a raw's defaults: sharpening, colour noise reduction and Remove
+    /// Hot Pixels, as import gave it. A raw shown from its embedded preview and a rendered photo don't.
+    #[test]
+    fn a_raw_whose_as_shot_white_is_not_read_yet_keeps_a_raws_defaults() {
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "IMG_1370.CR3", "CR3", 10, 10, "2026-10-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        p.meta.camera = "Canon Canon EOS R8".into();
+        assert!(!p.relative_wb(), "the R8 is edited in Kelvin");
+        assert_eq!(p.as_shot_wb, None);
+        let raw = DevelopSettings::for_raw(6500.0, 0.0);
+        let d = p.camera_defaults();
+        assert_eq!(d.detail, raw.detail, "a raw's sharpening, noise reduction and Remove Hot Pixels");
+        assert_eq!((d.wb.mode, d.wb.scale), (WbMode::AsShot, WbScale::Kelvin));
+        // imported while the camera was not known yet, on the relative scale: not an edit
+        p.develop = Arc::new(raw);
+        assert!(!p.is_edited());
+        assert!(p.develop_matches(p.camera_defaults()));
+        // a raw shown from its embedded preview develops nothing from raw data: no raw defaults
+        p.preview_only = Some("not decodable yet".into());
+        assert_eq!(p.camera_defaults(), DevelopSettings::default());
+        // nor does a rendered photo
+        let jpeg = Photo::new(PhotoId(2), Source::Demo { scene: 0 }, "a.jpg", "JPEG", 10, 10, "2026-10-01T00:00:00");
+        assert_eq!(jpeg.camera_defaults(), DevelopSettings::default());
     }
 }
