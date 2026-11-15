@@ -250,7 +250,7 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     m.iso = m.iso.or(src.iso);
     m.flash = m.flash.or(src.flash);
     m.exposure_bias = m.exposure_bias.or(src.exposure_bias);
-    fill_file_fields(&mut m, src);
+    file_fields(&mut m, src);
     if m.serial_number.is_empty() {
         m.serial_number = src.serial_number.clone();
     }
@@ -270,12 +270,16 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 }
 
 /// Repair only the shutter data an old import wrote, keeping independently edited metadata.
-/// Fill the fields that describe the file itself rather than anything a person edits (Exif `CustomRendered`), when
-/// the photo lacks them: a virtual copy shares its original's file, so it gets them too. True when one changed.
-fn fill_file_fields(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
-    let before = m.custom_rendered;
+/// Take the fields that describe the file itself rather than anything a person edits (recorded depth, Exif
+/// `CustomRendered`) from a fresh
+/// probe: it is right, also when an editor saved over the file and dropped the depth. A virtual copy shares its
+/// original's file, so it takes them too. True when one changed.
+fn file_fields(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
+    let before = (m.has_depth, m.custom_rendered);
+    m.has_depth = src.has_depth;
+    // `CustomRendered` is filled in, not replaced: a known value is kept
     m.custom_rendered = m.custom_rendered.or(src.custom_rendered);
-    m.custom_rendered != before
+    (m.has_depth, m.custom_rendered) != before
 }
 
 fn repair_legacy_shutter(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
@@ -348,11 +352,11 @@ pub(crate) fn reload_ops(
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
         let mut meta = c.meta.clone();
         // Copies share the source file but may have independently edited metadata. Repair only
-        // recognizable legacy shutter values and fill what describes the file itself, not every
+        // recognizable legacy shutter values and take what describes the file itself, not every
         // missing field on the copy.
         let repaired = repair_legacy_shutter(&mut meta, &info.meta);
-        let filled = fill_file_fields(&mut meta, &info.meta);
-        let shutter_op = (repaired | filled).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) });
+        let filed = file_fields(&mut meta, &info.meta);
+        let shutter_op = (repaired | filed).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) });
         let theirs: Vec<Op> = content_op(c.id, c, info.clone())
             .into_iter()
             .chain(shutter_op)
@@ -603,6 +607,49 @@ mod tests {
         assert_eq!(meta.focus, Some(fp(0.3)));
         ph.meta.focus = Some(fp(0.1));
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "a known focus point is kept");
+    }
+
+    /// Issue #4334: a Portrait photo imported before recorded depth was read gets it at Reload from Disk, and a photo
+    /// whose file no longer carries depth (an editor saved over it) loses it: the file decides, not the catalog.
+    #[test]
+    fn reload_takes_recorded_depth_from_the_file() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.heic".into() }, "x.heic", "HEIC", 4032, 3024, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        info.meta.has_depth = true;
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert!(meta.has_depth);
+        ph.meta.has_depth = true;
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "already known: nothing to do");
+        info.meta.has_depth = false;
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert!(!meta.has_depth, "the file no longer carries depth");
+    }
+
+    /// A virtual copy shares its original's file, so Reload from Disk gives it the file's recorded depth too, and
+    /// keeps the copy's own edits.
+    #[test]
+    fn reload_gives_virtual_copies_the_files_depth() {
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let source = Photo::new(PhotoId(1), Source::File { path: "/x.heic".into() }, "x.heic", "HEIC", 4032, 3024, "");
+        cat.apply(Op::AddPhoto { photo: Box::new(source.clone()) }).unwrap();
+        let mut copy = source.clone();
+        copy.id = PhotoId(2);
+        copy.copy_of = Some(source.id);
+        copy.meta.title = "My copy".into();
+        cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        let mut info = crate::media::ProbeInfo::default();
+        info.meta.has_depth = true;
+        let (mut ops, mut changed) = (Vec::new(), Vec::new());
+        reload_ops(&cat, source.id, &info, &mut ops, &mut changed);
+        for op in ops {
+            cat.apply(op).unwrap();
+        }
+        let m = |id| cat.photo(PhotoId(id)).unwrap().meta.clone();
+        assert!(m(1).has_depth);
+        assert_eq!((m(2).has_depth, m(2).title.as_str()), (true, "My copy"));
     }
 
     fn lens() -> lightcraft_develop::EmbeddedLens {

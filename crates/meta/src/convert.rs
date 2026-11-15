@@ -55,6 +55,8 @@ pub(crate) fn from_craft(m: craft_metadata::Metadata) -> Metadata {
         white_balance: m.white_balance,
         // read by `exif::custom_rendered`: the shared reader doesn't keep it
         custom_rendered: None,
+        // read from the container's structure by `heif::has_depth`, not from metadata blocks
+        has_depth: false,
         orientation: m.orientation.map(orientation_from_craft),
         gps: m.gps,
         width: m.width,
