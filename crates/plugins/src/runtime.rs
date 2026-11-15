@@ -29,6 +29,11 @@ use crate::{Error, Result};
 /// The plug-in ABI version this host implements (`lcc_abi_version` must return it).
 pub const ABI_VERSION: i32 = 1;
 
+/// The custom section a plug-in's manifest is stamped into (the SDK's `plugin-stamp`,
+/// `docs/plugins.md`): the bytes `lcc_manifest` returns. Neutral on purpose: it is stored in
+/// plug-in files, so it never follows the product's name.
+pub const MANIFEST_SECTION: &str = "photo-plugin.manifest";
+
 /// Fuel handed out per slice; between slices the host checks the deadline.
 const FUEL_SLICE: u64 = 20_000_000;
 /// Most log lines kept from one call, and the longest line.
@@ -85,6 +90,44 @@ pub struct Plugin {
 impl fmt::Debug for Plugin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Plugin").field("manifest", &self.manifest).field("size", &self.size).finish()
+    }
+}
+
+/// Where [`Plugin::inspect`] read a module's manifest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ManifestSource {
+    /// The stamped [`MANIFEST_SECTION`], read without running the module: the file's claim, which
+    /// [`Plugin::load`] checks against `lcc_manifest`.
+    Section,
+    /// `lcc_manifest`, run in the sandbox.
+    Export,
+}
+
+impl ManifestSource {
+    /// `"section"` or `"export"`, as `plugin.inspectFile` gives it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ManifestSource::Section => "section",
+            ManifestSource::Export => "export",
+        }
+    }
+}
+
+/// A module's manifest, read without installing it ([`Plugin::inspect`]).
+#[derive(Clone, Debug)]
+pub struct Inspection {
+    /// The manifest, from where [`Inspection::source`] says.
+    pub manifest: Manifest,
+    /// The stamped section (the file's claim) or `lcc_manifest`'s answer.
+    pub source: ManifestSource,
+    /// SHA-256 of the module's bytes, as [`Plugin::digest`].
+    pub digest: [u8; 32],
+}
+
+impl Inspection {
+    /// The manifest is `lcc_manifest`'s answer, not only the file's claim.
+    pub fn verified(&self) -> bool {
+        self.source == ManifestSource::Export
     }
 }
 
@@ -172,26 +215,17 @@ fn unpack(packed: i64) -> (i32, usize) {
 }
 
 impl Plugin {
-    /// Validates and loads a module: checks its imports, the ABI version and the manifest.
+    /// Validates and loads a module: checks its imports, the ABI version and the manifest. A module
+    /// with a stamped [`MANIFEST_SECTION`] is refused unless the section is exactly what
+    /// `lcc_manifest` returns, so an installed plug-in's section is always true.
     pub fn load(bytes: &[u8], limits: Limits) -> Result<Plugin> {
-        if bytes.len() > limits.max_module_bytes {
-            return Err(Error::Module(format!("module is {} bytes (limit {})", bytes.len(), limits.max_module_bytes)));
-        }
-        if !bytes.starts_with(b"\0asm") {
-            return Err(Error::Module("not a WebAssembly binary (missing \\0asm header)".into()));
-        }
-        let mut config = Config::default();
-        config.consume_fuel(true).enforced_limits(EnforcedLimits::strict()).set_max_recursion_depth(limits.max_recursion_depth.max(16));
-        config.compilation_mode(wasmi::CompilationMode::Eager);
-        let engine = Engine::new(&config);
-        let module = Module::new(&engine, bytes).map_err(|e| Error::Module(e.to_string()))?;
-        if let Some(imp) = module.imports().find(|i| i.module() != "host" || !IMPORTS.contains(&i.name())) {
-            return Err(Error::Abi(format!(
-                "the module imports `{}.{}`; plug-ins may import only host.call, host.response and host.log (no WASI)",
-                imp.module(),
-                imp.name()
-            )));
-        }
+        let (engine, module) = compile(bytes, &limits)?;
+        Plugin::load_compiled(bytes, limits, engine, module)
+    }
+
+    /// [`Plugin::load`] for a module [`compile`] has already validated.
+    fn load_compiled(bytes: &[u8], limits: Limits, engine: Engine, module: Module) -> Result<Plugin> {
+        let section = stamped_section(&module)?.map(<[u8]>::to_vec);
         let digest = Sha256::digest(bytes).into();
         let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), digest };
         let deadline = Deadline::new(&p.limits);
@@ -206,10 +240,32 @@ impl Plugin {
         if len > MAX_MANIFEST_BYTES {
             return Err(Error::Manifest(format!("manifest is {len} bytes (limit {MAX_MANIFEST_BYTES})")));
         }
-        p.manifest = Manifest::parse(&live.read(ptr, len, "lcc_manifest")?)?;
+        let answer = live.read(ptr, len, "lcc_manifest")?;
+        if let Some(section) = section
+            && section != answer
+        {
+            return Err(Error::Manifest(stale_section(&section, &answer)));
+        }
+        p.manifest = Manifest::parse(&answer)?;
         live.func::<i32, i32>("lcc_alloc")?;
         live.func::<(i32, i32), i64>("lcc_handle")?;
         Ok(p)
+    }
+
+    /// Reads a module's manifest without installing it. A module with a stamped
+    /// [`MANIFEST_SECTION`] is validated but never instantiated: the manifest is the section's, a
+    /// claim [`Plugin::load`] checks on install ([`ManifestSource::Section`]). One without a section,
+    /// or any module when `verify` is set, is loaded as [`Plugin::load`] loads it and gives
+    /// `lcc_manifest`'s answer ([`ManifestSource::Export`]).
+    pub fn inspect(bytes: &[u8], limits: Limits, verify: bool) -> Result<Inspection> {
+        let (engine, module) = compile(bytes, &limits)?;
+        if !verify && let Some(section) = stamped_section(&module)? {
+            check_exports(&module)?;
+            let manifest = Manifest::parse(section)?;
+            return Ok(Inspection { manifest, source: ManifestSource::Section, digest: Sha256::digest(bytes).into() });
+        }
+        let p = Plugin::load_compiled(bytes, limits, engine, module)?;
+        Ok(Inspection { manifest: p.manifest, source: ManifestSource::Export, digest: p.digest })
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -388,6 +444,84 @@ impl Plugin {
         }
         Ok(value.get("ok").cloned().unwrap_or(value))
     }
+}
+
+/// Validates `bytes` as a plug-in module (size, header, wasmi's validation, imports) without
+/// instantiating it.
+fn compile(bytes: &[u8], limits: &Limits) -> Result<(Engine, Module)> {
+    if bytes.len() > limits.max_module_bytes {
+        return Err(Error::Module(format!("module is {} bytes (limit {})", bytes.len(), limits.max_module_bytes)));
+    }
+    if !bytes.starts_with(b"\0asm") {
+        return Err(Error::Module("not a WebAssembly binary (missing \\0asm header)".into()));
+    }
+    let mut config = Config::default();
+    config.consume_fuel(true).enforced_limits(EnforcedLimits::strict()).set_max_recursion_depth(limits.max_recursion_depth.max(16));
+    config.compilation_mode(wasmi::CompilationMode::Eager);
+    let engine = Engine::new(&config);
+    let module = Module::new(&engine, bytes).map_err(|e| Error::Module(e.to_string()))?;
+    if let Some(imp) = module.imports().find(|i| i.module() != "host" || !IMPORTS.contains(&i.name())) {
+        return Err(Error::Abi(format!(
+            "the module imports `{}.{}`; plug-ins may import only host.call, host.response and host.log (no WASI)",
+            imp.module(),
+            imp.name()
+        )));
+    }
+    Ok((engine, module))
+}
+
+/// The module's [`MANIFEST_SECTION`], `None` when it wasn't stamped. More than one, or one over
+/// [`MAX_MANIFEST_BYTES`], is an error.
+fn stamped_section(module: &Module) -> Result<Option<&[u8]>> {
+    let mut found = module.custom_sections().filter(|s| s.name() == MANIFEST_SECTION).map(|s| s.data());
+    let Some(section) = found.next() else { return Ok(None) };
+    let more = found.count();
+    if more > 0 {
+        return Err(Error::Manifest(format!(
+            "the module has {} {MANIFEST_SECTION} sections; a stamped plug-in has exactly one (stamp it again)",
+            more.saturating_add(1)
+        )));
+    }
+    if section.len() > MAX_MANIFEST_BYTES {
+        return Err(Error::Manifest(format!("the {MANIFEST_SECTION} section is {} bytes (limit {MAX_MANIFEST_BYTES})", section.len())));
+    }
+    Ok(Some(section))
+}
+
+/// The ABI's exports, by type, read from the module without running it: what [`Plugin::load`]
+/// would look up after instantiating.
+fn check_exports(module: &Module) -> Result<()> {
+    use wasmi::ValType::{I32, I64};
+    let wanted: [(&str, &[wasmi::ValType], &[wasmi::ValType]); 4] =
+        [("lcc_abi_version", &[], &[I32]), ("lcc_manifest", &[], &[I64]), ("lcc_alloc", &[I32], &[I32]), ("lcc_handle", &[I32, I32], &[I64])];
+    for (name, params, results) in wanted {
+        let ok = module.get_export(name).and_then(|t| t.func().cloned()).is_some_and(|f| f.params() == params && f.results() == results);
+        if !ok {
+            return Err(Error::Abi(format!("export `{name}`: missing, or not the ABI's function type")));
+        }
+    }
+    if module.get_export("memory").and_then(|t| t.memory().cloned()).is_none() {
+        return Err(Error::Abi("the module must export its linear memory as `memory`".into()));
+    }
+    Ok(())
+}
+
+/// Why a stamped section isn't `lcc_manifest`'s answer, naming the top-level fields that differ.
+fn stale_section(section: &[u8], answer: &[u8]) -> String {
+    let object = |b: &[u8]| match serde_json::from_slice::<Value>(b) {
+        Ok(Value::Object(m)) => Some(m),
+        _ => None,
+    };
+    let head = format!("the {MANIFEST_SECTION} section differs from what lcc_manifest returns");
+    let (Some(a), Some(b)) = (object(section), object(answer)) else {
+        return format!("{head} (it isn't the same JSON object); the plug-in must be stamped again");
+    };
+    let keys: std::collections::BTreeSet<&String> = a.keys().chain(b.keys()).collect();
+    let fields: Vec<String> = keys.into_iter().filter(|k| a.get(*k) != b.get(*k)).map(|k| format!("`{k}`")).collect();
+    if fields.is_empty() {
+        return format!("{head} byte for byte (the same fields, written differently); the plug-in must be stamped again");
+    }
+    format!("{head} in {}; the plug-in must be stamped again", fields.join(", "))
 }
 
 fn placeholder_manifest() -> Manifest {

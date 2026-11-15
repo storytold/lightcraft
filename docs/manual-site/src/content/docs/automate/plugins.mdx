@@ -18,7 +18,7 @@ import { Aside } from '@astrojs/starlight/components';
 - **About tab**: description, commands, and where the plug-in comes from: Homepage, Source Code, Changelog and Licence links, plus **Report a Problem** for a GitHub repository. Pixel filters show the same links on their page.
 - **What a plug-in can add**: menu commands with dialogs, settings pages, export post-processing, export destinations ("Then send to"), publish services, metadata and keyword suggestions, custom metadata fields, programs it starts, pixel filters.
 - **Commands** appear under **File ▸ Plug-ins** and run as `plugin.run`, so CLI, MCP and actions can run them too.
-- **SDK**: write plug-ins in Rust with the `sdk/plugin` crate. Eight example plug-ins live in `sdk/examples` (catalog tools, batch metadata, export tools, publish folder, program tools, custom fields, job tools, keyword picker). Stamp a release build with `plugin-stamp` (`sdk/stamp`), which copies the plug-in's manifest into the `.wasm` so tools can read it without running the plug-in.
+- **SDK**: write plug-ins in Rust with the `sdk/plugin` crate. Eight example plug-ins live in `sdk/examples` (catalog tools, batch metadata, export tools, publish folder, program tools, custom fields, job tools, keyword picker). Stamp a release build with `plugin-stamp` (`sdk/stamp`), which copies the plug-in's manifest into the `.wasm` so tools can read it without running the plug-in. The app checks a stamped plug-in's copy each time it installs or loads it, and refuses one whose copy doesn't match, naming what differs.
 - Lightroom Lua plug-ins are not supported.
 
 <Shot name="plugin-manager" alt="The Plug-in Manager" menu="File ▸ Plug-ins ▸ Plug-in Manager…" />

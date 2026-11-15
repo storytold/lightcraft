@@ -1,10 +1,12 @@
 //! The SDK's manifest stamp (`sdk/stamp`, `plugin-stamp`): the `photo-plugin.manifest` section it
 //! writes equals what `lcc_manifest` returns, stamped plug-ins install and run as before, and a
-//! module that can't answer is refused with both files left alone.
+//! module that can't answer is refused with both files left alone. The host reads the section
+//! without running the module ([`Plugin::inspect`]) and refuses to load one whose section isn't
+//! `lcc_manifest`'s answer.
 
 use std::path::{Path, PathBuf};
 
-use lcc_plugins::{Manager, NoHost, Permissions, Plugin};
+use lcc_plugins::{MANIFEST_SECTION, Manager, ManifestSource, NoHost, Permissions, Plugin};
 use plugin_stamp::{Error, Limits, SECTION};
 use serde_json::{Value, json};
 
@@ -250,4 +252,107 @@ fn check_passes_only_a_matching_section_and_writes_nothing() {
     }
     let section: Value = serde_json::from_slice(plugin_stamp::read_section(&stamped).unwrap().unwrap()).unwrap();
     assert_eq!(section["id"], "test.stamp");
+}
+
+#[test]
+fn the_host_reads_the_section_the_tool_writes() {
+    assert_eq!(MANIFEST_SECTION, SECTION, "one name on both sides");
+}
+
+#[test]
+fn a_stamped_module_inspects_from_its_section_without_running() {
+    // lcc_manifest traps, and so does the start function: inspecting must run neither
+    let traps = module(b"", "(unreachable)", &format!("(func $start (unreachable)) (start $start) {}", custom(SECTION, MANIFEST.as_bytes())));
+    let limits = lcc_plugins::Limits::default();
+    let inspected = Plugin::inspect(&traps, limits.clone(), false).unwrap();
+    assert_eq!(inspected.source, ManifestSource::Section);
+    assert!(!inspected.verified(), "a section read without running is only the file's claim");
+    assert_eq!(inspected.manifest.id, "test.stamp");
+    assert!(inspected.manifest.permissions.catalog, "the section's permissions");
+    let e = Plugin::inspect(&traps, limits.clone(), true).unwrap_err();
+    assert!(matches!(e, lcc_plugins::Error::Trap(_)), "verify runs lcc_manifest: {e}");
+    assert!(Plugin::load(&traps, limits.clone()).is_err(), "and loading runs it");
+
+    let stamped = plugin_stamp::stamp(&plain(MANIFEST, ""), &Limits::default()).unwrap();
+    let verified = Plugin::inspect(&stamped, limits.clone(), true).unwrap();
+    assert_eq!((verified.source, verified.verified()), (ManifestSource::Export, true));
+    let unverified = Plugin::inspect(&stamped, limits.clone(), false).unwrap();
+    assert_eq!(unverified.manifest, verified.manifest, "a true section reads as lcc_manifest does");
+    assert_eq!(unverified.digest, *Plugin::load(&stamped, limits).unwrap().digest(), "the digest is the module's");
+}
+
+#[test]
+fn a_module_without_a_section_inspects_through_lcc_manifest() {
+    let inspected = Plugin::inspect(&plain(MANIFEST, ""), lcc_plugins::Limits::default(), false).unwrap();
+    assert_eq!((inspected.source, inspected.verified()), (ManifestSource::Export, true));
+    assert_eq!(inspected.manifest.id, "test.stamp");
+    let other = plain(MANIFEST, &custom("name", b"x"));
+    assert_eq!(Plugin::inspect(&other, lcc_plugins::Limits::default(), false).unwrap().source, ManifestSource::Export, "other custom sections");
+}
+
+#[test]
+fn a_section_inspect_still_refuses_what_install_would() {
+    let section = custom(SECTION, MANIFEST.as_bytes());
+    let wasi = format!(r#"(module (import "wasi_snapshot_preview1" "fd_write" (func (param i32 i32 i32 i32) (result i32))) {section})"#);
+    let e = Plugin::inspect(&wat::parse_str(&wasi).unwrap(), lcc_plugins::Limits::default(), false).unwrap_err().to_string();
+    assert!(e.contains("wasi_snapshot_preview1.fd_write"), "{e}");
+    let no_handle = format!(
+        r#"(module (memory (export "memory") 1)
+  (func (export "lcc_abi_version") (result i32) (i32.const 1))
+  (func (export "lcc_manifest") (result i64) (i64.const 0))
+  (func (export "lcc_alloc") (param i32) (result i32) (i32.const 0))
+  (func (export "lcc_handle") (param i32) (result i64) (i64.const 0))
+  {section})"#
+    );
+    let e = Plugin::inspect(&wat::parse_str(&no_handle).unwrap(), lcc_plugins::Limits::default(), false).unwrap_err().to_string();
+    assert!(e.contains("lcc_handle"), "the wrong type for lcc_handle: {e}");
+    let bad_json = plain(MANIFEST, &custom(SECTION, b"{\"id\":"));
+    let e = Plugin::inspect(&bad_json, lcc_plugins::Limits::default(), false).unwrap_err();
+    assert!(matches!(e, lcc_plugins::Error::Manifest(_)), "{e}");
+}
+
+/// A section that differs from `lcc_manifest` (it hides a permission and an older version): the
+/// install, an update and start-up all refuse it, naming the fields.
+#[test]
+fn a_section_that_differs_from_lcc_manifest_is_refused_everywhere() {
+    let claim = MANIFEST.replace(r#""catalog":true"#, r#""catalog":false"#).replace("1.0.0", "0.9.0");
+    let lying = plain(MANIFEST, &custom(SECTION, claim.as_bytes()));
+    let limits = lcc_plugins::Limits::default();
+    let e = Plugin::load(&lying, limits.clone()).unwrap_err().to_string();
+    assert!(e.contains("`permissions`, `version`") && e.contains(SECTION), "{e}");
+    assert_eq!(Plugin::inspect(&lying, limits.clone(), true).unwrap_err().to_string(), e, "verify refuses it the same way");
+    assert!(!Plugin::inspect(&lying, limits.clone(), false).unwrap().manifest.permissions.catalog, "unverified, it reads as it claims");
+    let respaced = plain(MANIFEST, &custom(SECTION, MANIFEST.replace(',', ", ").as_bytes()));
+    let e2 = Plugin::load(&respaced, limits.clone()).unwrap_err().to_string();
+    assert!(e2.contains("byte for byte"), "the same fields written differently: {e2}");
+    let not_json = plain(MANIFEST, &custom(SECTION, b"nope"));
+    assert!(Plugin::load(&not_json, limits.clone()).unwrap_err().to_string().contains("same JSON object"));
+
+    // a first install: nothing is installed
+    let grant = Permissions { catalog: true, ..Default::default() };
+    let mut m = Manager::in_memory();
+    let e = m.install_bytes_by_user(&lying, Some(grant.clone()), true).unwrap_err().to_string();
+    assert!(e.contains("`permissions`, `version`"), "{e}");
+    assert_eq!(m.list().count(), 0, "nothing installed");
+
+    // an update over a good install: the installed version stays as it was
+    let dir = temp("lying");
+    let mut m = Manager::open(&dir).unwrap();
+    let good = plugin_stamp::stamp(&plain(MANIFEST, ""), &Limits::default()).unwrap();
+    m.install_bytes_by_user(&good, Some(grant.clone()), false).unwrap();
+    let newer = plain(&MANIFEST.replace("1.0.0", "1.1.0"), &custom(SECTION, MANIFEST.as_bytes()));
+    let e = m.install_bytes_by_user(&newer, Some(grant), false).unwrap_err().to_string();
+    assert!(e.contains("`version`"), "{e}");
+    assert_eq!(m.get("test.stamp").unwrap().plugin.manifest().version, "1.0.0", "the installed plug-in is kept");
+    let installed_file = dir.join("test.stamp.wasm");
+    assert_eq!(std::fs::read(&installed_file).unwrap(), good, "and its file");
+
+    // start-up: a module copied over the installed one is listed as failed, with the reason
+    drop(m);
+    std::fs::write(&installed_file, &lying).unwrap();
+    let m = Manager::open(&dir).unwrap();
+    assert!(m.get("test.stamp").is_none(), "it doesn't load");
+    let failed = m.failed.iter().find(|f| f.id == "test.stamp").expect("listed as failed");
+    assert!(failed.error.contains("`permissions`, `version`"), "{}", failed.error);
+    let _ = std::fs::remove_dir_all(&dir);
 }
