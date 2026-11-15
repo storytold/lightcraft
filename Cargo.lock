@@ -1307,11 +1307,11 @@ dependencies = [
 [[package]]
 name = "craft-metadata"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=591061efb488727cb4a38cbb10cb861dec0bc832#591061efb488727cb4a38cbb10cb861dec0bc832"
+source = "git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff#149e74d739443d22fabb877745dad665f51c5eff"
 dependencies = [
  "brotli-decompressor 6.0.1",
  "chrono",
- "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=591061efb488727cb4a38cbb10cb861dec0bc832)",
+ "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "quick-xml 0.41.0",
  "serde",
 ]
@@ -1360,7 +1360,7 @@ dependencies = [
 [[package]]
 name = "craft-tiff"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=591061efb488727cb4a38cbb10cb861dec0bc832#591061efb488727cb4a38cbb10cb861dec0bc832"
+source = "git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff#149e74d739443d22fabb877745dad665f51c5eff"
 dependencies = [
  "serde",
  "thiserror 2.0.21",
@@ -3854,7 +3854,7 @@ dependencies = [
  "craft-heif",
  "craft-image-codecs",
  "craft-jxl",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=591061efb488727cb4a38cbb10cb861dec0bc832)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "craft-psd",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "dhat",
@@ -4090,7 +4090,7 @@ version = "0.21.1"
 dependencies = [
  "chrono",
  "craft-heif",
- "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=591061efb488727cb4a38cbb10cb861dec0bc832)",
+ "craft-metadata 0.1.0 (git+https://github.com/storytold/craft-libs?rev=149e74d739443d22fabb877745dad665f51c5eff)",
  "craft-psd",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18)",
  "lightcraft-geom",

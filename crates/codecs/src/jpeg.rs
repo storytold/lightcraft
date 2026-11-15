@@ -276,6 +276,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mpf_shared_matches_previous_reader_on_mutated_indices() {
+        fn previous(base: usize, data: &[u8]) -> Vec<craft_metadata::mpf::MpfImage> {
+            let Some(t) = exif::Tiff::new(data) else { return vec![] };
+            let Some(ifd) = t.first_ifd() else { return vec![] };
+            let Some((entries, _)) = t.ifd(ifd) else { return vec![] };
+            let Some(e) = entries.iter().find(|e| e.tag == 0xb002) else { return vec![] };
+            let Some(list) = t.bytes(e) else { return vec![] };
+            list.as_chunks::<16>()
+                .0
+                .iter()
+                .enumerate()
+                .take(16)
+                .skip(1)
+                .filter_map(|(_, rec)| {
+                    let rd = |i| {
+                        let b = [rec[i], rec[i + 1], rec[i + 2], rec[i + 3]];
+                        if data.starts_with(b"II") { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) }
+                    };
+                    let (attr, len, off) = (rd(0), rd(4) as usize, rd(8) as usize);
+                    (len > 0 && off > 0).then_some(craft_metadata::mpf::MpfImage { offset: base.saturating_add(off), len, kind: attr & 0x00ff_ffff })
+                })
+                .collect()
+        }
+        let file = craft_metadata::mpf::write(&[0xff, 0xd8, 0xff, 0xd9], &[(0x050000, &[0xff, 0xd8, 0xff, 0xd9])]).unwrap();
+        let m = parse_markers(&file).unwrap();
+        let (base, data) = m.mpf.unwrap();
+        for at in 0..data.len() {
+            for value in [0u8, 0xff] {
+                let mut altered = data.clone();
+                altered[at] = value;
+                assert_eq!(craft_metadata::mpf::images_from_index(&altered, base), previous(base, &altered), "mutation at {at}, value {value}");
+            }
+        }
+    }
+
+    #[test]
     fn container_fallback_matches_tagged_jpeg_before_resizing_and_keeps_own_metadata() {
         use crate::{ChromaSubsampling, EncodeImage, EncodeMeta, NamedSpace, Samples, SpaceOrigin, encode_jpeg};
         let pixels: Vec<u8> = (0..16 * 16).flat_map(|i| if i % 2 == 0 { [120, 180, 90] } else { [30, 100, 200] }).collect();
