@@ -708,25 +708,8 @@ fn publish_to_immich_albums_renders_and_stacks() {
 }
 
 #[test]
-fn albums_sync_both_ways_and_smart_search_maps_results_to_photos() {
-    let Setup { mut s, state, one, two, dir, .. } = setup("albums");
-    let a = s.execute("album.create", &json!({"name": "Holiday"})).unwrap()["id"].as_u64().unwrap();
-    s.execute("album.addPhotos", &json!({"id": a, "ids": [one.0]})).unwrap();
-    let r = s.execute("immich.linkAlbum", &json!({"album": a})).unwrap();
-    assert_eq!(r["ok"], true, "{r}");
-    // Immich already has photo two in it
-    state.lock().unwrap().albums[0].2.push("bbbb-2".into());
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["ok"], true, "{r}");
-    let mut photos = s.catalog.album(lcc_catalog::AlbumId(a)).unwrap().photos.clone();
-    photos.sort();
-    assert_eq!(photos, vec![one, two]);
-    assert!(state.lock().unwrap().albums[0].2.contains(&"aaaa-1".to_string()));
-    // removed in Immich: removed in the catalog
-    state.lock().unwrap().albums[0].2.retain(|x| x != "aaaa-1");
-    s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(s.catalog.album(lcc_catalog::AlbumId(a)).unwrap().photos, vec![two]);
-
+fn smart_search_maps_results_to_photos() {
+    let Setup { mut s, two, dir, .. } = setup("albums");
     // smart search maps Immich's results to photos, and shows or saves them
     let r = s.execute("immich.smartSearch", &json!({"query": "from immich", "show": true, "saveAs": "Immich: from immich"})).unwrap();
     assert_eq!(r["ok"], true, "{r}");
@@ -740,80 +723,6 @@ fn albums_sync_both_ways_and_smart_search_maps_results_to_photos() {
     assert!(s.visible().is_empty());
     assert!(s.execute("immich.smartSearch", &json!({"query": "  "})).is_err());
     assert!(s.execute("immich.smartSearch", &json!({"query": "x", "mode": "nope"})).is_err());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// The album rule: every plain album maps by name (creates both ways), renames travel, an album
-/// deleted on one side waits (ask) or follows the policy, photos are never deleted; a background
-/// run holds an activity row.
-#[test]
-fn album_rule_creates_renames_and_deletes_albums() {
-    let Setup { mut s, state, one, two, dir, .. } = setup("albumrule");
-    let album_named = |s: &Session, n: &str| s.catalog.albums().find(|a| a.name == n).map(|a| a.id);
-    let holiday = s.execute("album.create", &json!({"name": "Holiday"})).unwrap()["id"].as_u64().unwrap();
-    s.execute("album.addPhotos", &json!({"id": holiday, "ids": [one.0]})).unwrap();
-    state.lock().unwrap().albums.push(("album-x".into(), "Trip".into(), vec!["bbbb-2".into()]));
-    // off (the default): nothing happens to unlinked albums
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["albums"], 0, "{r}");
-    assert!(album_named(&s, "Trip").is_none());
-
-    s.execute("immich.setSync", &json!({"config": {"albums": {"direction": "twoWay", "policy": "ask"}}})).unwrap();
-    assert_eq!(s.execute("immich.syncStatus", &json!({})).unwrap()["albumRule"]["direction"], "twoWay");
-    // a background run, with the server held: the activity stack shows it
-    let guard = state.lock().unwrap();
-    assert_eq!(s.execute("immich.syncAlbums", &json!({"background": true})).unwrap()["started"], true);
-    assert!(s.activity.list().iter().any(|t| t.kind == "immich" && t.label == "Syncing albums with Immich"));
-    drop(guard);
-    pump_until(&mut s, |s, _| !s.remote.sync.values().any(|e| e.albums_running));
-    assert!(!s.activity.list().iter().any(|t| t.label == "Syncing albums with Immich"));
-    let last = s.execute("immich.syncStatus", &json!({})).unwrap()["albumsLast"].clone();
-    assert_eq!(last["ok"], true, "{last}");
-    assert_eq!(last["created"], 2, "{last}");
-    let trip = album_named(&s, "Trip").expect("Trip created in the catalog");
-    assert_eq!(s.catalog.album(trip).unwrap().photos, vec![two]);
-    {
-        let st = state.lock().unwrap();
-        let h = st.albums.iter().find(|a| a.1 == "Holiday").expect("Holiday created in Immich");
-        assert_eq!(h.2, vec!["aaaa-1".to_string()]);
-    }
-    // renamed in the catalog → renamed in Immich
-    s.execute("album.rename", &json!({"id": holiday, "name": "Summer"})).unwrap();
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["renamed"], 1, "{r}");
-    assert!(state.lock().unwrap().albums.iter().any(|a| a.1 == "Summer"));
-    // deleted in Immich, policy ask: waits; nothing deleted yet
-    state.lock().unwrap().albums.retain(|a| a.0 != "album-x");
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["pending"][0]["deletedOn"], "immich", "{r}");
-    assert!(s.catalog.album(trip).is_some());
-    let st = s.execute("immich.syncStatus", &json!({})).unwrap();
-    assert_eq!(st["albumDeletions"].as_array().unwrap().len(), 1);
-    // the user applies it: the catalog album goes, its photo stays
-    s.execute("immich.resolveAlbumDeletion", &json!({"album": trip.0, "action": "apply"})).unwrap();
-    assert!(s.catalog.album(trip).is_none());
-    assert!(s.catalog.photo(two).is_some_and(|p| !p.deleted));
-    assert!(s.execute("immich.syncStatus", &json!({})).unwrap()["albumDeletions"].as_array().unwrap().is_empty());
-    // policy catalog: a catalog delete removes the Immich album (never its assets)
-    s.execute("immich.setSync", &json!({"config": {"albums": {"direction": "twoWay", "policy": "catalog"}}})).unwrap();
-    s.execute("album.delete", &json!({"id": holiday})).unwrap();
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["deleted"], 1, "{r}");
-    assert!(!state.lock().unwrap().albums.iter().any(|a| a.1 == "Summer"));
-    assert_eq!(remote(&state, "aaaa-1")["isTrashed"], Value::Null);
-    // one-way to Immich: an Immich-only album is not pulled in
-    s.execute("immich.setSync", &json!({"config": {"albums": {"direction": "toImmich"}}})).unwrap();
-    state.lock().unwrap().albums.push(("album-y".into(), "Theirs".into(), vec![]));
-    s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert!(album_named(&s, "Theirs").is_none());
-    // Sync Now runs the album rule too, and a background metadata run holds its own row
-    let guard = state.lock().unwrap();
-    let r = s.execute("immich.sync", &json!({"background": true})).unwrap();
-    assert_eq!(r["albums"]["started"], true, "{r}");
-    let rows: Vec<String> = s.activity.list().into_iter().map(|t| t.label).collect();
-    assert!(rows.iter().any(|l| l == "Syncing metadata with Immich") && rows.iter().any(|l| l == "Syncing albums with Immich"), "{rows:?}");
-    drop(guard);
-    pump_until(&mut s, |s, _| !s.remote.sync.values().any(|e| e.albums_running || e.running));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -998,57 +907,6 @@ fn a_photo_edited_during_a_run_takes_immichs_change_on_the_next_run() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// An album add that fails (the request, or single photos the server refuses) must not leave
-/// those photos in the link's base: the next run would read them as "removed in Immich" and take
-/// them out of the catalog collection.
-#[test]
-fn a_failed_album_add_never_removes_photos_from_the_collection() {
-    let Setup { mut s, state, one, two, dir, .. } = setup("album-add-fail");
-    s.execute("immich.setSync", &json!({"config": {"albums": {"direction": "twoWay", "policy": "ask"}}})).unwrap();
-    let photos_of = |s: &Session, id: u64| {
-        let mut p = s.catalog.album(lcc_catalog::AlbumId(id)).unwrap().photos.clone();
-        p.sort();
-        p
-    };
-    let on_server = |name: &str| state.lock().unwrap().albums.iter().find(|a| a.1 == name).map(|a| a.2.clone());
-    // "Trip" exists on both sides (matched by name), empty in Immich; "Solo" only in the catalog
-    let trip = s.execute("album.create", &json!({"name": "Trip"})).unwrap()["id"].as_u64().unwrap();
-    s.execute("album.addPhotos", &json!({"id": trip, "ids": [one.0, two.0]})).unwrap();
-    let solo = s.execute("album.create", &json!({"name": "Solo"})).unwrap()["id"].as_u64().unwrap();
-    s.execute("album.addPhotos", &json!({"id": solo, "ids": [one.0]})).unwrap();
-    state.lock().unwrap().albums.push(("album-t".into(), "Trip".into(), vec![]));
-
-    // every add fails
-    state.lock().unwrap().album_add_down = true;
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["ok"], false, "{r}");
-    assert_eq!(on_server("Trip"), Some(vec![]));
-    assert_eq!(on_server("Solo"), Some(vec![]), "created, but its photo did not arrive");
-    // the server is back, but refuses one photo
-    {
-        let mut st = state.lock().unwrap();
-        st.album_add_down = false;
-        st.album_add_refused = vec!["bbbb-2".into()];
-    }
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["ok"], false, "the refused photo is reported: {r}");
-    assert_eq!((photos_of(&s, trip), photos_of(&s, solo)), (vec![one, two], vec![one]), "nothing left the collections");
-    assert_eq!(on_server("Trip"), Some(vec!["aaaa-1".to_string()]));
-    assert_eq!(on_server("Solo"), Some(vec!["aaaa-1".to_string()]));
-    // still refused: the photo stays in the collection run after run
-    s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(photos_of(&s, trip), vec![one, two]);
-    // accepted at last
-    state.lock().unwrap().album_add_refused.clear();
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["ok"], true, "{r}");
-    let mut t = on_server("Trip").unwrap();
-    t.sort();
-    assert_eq!(t, vec!["aaaa-1".to_string(), "bbbb-2".to_string()]);
-    assert_eq!((photos_of(&s, trip), photos_of(&s, solo)), (vec![one, two], vec![one]));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// The sync state belongs to one catalog. A second catalog opened in the same session starts
 /// from its own (empty) state: merged against the first one's bases, its freshly imported,
 /// unrated photos read as "the user cleared this" and wiped the values in Immich.
@@ -1085,42 +943,6 @@ fn another_catalog_is_not_merged_against_the_first_ones_sync_state() {
     assert_eq!(st["items"], 2, "{st}");
     let r = s.execute("immich.sync", &json!({"full": true})).unwrap();
     assert_eq!((r["ok"].as_bool(), r["pulled"].as_u64(), r["pushed"].as_u64()), (Some(true), Some(0), Some(0)), "{r}");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// "Immich wins" (or "newest wins") lets an album deleted in Immich delete the catalog
-/// collection: never one that holds photos Immich does not have. It is kept, taken out of the
-/// sync, and the run says so.
-#[test]
-fn an_immich_album_delete_keeps_a_collection_with_local_only_photos() {
-    let Setup { mut s, state, one, dir, .. } = setup("album-keep");
-    std::fs::write(dir.join("three.png"), png(42)).unwrap();
-    s.execute("library.import", &json!({"paths": [dir.join("three.png").to_string_lossy()]})).unwrap();
-    let three = s.catalog.photos().find(|p| p.file_name == "three.png").unwrap().id;
-    s.execute("immich.setSync", &json!({"config": {"albums": {"direction": "twoWay", "policy": "immich"}}})).unwrap();
-    let mixed = s.execute("album.create", &json!({"name": "Mixed"})).unwrap()["id"].as_u64().unwrap();
-    s.execute("album.addPhotos", &json!({"id": mixed, "ids": [one.0, three.0]})).unwrap();
-    let linked_only = s.execute("album.create", &json!({"name": "Linked"})).unwrap()["id"].as_u64().unwrap();
-    s.execute("album.addPhotos", &json!({"id": linked_only, "ids": [one.0]})).unwrap();
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["ok"], true, "{r}");
-    assert!(state.lock().unwrap().albums.iter().any(|a| a.1 == "Mixed" && a.2 == vec!["aaaa-1".to_string()]));
-
-    // both albums are deleted in Immich
-    state.lock().unwrap().albums.clear();
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["kept"].as_array().map(Vec::len), Some(1), "{r}");
-    assert_eq!((r["kept"][0]["album"].as_u64(), r["kept"][0]["unlinked"].as_u64()), (Some(mixed), Some(1)), "{r}");
-    let mut photos = s.catalog.album(lcc_catalog::AlbumId(mixed)).expect("the collection is kept").photos.clone();
-    photos.sort();
-    assert_eq!(photos, vec![one, three]);
-    assert!(s.catalog.album(lcc_catalog::AlbumId(linked_only)).is_none(), "a collection of linked photos only follows the delete");
-    assert!(s.catalog.photo(one).is_some_and(|p| !p.deleted));
-    // later runs leave it alone: not deleted, not made again in Immich, not reported again
-    let r = s.execute("immich.syncAlbums", &json!({})).unwrap();
-    assert_eq!(r["kept"].as_array().map(Vec::len), Some(0), "{r}");
-    assert!(s.catalog.album(lcc_catalog::AlbumId(mixed)).is_some());
-    assert!(!state.lock().unwrap().albums.iter().any(|a| a.1 == "Mixed"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

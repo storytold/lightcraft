@@ -102,7 +102,17 @@ impl Accounts {
     /// Read from `path`; a missing file is empty, a corrupt one an error the caller shows.
     pub fn load(path: &std::path::Path) -> Result<Accounts, String> {
         match std::fs::read(path) {
-            Ok(b) => serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display())),
+            Ok(b) => {
+                let mut a: Accounts = serde_json::from_slice(&b).map_err(|e| format!("{}: {e}", path.display()))?;
+                // the old name-matching album rule: an account that had it on shows its albums as
+                // collections in device sync instead
+                for x in &mut a.immich {
+                    if x.sync.albums.take().is_some_and(|r| r.direction != crate::sync::Direction::Off) {
+                        x.collections = true;
+                    }
+                }
+                Ok(a)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Accounts::default()),
             Err(e) => Err(format!("{}: {e}", path.display())),
         }

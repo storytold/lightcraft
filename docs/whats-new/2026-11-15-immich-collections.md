@@ -15,3 +15,5 @@
   encrypted link; off, the connection and its albums stay on this device.
 - **Sync this device's camera roll** (Settings ▸ Sync) puts new photos into the collection "Camera Roll - ‹device›",
   without duplicates when the Immich app uploads them too.
+- The Immich "Collections ↔ albums" name-matching rule is gone: albums now show as collections (accounts that
+  used the rule are switched over).

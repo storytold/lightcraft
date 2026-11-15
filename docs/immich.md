@@ -248,32 +248,6 @@ server by checksum first, so an upload whose answer was lost is never stored twi
 the next run (photos already sent are found by checksum). In the app, Publish Services ▸ Set Up / Edit Settings…
 has the Immich form: account, what to send (rendered / original / both) and "trash removed renders".
 
-`immich.linkAlbum {album}` links a catalog album with an Immich album; `immich.syncAlbums` then keeps the same linked
-photos in both (added or removed on one side since the last sync: the same on the other).
-
-**Album rule.** Settings → Connections → Sync… → *Albums ↔ albums* (`immich.setSync {config: {albums: {direction,
-policy}}}`) maps every plain catalog album to the Immich album of the same name:
-
-- *Off* (default): only albums linked by hand sync, as above.
-- *To Immich* / *From Immich*: one way; the other side's changes are not followed (an album deleted on the source-only
-  side is put back).
-- *Two-way*: creates, renames, photos added or removed, and album deletes travel both ways.
-
-Deleting an album never deletes photos, only the album on the other side, and only as the policy says: *Catalog wins*
-/ *Immich wins* decide, *Newest wins* deletes unless the other side changed the album since the last sync, *Ask* (the
-default) leaves it in the Sync… panel's *Albums deleted on one side* list (`immich.resolveAlbumDeletion {album,
-action: apply|keep}`). A name changed differently on both sides follows the policy, or is left alone. Published
-collections, smart albums, folders and the Quick Collection never map. Sync Now and the background schedule run the
-album rule too; runs show in the activity stack. The key needs `album.create`, `album.update`, `album.delete`,
-`albumAsset.create` and `albumAsset.delete` for this.
-
-Two rules keep a failed run from costing photos or collections:
-
-- A link remembers which photos both albums held after the last run. Only photos **known to be in the Immich album**
-  go in there: Immich answers an album add with one result per asset, and a photo it refused (or an add that failed
-  altogether, also right after creating the album) is simply added again by the next run. It is never read as
-  "removed in Immich" and taken out of the collection.
-- A collection that holds **photos Immich does not have** (not linked to an asset) is never deleted because its
-  Immich album was deleted, whatever the policy. It is kept, taken out of the album sync (no album is made or
-  matched for it again until it is linked by hand with `immich.linkAlbum`), and the run lists it in `kept`; the Sync
-  section says how many were kept. *Ask* still asks, and the user may delete it knowingly.
+Immich albums meet the catalog as device-sync collections (above, *Albums as device-sync collections*). The
+earlier name-matching album rule (`immich.linkAlbum`, `immich.syncAlbums`, `immich.resolveAlbumDeletion`) was removed:
+an account that had it on shows its albums as collections instead (migrated when `connections.json` is read).

@@ -920,9 +920,6 @@ pub fn pump(s: &mut Session, p: &Value) -> Result<Value> {
             Msg::Synced(d) => {
                 sync::finish(s, *d);
             }
-            Msg::AlbumsSynced(d) => {
-                publish::finish_albums(s, *d);
-            }
             Msg::Sidecars(d) => {
                 sidecars::finish(s, *d);
             }

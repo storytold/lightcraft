@@ -99,6 +99,7 @@
   "Page {page} of {pages}": "Сторінка {page} з {pages}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Повернення панорамуванням або повторне збільшення HDR-зміни показує її одразу, без повторного рендерингу. Використовує до {need} МБ графічної пам’яті на цьому екрані.",
   "Person {n}": "Людина {n}",
+  "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Фото з {folder} потрапляють до колекції «Camera Roll - назва цього пристрою».",
   "Picks to unflag: {n}": "Вибраних, з яких знімається позначка: {n}",
   "Preset {name} on {n} photos": "Пресет {name} на {n} фото",
   "Print settings not saved: {e}": "Параметри друку не збережено: {e}",
@@ -221,6 +222,6 @@
   "{} keys": "Клавіші {}",
   "“{name}” added to Camera Profiles": "«{name}» додано до профілів камери",
   "“{name}” has its old settings again": "«{name}» знову має попередні налаштування",
-  "“{name}” is new. What may the other devices syncing this catalog have of it?": "«{name}» — нова. Що з неї можуть отримувати інші пристрої, які синхронізують цей каталог?",
+  "“{name}” is new. What may the other devices syncing this catalog have of it?": "«{name}»: нова. Що з неї можуть отримувати інші пристрої, які синхронізують цей каталог?",
   "“{name}” takes the active photo's settings. Its name, group, place and marks stay.": "«{name}» отримує налаштування активного фото. Назва, група, місце й позначки лишаються."
 }

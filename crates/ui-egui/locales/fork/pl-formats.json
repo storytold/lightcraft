@@ -108,6 +108,7 @@
   "Page {page} of {pages}": "Strona {page} z {pages}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Powrót przesunięciem lub ponowne powiększenie edycji HDR pokazuje ją od razu, bez ponownego renderowania. Używa do {need} MB pamięci graficznej przy tym ekranie.",
   "Person {n}": "Osoba {n}",
+  "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Zdjęcia z {folder} trafiają do kolekcji „Camera Roll - nazwa tego urządzenia”.",
   "Picks to unflag: {n}": "Wybrane do odflagowania: {n}",
   "Preset {name} on {n} photos": "Ustawienie {name} na zdjęciach: {n}",
   "Print settings not saved: {e}": "Nie zapisano ustawień drukowania: {e}",

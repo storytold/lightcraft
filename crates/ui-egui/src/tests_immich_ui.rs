@@ -193,7 +193,7 @@ fn immich_card_is_compact() {
     // (further down the Sync section: scrolled to, as a person would)
     let mut text = h.painted_text().join("\n");
     for _ in 0..12 {
-        if text.contains("Collections ↔ albums") {
+        if text.contains("Favourite means") {
             break;
         }
         h.request("ui.hoverWidget", json!({"id": "settings:rows", "fx": 0.98, "fy": 0.5}), T);
@@ -203,7 +203,8 @@ fn immich_card_is_compact() {
         }
         text = h.painted_text().join("\n");
     }
-    assert!(text.contains("Collections ↔ albums"), "the album rule row");
+    assert!(text.contains("Favourite means"), "the rest of the Sync section");
+    assert!(!text.contains("Collections ↔ albums"), "the name-matching album rule is gone");
     if let Some(p) = lcc_brand::env_os("TEST_SHOTS") {
         h.app.services.png = Some(Box::new(|img: &lcc_raster::Rgba8| {
             lcc_codecs::encode_png(&lcc_codecs::EncodeImage::rgba8(img), &lcc_codecs::EncodeMeta::default()).unwrap_or_default()

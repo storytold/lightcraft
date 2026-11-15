@@ -119,6 +119,7 @@
   "Paint over what to replace, then click Generate. About ${usd} per variation.": "Måla över det som ska ersättas och klicka sedan på Generera. Cirka ${usd} per variant.",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "När du panorerar tillbaka eller zoomar in igen på en HDR-redigering visas den direkt i stället för att renderas igen. Använder upp till {need} MB grafikminne på den här skärmen.",
   "Person {n}": "Person {n}",
+  "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Bilder i {folder} hamnar i samlingen ”Camera Roll - den här enhetens namn”.",
   "Picks to unflag: {n}": "Val att avflagga: {n}",
   "Preset {name} on {n} photos": "Förinställning {name} på {n} foton",
   "Print settings not saved: {e}": "Utskriftsinställningarna sparades inte: {e}",

@@ -103,6 +103,7 @@
   "Page {page} of {pages}": "第 {page} 页，共 {pages} 页",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "在 HDR 编辑中平移回来或再次放大时会立即显示，而无需重新渲染。在此屏幕上最多占用 {need} MB 显存。",
   "Person {n}": "人物 {n}",
+  "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "{folder} 中的照片会放入收藏集“Camera Roll - 此设备名称”。",
   "Picks to unflag: {n}": "将取消标记的选用照片：{n}",
   "Preset {name} on {n} photos": "预设 {name} 应用到 {n} 张照片",
   "Print settings not saved: {e}": "打印设置未保存：{e}",

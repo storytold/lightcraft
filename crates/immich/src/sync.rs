@@ -130,19 +130,15 @@ pub struct SyncConfig {
     pub on_publish: bool,
     /// Send names given in the app back to Immich's people (IMM-PEOPLE).
     pub push_people: bool,
-    /// Collections ↔ albums (`crate::albums`); unset: [`SyncConfig::album_rule`]'s default.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// No longer used or written: the old name-matching album rule. An account that had it on
+    /// shows its albums as collections instead ([`crate::accounts::Accounts::load`]).
+    #[serde(skip_serializing)]
     pub albums: Option<FieldRule>,
 }
 
 impl SyncConfig {
     pub fn rule(&self, f: Field) -> FieldRule {
         self.rules.get(&f).copied().unwrap_or_else(|| default_rule(f))
-    }
-
-    /// The album rule: by default only albums linked by hand sync, and album deletes ask.
-    pub fn album_rule(&self) -> FieldRule {
-        self.albums.unwrap_or(FieldRule { direction: Direction::Off, policy: Policy::Ask })
     }
 }
 
