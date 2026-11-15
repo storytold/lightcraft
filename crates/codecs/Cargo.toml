@@ -14,7 +14,9 @@ lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
 craft-gainmap = { workspace = true }
 craft-cms = { workspace = true }
+craft-jpeg = { workspace = true }
 craft-image-codecs = { workspace = true }
+craft-image-codecs-sef = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "cae7c1d8a6fec9a9ee136169918c5dd20ca509a0" }
 craft-metadata = { workspace = true }
 craft-tiff = { workspace = true }
 craft-gif = { workspace = true }
@@ -33,7 +35,7 @@ avif-serialize = { workspace = true, optional = true }
 
 [features]
 default = ["parallel", "jxl", "avif"]
-parallel = ["dep:rayon", "lightcraft-raster/parallel"]
+parallel = ["dep:rayon", "lightcraft-raster/parallel", "craft-jpeg/parallel"]
 ## JPEG XL decoding and encoding via the shared craft-jxl codec.
 jxl = ["dep:craft-jxl"]
 # HEIC/HEIF decode via the optional craft-heif crate (heic-rs, pure Rust). Off by default so
@@ -46,6 +48,8 @@ avif = ["dep:ravif", "dep:rav1e", "dep:avif-serialize"]
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+# JPEG parity tests and the benchmark use the prior/reference encoder only in development.
+jpeg-encoder = { workspace = true }
 # JPEG XL tests read encoded samples without our colour conversion
 jxl-oxide = { workspace = true }
 proptest = { workspace = true }

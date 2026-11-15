@@ -202,7 +202,10 @@ mod cr3 {
         let mut co64 = vec![0u8; 4];
         co64.extend(1u32.to_be_bytes());
         co64.extend(offset.to_be_bytes());
-        let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
+        // One sample in chunk 1, using sample description 1. The shared parser
+        // deliberately refuses sample access without this mapping.
+        let stsc: Vec<u8> = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect();
+        let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsc", &stsc), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
         box_bytes(b"trak", &box_bytes(b"mdia", &box_bytes(b"minf", &box_bytes(b"stbl", &tables))))
     }
 
@@ -231,10 +234,11 @@ mod cr3 {
         let entry = box_bytes(b"CRAW", &craw);
         let ftyp = box_bytes(b"ftyp", b"crx \0\0\0\x01crx isom");
         let track_len = track(&entry, 0, sample.len() as u32).len();
-        let offset = ftyp.len() + 8 + track_len + 8; // moov and mdat headers
+        let offset = (ftyp.len() + 8 + track_len + 7) & !7;
         let mut out = ftyp;
         out.extend(box_bytes(b"moov", &track(&entry, offset as u64, sample.len() as u32)));
-        out.extend(box_bytes(b"mdat", sample));
+        out.resize(offset, 0);
+        out.extend_from_slice(sample);
         out
     }
 
