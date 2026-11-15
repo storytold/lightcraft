@@ -489,6 +489,7 @@ fn adopt(s: &mut Session, lib: &mut Lib, key: &str) {
             lib.keys.insert(key.to_string(), id);
             lib.ids.insert(id, key.to_string());
             // a connected Immich server that has the same original links it (no upload, no second asset)
+            #[cfg(not(target_arch = "wasm32"))]
             s.remote.link_queue.push(id);
             (id, Depth::None)
         }
