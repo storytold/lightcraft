@@ -29,11 +29,7 @@ impl Display {
     /// Load the ICC profile at `path`.
     pub fn load(path: &str) -> Result<Display, String> {
         let path = path.trim();
-        let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-        if meta.len() > MAX_PROFILE_BYTES as u64 {
-            return Err(format!("{path}: too large for an ICC profile"));
-        }
-        let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+        let bytes = crate::read_file::read_regular(path, MAX_PROFILE_BYTES as u64).map_err(|e| format!("{path}: {e} (an ICC profile)"))?;
         Display::from_bytes(path, &bytes)
     }
 

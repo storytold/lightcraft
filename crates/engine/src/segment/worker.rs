@@ -47,6 +47,12 @@ pub enum Kind {
     Prepare,
     Clicks(Vec<lightcraft_segment::Click>),
     Text(String),
+    /// The photo's subject among its people and animals (`Sam3::segment_subject`); `focus`: where
+    /// the camera focused (normalized), when the file records it. No result: the subject is
+    /// something else.
+    Subject {
+        focus: Option<(f32, f32)>,
+    },
     /// The parts of the person whose face box is `face` (normalized).
     People {
         face: [f64; 4],
@@ -430,6 +436,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
     let operation = match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Prepare => Operation::Prepare,
         Kind::Text(text) => Operation::Text(text),
+        Kind::Subject { focus } => Operation::Subject(focus.map(|(x, y)| [x, y])),
         Kind::Clicks(clicks) => Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect()),
         Kind::People { .. } => return Err(REMOTE_PEOPLE.into()),
         Kind::Detail { prompt, region: r } => {
@@ -495,6 +502,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         Kind::Text(text) => {
             let (m, enc) = encoded(state, shared, job, placement)?;
             Ok(text_logits(m, enc, &text)?.map(|l| SegMask::from_logits(side, &l)))
+        }
+        Kind::Subject { focus } => {
+            let (m, enc) = encoded(state, shared, job, placement)?;
+            // (the reference score threshold, as Describe uses)
+            Ok(m.segment_subject(enc, focus, 0.5)?.map(|p| SegMask::from_logits(side, &p.logits)))
         }
         Kind::People { face, parts } => {
             let (m, enc) = encoded(state, shared, job, placement)?;
