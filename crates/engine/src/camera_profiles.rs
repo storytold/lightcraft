@@ -130,6 +130,16 @@ fn normalize_for_local_match(model: &str) -> String {
     normalize_for_lookup(model)
 }
 
+/// Resolve an EXIF model spelling to the canonical model spelling using
+/// [`ALIASES`], so spellings that differ by more than case and spacing
+/// (for example "NIKON Z8" versus "NIKON Z 8") match the same profile.
+fn canonical_model(model: &str) -> &str {
+    let needle = normalized_model(model);
+    ALIASES.iter()
+        .find(|(spelling, _)| normalized_model(spelling) == needle)
+        .map_or(model, |(_, canonical)| *canonical)
+}
+
 /// The built-in profile for `model`, if any.
 fn bundled(model: &str) -> Option<CameraProfile> {
     let needle = normalized_model(model);
@@ -157,15 +167,29 @@ fn cache() -> &'static Mutex<HashMap<String, Option<Arc<CameraProfile>>>> {
 
 /// The profile for camera `model`: from [`dir`], else built in; read once per process.
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
+    get_from(model, dir().as_deref())
+}
+
+/// The profile for camera `model` read from `directory`, else built in; read once per process.
+///
+/// `directory` is the profile folder to search for a local profile; [`dir`] resolves it from
+/// [`LIGHTCRAFT_CAMERA_PROFILES`] or the config folder. Separating it lets tests point the lookup
+/// at a temporary directory without changing process environment variables.
+fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>> {
     let model = model.trim();
     if model.is_empty() {
         return None;
     }
+    // EXIF spellings that differ by more than case and spacing (for example
+    // "NIKON Z8") resolve to the canonical model ("NIKON Z 8") before the
+    // local lookup, so a local profile saved under the canonical spelling is
+    // found instead of falling back to the bundled profile.
+    let model = canonical_model(model);
     let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(hit) = cache.get(model) {
         return hit.clone();
     }
-    let path = dir().map(|d| d.join(file_name(model)));
+    let path = directory.as_ref().map(|d| d.join(file_name(model)));
     let profile = match path {
         Some(path) if path.is_file() => match load(&path) {
             Ok(p) if normalize_for_local_match(&p.model) == normalize_for_local_match(model) => Some(Arc::new(p)),
@@ -185,7 +209,7 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     // (e.g. "Nikon Z 6-2" vs saved "NIKON_Z_6_2.json") without a full directory scan.
     let profile = profile.or_else(|| {
         let needle = normalize_for_local_match(model);
-        dir().and_then(|d| {
+        directory.clone().and_then(|d| {
             std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
                 let path = e.path();
                 if path.extension().is_some_and(|x| x == "json") {
@@ -204,7 +228,7 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     // Also try to find a local profile using normalized model name matching (full scan)
     let profile = profile.or_else(|| {
         let needle = normalize_for_local_match(model);
-        dir().and_then(|d| {
+        directory.clone().and_then(|d| {
             std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
                 let path = e.path();
                 if path.extension().is_some_and(|x| x == "json") {
@@ -465,22 +489,54 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // Save a profile under the canonical spelling
-        let mut profile = CameraProfile::new("NIKON Z 6_2", 10, 100, Mat3::IDENTITY, None);
+        let profile = CameraProfile::new("NIKON Z 6_2", 10, 100, Mat3::IDENTITY, None);
         let path = save(&profile, &dir).unwrap();
         assert_eq!(path.file_name().unwrap(), "NIKON_Z_6_2.json");
 
-        // Lookup with a variant spelling should find it
-        let found = get("Nikon Z 6-2");
+        // Point the lookup at the temporary directory so it finds the local profile
+        // instead of the bundled one.
+        let found = get_from("Nikon Z 6-2", Some(&dir));
         assert!(found.is_some(), "Nikon Z 6-2 should find local NIKON Z 6_2 profile");
         assert_eq!(found.as_ref().unwrap().model, "NIKON Z 6_2");
+        assert_eq!(found.as_ref().unwrap().files, 10, "the local NIKON Z 6_2 profile, not the bundled one, must be used");
 
-        let found = get("Nikon Z 6 2");
+        let found = get_from("Nikon Z 6 2", Some(&dir));
         assert!(found.is_some(), "Nikon Z 6 2 should find local NIKON Z 6_2 profile");
         assert_eq!(found.as_ref().unwrap().model, "NIKON Z 6_2");
+        assert_eq!(found.as_ref().unwrap().files, 10, "the local NIKON Z 6_2 profile, not the bundled one, must be used");
 
-        let found = get("NIKON Z 6-2");
+        let found = get_from("NIKON Z 6-2", Some(&dir));
         assert!(found.is_some(), "NIKON Z 6-2 should find local NIKON Z 6_2 profile");
         assert_eq!(found.as_ref().unwrap().model, "NIKON Z 6_2");
+        assert_eq!(found.as_ref().unwrap().files, 10, "the local NIKON Z 6_2 profile, not the bundled one, must be used");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_profile_lookup_uses_normalized_matching_review_regression_1() {
+        // Regression: a local NIKON Z 8 profile must be found by the EXIF
+        // spelling "NIKON Z8" (alias "NIKON Z8" -> "NIKON Z 8") instead of
+        // falling back to the bundled NIKON Z 8 profile.
+        // The lookup is pointed at a temporary directory so the local profile
+        // is visible instead of the bundled one.
+        // The assertion fails until local lookup applies the same alias table
+        // as bundled().
+        let dir = std::env::temp_dir().join(format!("lc-local-z8-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let local = CameraProfile::new("NIKON Z 8", 1, 100, Mat3::IDENTITY, None);
+        let path = save(&local, &dir).unwrap();
+        assert_eq!(path.file_name().unwrap(), "NIKON_Z_8.json");
+
+        let found = get_from("NIKON Z8", Some(&dir));
+        assert!(found.is_some(), "NIKON Z8 should find a NIKON Z 8 profile");
+        assert_eq!(
+            found.unwrap().files,
+            1,
+            "the local NIKON Z 8 profile, not the bundled one, must be used"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
