@@ -121,7 +121,7 @@ mod tests {
                 let mut png = base.clone();
                 let iend = png.len() - 12;
                 png.splice(iend..iend, png_chunk(*b"eXIf", &data));
-                assert_eq!(super::header(&png).unwrap().2, crate::exif::summarize(&data).orientation.unwrap_or(1), "at {at}, value {value}");
+                assert_eq!(super::header(&png).unwrap().2, crate::exif::legacy_reference(&data).orientation.unwrap_or(1), "at {at}, value {value}");
             }
         }
     }
