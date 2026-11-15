@@ -123,6 +123,10 @@ pub struct Metadata {
     pub metering_mode: Option<u16>,
     /// Exif `WhiteBalance` (0 auto, 1 manual).
     pub white_balance: Option<u16>,
+    /// The file carries recorded depth: an iPhone Portrait HEIC's depth map ([`heif::has_depth`]). Read from the
+    /// file's structure only, never from Exif or XMP, and never written.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_depth: bool,
     pub orientation: Option<Orientation>,
     pub gps: Option<Gps>,
     /// Pixel dimensions as recorded (not oriented).
@@ -319,7 +323,13 @@ pub fn extract(bytes: &[u8]) -> Metadata {
     let e = embedded(bytes);
     let exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
     let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok());
-    extract_embedded(e, exif, xmp)
+    with_structure(bytes, extract_embedded(e, exif, xmp))
+}
+
+/// What the container's structure says, beside its metadata blocks: whether a HEIF carries recorded depth.
+fn with_structure(bytes: &[u8], mut m: Metadata) -> Metadata {
+    m.has_depth = heif::is_heif(bytes) && heif::has_depth(bytes);
+    m
 }
 
 /// Read metadata while reporting malformed PSD/PSB containers, embedded EXIF, or embedded XMP instead of treating
@@ -337,7 +347,7 @@ pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
         Some(xmp) => parse_xmp(xmp).ok(),
         None => None,
     };
-    Ok(extract_embedded(e, exif, xmp))
+    Ok(with_structure(bytes, extract_embedded(e, exif, xmp)))
 }
 
 fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metadata {
