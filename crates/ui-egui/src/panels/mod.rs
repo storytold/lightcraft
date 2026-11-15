@@ -72,6 +72,7 @@ pub mod slide_templates;
 pub mod slide_titles;
 pub mod slideshow;
 pub mod strip;
+pub mod suggested;
 pub mod surface_osd;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod sync_pill;

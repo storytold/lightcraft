@@ -168,6 +168,199 @@ fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"id": id.0, "index": index, "name": name}))
 }
 
+/// The faces a decision command was given, as `(photo, region index, the face's box)`, checked before anything changes:
+/// each must be an unnamed Face region of a photo in the library (a stale list changes nothing). Reads nothing but the
+/// catalog, and refuses more than 5,000 at a time.
+fn unnamed_faces_param(s: &Session, cmd: &str, p: &Value) -> Result<Vec<(u64, usize, lcc_geom::Rect)>> {
+    let list = p.get("faces").and_then(Value::as_array).ok_or_else(|| bad(cmd, "missing `faces`"))?;
+    if list.is_empty() || list.len() > 5000 {
+        return Err(bad(cmd, "select between 1 and 5000 faces"));
+    }
+    let mut out = Vec::with_capacity(list.len());
+    let mut seen = std::collections::HashSet::new();
+    for face in list {
+        let id = lcc_catalog::PhotoId(face.get("photo").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "missing `photo`"))?);
+        let index = face.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(cmd, "invalid face `index`"))?;
+        if !seen.insert((id, index)) {
+            continue;
+        }
+        let photo = s.catalog.photo(id).filter(|p| p.in_library()).ok_or_else(|| bad(cmd, "photo is no longer in the catalog"))?;
+        let region = photo.meta.regions.get(index).ok_or_else(|| bad(cmd, "face no longer exists"))?;
+        if region.kind != lcc_meta::RegionKind::Face || region.name.is_some() {
+            return Err(bad(cmd, "a selected face changed; reload the faces and try again"));
+        }
+        if let Some(rect) = face.get("rect") {
+            let rect: lcc_geom::Rect = serde_json::from_value(rect.clone()).map_err(|_| bad(cmd, "invalid `rect`"))?;
+            if rect != region.rect {
+                return Err(bad(cmd, "a selected face changed; reload the faces and try again"));
+            }
+        }
+        out.push((id.0, index, region.rect));
+    }
+    Ok(out)
+}
+
+/// Today, as `people.json` writes the day of a decision (`YYYY-MM-DD`, the day it is where the user is).
+fn today() -> String {
+    chrono::Local::now().date_naive().format("%Y-%m-%d").to_string()
+}
+
+/// `faces.confirmSuggestions {faces: [{photo, index, rect?}]}`: the user agreed with what the named faces suggest. Each
+/// face is given the name that was suggested for it now, so confirming a stale list never names a face something it was
+/// not seen to look like: a face with no suggestion is left alone. One undo step, catalog only; the decisions are kept
+/// in `people.json` (see `faces.suggestionDecisions`).
+fn confirm_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.confirmSuggestions";
+    let chosen = unnamed_faces_param(s, C, p)?;
+    // what the named faces suggest for these faces now (never a stale name from the list the user looked at)
+    let mut current: Vec<(u64, usize, lcc_geom::Rect)> = chosen.iter().map(|(photo, index, rect)| (*photo, *index, *rect)).collect();
+    let arranged = imp::arrange_unnamed(s, &mut current, current.len());
+    let mut by_photo: std::collections::BTreeMap<u64, Vec<(usize, String)>> = std::collections::BTreeMap::new();
+    let mut decisions: Vec<(u64, usize, String)> = Vec::new();
+    for (photo, index, _) in &chosen {
+        let Some((name, _)) = arranged.suggestions.get(&(*photo, *index)) else { continue };
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        by_photo.entry(*photo).or_default().push((*index, name.to_string()));
+        decisions.push((*photo, *index, name.to_string()));
+    }
+    let mut named = 0usize;
+    let mut ops = Vec::new();
+    for (photo, faces) in by_photo {
+        let id = lcc_catalog::PhotoId(photo);
+        let Some(p) = s.catalog.photo(id) else { continue };
+        let mut meta = p.meta.clone();
+        for (index, name) in faces {
+            if let Some(region) = meta.regions.get_mut(index).filter(|r| r.kind == lcc_meta::RegionKind::Face) {
+                apply_name(region, &Some(name));
+                named += 1;
+            }
+        }
+        ops.push(Op::SetMeta { id, meta: Box::new(meta) });
+    }
+    if named > 0 {
+        s.commit("Confirm Faces", Op::Batch { ops })?;
+        s.skip_auto_write = true;
+    }
+    // the decisions are remembered so the groups drop them before the face lists are next read
+    let day = today();
+    let kept = s
+        .with_people(|store| {
+            let mut kept = 0usize;
+            for (photo, index, name) in &decisions {
+                if store.decide(*photo, *index, name, crate::people_store::Verdict::Confirmed, &day).is_ok() {
+                    kept += 1;
+                }
+            }
+            kept
+        })
+        .unwrap_or(0);
+    Ok(json!({"confirmed": named, "suggested": chosen.len(), "kept": kept}))
+}
+
+/// `faces.rejectSuggestions {faces: [{photo, index, rect?}]}`: the user said a suggested face is not that person. The
+/// face stays where it is (unnamed and unknown, not ignored, still detected and never named automatically); the person
+/// it was suggested as is remembered, so it is not suggested as them again. Nothing on a photo changes, so this makes no
+/// catalog undo step: the app offers a toast that calls `faces.undoSuggestionDecision`.
+fn reject_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.rejectSuggestions";
+    let chosen = unnamed_faces_param(s, C, p)?;
+    // a rejected face is not suggested again, so the groups are worked out here exactly as the Suggested category does
+    let mut current: Vec<(u64, usize, lcc_geom::Rect)> = chosen.iter().map(|(photo, index, rect)| (*photo, *index, *rect)).collect();
+    let arranged = imp::arrange_unnamed(s, &mut current, current.len());
+    let day = today();
+    let decisions: Vec<(u64, usize, String)> = chosen
+        .iter()
+        .filter_map(|(photo, index, _)| Some((*photo, *index, arranged.suggestions.get(&(*photo, *index))?.0.clone())))
+        .collect();
+    let kept = s
+        .with_people(|store| {
+            let mut kept = 0usize;
+            for (photo, index, name) in &decisions {
+                if store.decide(*photo, *index, name, crate::people_store::Verdict::Rejected, &day).is_ok() {
+                    kept += 1;
+                }
+            }
+            kept
+        })
+        .map_err(crate::EngineError::Other)?;
+    Ok(json!({"rejected": kept, "faces": chosen.len()}))
+}
+
+/// `faces.undoSuggestionDecision {faces: [{photo, index}]}`: forget what was decided about these faces, so the person
+/// they were rejected as is suggested again and they can be confirmed or rejected afresh. Nothing on a photo changes,
+/// so this has no catalog undo step of its own (the app offers a toast for it).
+fn undo_suggestion_decision(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.undoSuggestionDecision";
+    let list = p.get("faces").and_then(Value::as_array).ok_or_else(|| bad(C, "missing `faces`"))?;
+    if list.is_empty() || list.len() > 5000 {
+        return Err(bad(C, "select between 1 and 5000 faces"));
+    }
+    let mut keys = std::collections::BTreeSet::new();
+    for face in list {
+        let photo = face.get("photo").and_then(Value::as_u64).ok_or_else(|| bad(C, "missing `photo`"))?;
+        let index =
+            face.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "invalid face `index`"))?;
+        keys.insert((photo, index));
+    }
+    let removed = s
+        .with_people(|store| {
+            let before = store.decisions.len();
+            store.decisions.retain(|d| !keys.contains(&(d.photo, d.index)));
+            before - store.decisions.len()
+        })
+        .map_err(crate::EngineError::Other)?;
+    Ok(json!({"removed": removed, "faces": keys.len()}))
+}
+
+/// Most decisions `faces.suggestionDecisions` lists at once.
+const MAX_DECISIONS_LISTED: usize = 2000;
+
+/// `faces.suggestionDecisions {photo?}`: what was decided about suggested faces (rejected, or confirmed), newest
+/// decisions included, from `people.json`.
+fn suggestion_decisions(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.suggestionDecisions";
+    let photo = match p.get("photo") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().ok_or_else(|| bad(C, "`photo` must be a photo id"))?),
+    };
+    // a page at a time, as `faces.ignored` lists: at most `MAX_DECISIONS_LISTED` rows, newest first (the latest decisions
+    // are the likeliest undone), after `after` of the previous page; a library can hold a decision about every face it knows
+    let start = match p.get("after") {
+        None | Some(Value::Null) => 0,
+        Some(v) => usize::try_from(v.as_u64().ok_or_else(|| bad(C, "`after` must be a count"))?).map_err(|_| bad(C, "`after` is too large"))?,
+    };
+    let limit = match p.get("limit") {
+        None | Some(Value::Null) => MAX_DECISIONS_LISTED,
+        Some(v) => usize::try_from(v.as_u64().ok_or_else(|| bad(C, "`limit` must be a count"))?)
+            .map_err(|_| bad(C, "`limit` is too large"))?
+            .clamp(1, MAX_DECISIONS_LISTED),
+    };
+    let store = s.people_store();
+    let mut listed: Vec<&crate::people_store::SuggestionDecision> = store.decisions.iter().filter(|d| photo.is_none_or(|id| d.photo == id)).collect();
+    listed.sort_by(|a, b| b.decided.cmp(&a.decided).then_with(|| (b.photo, b.index).cmp(&(a.photo, a.index))));
+    Ok(json!({"total": listed.len(), "decisions": decisions_page(&listed, start, limit)}))
+}
+
+/// One page of `listed` (already in the order to show), from `start`, `limit` long.
+fn decisions_page<'a>(listed: &[&'a crate::people_store::SuggestionDecision], start: usize, limit: usize) -> Vec<Value> {
+    let list: Vec<Value> = listed
+        .iter()
+        .skip(start)
+        .take(limit)
+        .map(|d| {
+            let verdict = match d.verdict {
+                crate::people_store::Verdict::Rejected => "rejected",
+                crate::people_store::Verdict::Confirmed => "confirmed",
+            };
+            json!({"photo": d.photo, "index": d.index, "person": d.person, "verdict": verdict, "decided": d.decided})
+        })
+        .collect();
+    list
+}
+
 /// `faces.renamePerson {from, to, merge?}`: give every in-library face of `from` the exact name `to`, as one undo
 /// step. Names match the People view (trimmed, case-insensitive). A `to` that is already someone else is refused
 /// unless `merge` is set, and then the two people become one. The sidecar is not touched, and a refusal changes nothing.
@@ -294,11 +487,61 @@ struct Arranged {
     groups: std::collections::HashMap<(u64, usize), usize>,
 }
 
-/// `faces.unnamed {limit?: 600}`: the faces nobody has named, to be named a group at a time. With a recognition model
-/// chosen, faces that look alike are next to each other, and a face the named faces recognise carries the name they suggest.
+/// The unnamed faces `shown` that the named ones recognise, grouped by the name they suggest (issue #1050): one entry
+/// per person suggested, the people with the most suggested faces first (then by name), and within a group the faces
+/// that look most like them first (then in photo order). Each face is in one group, the best name it was given.
+///
+/// Only the faces listed are in a group, so a group says how many of the listed faces it holds; `total` of
+/// `faces.unnamed` says how many unnamed faces the library has.
+fn suggestion_groups(s: &Session, shown: &[(u64, usize, lcc_geom::Rect)], suggestions: &std::collections::HashMap<(u64, usize), (String, f32)>) -> Value {
+    // the name each suggested person was first shown as, by lower-cased name (`Ann` and `ann` are one person)
+    let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut groups: std::collections::HashMap<String, Vec<(u64, usize, lcc_geom::Rect, f32)>> = std::collections::HashMap::new();
+    for (photo, index, rect) in shown {
+        let Some((name, score)) = suggestions.get(&(*photo, *index)) else { continue };
+        let key = name.trim().to_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        names.entry(key.clone()).or_insert_with(|| name.trim().to_string());
+        groups.entry(key).or_default().push((*photo, *index, *rect, *score));
+    }
+    let mut out: Vec<Value> = groups
+        .into_iter()
+        .filter_map(|(key, mut faces)| {
+            let name = names.get(&key)?.clone();
+            faces.sort_by(|a, b| b.3.total_cmp(&a.3).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
+            let list: Vec<Value> = faces
+                .iter()
+                .map(|(photo, index, rect, score)| {
+                    let view = s.face_view(lcc_catalog::PhotoId(*photo), *rect);
+                    json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "score": score})
+                })
+                .collect();
+            Some(json!({"name": name, "total": faces.len(), "faces": list}))
+        })
+        .collect();
+    // the most suggested faces first, then by name, so the groups do not move between frames
+    out.sort_by(|a, b| {
+        let count = |v: &Value| v["total"].as_u64().unwrap_or(0);
+        let name = |v: &Value| v["name"].as_str().unwrap_or("").to_lowercase();
+        count(b).cmp(&count(a)).then_with(|| name(a).cmp(&name(b)))
+    });
+    Value::Array(out)
+}
+
+/// `faces.unnamed {limit?: 600, bySuggestion?: false}`: the faces nobody has named, to be named a group at a time. With
+/// a recognition model chosen, faces that look alike are next to each other, and a face the named faces recognise
+/// carries the name they suggest. With `bySuggestion: true`, `groups` holds those suggested faces under the person
+/// suggested (issue #1050), so one person's suggestions are reviewed together.
 fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "faces.unnamed";
     let limit = p.get("limit").and_then(Value::as_u64).map_or(600, |n| usize::try_from(n).unwrap_or(600)).clamp(1, MAX_UNNAMED);
-    let scope = scope_of(s, "faces.unnamed", p)?;
+    let by_suggestion = match p.get("bySuggestion") {
+        None => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(C, "`bySuggestion` must be true or false"))?,
+    };
+    let scope = scope_of(s, C, p)?;
     let mut all: Vec<(u64, usize, lcc_geom::Rect)> = Vec::new();
     for ph in s.catalog.photos().filter(|ph| ph.in_library() && in_scope(&scope, ph.id.0)) {
         for (index, r) in ph.meta.regions.iter().enumerate() {
@@ -316,11 +559,30 @@ fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
         .map(|(photo, index, rect)| {
             let view = s.face_view(lcc_catalog::PhotoId(*photo), *rect);
             let suggestion = arranged.suggestions.get(&(*photo, *index)).map(|(name, score)| json!({"name": name, "score": score}));
-            let group = arranged.groups.get(&(*photo, *index));
-            json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "suggestion": suggestion, "group": group})
+            let alike = arranged.groups.get(&(*photo, *index));
+            json!({"photo": photo, "index": index, "rect": rect_json(rect), "view": rect_json(&view), "suggestion": suggestion, "group": alike})
         })
         .collect();
-    Ok(json!({"total": total, "faces": faces, "ordered": arranged.ordered, "ready": arranged.ready}))
+    // what the user said about a face's suggestion holds: a face rejected as the person it was suggested as is not put
+    // under them again (issue #1050); the face itself stays in the list, unknown
+    let (mut faces, mut rejected, mut suggestions) = (faces, 0usize, arranged.suggestions.clone());
+    // (`faces` is one entry per listed face, in `all`'s order)
+    for ((photo, index, _), face) in all.iter().zip(faces.iter_mut()) {
+        let Some((name, _)) = suggestions.get(&(*photo, *index)) else { continue };
+        if !s.people_store().rejected_as(*photo, *index, name) {
+            continue;
+        }
+        suggestions.remove(&(*photo, *index));
+        rejected += 1;
+        if let Value::Object(map) = face {
+            map.insert("suggestion".into(), Value::Null);
+        }
+    }
+    let mut out = json!({"total": total, "faces": faces, "ordered": arranged.ordered, "ready": arranged.ready, "rejected": rejected});
+    if by_suggestion && let Value::Object(map) = &mut out {
+        map.insert("groups".into(), suggestion_groups(s, &all, &suggestions));
+    }
+    Ok(out)
 }
 
 /// What looking for faces that resemble a person found.
@@ -1540,7 +1802,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Unnamed Faces",
             [],
             None,
-            "{limit?: 600, scope?: \"filter\"} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready}: the faces nobody has named (with `scope: \"filter\"`, only in the photos the library filter shows, any person filter aside); with a recognition model chosen, look-alikes are next to each other and a face the named ones recognise carries the name they suggest. `view` is the box to show the face by. Name them with `faces.nameFaces`",
+            "{limit?: 600, scope?: \"filter\", bySuggestion?: false} → {total, faces: [{photo, index, rect, view, suggestion: {name, score} | null}], ordered, ready, groups?}: the faces nobody has named (with `scope: \"filter\"`, only in the photos the library filter shows, any person filter aside); with a recognition model chosen, look-alikes are next to each other and a face the named ones recognise carries the name they suggest, and with `bySuggestion: true` `groups` lists those faces under the person suggested ([{name, total, faces: [{photo, index, rect, view, score}]}], the most faces first). `view` is the box to show the face by. Name them with `faces.nameFaces`, ignore them with `faces.ignore`",
             super::always,
             unnamed
         ),
@@ -1552,6 +1814,42 @@ pub fn specs() -> Vec<CommandSpec> {
             "{faces: [{photo, index}], name} → {named, photos}: name (or, with a null or empty name, clear) many face regions as one undoable step; the sidecar is not touched",
             super::always,
             name_faces
+        ),
+        cmd!(
+            "faces.confirmSuggestions",
+            "Confirm Suggested Faces",
+            [],
+            None,
+            "{faces: [{photo, index, rect?}]} → {confirmed, suggested, kept}: the user agreed with what the named faces suggest for these unnamed faces: each is named the person suggested for it now (a stale list never names a face something it was not seen to look like), one undo step, catalog only; what was decided is kept in people.json (people.forgetAll empties that)",
+            super::always,
+            confirm_suggestions
+        ),
+        cmd!(
+            "faces.rejectSuggestions",
+            "Reject Suggested Faces",
+            [],
+            None,
+            "{faces: [{photo, index, rect?}]} → {rejected, faces}: the user said a suggested face is not the person it was suggested as: the face stays unnamed and is not ignored, and that person is never suggested for it again; kept in people.json (people.forgetAll empties that)",
+            super::always,
+            reject_suggestions
+        ),
+        cmd!(
+            "faces.undoSuggestionDecision",
+            "Undo Face Decision",
+            [],
+            None,
+            "{faces: [{photo, index}]} → {removed, faces}: forget what was decided about these faces, so a rejected person is suggested again and the face can be reviewed afresh; nothing on a photo changes",
+            super::always,
+            undo_suggestion_decision
+        ),
+        cmd!(
+            query "faces.suggestionDecisions",
+            "Face Decisions",
+            [],
+            None,
+            "{photo?, limit?: 2000, after?} → {total, decisions: [{photo, index, person, verdict: \"rejected\" | \"confirmed\", decided}]}: what was decided about suggested faces (faces.rejectSuggestions / faces.confirmSuggestions), newest first, a page of at most `limit` (2000) after `after` of the last page; `total` counts them all",
+            super::always,
+            suggestion_decisions
         ),
         cmd!(
             query "faces.person",

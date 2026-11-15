@@ -1,6 +1,8 @@
 # Plan: group unknown faces in People (issue #259)
 
-Status: **plan; the remaining part (grouping) is not built.** Refreshed 2026-11-14 from draft PR #492 (2026-10-25).
+Status: **partly built.** The Suggested category groups the unnamed faces under the person they are suggested as and
+reviews them a person at a time (issue #1050, 2026-11-15). The remaining part — stacks of unknown look-alikes with no
+name — is a plan. Refreshed 2026-11-15 from draft PR #492 (2026-10-25).
 
 ## Done on main
 
@@ -11,8 +13,11 @@ Status: **plan; the remaining part (grouping) is not built.** Refreshed 2026-11-
   `faces.ignored` (paged list). Ignored faces are stored as `RegionKind::IgnoredFace` (catalog format 14), so rescans
   do not find them again, and they are left out of People, person pages, Unnamed faces and matching. The People header
   offers **Restore N ignored faces**. See `docs/faces.md` ▸ Ignored faces.
-- **Reject = Ignore** was chosen (old option A): one stored state, one command. A per-person "not this person" store
-  was not built; revisit only if users ask for it.
+- **Reject = Ignore** was the choice for the batch bar (old option A): one stored state, one command there. Issue #1050
+  then asked for a rejection that is *not* an ignore — the face stays unknown and still detected, and the person it was
+  suggested as is never suggested for it again — which is what the Suggested category's **Reject all** does now
+  (`faces.rejectSuggestions`, a decision in `people.json`; see `docs/faces.md` ▸ Suggested faces). The batch bar on a
+  person's page still rejects by ignoring.
 - Ignore state lives in the catalog only (old option A); nothing is written to XMP.
 
 ## Remaining: group unknown faces into stacks

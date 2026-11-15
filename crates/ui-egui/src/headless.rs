@@ -1914,10 +1914,17 @@ mod tests {
         h.step();
         h.step();
         let tiles = |h: &mut Headless| h.request("ui.widgets", json!({"filter": "unnamed-face:"}), t)["result"].as_array().map_or(0, Vec::len);
-        // the named person is a card, and the four unnamed faces are tiles below
+        // the four unnamed faces are tiles of Unknown; the named person is a card under Confirmed (issue #1050), and
+        // their card opens their page
+        let r = h.request("ui.clickWidget", json!({"id": "person:Jane Doe"}), t);
+        assert_eq!(r["ok"], false, "the named are not in Unknown");
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "button:peopleCategory-confirmed"}), t)["ok"], true);
+        h.step();
+        h.step();
         let r = h.request("ui.clickWidget", json!({"id": "person:Jane Doe"}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.request("engine.execute", json!({"command": "view.people"}), t);
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "button:peopleCategory-unknown"}), t)["ok"], true);
         h.step();
         h.step();
         assert_eq!(tiles(&mut h), 4);
@@ -2031,6 +2038,103 @@ mod tests {
         h.request("ui.key", json!({"key": "escape"}), t);
         h.step();
         assert_eq!((h.app.ui.view, h.app.ui.person_page.clone()), (ViewMode::People, None));
+    }
+
+    /// Issue #1050: the People view's three categories. The faces recognition matched to someone wait under Suggested
+    /// in their person's group, with **Confirm all** over a group and **✓** / **✗** / **−** over one face: confirming
+    /// names them that person in one undo step, rejecting keeps them unnamed and unignored (Undo comes back through
+    /// the toast), and both leave the groups at once.
+    #[test]
+    fn suggested_faces_are_grouped_under_people_and_confirmed_or_rejected() {
+        use lcc_catalog::Op;
+        let mut h = demo([1500.0, 1000.0]);
+        let t = Duration::from_secs(10);
+        let ids: Vec<_> = h.app.session.catalog.photos().map(|p| p.id).take(2).collect();
+        let face = |x: f64, name: Option<&str>| lcc_meta::Region {
+            rect: lcc_geom::Rect { x0: x, y0: 0.2, x1: x + 0.2, y1: 0.55 },
+            kind: lcc_meta::RegionKind::Face,
+            name: name.map(str::to_string),
+            description: None,
+        };
+        for (id, regions) in [
+            (ids[0], vec![face(0.1, Some("Jane Doe")), face(0.5, None)]),
+            (ids[1], vec![face(0.1, Some("Jane Doe")), face(0.5, None), face(0.7, None)]),
+        ] {
+            let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+            meta.regions = regions;
+            h.app.session.commit("setup", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        }
+        let region = |h: &Headless, id: lcc_catalog::PhotoId, i: usize| {
+            let r = h.app.session.catalog.photo(id).unwrap().meta.regions[i].clone();
+            (r.kind, r.name)
+        };
+        // nothing is recognised in this demo library, so what the engine would answer is put where the view reads it
+        let boxes = [ids[0], ids[1], ids[1]];
+        let places = [1usize, 1, 2];
+        let views: Vec<serde_json::Value> = boxes
+            .iter()
+            .zip(places.iter())
+            .map(|(id, i)| {
+                let r = h.app.session.catalog.photo(*id).unwrap().meta.regions[*i].rect;
+                json!({"x0": r.x0, "y0": r.y0, "x1": r.x1, "y1": r.y1})
+            })
+            .collect();
+        h.app.caches.unnamed = Some((
+            h.app.session.catalog.revision,
+            h.app.caches.faces_indexed,
+            0.0,
+            std::sync::Arc::new(super::unnamed::parse(&json!({
+                "total": 3, "ordered": true, "ready": true, "rejected": 0,
+                "faces": [
+                    {"photo": ids[0].0, "index": 1, "rect": views[0].clone(), "view": views[0].clone(), "suggestion": {"name": "Jane Doe", "score": 0.7}},
+                    {"photo": ids[1].0, "index": 1, "rect": views[1].clone(), "view": views[1].clone(), "suggestion": {"name": "Jane Doe", "score": 0.6}},
+                    {"photo": ids[1].0, "index": 2, "rect": views[2].clone(), "view": views[2].clone(), "suggestion": null}
+                ],
+                "groups": [{"name": "Jane Doe", "total": 2, "faces": [
+                    {"photo": ids[0].0, "index": 1, "view": views[0].clone(), "score": 0.7},
+                    {"photo": ids[1].0, "index": 1, "view": views[1].clone(), "score": 0.6}
+                ]}]
+            }))),
+        ));
+        h.request("engine.execute", json!({"command": "view.people"}), t);
+        h.settle(SETTLE);
+        h.step();
+        // the three categories are on screen, and a click shows one
+        let buttons = h.request("ui.widgets", json!({"filter": "button:peopleCategory-"}), t).to_string();
+        for category in ["unknown", "suggested", "confirmed"] {
+            assert!(buttons.contains(&format!("button:peopleCategory-{category}")), "{category}: {buttons}");
+        }
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "button:peopleCategory-suggested"}), t)["ok"], true);
+        h.step();
+        h.step();
+        assert_eq!(h.app.ui.people_category, crate::state::PeopleCategory::Suggested);
+        // one group, under the person suggested, holding both of her faces
+        let widgets = h.request("ui.widgets", json!({"filter": "suggested"}), t).to_string();
+        for id in [
+            "suggested:confirmAll:Jane Doe".to_string(),
+            "suggested:rejectAll:Jane Doe".to_string(),
+            format!("suggested:face:{}:1", ids[1].0),
+        ] {
+            assert!(widgets.contains(&id), "{id} is on screen: {widgets}");
+        }
+        // confirming one names it her, in one undo step
+        let undo = h.app.session.undo.len();
+        assert_eq!(h.request("ui.clickWidget", json!({"id": format!("suggested:confirm:{}:1", ids[0].0)}), t)["ok"], true);
+        h.step();
+        h.step();
+        assert_eq!(region(&h, ids[0], 1), (lcc_meta::RegionKind::Face, Some("Jane Doe".to_string())));
+        assert_eq!(h.app.session.undo.len(), undo + 1, "one step");
+        // rejecting the other leaves it a face, unnamed, and nothing on the catalog to undo: the toast carries the way back
+        assert_eq!(h.request("ui.clickWidget", json!({"id": format!("suggested:reject:{}:1", ids[1].0)}), t)["ok"], true);
+        h.step();
+        h.step();
+        assert_eq!(region(&h, ids[1], 1), (lcc_meta::RegionKind::Face, None), "not named, not ignored");
+        assert_eq!(h.app.session.undo.len(), undo + 1, "a rejection changes no photo");
+        assert!(h.app.ui.toast_action.is_some(), "the message offers Undo");
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "button:toastAction"}), t)["ok"], true);
+        h.step();
+        h.step();
+        assert!(h.app.ui.toast_action.is_none(), "Undo ran once");
     }
 
     /// The name field under the unnamed faces is a shared text field: right-click ▸ Paste puts the
