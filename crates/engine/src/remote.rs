@@ -29,7 +29,20 @@ pub(crate) enum Msg {
     LinkDone {
         account: String,
         result: Result<Option<String>, ImmichError>,
+        /// The cursor file of the library the pass was started in (the cursor is the catalog's).
+        home: Option<PathBuf>,
     },
+    /// The checksum lookup of newly imported / hashed photos finished ([`State::link_queue`]).
+    LinkChecked,
+    /// A server call made with `background: true` finished: its result, kept under `key` until
+    /// `immich.answer` takes it.
+    Answer {
+        key: String,
+        value: serde_json::Value,
+    },
+    /// `immich.importPeople {background}`: the faces were read; the catalog is written on the
+    /// session thread.
+    People(Box<crate::cmd::immich::sync::PeopleDone>),
     Downloaded(Box<Downloaded>),
     Original {
         photo: PhotoId,
@@ -206,6 +219,10 @@ pub(crate) struct Downloaded {
     /// (asset, where it was saved) or the error.
     pub items: Vec<(Asset, Result<PathBuf, ImmichError>)>,
     pub skipped: usize,
+    /// Asked-for assets that are linked to a catalog photo already (not downloaded).
+    pub already_linked: Vec<String>,
+    /// Asked-for assets whose checksum the catalog already has (not downloaded): to be linked.
+    pub present: Vec<Asset>,
 }
 
 /// Progress of one account's link pass.
@@ -232,6 +249,8 @@ pub struct ImportProgress {
     pub requested: usize,
     pub imported: usize,
     pub skipped: usize,
+    /// Of the skipped: assets whose photo the catalog already had (now linked, and in the album).
+    pub present: usize,
     pub failed: Vec<(String, String)>,
 }
 
@@ -252,6 +271,17 @@ pub struct State {
     /// Where link-only previews and fetched originals go when the library is not a folder.
     pub cache_dir: Option<PathBuf>,
     pub(crate) links: HashMap<String, LinkProgress>,
+    /// Photos that were just imported or got their SHA-1: `remote.pump` asks each connected
+    /// server (on a worker) whether it has their checksums and links the ones it has. The link
+    /// pass alone would never find them: it lists only assets changed since its last run, and
+    /// these assets may have been on the server for years.
+    pub(crate) link_queue: Vec<PhotoId>,
+    /// That lookup is on a worker.
+    pub(crate) link_checking: bool,
+    /// Server calls running on workers for a command's `background: true` (their keys), and the
+    /// finished ones' results until `immich.answer` takes them.
+    pub(crate) asking: HashSet<String>,
+    pub(crate) answers: HashMap<String, serde_json::Value>,
     pub(crate) import: ImportProgress,
     pub(crate) fetching: HashSet<PhotoId>,
     pub(crate) fetch_errors: HashMap<PhotoId, String>,
@@ -296,6 +326,10 @@ impl Default for State {
             store: None,
             cache_dir: None,
             links: HashMap::new(),
+            link_queue: Vec::new(),
+            link_checking: false,
+            asking: HashSet::new(),
+            answers: HashMap::new(),
             import: ImportProgress::default(),
             fetching: HashSet::new(),
             fetch_errors: HashMap::new(),
