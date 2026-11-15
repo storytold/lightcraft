@@ -343,5 +343,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "いずれかを含む写真: {count}枚。下位のキーワードも削除されます。取り消すと元に戻ります。",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "{n}個のフォルダをライブラリから除去しますか？ 読み込まれた写真: {count}枚。",
   "…and {n} more": "…ほか{n}個",
-  "{n} keywords": "{n}個のキーワード"
+  "{n} keywords": "{n}個のキーワード",
+  "Queued: it starts after {n} more": "キューに追加: あと {n} 件の後に開始します",
+  "Left alone: {n} (synchronize again to review them)": "そのまま: {n} 件（再度同期して確認してください）",
+  "Starts after {n} more": "あと {n} 件の後に開始します",
+  "Remove from Queue: {label}": "キューから削除: {label}"
 }

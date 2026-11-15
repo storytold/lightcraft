@@ -342,5 +342,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Zdjęcia, które mają jedno z nich: {count}. Słowa kluczowe pod nimi też zostaną usunięte. Cofnij je przywróci.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "Usunąć foldery ({n}) z biblioteki? Zdjęcia z nich zaimportowane: {count}.",
   "…and {n} more": "…i {n} więcej",
-  "{n} keywords": "Słowa kluczowe: {n}"
+  "{n} keywords": "Słowa kluczowe: {n}",
+  "Queued: it starts after {n} more": "W kolejce: rozpocznie się po kolejnych zadaniach ({n})",
+  "Left alone: {n} (synchronize again to review them)": "Pominięto: {n} (zsynchronizuj ponownie, aby je sprawdzić)",
+  "Starts after {n} more": "Rozpocznie się po kolejnych zadaniach ({n})",
+  "Remove from Queue: {label}": "Usuń z kolejki: {label}"
 }

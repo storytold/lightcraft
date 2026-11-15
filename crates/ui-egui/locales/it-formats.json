@@ -342,5 +342,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Foto che ne hanno uno: {count}. Vengono eliminate anche le parole chiave sotto di esse. Annulla le ripristina.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "Rimuovere {n} cartelle dalla libreria? Foto importate da esse: {count}.",
   "…and {n} more": "…e altri {n}",
-  "{n} keywords": "{n} parole chiave"
+  "{n} keywords": "{n} parole chiave",
+  "Queued: it starts after {n} more": "In coda: parte dopo altre attività ({n})",
+  "Left alone: {n} (synchronize again to review them)": "Lasciati invariati: {n} (sincronizza di nuovo per rivederli)",
+  "Starts after {n} more": "Parte dopo altre attività ({n})",
+  "Remove from Queue: {label}": "Rimuovi dalla coda: {label}"
 }

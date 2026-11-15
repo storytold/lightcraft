@@ -342,5 +342,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Foton som har något av dem: {count}. Nyckelorden under dem raderas också. Ångra tar tillbaka dem.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "Ta bort {n} mappar från biblioteket? Foton som importerats från dem: {count}.",
   "…and {n} more": "…och {n} till",
-  "{n} keywords": "{n} nyckelord"
+  "{n} keywords": "{n} nyckelord",
+  "Queued: it starts after {n} more": "I kö: startar efter {n} till",
+  "Left alone: {n} (synchronize again to review them)": "Lämnade orörda: {n} (synkronisera igen för att granska dem)",
+  "Starts after {n} more": "Startar efter {n} till",
+  "Remove from Queue: {label}": "Ta bort från kön: {label}"
 }

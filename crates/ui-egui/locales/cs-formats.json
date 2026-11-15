@@ -342,5 +342,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Fotografie, které mají některé z nich: {count}. Smažou se i klíčová slova pod nimi. Zpět je vrátí.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "Odebrat složky ({n}) z knihovny? Fotografie z nich importované: {count}.",
   "…and {n} more": "…a dalších {n}",
-  "{n} keywords": "Klíčová slova: {n}"
+  "{n} keywords": "Klíčová slova: {n}",
+  "Queued: it starts after {n} more": "Ve frontě: začne po dalších úlohách: {n}",
+  "Left alone: {n} (synchronize again to review them)": "Ponecháno: {n} (pro kontrolu synchronizujte znovu)",
+  "Starts after {n} more": "Začne po dalších úlohách: {n}",
+  "Remove from Queue: {label}": "Odebrat z fronty: {label}"
 }

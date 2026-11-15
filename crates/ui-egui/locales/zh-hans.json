@@ -1920,7 +1920,6 @@
   "Skipped: files that can't be read": "已跳过：无法读取的文件",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "此文件夹不存在：它已被移动或重命名，或其磁盘未连接。",
   "Relink photos whose file was renamed or moved": "重新链接文件被重命名或移动的照片",
-  "A folder is already being synchronized": "已有文件夹正在同步",
   "Synchronizing…": "正在同步…",
   "Relinked": "已重新链接",
   "Removed": "已移除",
@@ -1930,8 +1929,6 @@
   "Stopped at the scan limit: there may be more photos": "已在扫描上限处停止：可能还有更多照片",
   "Stopped by an error (see the log)": "因错误而停止（见日志）",
   "Not saved": "未保存",
-  "A folder is being synchronized": "正在同步文件夹",
-  "Wait for the import to finish": "请等待导入完成",
   "Appearance": "外观",
   "Appearance Mode": "外观模式",
   "Sync with System": "与系统同步",
@@ -2443,5 +2440,9 @@
   "That includes the photos in the folders inside them.": "其中也包括这些文件夹内各子文件夹中的照片。",
   "The photos stay in All Photos. Undo brings the albums back.": "照片仍保留在“所有照片”中。撤销可恢复这些相册。",
   "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "照片仍保留在“所有照片”中。删除文件夹也会删除其中的相册。可以撤销。",
-  "Another library was opened since this window appeared: nothing was changed": "此窗口出现后打开了另一个图库：未更改任何内容"
+  "Another library was opened since this window appeared: nothing was changed": "此窗口出现后打开了另一个图库：未更改任何内容",
+  "Queued: it starts when the task ahead of it ends": "已加入队列：前一个任务结束后开始",
+  "Another library was opened: nothing was done": "已打开另一个图库：未执行任何操作",
+  "Photos of the folder changed while it was read: nothing was done": "读取期间文件夹中的照片发生了变化：未执行任何操作",
+  "Starts next": "接下来开始"
 }

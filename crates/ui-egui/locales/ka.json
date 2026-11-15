@@ -64,8 +64,6 @@
   "A dialog taller than the window no longer runs off it (issue #781): on a 1366×768 screen the Export dialog's title": "ფანჯარაზე მაღალი დიალოგი აღარ გადის მის საზღვრებს გარეთ (ხარვეზი #781): 1366×768 ეკრანზე ექსპორტის დიალოგის სათაური",
   "A fast, non-destructive photo library and raw developer: your originals stay untouched, and every edit can be revisited or reset.": "სწრაფი, არადესტრუქციული ფოტობიბლიოთეკა და RAW-დამუშავების ინსტრუმენტი: ორიგინალები უცვლელი რჩება, ყოველი რედაქტირების ნახვა ან გაუქმება კი შესაძლებელია.",
   "A filter is hiding this view's photos: change it, or clear it (View → Clear Filters)": "ფილტრი მალავს ამ ხედის ფოტოებს: შეცვალეთ ან გაასუფთავეთ იგი (ხედი → ფილტრების გასუფთავება)",
-  "A folder is already being synchronized": "საქაღალდე უკვე სინქრონიზდება",
-  "A folder is being synchronized": "საქაღალდე სინქრონიზდება",
   "A keyword set needs a name": "საკვანძო სიტყვების ნაკრებს სახელი სჭირდება",
   "A label follows its folder when it is renamed or moved in LightCraft, together with the labels of the folders": "იარლიყი თავის საქაღალდეს მიჰყვება, როცა ის LightCraft-ში გადაერქმევა ან გადაიტანება, მასში მყოფი საქაღალდეების",
   "A library holding thousands of presets (a Lightroom collection imported whole: 11 000 presets, a 42 MB": "ბიბლიოთეკა ათასობით პრესეტით (მთლიანად იმპორტირებული Lightroom-ის კოლექცია: 11 000 პრესეტი, 42 MB-იანი",
@@ -2263,7 +2261,6 @@
   "Visualize range": "დიაპაზონის ვიზუალიზაცია",
   "Vivid": "ცოცხალი",
   "Vivid Pop": "ცოცხალი და მკვეთრი",
-  "Wait for the import to finish": "დაელოდეთ იმპორტის დასრულებას",
   "Waiting to start…": "დაწყების მოლოდინში…",
   "Warm Film": "თბილი ფირი",
   "Warm Glow": "თბილი ნათება",
@@ -3709,5 +3706,9 @@
   "One of them is a whole disk: remove a disk by itself": "ერთ-ერთი მათგანი მთელი დისკია: დისკი ცალკე მოაშორეთ",
   "Remove Folders from Library": "საქაღალდეების ბიბლიოთეკიდან ამოღება",
   "That includes the photos in the folders inside them.": "ეს მოიცავს მათში არსებული საქაღალდეების ფოტოებსაც.",
-  "The photos stay in All Photos. Undo brings the albums back.": "ფოტოები „ყველა ფოტოში“ რჩება. „დაბრუნება“ ალბომებს აღადგენს."
+  "The photos stay in All Photos. Undo brings the albums back.": "ფოტოები „ყველა ფოტოში“ რჩება. „დაბრუნება“ ალბომებს აღადგენს.",
+  "Queued: it starts when the task ahead of it ends": "რიგშია: დაიწყება, როცა წინა ამოცანა დასრულდება",
+  "Another library was opened: nothing was done": "სხვა ბიბლიოთეკა გაიხსნა: არაფერი გაკეთებულა",
+  "Photos of the folder changed while it was read: nothing was done": "საქაღალდის ფოტოები წაკითხვისას შეიცვალა: არაფერი გაკეთებულა",
+  "Starts next": "დაიწყება შემდეგი"
 }

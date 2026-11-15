@@ -22,8 +22,6 @@
   "A dark slate backdrop with the exposure, ISO and focal length, then the camera and lens, under each photo.": "Latar abu-abu gelap berisi eksposur, ISO, dan panjang fokus, lalu kamera dan lensa, di bawah setiap foto.",
   "A face model uses the GPU only when a check shows it gives the same results faster.": "Model wajah hanya menggunakan GPU jika pengujian menunjukkan hasilnya sama tetapi lebih cepat.",
   "A filter is hiding this view's photos: change it, or clear it (View → Clear Filters)": "Filter menyembunyikan foto di tampilan ini: ubah atau hapus filternya (Tampilan → Hapus filter)",
-  "A folder is already being synchronized": "Sudah ada folder yang sedang disinkronkan",
-  "A folder is being synchronized": "Folder sedang disinkronkan",
   "A keyword set needs a name": "Set kata kunci harus diberi nama",
   "A light grey wall with a white mat and a soft shadow; the caption and the rating under the photo.": "Dinding abu-abu muda dengan paspartu putih dan bayangan lembut; keterangan dan rating di bawah foto.",
   "A one-time download of about": "Unduhan satu kali, sekitar",
@@ -2172,7 +2170,6 @@
   "Visualize range": "Visualisasikan rentang",
   "Vivid": "Cerah",
   "Vivid Pop": "Warna Hidup",
-  "Wait for the import to finish": "Tunggu hingga impor selesai",
   "Waiting to start…": "Menunggu untuk dimulai…",
   "Warm Film": "Film Hangat",
   "Warm Glow": "Hangat Bercahaya",
@@ -2414,5 +2411,9 @@
   "Remove Folders from Library": "Keluarkan folder dari pustaka",
   "That includes the photos in the folders inside them.": "Ini mencakup foto di dalam folder yang ada di dalamnya.",
   "The photos stay in All Photos. Undo brings the albums back.": "Foto tetap ada di Semua foto. Urungkan mengembalikan album.",
-  "Another library was opened since this window appeared: nothing was changed": "Pustaka lain telah dibuka setelah jendela ini muncul: tidak ada yang diubah"
+  "Another library was opened since this window appeared: nothing was changed": "Pustaka lain telah dibuka setelah jendela ini muncul: tidak ada yang diubah",
+  "Queued: it starts when the task ahead of it ends": "Dalam antrean: dimulai saat tugas di depannya selesai",
+  "Another library was opened: nothing was done": "Pustaka lain dibuka: tidak ada yang dilakukan",
+  "Photos of the folder changed while it was read: nothing was done": "Foto di folder berubah saat dibaca: tidak ada yang dilakukan",
+  "Starts next": "Dimulai berikutnya"
 }

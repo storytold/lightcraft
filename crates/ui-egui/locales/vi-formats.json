@@ -339,5 +339,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Số ảnh có một trong số đó: {count}. Các từ khóa bên dưới cũng bị xóa. Hoàn tác sẽ đưa chúng trở lại.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "Gỡ {n} thư mục khỏi thư viện? Số ảnh đã nhập từ chúng: {count}.",
   "…and {n} more": "…và {n} mục nữa",
-  "{n} keywords": "{n} từ khóa"
+  "{n} keywords": "{n} từ khóa",
+  "Queued: it starts after {n} more": "Trong hàng đợi: bắt đầu sau {n} tác vụ nữa",
+  "Left alone: {n} (synchronize again to review them)": "Để nguyên: {n} (đồng bộ lại để xem xét)",
+  "Starts after {n} more": "Bắt đầu sau {n} tác vụ nữa",
+  "Remove from Queue: {label}": "Xóa khỏi hàng đợi: {label}"
 }

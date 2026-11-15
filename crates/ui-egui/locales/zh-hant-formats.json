@@ -343,5 +343,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "含其中任一個的照片：{count} 張。其下的關鍵字也會被刪除。復原即可回復。",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "要從照片庫移除 {n} 個資料夾嗎？從中匯入的照片：{count} 張。",
   "…and {n} more": "…以及另外 {n} 個",
-  "{n} keywords": "{n} 個關鍵字"
+  "{n} keywords": "{n} 個關鍵字",
+  "Queued: it starts after {n} more": "已加入佇列：再過 {n} 個後開始",
+  "Left alone: {n} (synchronize again to review them)": "未處理：{n}（再次同步以檢視）",
+  "Starts after {n} more": "再過 {n} 個後開始",
+  "Remove from Queue: {label}": "從佇列中移除：{label}"
 }

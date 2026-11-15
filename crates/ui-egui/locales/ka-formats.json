@@ -345,5 +345,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "ფოტოები, რომლებსაც ერთ-ერთი აქვს: {count}. მათ ქვემოთ არსებული საკვანძო სიტყვებიც წაიშლება. გაუქმება მათ დააბრუნებს.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "ამოვიღოთ {n} საქაღალდე ბიბლიოთეკიდან? მათგან იმპორტირებული ფოტოები: {count}.",
   "…and {n} more": "…და კიდევ {n}",
-  "{n} keywords": "საკვანძო სიტყვები: {n}"
+  "{n} keywords": "საკვანძო სიტყვები: {n}",
+  "Queued: it starts after {n} more": "რიგშია: დაიწყება კიდევ {n}-ის შემდეგ",
+  "Left alone: {n} (synchronize again to review them)": "უცვლელი დარჩა: {n} (გადასახედად თავიდან დაასინქრონეთ)",
+  "Starts after {n} more": "დაიწყება კიდევ {n}-ის შემდეგ",
+  "Remove from Queue: {label}": "რიგიდან ამოღება: {label}"
 }

@@ -343,5 +343,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Фото с одним из них: {count}. Вложенные ключевые слова тоже удаляются. Отмена вернёт их.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "Убрать папки ({n}) из библиотеки? Импортированных из них фото: {count}.",
   "…and {n} more": "…и ещё {n}",
-  "{n} keywords": "Ключевые слова: {n}"
+  "{n} keywords": "Ключевые слова: {n}",
+  "Queued: it starts after {n} more": "В очереди: начнётся после ещё {n}",
+  "Left alone: {n} (synchronize again to review them)": "Оставлено без изменений: {n} (синхронизируйте снова, чтобы проверить)",
+  "Starts after {n} more": "Начнётся после ещё {n}",
+  "Remove from Queue: {label}": "Убрать из очереди: {label}"
 }

@@ -2109,7 +2109,6 @@
   "Skipped: files that can't be read": "Пропущено: файли, які не вдається прочитати",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Цієї теки немає: її переміщено чи перейменовано, або її диск не під’єднано.",
   "Relink photos whose file was renamed or moved": "Перезв’язати фото, файл яких перейменовано чи переміщено",
-  "A folder is already being synchronized": "Тека вже синхронізується",
   "Synchronizing…": "Синхронізація…",
   "Relinked": "Перезв’язано",
   "Removed": "Прибрано",
@@ -2119,8 +2118,6 @@
   "Stopped at the scan limit: there may be more photos": "Зупинено на межі сканування: можливо, є й інші фото",
   "Stopped by an error (see the log)": "Зупинено через помилку (див. журнал)",
   "Not saved": "Не збережено",
-  "A folder is being synchronized": "Тека синхронізується",
-  "Wait for the import to finish": "Дочекайтеся завершення імпорту",
   "Show less": "Показати менше",
   "Quit while tasks are running?": "Вийти, поки виконуються завдання?",
   "Exporting contact sheet": "Експорт аркуша мініатюр",
@@ -2440,5 +2437,9 @@
   "That includes the photos in the folders inside them.": "Також включаються фото у вкладених у них теках.",
   "The photos stay in All Photos. Undo brings the albums back.": "Фото залишаються в «Усіх фото». Скасування повертає альбоми.",
   "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "Фото залишаються в «Усіх фото». Видалення теки видаляє й її альбоми. Це можна скасувати.",
-  "Another library was opened since this window appeared: nothing was changed": "Після появи цього вікна було відкрито іншу бібліотеку: нічого не змінено"
+  "Another library was opened since this window appeared: nothing was changed": "Після появи цього вікна було відкрито іншу бібліотеку: нічого не змінено",
+  "Queued: it starts when the task ahead of it ends": "У черзі: почнеться, коли завершиться попереднє завдання",
+  "Another library was opened: nothing was done": "Відкрито іншу бібліотеку: нічого не зроблено",
+  "Photos of the folder changed while it was read: nothing was done": "Фотографії в теці змінилися під час читання: нічого не зроблено",
+  "Starts next": "Почнеться наступним"
 }

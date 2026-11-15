@@ -1926,7 +1926,6 @@
   "Skipped: files that can't be read": "Ignorados: arquivos que não podem ser lidos",
   "This folder isn't there: it was moved or renamed, or its disk isn't connected.": "Esta pasta não está lá: foi movida ou renomeada, ou o disco dela não está conectado.",
   "Relink photos whose file was renamed or moved": "Vincular de novo fotos cujo arquivo foi renomeado ou movido",
-  "A folder is already being synchronized": "Uma pasta já está sendo sincronizada",
   "Synchronizing…": "Sincronizando…",
   "Relinked": "Revinculadas",
   "Removed": "Removidas",
@@ -1936,8 +1935,6 @@
   "Stopped at the scan limit: there may be more photos": "Parou no limite da verificação: pode haver mais fotos",
   "Stopped by an error (see the log)": "Interrompido por um erro (veja o log)",
   "Not saved": "Não salvo",
-  "A folder is being synchronized": "Uma pasta está sendo sincronizada",
-  "Wait for the import to finish": "Aguarde a importação terminar",
   "Appearance": "Aparência",
   "Appearance Mode": "Modo de aparência",
   "Sync with System": "Sincronizar com o sistema",
@@ -2288,5 +2285,9 @@
   "That includes the photos in the folders inside them.": "Isso inclui as fotos das pastas dentro delas.",
   "The photos stay in All Photos. Undo brings the albums back.": "As fotos continuam em Todas as fotos. Desfazer traz os álbuns de volta.",
   "Photos stay in All Photos. Deleting a folder also deletes its albums. You can undo this.": "As fotos continuam em Todas as fotos. Excluir uma pasta também exclui os álbuns dela. Você pode desfazer.",
-  "Another library was opened since this window appeared: nothing was changed": "Outra biblioteca foi aberta depois que esta janela apareceu: nada foi alterado"
+  "Another library was opened since this window appeared: nothing was changed": "Outra biblioteca foi aberta depois que esta janela apareceu: nada foi alterado",
+  "Queued: it starts when the task ahead of it ends": "Na fila: começa quando a tarefa anterior terminar",
+  "Another library was opened: nothing was done": "Outra biblioteca foi aberta: nada foi feito",
+  "Photos of the folder changed while it was read: nothing was done": "As fotos da pasta mudaram durante a leitura: nada foi feito",
+  "Starts next": "Começa em seguida"
 }

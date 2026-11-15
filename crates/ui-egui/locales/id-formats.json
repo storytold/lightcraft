@@ -342,5 +342,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Foto yang memiliki salah satunya: {count}. Kata kunci di bawahnya ikut terhapus. Urungkan mengembalikannya.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "Keluarkan {n} folder dari pustaka? Foto yang diimpor dari folder tersebut: {count}.",
   "…and {n} more": "…dan {n} lainnya",
-  "{n} keywords": "{n} kata kunci"
+  "{n} keywords": "{n} kata kunci",
+  "Queued: it starts after {n} more": "Dalam antrean: dimulai setelah {n} lagi",
+  "Left alone: {n} (synchronize again to review them)": "Dibiarkan: {n} (sinkronkan lagi untuk meninjau)",
+  "Starts after {n} more": "Dimulai setelah {n} lagi",
+  "Remove from Queue: {label}": "Hapus dari antrean: {label}"
 }

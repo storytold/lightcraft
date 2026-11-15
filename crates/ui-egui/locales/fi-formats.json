@@ -339,5 +339,9 @@
   "Photos that have one of them: {count}. The keywords below them go too. Undo brings them back.": "Kuvia, joilla on jokin niistä: {count}. Niiden alla olevat avainsanat poistetaan myös. Kumoa palauttaa ne.",
   "Remove {n} folders from the library? Photos imported from them: {count}.": "Poistetaanko {n} kansiota kirjastosta? Niistä tuotuja kuvia: {count}.",
   "…and {n} more": "…ja {n} muuta",
-  "{n} keywords": "{n} avainsanaa"
+  "{n} keywords": "{n} avainsanaa",
+  "Queued: it starts after {n} more": "Jonossa: alkaa {n} muun jälkeen",
+  "Left alone: {n} (synchronize again to review them)": "Jätetty ennalleen: {n} (synkronoi uudelleen tarkistaaksesi)",
+  "Starts after {n} more": "Alkaa {n} muun jälkeen",
+  "Remove from Queue: {label}": "Poista jonosta: {label}"
 }
