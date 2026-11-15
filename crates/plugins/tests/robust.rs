@@ -108,6 +108,57 @@ fn stamped_sections_never_panic() {
     assert_eq!(plugin_stamp::check(&doubled, &sandbox), Err(plugin_stamp::Error::Duplicate(2)));
 }
 
+/// The host's own read of a stamped section ([`Plugin::inspect`], and [`Plugin::load`]'s check
+/// against `lcc_manifest`) on mutated and malformed modules: errors, never a panic.
+#[test]
+fn inspected_sections_never_panic() {
+    let limits = lcc_plugins::Limits { fuel: 5_000_000, ..Default::default() };
+    let unstamped = module(MANIFEST, "{}");
+    let stamped = plugin_stamp::stamp(&unstamped, &plugin_stamp::Limits::default()).unwrap();
+    assert_eq!(Plugin::inspect(&stamped, limits.clone(), false).unwrap().source, lcc_plugins::ManifestSource::Section);
+    lcc_fuzzkit::run("plugins.inspect", &[stamped.as_slice()], 300, |b| {
+        let _ = Plugin::inspect(b, limits.clone(), false);
+        let _ = Plugin::inspect(b, limits.clone(), true);
+    });
+    // the section goes last: a truncated module fails, or (cut at a section boundary) has no section left
+    for cut in 0..stamped.len() {
+        let read = Plugin::inspect(&stamped[..cut], limits.clone(), false);
+        assert!(read.as_ref().map_or(true, |i| i.source == lcc_plugins::ManifestSource::Export), "cut at {cut}");
+    }
+    let section = |data: &[u8]| {
+        let name = lcc_plugins::MANIFEST_SECTION.as_bytes();
+        let mut payload = vec![u8::try_from(name.len()).unwrap()];
+        payload.extend_from_slice(name);
+        payload.extend_from_slice(data);
+        let mut out = vec![0u8];
+        let mut n = payload.len();
+        loop {
+            let b = (n & 0x7f) as u8;
+            n >>= 7;
+            out.push(if n == 0 { b } else { b | 0x80 });
+            if n == 0 {
+                break;
+            }
+        }
+        out.extend_from_slice(&payload);
+        out
+    };
+    let oversized = format!(r#"{{"id":"t","name":"T","version":"1.0.0","pad":"{}"}}"#, "x".repeat(lcc_plugins::manifest::MAX_MANIFEST_BYTES));
+    let hostile: [(&str, Vec<u8>, &str); 6] = [
+        ("a length over 32 bits", [unstamped.as_slice(), &[0, 0xff, 0xff, 0xff, 0xff, 0x7f]].concat(), "not a valid plug-in module"),
+        ("a length past the end", [unstamped.as_slice(), &[0, 9, 1, b'x']].concat(), "not a valid plug-in module"),
+        ("two sections", [stamped.as_slice(), &section(MANIFEST.as_bytes())].concat(), "2 photo-plugin.manifest sections"),
+        ("an oversized section", [unstamped.as_slice(), &section(oversized.as_bytes())].concat(), "limit 65536"),
+        ("invalid UTF-8", [unstamped.as_slice(), &section(b"{\"id\":\"\xff\"}")].concat(), "plug-in manifest"),
+        ("invalid JSON", [unstamped.as_slice(), &section(b"{\"id\"")].concat(), "plug-in manifest"),
+    ];
+    for (what, wasm, needle) in hostile {
+        let e = Plugin::inspect(&wasm, limits.clone(), false).expect_err(what).to_string();
+        assert!(e.contains(needle), "{what}: {e}");
+        assert!(Plugin::load(&wasm, limits.clone()).is_err(), "{what}: loading refuses it too");
+    }
+}
+
 /// `requires` and `version` from a hostile manifest: errors, never a panic.
 #[test]
 fn hostile_requires_and_versions_are_errors() {

@@ -18,7 +18,8 @@
 //! analyse the whole photo before a render (Upright, the model-free auto masks, spot-source picking,
 //! a zoomed view's dehaze airlight), so they see e.g. the converted negative, not the scan.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use lcc_develop::{DevelopSettings, FilterStage};
 use lcc_raster::Rgb32f;
@@ -48,12 +49,132 @@ pub fn native_size(frame: &Frame, info: &SourceInfo) -> (usize, usize) {
 
 struct Native {
     key: u64,
+    /// The photo as framed, without the stack ([`native_base`]).
+    base: u64,
+    /// The stack's key: a later stack that starts with these filters starts from this result.
+    stack: u64,
+    /// The image before the stack's last filter (the filters' encoding), with its key and the
+    /// warnings so far: a change to the last filter's parameters runs that filter only.
+    before_last: Option<(u64, Arc<Rgb32f>, Vec<String>)>,
+    /// Long edge of the source it was made from: a render takes it only when its own source is no
+    /// larger (a result upscaled from the grid's 512-px decode would blur the loupe's).
+    src_long: usize,
     img: Arc<Rgb32f>,
     warnings: Vec<String>,
 }
 
+/// Most pixels a native result also keeps the image before its last filter for (a second copy).
+const KEEP_BEFORE_LAST_PIXELS: usize = 40_000_000;
+
 /// The last native-resolution result (one photo's worth of memory at most).
 static NATIVE: Mutex<Option<Native>> = Mutex::new(None);
+
+/// A native-resolution run under way: a render that needs it waits for it instead of running the
+/// stack again beside it (the loupe, the grid's cell and an export of one edit would each run it,
+/// all at once, each slowed by the others).
+struct Running {
+    key: u64,
+    /// Long edge of the source the run is made from (it serves renders of no larger sources).
+    src_long: usize,
+    /// Set when a run of the same key from a larger source starts: this one gives way to it.
+    give_way: Arc<AtomicBool>,
+}
+
+static RUNNING: Mutex<Vec<Running>> = Mutex::new(Vec::new());
+static RAN: Condvar = Condvar::new();
+
+/// The sources (by [`crate::optics::fingerprint`]) native runs were made of and the filter each
+/// started at, for tests to count.
+#[cfg(test)]
+pub(crate) static NATIVE_RUNS: Mutex<Vec<(u64, usize)>> = Mutex::new(Vec::new());
+
+/// Takes `key`'s run for a source of long edge `src_long`: `None` while another render runs it from
+/// a source at least as large (after waiting for that to end, the caller looks in [`NATIVE`] again).
+/// Smaller runs of the key are told to give way.
+fn claim(key: u64, src_long: usize) -> Option<Claim> {
+    let serves = |g: &Vec<Running>| g.iter().any(|r| r.key == key && r.src_long >= src_long);
+    let mut g = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
+    if serves(&g) {
+        // (a render on one of rayon's own threads runs it itself: blocked there, it could hold up
+        // the very run it waits for)
+        if rayon::current_thread_index().is_some() {
+            return Some(Claim { run: None, give_way: Arc::new(AtomicBool::new(false)) });
+        }
+        while serves(&g) {
+            g = RAN.wait(g).unwrap_or_else(PoisonError::into_inner);
+        }
+        return None;
+    }
+    for r in g.iter().filter(|r| r.key == key) {
+        r.give_way.store(true, Ordering::Relaxed);
+    }
+    let give_way = Arc::new(AtomicBool::new(false));
+    g.push(Running { key, src_long, give_way: give_way.clone() });
+    Some(Claim { run: Some((key, src_long)), give_way })
+}
+
+/// A native run under way; ends (and wakes the renders waiting for it) when dropped, also when the
+/// run fails. (`run: None`: a second run of a key another render holds, which it doesn't end.)
+struct Claim {
+    run: Option<(u64, usize)>,
+    give_way: Arc<AtomicBool>,
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        if let Some((key, src_long)) = self.run {
+            let mut g = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
+            if let Some(i) = g.iter().position(|r| r.key == key && r.src_long == src_long && Arc::ptr_eq(&r.give_way, &self.give_way)) {
+                g.remove(i);
+            }
+            drop(g);
+            RAN.notify_all();
+        }
+    }
+}
+
+fn native_hit(key: u64, src_long: usize) -> Option<(Arc<Rgb32f>, Vec<String>)> {
+    let g = NATIVE.lock().unwrap_or_else(PoisonError::into_inner);
+    g.as_ref().filter(|n| n.key == key && n.src_long >= src_long).map(|n| (n.img.clone(), n.warnings.clone()))
+}
+
+/// What a native result is of, without the stack: the photo as `plan` frames it. With the source's
+/// [`SourceInfo::identity`] this is the same at every size the photo is decoded at (the framing by
+/// its orientation, normalized crop, flips and warp), so the grid's cell, the loupe's preview-size
+/// render and an export share one run; without one, the source's pixels and frame.
+fn native_base(src: &Rgb32f, info: &SourceInfo, plan: &Plan<'_>, nw: usize, nh: usize) -> u64 {
+    let f = &plan.whole_frame;
+    match info.identity {
+        // (not the native size worked out from the decode: decodes whose sizes round differently
+        // give sizes a pixel apart; any native result is resampled to the request anyway)
+        Some(id) => hash_of((id.key, id.size, format!("{:?} {:?} {} {} {:?} {}", f.orient, f.crop, f.flip_h, f.flip_v, f.warp, f.masks_on_photo))),
+        None => hash_of((crate::optics::fingerprint(src), src.width, src.height, format!("{f:?}"), nw, nh)),
+    }
+}
+
+/// Where a native run of `stack` can start for a source of long edge `src_long`: the furthest
+/// filter an earlier run of the photo (`base`) got to along it, the image there (the filters'
+/// encoding) and the warnings so far. Adding a filter at the end runs the new filter only, and so
+/// does a change to the last filter's parameters.
+fn resume_point(stack: &Stack, base: u64, src_long: usize) -> Option<(usize, Rgb32f, Vec<String>)> {
+    let n = stack.len();
+    let at = |key: u64| (1..n).rev().find(|k| stack.prefix_key(*k) == Some(key));
+    let (k, img, w, encoded) = {
+        let g = NATIVE.lock().unwrap_or_else(PoisonError::into_inner);
+        let p = g.as_ref().filter(|p| p.base == base && p.src_long >= src_long)?;
+        let whole = at(p.stack).map(|k| (k, p.img.clone(), p.warnings.clone(), false));
+        let before = p.before_last.as_ref().and_then(|(key, img, w)| at(*key).map(|k| (k, img.clone(), w.clone(), true)));
+        match (whole, before) {
+            (Some(a), Some(b)) => Some(if b.0 > a.0 { b } else { a }),
+            (a, b) => a.or(b),
+        }?
+    };
+    let mut img = Arc::unwrap_or_clone(img);
+    if !encoded {
+        plugin_filters::to_filter_space(&mut img);
+    }
+    Some((k, img, w))
+}
 
 /// Drops the cached native-resolution result (with [`crate::StageCache::clear`], to free memory).
 pub fn clear() {
@@ -75,36 +196,10 @@ pub(crate) fn run(
     let stack = &plan.source_filters;
     if stack.pixel_scale() {
         let (nw, nh) = native_size(&plan.whole_frame, info);
-        let key = hash_of((stack.key, crate::optics::fingerprint(src), src.width, src.height, format!("{:?}", plan.whole_frame), nw, nh));
-        let hit = {
-            let g = NATIVE.lock().unwrap_or_else(PoisonError::into_inner);
-            g.as_ref().filter(|n| n.key == key).map(|n| (n.img.clone(), n.warnings.clone()))
-        };
-        let native = match hit {
-            Some((img, w)) => {
-                warnings.extend(w);
-                Some(img)
-            }
-            // a draft doesn't wait for the full-resolution run: its proxy stands in
-            None if draft => None,
-            None => {
-                // (a whole-frame render at the native size has sampled exactly this already)
-                let f = plan.filter_frame;
-                let same = (f.x, f.y, f.full_w as usize, f.full_h as usize, sampled.width, sampled.height) == (0, 0, nw, nh, nw, nh);
-                let mut img = if same { sampled.clone() } else { plan.whole_frame.sample(src, nw, nh) };
-                if !same {
-                    // (`sampled` had its film dust filled in by the render; a fresh sample needs it too)
-                    crate::film_dust::stage(&mut img, src, info, &plan.settings, &plan.whole_frame);
-                }
-                let mut w = Vec::new();
-                plugin_filters::apply_source(stack, &mut img, lcc_filters::FrameInfo::whole(u32_of(nw), u32_of(nh)), false, &mut w);
-                let img = Arc::new(img);
-                warnings.extend(w.iter().cloned());
-                *NATIVE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Native { key, img: img.clone(), warnings: w });
-                Some(img)
-            }
-        };
-        if let Some(n) = native {
+        let base = native_base(src, info, plan, nw, nh);
+        let key = hash_of((base, stack.key));
+        let src_long = src.width.max(src.height);
+        if let Some(n) = native(src, info, plan, sampled, (nw, nh), (base, key), src_long, draft, warnings) {
             let f = plan.filter_frame;
             let out = crate::timed("plug-in filters: resample native", || {
                 to_request(&n, f.full_w as usize, f.full_h as usize, (f.x as usize, f.y as usize), sampled.width, sampled.height)
@@ -115,6 +210,81 @@ pub(crate) fn run(
     let mut img = sampled.clone();
     plugin_filters::apply_source(stack, &mut img, plan.filter_frame, draft, warnings);
     (if draft { draft_key } else { stack.key }, Arc::new(img))
+}
+
+/// The native-resolution result `key` for a source of long edge `src_long`: kept, made by another
+/// render (waited for), or made here; `None` for a draft that finds none (its proxy stands in).
+#[allow(clippy::too_many_arguments)]
+fn native(
+    src: &Rgb32f,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    sampled: &Rgb32f,
+    (nw, nh): (usize, usize),
+    (base, key): (u64, u64),
+    src_long: usize,
+    draft: bool,
+    warnings: &mut Vec<String>,
+) -> Option<Arc<Rgb32f>> {
+    loop {
+        if let Some((img, w)) = native_hit(key, src_long) {
+            warnings.extend(w);
+            return Some(img);
+        }
+        // a draft doesn't wait for the full-resolution run
+        if draft {
+            return None;
+        }
+        // another render running this very stack from a source as large: its result, once it
+        // lands (and when that run failed or gave way, this one takes over)
+        let Some(running) = claim(key, src_long) else { continue };
+        // (it may have landed between the look and the claim)
+        if let Some((img, w)) = native_hit(key, src_long) {
+            warnings.extend(w);
+            return Some(img);
+        }
+        let stack = &plan.source_filters;
+        let (mut img, start, mut w) = match resume_point(stack, base, src_long) {
+            Some((k, img, w)) => (img, k, w),
+            None => {
+                // (a whole-frame render at the native size has sampled exactly this already)
+                let f = plan.filter_frame;
+                let same = (f.x, f.y, f.full_w as usize, f.full_h as usize, sampled.width, sampled.height) == (0, 0, nw, nh, nw, nh);
+                let mut img = if same { sampled.clone() } else { plan.whole_frame.sample(src, nw, nh) };
+                if !same {
+                    // (`sampled` had its film dust filled in by the render; a fresh sample needs it too)
+                    crate::film_dust::stage(&mut img, src, info, &plan.settings, &plan.whole_frame);
+                }
+                plugin_filters::to_filter_space(&mut img);
+                (img, 0, Vec::new())
+            }
+        };
+        #[cfg(test)]
+        NATIVE_RUNS.lock().unwrap_or_else(PoisonError::into_inner).push((crate::optics::fingerprint(src), start));
+        // (a resumed run's size is the earlier run's: a decode a pixel apart works one out a pixel off)
+        let frame = lcc_filters::FrameInfo::whole(u32_of(img.width), u32_of(img.height));
+        let last = stack.len().saturating_sub(1);
+        let keep_at = (stack.len() > 1 && img.width.saturating_mul(img.height) <= KEEP_BEFORE_LAST_PIXELS && start <= last).then_some(last);
+        let ran = plugin_filters::apply_native(stack, &mut img, frame, &mut w, plugin_filters::Run { give_way: &running.give_way, start, keep_at });
+        if ran.gave_way {
+            // a render of a larger source of the photo started the same run: its result, once it
+            // lands, serves this one too
+            drop(running);
+            continue;
+        }
+        plugin_filters::from_filter_space(&mut img);
+        let img = Arc::new(img);
+        warnings.extend(w.iter().cloned());
+        // (stopped short at the render's cancel: not the stack's result, not kept)
+        if !crate::was_cut() {
+            let before_last =
+                ran.kept.zip(stack.prefix_key(last)).map(|((data, kw), k)| (k, Arc::new(Rgb32f { width: img.width, height: img.height, data }), kw));
+            *NATIVE.lock().unwrap_or_else(PoisonError::into_inner) =
+                Some(Native { key, base, stack: stack.key, before_last, src_long, img: img.clone(), warnings: w });
+        }
+        drop(running);
+        return Some(img);
+    }
 }
 
 fn u32_of(v: usize) -> u32 {
@@ -171,6 +341,9 @@ pub fn aux_source(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings) -> Optio
         return Some(a.clone());
     }
     let img = Arc::new(plugin_filters::filtered_source(src, info, s, AUX_EDGE).into_owned());
+    if crate::was_cut() {
+        return Some(img);
+    }
     let mut c = AUX.lock().unwrap_or_else(PoisonError::into_inner);
     if c.len() >= 4 {
         c.remove(0);

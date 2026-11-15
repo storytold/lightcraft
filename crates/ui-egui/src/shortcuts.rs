@@ -442,6 +442,29 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
 /// preview keeps the grid's view but shows the photo alone, so backslash stays Show Original there.
 /// Remapped brush and Show Original keys retain their action, and a saved assignment of the key to
 /// another command takes precedence over this default.
+/// Like [`matches`] but Alt (macOS Option) may be held: the Masking brush uses it as the
+/// subtract-while-painting modifier, and adjusting the brush with `[` / `]` (size) and ⇧`[` /
+/// ⇧`]` (feather) must keep working while subtracting (issue #1179). Only the event's key matches,
+/// so one press fires one binding (the ⇧`{` / ⇧`}` aliases of feather share the same physical key);
+/// egui-winit already reports the physical key as `key` when Option changes the character.
+fn matches_ignoring_alt(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
+    i.events.iter().any(|e| {
+        let (key, modifiers) = match e {
+            egui::Event::Key { key, pressed: true, modifiers, .. } => (key, modifiers),
+            _ => return false,
+        };
+        let ctrl_ok = if m.ctrl { modifiers.ctrl } else { !modifiers.ctrl || modifiers.command };
+        let cmd_ok = m.ctrl || modifiers.command == m.command;
+        *key == k && ctrl_ok && cmd_ok && modifiers.shift == m.shift
+    })
+}
+
+/// The brush size / feather commands: their bracket keys keep working while Alt (macOS Option) is
+/// held for subtracting a mask (issue #1179).
+fn brush_size_key(id: &str) -> bool {
+    matches!(id, "brush.smaller" | "brush.larger" | "brush.featherLess" | "brush.featherMore")
+}
+
 fn grid_key_command(keymap: &Keymap, grid: bool, fullscreen: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
     let command = match (grid, id, shortcut) {
         (true, "brush.smaller", (m, Key::OpenBracket)) if m == Modifiers::NONE => "photo.decreaseRating",
@@ -622,7 +645,11 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
                 && !native(sc)
                 && !consumed.contains(&(m, k))
                 && !(k == Key::Escape && popup_open)
-                && matches(i, m, k)
+                // Alt (macOS Option) is the Masking brush's subtract modifier: the bracket size /
+                // feather keys still fire with it held in the photo view, unless the user gave
+                // the Alt chord (or the plain key) to another command. Grids keep their rating keys.
+                && (matches(i, m, k)
+                    || (!grid && brush_size_key(b.id) && !taken.contains(&(m | Modifiers::ALT, k)) && matches_ignoring_alt(i, m, k)))
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 // a rating or label command goes the culling path its digit always took
@@ -636,7 +663,7 @@ pub fn handle(app: &mut LccApp, ctx: &egui::Context) {
                 && !(k == Key::Escape && popup_open)
                 && !(k == Key::Space && space_repeat)
                 && !taken.contains(&(m, k))
-                && matches(i, m, k)
+                && (matches(i, m, k) || (!grid && brush_size_key(id) && !taken.contains(&(m | Modifiers::ALT, k)) && matches_ignoring_alt(i, m, k)))
             {
                 aliased.push((id, serde_json::from_str(params).unwrap_or_default()));
             }

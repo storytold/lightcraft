@@ -304,5 +304,59 @@
     }
    }
   ]
+ },
+ {
+  "name": "capture-one-import-result",
+  "steps": [
+   {
+    "method": "ui.key",
+    "params": {
+     "key": "Escape"
+    }
+   },
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "module.library"
+    }
+   },
+   {
+    "method": "engine.execute",
+    "params": {
+     "command": "library.importLightroom",
+     "params": {
+      "path": "docs/manual-site/scripts/fixtures/capture-one/Example.cocatalogdb",
+      "wait": true
+     }
+    }
+   },
+   {
+    "method": "ui.drag",
+    "params": {
+     "x": 800,
+     "y": 500,
+     "toX": 800,
+     "toY": 500,
+     "steps": 400
+    },
+    "only": [
+     "classic",
+     "compact"
+    ]
+   },
+   {
+    "method": "ui.drag",
+    "params": {
+     "x": 640,
+     "y": 400,
+     "toX": 640,
+     "toY": 400,
+     "steps": 400
+    },
+    "only": [
+     "modern"
+    ]
+   }
+  ]
  }
 ]

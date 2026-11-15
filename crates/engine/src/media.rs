@@ -1436,7 +1436,15 @@ impl RenderJob {
         let failed = self.failed(String::new());
         // thumbnails go to the second graphics card when there is one: the editing card keeps the views
         let thumb = self.cache.is_some();
-        let run = || crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed });
+        // a render a newer request replaced stops its plug-in filters; what it made then isn't the
+        // picture asked for, and goes back as superseded (the decode it did is still handed on)
+        let cancel = self.superseded.clone();
+        let run = || {
+            let (r, cut) = lcc_pipeline::with_cancel(cancel, || {
+                crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed })
+            });
+            if cut { RenderResult { rendered: Err(SUPERSEDED.into()), ..r } } else { r }
+        };
         if thumb { lcc_gpu::prefer_helper(run) } else { run() }
     }
 
@@ -3609,6 +3617,33 @@ mod thumbnail_hash_tests {
         let r = quick.run();
         assert_eq!((r.request_id, r.key), (7, 9));
         assert_eq!(r.rendered.err().as_deref(), Some("the render failed unexpectedly: preview reader bug"));
+    }
+
+    /// A raw imported on the relative white balance scale (6500 / 0 meaning as shot) before its camera was edited in
+    /// Kelvin still looks as the camera rendered it, whether or not its as-shot white has been read since: the numbers
+    /// As Shot stores don't change how it renders. Its thumbnail is the camera's JPEG, not a decode of the whole raw.
+    #[test]
+    fn as_shot_on_the_old_relative_scale_keeps_the_camera_thumbnail() {
+        let mut s = crate::Session::new();
+        s.media.preview_loader =
+            Some(Arc::new(|_: &str, edge: usize| Some(Rgba8 { width: edge.min(64), height: 2, data: vec![[9, 8, 7, 255]; edge.min(64) * 2] })));
+        let mut raw = Photo::new(PhotoId(1), Source::File { path: "IMG_1370.CR3".into() }, "IMG_1370.CR3", "CR3", 6000, 4000, "2026-10-01");
+        raw.kind = MediaKind::Raw;
+        raw.meta.camera = "Canon Canon EOS R8".into();
+        assert!(!raw.relative_wb(), "the R8 is edited in Kelvin");
+        assert_eq!(raw.camera_defaults().wb.scale, lcc_develop::WbScale::Kelvin, "its defaults are on the Kelvin scale");
+        raw.develop = Arc::new(lcc_develop::DevelopSettings::for_raw(6500.0, 0.0));
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+        for as_shot in [None, Some((3109.0, 2.0))] {
+            s.catalog.apply(Op::SetAsShotWb { id: PhotoId(1), wb: as_shot }).unwrap();
+            let p = s.catalog.photo(PhotoId(1)).unwrap();
+            assert!(crate::import::has_import_look(p), "as-shot white {as_shot:?}");
+            assert!(s.embedded_thumb_is_final(p), "as-shot white {as_shot:?}");
+        }
+        let mut custom = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+        custom.wb.mode = lcc_develop::WbMode::Custom;
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(custom), label: "wb".into(), edited: None }).unwrap();
+        assert!(!s.embedded_thumb_is_final(s.catalog.photo(PhotoId(1)).unwrap()), "a white balance of one's own is rendered");
     }
 }
 

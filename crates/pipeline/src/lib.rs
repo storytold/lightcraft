@@ -1134,7 +1134,19 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     prep.mask_tone = plan.mask_tone.clone();
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, filtered, lin: Some((lin_key, lin)), nr: nr.map(|n| (nr_key, n)), colour_noise, planes });
+        // (a render whose filters stopped short at its cancel keeps nothing: its pixels aren't the stack's)
+        if !was_cut() {
+            c.put(CacheEntry {
+                src: a.clone(),
+                geo,
+                sampled,
+                filtered,
+                lin: Some((lin_key, lin)),
+                nr: nr.map(|n| (nr_key, n)),
+                colour_noise,
+                planes,
+            });
+        }
     }
     let display_filters = plugin_filters::Stack::resolve(info, s, lcc_develop::FilterStage::Display);
     let post = finish::Post { stack: &display_filters, frame: plan.filter_frame, warnings: std::cell::RefCell::new(&mut warnings) };
@@ -1324,6 +1336,38 @@ pub fn before_settings(s: &DevelopSettings) -> DevelopSettings {
 
 pub(crate) fn is_bw(s: &DevelopSettings) -> bool {
     s.treatment == Treatment::Bw || s.profile.id == "lc.mono" || s.profile.id.starts_with("lc.bw.")
+}
+
+thread_local! {
+    /// The flag that says this thread's render is no longer wanted ([`with_cancel`]), and whether a
+    /// step stopped short because of it.
+    static CANCEL: std::cell::RefCell<(Option<Arc<std::sync::atomic::AtomicBool>>, bool)> = const { std::cell::RefCell::new((None, false)) };
+}
+
+/// Runs `f` (a render on this thread) with `flag` as its cancel: once it is set, the plug-in
+/// filters still to run stop (a render a newer edit replaced would otherwise run its whole stack,
+/// beside the new one, each edit adding one more). The second value is true when something stopped
+/// short: the result is then not the picture asked for, and nothing of it was cached.
+pub fn with_cancel<R>(flag: Option<Arc<std::sync::atomic::AtomicBool>>, f: impl FnOnce() -> R) -> (R, bool) {
+    let before = CANCEL.with(|c| c.replace((flag, false)));
+    let r = f();
+    let (_, cut) = CANCEL.with(|c| c.replace(before));
+    (r, cut)
+}
+
+/// This thread's render's cancel flag ([`with_cancel`]).
+pub(crate) fn cancel_flag() -> Option<Arc<std::sync::atomic::AtomicBool>> {
+    CANCEL.with(|c| c.borrow().0.clone())
+}
+
+/// A step of this thread's render stopped short at its cancel.
+pub(crate) fn note_cut() {
+    CANCEL.with(|c| c.borrow_mut().1 = true);
+}
+
+/// Whether a step of this thread's render stopped short ([`note_cut`]): what it made is not to be kept.
+pub(crate) fn was_cut() -> bool {
+    CANCEL.with(|c| c.borrow().1)
 }
 
 /// `{ENV_PREFIX}_PROFILE` is set: print per-stage timings to stderr.
