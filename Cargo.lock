@@ -1197,6 +1197,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-codepage"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+
+[[package]]
 name = "craft-crw"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=6325cd286bd87effa3020b01d6b9d289d4f7c055#6325cd286bd87effa3020b01d6b9d289d4f7c055"
@@ -1322,6 +1327,16 @@ dependencies = [
  "craft-tiff",
  "quick-xml 0.41.0",
  "serde",
+]
+
+[[package]]
+name = "craft-mime"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
+dependencies = [
+ "chrono",
+ "craft-codepage",
+ "encoding_rs",
 ]
 
 [[package]]
@@ -3922,6 +3937,7 @@ dependencies = [
 name = "lightcraft-develop"
 version = "0.21.1"
 dependencies = [
+ "craft-mime",
  "lightcraft-color",
  "lightcraft-geom",
  "miniz_oxide 0.9.1",
@@ -3938,6 +3954,7 @@ dependencies = [
  "chrono",
  "craft-docpath",
  "craft-heif",
+ "craft-mime",
  "craft-tiff",
  "crc32fast",
  "fs4",
@@ -4066,6 +4083,7 @@ dependencies = [
 name = "lightcraft-mcp"
 version = "0.21.1"
 dependencies = [
+ "craft-mime",
  "lightcraft-codecs",
  "lightcraft-engine",
  "lightcraft-raster",
