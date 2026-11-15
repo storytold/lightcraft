@@ -111,7 +111,8 @@ impl Photo {
                 // `camera` is maker and model together; older records may have no `make` of their own
                 let camera = m.camera.trim().to_lowercase();
                 let maker = if make.is_empty() { &camera } else { &make };
-                DRONE_MAKERS.iter().any(|d| maker.starts_with(d)) && !HANDHELD_MODELS.iter().any(|h| camera.contains(h))
+                // stills only: drone videos come with video import (gap 18)
+                still && DRONE_MAKERS.iter().any(|d| maker.starts_with(d)) && !HANDHELD_MODELS.iter().any(|h| camera.contains(h))
             }
         }
     }
@@ -235,6 +236,9 @@ mod tests {
         p.meta.make = "DJI".into();
         p.meta.camera = "DJI FC3582".into();
         assert!(p.is_type(PhotoType::Drone));
+        let mut video = p.clone();
+        video.kind = MediaKind::Video;
+        assert!(!video.is_type(PhotoType::Drone), "a drone's video is not a drone photo");
         p.meta.camera = "DJI Osmo Pocket 3".into();
         assert!(!p.is_type(PhotoType::Drone));
         // no Make of its own: the camera name says it

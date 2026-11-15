@@ -250,7 +250,7 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     m.iso = m.iso.or(src.iso);
     m.flash = m.flash.or(src.flash);
     m.exposure_bias = m.exposure_bias.or(src.exposure_bias);
-    m.custom_rendered = m.custom_rendered.or(src.custom_rendered);
+    fill_file_fields(&mut m, src);
     if m.serial_number.is_empty() {
         m.serial_number = src.serial_number.clone();
     }
@@ -270,6 +270,14 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
 }
 
 /// Repair only the shutter data an old import wrote, keeping independently edited metadata.
+/// Fill the fields that describe the file itself rather than anything a person edits (Exif `CustomRendered`), when
+/// the photo lacks them: a virtual copy shares its original's file, so it gets them too. True when one changed.
+fn fill_file_fields(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
+    let before = m.custom_rendered;
+    m.custom_rendered = m.custom_rendered.or(src.custom_rendered);
+    m.custom_rendered != before
+}
+
 fn repair_legacy_shutter(m: &mut lightcraft_catalog::Meta, src: &lightcraft_catalog::Meta) -> bool {
     if m.exposure_time.is_none()
         && let Some(t) = src.exposure_time
@@ -340,8 +348,11 @@ pub(crate) fn reload_ops(
     for c in cat.photos().filter(|c| c.copy_of == Some(id)) {
         let mut meta = c.meta.clone();
         // Copies share the source file but may have independently edited metadata. Repair only
-        // recognizable legacy shutter values, not every missing field on the copy.
-        let shutter_op = repair_legacy_shutter(&mut meta, &info.meta).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) });
+        // recognizable legacy shutter values and fill what describes the file itself, not every
+        // missing field on the copy.
+        let repaired = repair_legacy_shutter(&mut meta, &info.meta);
+        let filled = fill_file_fields(&mut meta, &info.meta);
+        let shutter_op = (repaired | filled).then(|| Op::SetMeta { id: c.id, meta: Box::new(meta) });
         let theirs: Vec<Op> = content_op(c.id, c, info.clone())
             .into_iter()
             .chain(shutter_op)
@@ -543,6 +554,34 @@ mod tests {
         for id in [2, 3, 4, 5] {
             assert_eq!(cat.photo(PhotoId(id)).unwrap().meta.title, "My copy");
         }
+    }
+
+    /// A virtual copy shares its original's file, so Reload from Disk gives it the file's `CustomRendered` too (an
+    /// iPhone panorama's copy is a panorama), keeping a value it already has and its own edits.
+    #[test]
+    fn reload_fills_file_fields_on_virtual_copies() {
+        let mut cat = lightcraft_catalog::Catalog::new();
+        let source = Photo::new(PhotoId(1), Source::File { path: "/x.heic".into() }, "x.heic", "HEIC", 7910, 3788, "");
+        cat.apply(Op::AddPhoto { photo: Box::new(source.clone()) }).unwrap();
+        for (id, known) in [(2, None), (3, Some(1))] {
+            let mut copy = source.clone();
+            copy.id = PhotoId(id);
+            copy.copy_of = Some(source.id);
+            copy.meta.custom_rendered = known;
+            copy.meta.title = "My copy".into();
+            cat.apply(Op::AddPhoto { photo: Box::new(copy) }).unwrap();
+        }
+        let mut info = crate::media::ProbeInfo::default();
+        info.meta.custom_rendered = Some(lightcraft_meta::CUSTOM_RENDERED_PANORAMA);
+        let (mut ops, mut changed) = (Vec::new(), Vec::new());
+        reload_ops(&cat, source.id, &info, &mut ops, &mut changed);
+        for op in ops {
+            cat.apply(op).unwrap();
+        }
+        let m = |id| cat.photo(PhotoId(id)).unwrap().meta.clone();
+        assert_eq!(m(1).custom_rendered, Some(lightcraft_meta::CUSTOM_RENDERED_PANORAMA));
+        assert_eq!((m(2).custom_rendered, m(2).title.as_str()), (Some(lightcraft_meta::CUSTOM_RENDERED_PANORAMA), "My copy"));
+        assert_eq!(m(3).custom_rendered, Some(1), "a value the copy has is kept");
     }
 
     /// Reload from Disk gives a photo imported before focus points were read its camera focus point,
