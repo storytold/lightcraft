@@ -188,6 +188,8 @@
   "{name} found nothing to select on {n} of {total} photos": "{name}: {total} ფოტოდან {n}-ზე ასარჩევი ვერაფერი მოიძებნა",
   "Found nothing to select on {n} of {total} photos": "{total} ფოტოდან {n}-ზე ასარჩევი ვერაფერი მოიძებნა",
   "Can't tell yet for {n} photos": "{n} ფოტოსთვის ჯერ ვერ დგინდება",
+  "{n} photos updated": "განახლდა {n} ფოტო",
+  "{n} photos were imported before LightCraft recorded what their files carry.": "{n} ფოტო იმპორტირდა მანამ, სანამ LightCraft მათი ფაილების შიგთავსს ჩაიწერდა.",
   "{matching} of {t} photos": "ფოტო: {matching} / {t}",
   "{matching} photos": "ფოტო: {matching}",
   "{mode} spot {} of {}": "{mode}: ლაქა {} / {}",

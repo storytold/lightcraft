@@ -151,6 +151,8 @@
   "{name} found nothing to select on {n} of {total} photos": "{name} n’a rien trouvé à sélectionner sur {n} des {total} photos",
   "Found nothing to select on {n} of {total} photos": "Rien à sélectionner sur {n} des {total} photos",
   "Can't tell yet for {n} photos": "Impossible de le dire pour {n} photos pour l’instant",
+  "{n} photos updated": "{n} photos mises à jour",
+  "{n} photos were imported before LightCraft recorded what their files carry.": "{n} photos ont été importées avant que LightCraft n’enregistre ce que contiennent leurs fichiers.",
   "{matching} of {t} photos": "{matching} sur {t} photos",
   "{matching} photos": "{matching} photos",
   "{mode} spot {} of {}": "Tache {mode} {} sur {}",

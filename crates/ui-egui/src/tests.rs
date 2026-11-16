@@ -44,6 +44,7 @@ mod drop_import;
 mod edit_layout;
 mod empty_library;
 mod error_kinds;
+mod file_facts_offer;
 mod filmstrip;
 mod filmstrip_drag;
 mod find_similar;

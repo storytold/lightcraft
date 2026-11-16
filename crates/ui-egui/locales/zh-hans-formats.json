@@ -90,6 +90,8 @@
   "{name} found nothing to select on {n} of {total} photos": "{name}：{total} 张照片中有 {n} 张没有可选择的内容",
   "Found nothing to select on {n} of {total} photos": "{total} 张照片中有 {n} 张没有可选择的内容",
   "Can't tell yet for {n} photos": "有 {n} 张照片暂时无法判断",
+  "{n} photos updated": "已更新 {n} 张照片",
+  "{n} photos were imported before LightCraft recorded what their files carry.": "有 {n} 张照片是在 LightCraft 记录文件内容之前导入的。",
   "{matching} of {t} photos": "{t} 张照片中的 {matching} 张",
   "{matching} photos": "{matching} 张照片",
   "{mode} spot {} of {}": "{mode}：第 {0} 个污点，共 {1} 个",

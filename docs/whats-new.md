@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Photos imported earlier catch up, when you say so
+- LightCraft now notes more about a file when it is imported (which people and sky mattes an iPhone ProRAW carries).
+  Photos imported before that can be updated in one go: after an update LightCraft asks once, with how many there are
+  (**Update Now** / **Not Now**), and Settings ▸ General ▸ Photos Imported Earlier has it any time, with a switch for
+  the question. It reads those files in the background (a row in the activity stack, which can stop it) and records
+  only what was missing: your edits and metadata are not touched, and it is not an undo step. Files on a disk that
+  isn't connected are left for next time.
+
 ### Adaptive presets
 - Presets has a new **Adaptive** group. Each preset adds one mask that is worked out again on every photo you apply it
   to, so applying it to a whole shoot gives each photo its own mask: **Brighten Subject**, **Darken Background** and

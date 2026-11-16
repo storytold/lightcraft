@@ -90,6 +90,8 @@
   "{name} found nothing to select on {n} of {total} photos": "{name} tidak menemukan apa pun untuk dipilih pada {n} dari {total} foto",
   "Found nothing to select on {n} of {total} photos": "Tidak ada yang bisa dipilih pada {n} dari {total} foto",
   "Can't tell yet for {n} photos": "Belum bisa dipastikan untuk {n} foto",
+  "{n} photos updated": "{n} foto diperbarui",
+  "{n} photos were imported before LightCraft recorded what their files carry.": "{n} foto diimpor sebelum LightCraft mencatat isi berkasnya.",
   "{matching} of {t} photos": "{matching} dari {t} foto",
   "{matching} photos": "{matching} foto",
   "{mode} spot {} of {}": "{mode}: bintik {} dari {}",

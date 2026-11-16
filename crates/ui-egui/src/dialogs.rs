@@ -306,6 +306,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::LightroomDestination { .. } => 480.0,
             Dialog::Welcome { .. } => 460.0,
             Dialog::LensDatabase { .. } => 440.0,
+            Dialog::FileFacts { .. } => 440.0,
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
         })
@@ -478,6 +479,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
         Dialog::LensDatabase { .. } => "Lens Profiles",
+        Dialog::FileFacts { .. } => "Photos Imported Earlier",
         Dialog::SaveEffect { .. } => "New Effect Preset",
         Dialog::ManageEffects { .. } => "Manage Effect Presets",
         Dialog::DeleteEffects { names } if names.len() == 1 => "Delete Effect Preset",
@@ -527,7 +529,7 @@ impl SamState {
 fn cancel_label(dlg: &Dialog, sam: &SamState) -> &'static str {
     match dlg {
         Dialog::SamModel { .. } if sam.running || sam.installed || sam.by_hand => "Close",
-        Dialog::SamModel { .. } | Dialog::LensDatabase { .. } => "Not Now",
+        Dialog::SamModel { .. } | Dialog::LensDatabase { .. } | Dialog::FileFacts { .. } => "Not Now",
         Dialog::LightroomResult { .. } => "Close",
         _ => "Cancel",
     }
@@ -606,6 +608,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
         Dialog::Welcome { .. } => "",
         Dialog::LensDatabase { .. } => "Download",
+        Dialog::FileFacts { .. } => "Update Now",
         Dialog::SynchronizeFolder { .. } if informational => "Close",
         Dialog::SynchronizeFolder { .. } => "Synchronize",
         Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
@@ -733,6 +736,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::SaveEffect { .. }
                     | Dialog::CaptureTime { .. }
                     | Dialog::LensDatabase { .. }
+                    | Dialog::FileFacts { .. }
             ) =>
         {
             app.toast(ctx, e)
@@ -2152,6 +2156,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::LightroomCatalog { .. } => lightroom_catalog_body(app, ui, t, dlg),
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::body(app, ui, d),
         Dialog::LensDatabase { .. } => crate::lens_db::offer(ui),
+        Dialog::FileFacts { count } => crate::file_facts::offer(ui, *count),
         Dialog::RemoveFolder { .. } => remove_folder_body(ui, t, dlg),
         Dialog::About => about_body(app, ui, t, dlg),
         Dialog::Shortcuts => crate::panels::keymap::body(app, ui, t),

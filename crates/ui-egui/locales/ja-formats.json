@@ -90,6 +90,8 @@
   "{name} found nothing to select on {n} of {total} photos": "{name}：{total}枚中{n}枚で選択対象が見つかりませんでした",
   "Found nothing to select on {n} of {total} photos": "{total}枚中{n}枚で選択対象が見つかりませんでした",
   "Can't tell yet for {n} photos": "{n}枚はまだ判定できません",
+  "{n} photos updated": "{n}枚の写真を更新しました",
+  "{n} photos were imported before LightCraft recorded what their files carry.": "{n}枚の写真は、LightCraft がファイルの内容を記録するようになる前に読み込まれました。",
   "{matching} of {t} photos": "{t}枚中{matching}枚",
   "{matching} photos": "{matching}枚",
   "{mode} spot {} of {}": "{mode}：{1}か所中{0}か所",

@@ -224,6 +224,8 @@
   "{name} found nothing to select on {n} of {total} photos": "{name} không tìm thấy gì để chọn trên {n} trong {total} ảnh",
   "Found nothing to select on {n} of {total} photos": "Không có gì để chọn trên {n} trong {total} ảnh",
   "Can't tell yet for {n} photos": "Chưa thể biết với {n} ảnh",
+  "{n} photos updated": "Đã cập nhật {n} ảnh",
+  "{n} photos were imported before LightCraft recorded what their files carry.": "{n} ảnh đã được nhập trước khi LightCraft ghi lại nội dung tệp của chúng.",
   "{matching} of {t} photos": "{matching} / {t} ảnh",
   "{matching} photos": "{matching} ảnh",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.",

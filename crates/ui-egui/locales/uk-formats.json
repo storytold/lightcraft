@@ -151,6 +151,8 @@
   "{name} found nothing to select on {n} of {total} photos": "{name}: нічого вибрати на {n} із {total} фото",
   "Found nothing to select on {n} of {total} photos": "Нічого вибрати на {n} із {total} фото",
   "Can't tell yet for {n} photos": "Поки невідомо для {n} фото",
+  "{n} photos updated": "Оновлено фото: {n}",
+  "{n} photos were imported before LightCraft recorded what their files carry.": "Фото, імпортованих до того, як LightCraft почав записувати вміст їхніх файлів: {n}.",
   "{matching} of {t} photos": "Фото: {matching} із {t}",
   "{matching} photos": "Фото: {matching}",
   "{mode} spot {} of {}": "{mode}: ділянка {} із {}",

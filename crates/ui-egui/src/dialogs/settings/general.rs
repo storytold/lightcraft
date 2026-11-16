@@ -73,6 +73,7 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
+    earlier_imports(app, ui, t);
     heading(ui, t, crate::i18n::tr("Dialogs"));
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
     heading(ui, t, crate::i18n::tr("External Editing"));
@@ -153,6 +154,46 @@ fn lens_profiles(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             "lensfun's open lens database (CC BY-SA 3.0) corrects distortion and vignetting for many lenses. It is only downloaded when you choose to.",
         ),
     );
+}
+
+/// Photos imported before LightCraft recorded what their files carry ([`crate::file_facts`]): how many are waiting,
+/// Update Now, and whether it is offered when the app starts.
+fn earlier_imports(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    heading(ui, t, crate::i18n::tr("Photos Imported Earlier"));
+    let running = crate::file_facts::running(app);
+    // counted once per library and finished update, not every frame (it looks at every photo)
+    let key = (app.session.library_generation(), app.ui.file_facts_epoch, app.session.catalog.photos().count());
+    let id = egui::Id::unique("settings-file-facts-pending");
+    let waiting = match ui.data(|d| d.get_temp::<((u64, u64, usize), usize)>(id)) {
+        Some((k, n)) if k == key => n,
+        _ => {
+            let n = crate::file_facts::pending(app);
+            ui.data_mut(|d| d.insert_temp(id, (key, n)));
+            n
+        }
+    };
+    let status = if running {
+        crate::i18n::tr("Updating photos imported earlier…").to_string()
+    } else if waiting == 0 {
+        crate::i18n::tr("Every photo is up to date.").to_string()
+    } else {
+        crate::i18n::tr_format!("{n} photos were imported before LightCraft recorded what their files carry.", n = waiting)
+    };
+    row(ui, t, crate::i18n::tr("Earlier imports"), |ui| {
+        ui.label(RichText::new(status).color(t.text));
+        let r = ui.add_enabled(!running && waiting > 0, egui::Button::new(crate::i18n::tr("Update Now")));
+        register(ui, "button:settingsFileFacts", r.rect);
+        if r.clicked()
+            && let Err(e) = crate::file_facts::start(app)
+        {
+            app.toast(ui.ctx(), e);
+        }
+    });
+    let mut offer = app.ui.settings.file_facts_offer;
+    if check(ui, "settings.fileFactsOffer", &mut offer, "Offer to update photos imported earlier when LightCraft starts") {
+        app.ui.settings.file_facts_offer = offer;
+    }
+    hint(ui, t, crate::i18n::tr(crate::file_facts::WHAT));
 }
 
 /// The file Edit In hands an editor: format, colour space and bit depth (`button:{id}Format-…`).
