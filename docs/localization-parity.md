@@ -74,7 +74,7 @@ string follows that.
 | Georgian | `ka` | 2,398 / 2,398 (100%: every plain and formats message any catalog has on 2026-10-12, plus the 27 display labels and 397 What's New lines no other catalog translates) | Geor: no craft-fonts face yet (boxes until one is available) | yes (native speaker) | partial (lower-layer errors English) | 2–4 h (+ a Georgian face) |
 | Finnish | `fi` | 2,610 / 3,308 (79%, measured 2026-10-17: 2,313 plain + 297 formats; the rest is What's New) | Latin (Inter) | yes (written with an agent; native-speaker review by @roopeg) | partial (lower-layer errors English) | 3–5 h |
 | Polish | `pl` | 2,159 messages + 291 formats; every format message translated (2026-10-15) | Latin (Inter) | no (AI-drafted; follow-up by a native speaker) | partial (lower-layer errors English) | 2–4 h (full native review) |
-| Tamil | `ta` | 2,999 / 2,999 (2026-11-14: 2,662 plain + 337 formats, 0 missing non-What's New plain or format messages in `translation_gaps_report`; What's New left in English) | Taml via craft-fonts (Noto Sans Tamil, from craft-fonts `c1db6d1`; boxes with an older revision), shaped by egui (HarfRust) | no (written with an agent; 576 labels reuse the sibling apps' Tamil wording, 454 of them from craft-i18n's native-reviewed catalogs; native-speaker pass pending) | partial (lower-layer errors English) | 3–5 h (native review) |
+| Tamil | `ta` | 2,999 / 2,999 (2026-11-14: 2,662 plain + 337 formats, 0 missing non-What's New plain or format messages in `translation_gaps_report`; What's New left in English) | Taml via craft-fonts (Noto Sans Tamil, from craft-fonts `c1db6d1`; boxes with an older revision), shaped by egui (HarfRust) | yes (written with an agent; 576 labels reuse the sibling apps' Tamil wording, 454 of them from craft-i18n's native-reviewed catalogs; reviewed in the running app by native speakers Radhika and Mohan Raj, 2026-11-15) | partial (lower-layer errors English) | 1–2 h (What's New, lower-layer errors) |
 
 Target languages LightCraft lacks: Korean, Dutch, Norwegian Bokmål, Thai
 (Thai needs shaping and line breaking without spaces). Each Latin-script one is ~10–16 h; Thai
@@ -101,6 +101,7 @@ Target languages LightCraft lacks: Korean, Dutch, Norwegian Bokmål, Thai
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Tamil (`ta`): reviewed in the running app by native speakers Radhika and Mohan Raj (2026-11-15) |
 | 2026-11-13 | minor | Tamil interface catalog (`ta`): every plain and formats message (2,650 + 337; 0 missing non-What's New messages in `translation_gaps_report`), What's New left in English; Tamil text needs craft-fonts `c1db6d1` (Noto Sans Tamil) |
 | 2026-10-26 | minor | Vietnamese (`vi`): 421 missing plain interface messages translated (2,658 plain + 307 formats = 2,965 messages; 0 missing non-What's New plain or format messages in `translation_gaps_report`) |
 | 2026-10-19 | minor | Indonesian interface catalog (`id`): every plain and formats message any catalog has, plus 69 command labels; What's New left in English |

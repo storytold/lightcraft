@@ -14,8 +14,8 @@ as in the other languages. 576 labels reuse the Tamil wording of the sibling app
 [storytold/craft-i18n](https://github.com/storytold/craft-i18n), so the suite reads the same: 454 as
 merged there (the PhotoCraft, PdfCraft and shared catalogs, reviewed by native speakers) and 122 from
 catalogs still in storytold/craft-i18n#226. The rest were written with an agent from the meaning of
-the English labels and have not yet been reviewed by a native speaker. A native speaker's pass is
-welcome.
+the English labels. Native speakers Radhika and Mohan Raj reviewed the whole Tamil interface in the
+running app on 2026-11-15.
 
 File names, command ids, template placeholders and albums, presets or metadata you named yourself are
 not translated.
