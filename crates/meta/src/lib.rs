@@ -353,8 +353,17 @@ fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metad
         m.overlay_user_fields(&xmp.metadata);
         m.fill_missing(&xmp.metadata);
         // boxes another app drew on the photo as stored go where the upright photo has them (#2674)
-        if let (Some(drawn_on), Some(orientation), Some(stored)) = (xmp.regions_drawn_on(), exif_orientation, stored) {
-            upright_regions(&mut m.regions, drawn_on, orientation, stored);
+        if let (Some(drawn_on), Some(stored)) = (xmp.regions_drawn_on(), stored) {
+            match exif_orientation {
+                Some(orientation) if orientation.swaps_axes() => {
+                    upright_regions(&mut m.regions, drawn_on, orientation, stored);
+                }
+                // no quarter turn stated, yet the boxes were drawn on a frame of the other shape: the pixels themselves
+                // were turned after the boxes were drawn (an iPhone photo saved upright, its faces left as shot)
+                _ => {
+                    regions_onto_turned_pixels(&mut m.regions, drawn_on, stored, xmp.regions_turn());
+                }
+            }
         }
     }
     m
@@ -374,6 +383,22 @@ pub fn upright_regions(regions: &mut [Region], drawn_on: (f64, f64), orientation
     }
     for r in regions.iter_mut() {
         r.rect = orientation.map_norm_rect(r.rect);
+    }
+    true
+}
+
+/// Turn regions drawn on a photo before its pixels were turned a quarter turn (by an app that saved it upright and
+/// dropped the Exif orientation, keeping the boxes as they were drawn) onto the pixels as they are now. `drawn_on` is
+/// `AppliedToDimensions`, `shown` the size of the pixels, which no orientation turns; when the two have opposite
+/// shapes the boxes are turned by `turn` ([`XmpData::regions_turn`]). Returns whether they were. Square sizes say
+/// nothing, and boxes on a frame of the photo's own shape are left as they are.
+pub fn regions_onto_turned_pixels(regions: &mut [Region], drawn_on: (f64, f64), shown: (u32, u32), turn: Orientation) -> bool {
+    let ((dw, dh), (sw, sh)) = (drawn_on, shown);
+    if regions.is_empty() || !turn.swaps_axes() || sw == sh || dw == dh || (dw > dh) == (sw > sh) {
+        return false;
+    }
+    for r in regions.iter_mut() {
+        r.rect = turn.map_norm_rect(r.rect);
     }
     true
 }

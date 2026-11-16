@@ -203,15 +203,21 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     }
     // regions another app drew on the photo as stored: `extract` could only tell by the size the metadata states, which
     // can be missing or wrong; the header's is the size as stored, so the boxes as written are turned by it (#2674)
+    // and boxes drawn before the pixels themselves were turned (no orientation, opposite shape) are turned to match them
     let mut meta = meta;
-    if o.swaps_axes()
-        && !meta.regions.is_empty()
+    if !meta.regions.is_empty()
         && let Some(xmp) = lightcraft_meta::embedded(bytes).xmp.and_then(|x| lightcraft_meta::parse_xmp(&x).ok())
         && let Some(drawn_on) = xmp.regions_drawn_on()
         && !xmp.metadata.regions.is_empty()
     {
-        meta.regions = xmp.metadata.regions;
-        lightcraft_meta::upright_regions(&mut meta.regions, drawn_on, o, (header.width, header.height));
+        let stored = (header.width, header.height);
+        let mut regions = xmp.metadata.regions.clone();
+        if o.swaps_axes() {
+            lightcraft_meta::upright_regions(&mut regions, drawn_on, o, stored);
+            meta.regions = regions;
+        } else if lightcraft_meta::regions_onto_turned_pixels(&mut regions, drawn_on, stored, xmp.regions_turn()) {
+            meta.regions = regions;
+        }
     }
     let format = match ext_upper(name).as_str() {
         "JPG" | "JPEG" => "JPEG".to_string(),

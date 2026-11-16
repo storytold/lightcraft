@@ -627,6 +627,67 @@ fn regions_drawn_on_the_photo_as_stored_land_on_the_upright_photo() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
+/// An iPhone photo saved upright: its pixels were turned (24 × 32 here) and its Exif orientation dropped, but its face
+/// regions are still those the camera drew on the sideways frame it shot (`AppliedToDimensions` 32 × 24), each with
+/// Apple's `AngleInfoRoll`. The boxes are turned onto the pixels: by Exif orientation 6 for a roll near 270 (the
+/// phone held the usual way), by 8 for one near 90. With and without an Exif that states the size.
+#[test]
+fn faces_drawn_before_the_pixels_were_turned_land_on_the_faces() {
+    let src = temp_dir("regions-turned-pixels");
+    let packet = |roll: u32| {
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+                xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:apple-fi="http://ns.apple.com/faceinfo/1.0/"
+                xmlns:stDim="http://ns.adobe.com/xap/1.0/sType/Dimensions#">
+             <mwg-rs:Regions rdf:parseType="Resource"><mwg-rs:RegionList><rdf:Seq><rdf:li><rdf:Description mwg-rs:Type="Face">
+              <mwg-rs:Area stArea:y="0.4" stArea:w="0.1" stArea:x="0.25" stArea:h="0.15" stArea:unit="normalized"/>
+              <mwg-rs:Extensions apple-fi:AngleInfoYaw="3" apple-fi:AngleInfoRoll="{roll}" apple-fi:ConfidenceLevel="703" apple-fi:FaceID="1"/>
+             </rdf:Description></rdf:li></rdf:Seq></mwg-rs:RegionList>
+             <mwg-rs:AppliedToDimensions stDim:h="24" stDim:w="32" stDim:unit="pixel"/></mwg-rs:Regions>
+            </rdf:Description></rdf:RDF></x:xmpmeta>"#
+        )
+    };
+    let size_exif = {
+        use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+        let mut sub = IfdBuilder::new();
+        sub.set(t::PIXEL_X_DIMENSION, Value::Long(vec![24]));
+        sub.set(t::PIXEL_Y_DIMENSION, Value::Long(vec![32]));
+        let mut ifd0 = IfdBuilder::new();
+        ifd0.set_child(t::EXIF_IFD, sub);
+        [b"Exif\0\0".as_slice(), &TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()].concat()
+    };
+    let img = lightcraft_raster::Rgba8::from_fn(24, 32, |x, y| [(x * 7) as u8, (y * 9) as u8, 90, 255]);
+    for (roll, want) in [(261, [0.525, 0.2, 0.675, 0.3]), (88, [0.325, 0.7, 0.475, 0.8])] {
+        for exif in [None, Some(size_exif.as_slice())] {
+            let file = src.join(format!("roll{roll}-{}.jpg", exif.is_some()));
+            let xmp = packet(roll);
+            let meta = lightcraft_codecs::EncodeMeta { exif, xmp: Some(&xmp), ..Default::default() };
+            std::fs::write(
+                &file,
+                lightcraft_codecs::encode_jpeg(&lightcraft_codecs::EncodeImage::rgba8(&img), 90, Default::default(), &meta).unwrap(),
+            )
+            .unwrap();
+            let mut s = Session::new().with_fs();
+            s.execute("library.import", &json!({"paths": [file.to_string_lossy()]})).unwrap();
+            let id = only(&s);
+            let check = |s: &Session, when: &str| {
+                let p = s.catalog.photo(id).unwrap();
+                assert_eq!((p.width, p.height), (24, 32), "{when}");
+                assert_eq!(p.meta.regions.len(), 1, "{when}");
+                let r = p.meta.regions[0].rect;
+                let got = [r.x0, r.y0, r.x1, r.y1];
+                assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-9), "roll {roll}, Exif size {}, {when}: {got:?}", exif.is_some());
+            };
+            check(&s, "imported");
+            let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+            assert_eq!(read["failed"], json!([]), "{read}");
+            check(&s, "read again");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// Review of #2857: a photo whose Exif states no orientation, but whose XMP says `tiff:Orientation=6`, is shown as
 /// stored (LightCraft turns by the Exif alone), so boxes drawn on its stored frame are right as written: at import
 /// and when the file's metadata is read again, which must agree.

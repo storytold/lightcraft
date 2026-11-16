@@ -30,6 +30,26 @@ impl XmpData {
         let turned = regions.field("mwg-rs:RegionList").is_some_and(|l| l.items().iter().any(|r| r.field("mwg-rs:Rotation").is_some()));
         if turned { None } else { applied_to(regions) }
     }
+
+    /// Which way to turn the regions of a photo whose pixels were turned a quarter turn after they were drawn
+    /// ([`crate::regions_onto_turned_pixels`]). Apple's face regions say how each face leans on the frame they were
+    /// drawn on (`apple-fi:AngleInfoRoll`, degrees): about 270 is a photo shot upright on a phone held the usual way
+    /// (Exif orientation 6), about 90 one held the other way (8). Without that, the usual way.
+    pub fn regions_turn(&self) -> crate::Orientation {
+        let rolls = self.values.get("mwg-rs:Regions").and_then(|r| r.field("mwg-rs:RegionList")).map_or(&[][..], XmpValue::items);
+        let roll = rolls.iter().find_map(|r| {
+            let XmpValue::Struct(ext) = r.field("mwg-rs:Extensions")? else { return None };
+            ext.iter()
+                .find(|(k, _)| k.ends_with(":AngleInfoRoll"))
+                .and_then(|(_, v)| v.text())
+                .and_then(|t| t.trim().parse::<f64>().ok())
+                .filter(|r| r.is_finite())
+        });
+        match roll.map(|r| r.rem_euclid(360.0)) {
+            Some(r) if (45.0..135.0).contains(&r) => crate::Orientation::Rotate270,
+            _ => crate::Orientation::Rotate90,
+        }
+    }
 }
 
 fn applied_to(regions: &XmpValue) -> Option<(f64, f64)> {
