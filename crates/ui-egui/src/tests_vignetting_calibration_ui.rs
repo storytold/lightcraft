@@ -43,7 +43,7 @@ fn scroll_to(h: &mut crate::headless::Headless, id: &str) {
     h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
     for _ in 0..30 {
         let Some(target) = rect(h, id) else { panic!("{id} is laid out") };
-        let floor = rect(h, "button:previousBar").map_or(panel.bottom(), |r| r.top());
+        let floor = rect(h, "button:previousBar").map_or(panel.bottom() - 48.0, |r| r.top());
         if target.bottom() <= floor && target.top() >= panel.top() {
             return;
         }

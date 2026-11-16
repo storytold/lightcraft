@@ -290,6 +290,8 @@ impl DevelopSettings {
 }
 
 #[cfg(test)]
+mod tests_brightness;
+#[cfg(test)]
 mod tests_genfill;
 #[cfg(test)]
 mod tests_levels;

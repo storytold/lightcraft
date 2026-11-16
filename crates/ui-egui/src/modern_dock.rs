@@ -114,7 +114,9 @@ impl Group {
     /// The pill sliders of an adjustment group, in order (none for Presets and the tools).
     fn control_ids(self) -> &'static [&'static str] {
         match self {
-            Group::Light => &["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"],
+            Group::Light => {
+                &["light.exposure", "light.contrast", "light.brightness", "light.highlights", "light.shadows", "light.whites", "light.blacks"]
+            }
             Group::Colour => &["wb.temp", "wb.tint", "color.vibrance", "color.saturation"],
             Group::Tone => {
                 &["curve.highlights", "curve.lights", "curve.darks", "curve.shadows", "curve.splitShadows", "curve.splitMid", "curve.splitHighlights"]

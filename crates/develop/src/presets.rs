@@ -157,9 +157,20 @@ impl SettingsGroup {
     }
 }
 
+/// `s` as JSON with the settings that serialization leaves out while neutral, and that a copy, a preset or a sync must
+/// still carry, written out: Brightness. A photo without Brightness then still resets the Brightness of the photo it is
+/// pasted on, and a preset blends it from the photo's own value.
+fn full_json(s: &DevelopSettings) -> Value {
+    let mut full = s.to_json();
+    if let Some(light) = full.get_mut("light").and_then(Value::as_object_mut) {
+        light.entry("brightness").or_insert_with(|| Value::from(s.light.brightness));
+    }
+    full
+}
+
 /// The subset of `s` covering `groups`, as a partial JSON object.
 pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
-    let full = s.to_json();
+    let full = full_json(s);
     let mut out = Map::new();
     for g in groups {
         for k in g.keys() {
@@ -212,6 +223,7 @@ const fn item(id: &'static str, label: &'static str, paths: &'static [&'static s
 const LIGHT_ITEMS: &[SettingItem] = &[
     item("light.exposure", "Exposure", &["light.exposure"]),
     item("light.contrast", "Contrast", &["light.contrast", "light.contrast_mode"]),
+    item("light.brightness", "Brightness", &["light.brightness"]),
     item("light.highlights", "Highlights", &["light.highlights"]),
     item("light.shadows", "Shadows", &["light.shadows"]),
     item("light.whites", "Whites", &["light.whites"]),
@@ -444,7 +456,7 @@ impl SettingsPick {
         if self.settings.is_empty() {
             return out;
         }
-        let full = s.to_json();
+        let full = full_json(s);
         let Some(o) = out.as_object_mut() else { return out };
         for id in &self.settings {
             let Some((_, it)) = find_item(id) else { continue };
@@ -683,7 +695,7 @@ pub fn apply_partial(s: &DevelopSettings, partial: &Value, amount: f64) -> Devel
 /// serialization leaves out while at their defaults (HDR), so their numbers blend from `s`'s
 /// values too.
 fn blend_base(s: &DevelopSettings) -> Value {
-    let mut base = s.to_json();
+    let mut base = full_json(s);
     if let (Some(o), Ok(hdr)) = (base.as_object_mut(), serde_json::to_value(s.hdr)) {
         o.entry("hdr").or_insert(hdr);
     }
@@ -1194,7 +1206,7 @@ mod tests {
                 assert!(it.id.starts_with(&format!("{}.", g.id())), "{}", it.id);
                 for p in it.paths {
                     assert!(
-                        path_in(&full, p) || ["camera_profile", "retouch", "light.contrast_mode"].contains(p),
+                        path_in(&full, p) || ["camera_profile", "retouch", "light.contrast_mode", "light.brightness"].contains(p),
                         "{}: {p} isn't in the settings",
                         it.id
                     );

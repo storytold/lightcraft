@@ -223,6 +223,7 @@ controls! {
     "wb.tint" => wb.tint, "Tint", Color, -150, 150, 0, 1, 0, Tint;
     "light.exposure" => light.exposure, "Exposure", Light, -5, 5, 0, 0.01, 2, Centered => Ramp;
     "light.contrast" => light.contrast, "Contrast", Light, -100, 100, 0, 1, 0, Centered => ReverseRamp;
+    "light.brightness" => light.brightness, "Brightness", Light, -100, 100, 0, 1, 0, Centered => Ramp;
     "light.highlights" => light.highlights, "Highlights", Light, -100, 100, 0, 1, 0, Centered => Ramp;
     "light.shadows" => light.shadows, "Shadows", Light, -100, 100, 0, 1, 0, Centered => Ramp;
     "light.whites" => light.whites, "Whites", Light, -100, 100, 0, 1, 0, Centered => Ramp;
