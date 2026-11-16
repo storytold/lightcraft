@@ -1023,7 +1023,9 @@ fn render(args: &[String]) -> Result<(), String> {
             // a movie (.mp4 / .mov): a video clip exports as one; the format stays a rendered one
             (None, Some(v)) if p.get("videoFormat").is_none() => video = Some(v),
             (None, Some(_)) => {}
-            (None, None) => return Err(format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .jxl .psd .dng .mp4 .mov or --opt format=…)")),
+            (None, None) => {
+                return Err(format!("{output}: unknown extension (use .jpg .png .tif .webp .avif .jxl .psd .dng .mp4 .mov or --opt format=…)"));
+            }
         }
         video
     } else {
