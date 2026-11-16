@@ -328,5 +328,8 @@
   "View › Detail View ({keys}).": "Вид › Режим детализации ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Файл › Экспорт… · Файл › Печать… ({keys}).",
   "Set the location of {n} photos": "Задать местоположение {n} фото",
-  "{n} photos without GPS": "Фото без GPS: {n}"
+  "{n} photos without GPS": "Фото без GPS: {n}",
+  "Location {n}": "Место {n}",
+  "In private location “{name}”": "В личном месте «{name}»",
+  "within {d} of {lat}, {lon}": "в пределах {d} от {lat}, {lon}"
 }

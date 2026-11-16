@@ -324,5 +324,8 @@
   "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
   "Set the location of {n} photos": "Đặt vị trí cho {n} ảnh",
-  "{n} photos without GPS": "{n} ảnh không có GPS"
+  "{n} photos without GPS": "{n} ảnh không có GPS",
+  "Location {n}": "Vị trí {n}",
+  "In private location “{name}”": "Trong vị trí riêng tư “{name}”",
+  "within {d} of {lat}, {lon}": "trong vòng {d} quanh {lat}, {lon}"
 }

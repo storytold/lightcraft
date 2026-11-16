@@ -671,7 +671,7 @@ fn related_fields_share_a_group() {
     same(&["captureDate", "importDate", "editDate"], "Date");
     same(&["keywords", "keywordCount", "person", "personCount"], "Keywords & People");
     same(&["title", "caption", "altText", "creator", "copyright", "copyrightStatus"], "Description");
-    same(&["location", "city", "state", "country", "hasGps", "gpsArea"], "Location");
+    same(&["location", "city", "state", "country", "hasGps", "gpsArea", "gpsRadius"], "Location");
     for f in ["rating", "flag", "label", "text"] {
         assert_eq!(field_group(f), None, "{f} stays at the top level");
     }
@@ -956,4 +956,91 @@ fn a_smart_album_can_hold_an_area() {
     assert!(cat.album_photos(AlbumId(2)).is_empty());
     assert_eq!(cat.album_count(AlbumId(1)), 2);
     let _ = paris;
+}
+
+fn in_circle(p: &Photo, op: &str, value: serde_json::Value) -> bool {
+    rs(json!({"rules": [{"field": "gpsRadius", "op": op, "value": value}]})).matches(p, &Catalog::new())
+}
+
+/// GPS Radius: within a distance of a point, measured on the sphere: across the antimeridian
+/// and around a pole as anywhere else; a photo without a position is in no circle and outside
+/// none; a circle that isn't one matches nothing and is reported.
+#[test]
+fn gps_radius_matches_positions_within_the_distance() {
+    let eiffel = (48.8584, 2.2945);
+    let notre_dame = (48.8530, 2.3499);
+    // ~4.1 km apart
+    let d = distance_m(eiffel.0, eiffel.1, notre_dame.0, notre_dame.1);
+    assert!((4000.0..4200.0).contains(&d), "{d}");
+    let c = |lat: f64, lon: f64, r: f64| json!({"lat": lat, "lon": lon, "radius": r});
+    assert!(in_circle(&at(Some(notre_dame)), "inside", c(eiffel.0, eiffel.1, 5000.0)));
+    assert!(!in_circle(&at(Some(notre_dame)), "inside", c(eiffel.0, eiffel.1, 3000.0)));
+    assert!(in_circle(&at(Some(notre_dame)), "outside", c(eiffel.0, eiffel.1, 3000.0)));
+    // the centre itself, and a radius of exactly the distance (edge included)
+    assert!(in_circle(&at(Some(eiffel)), "inside", c(eiffel.0, eiffel.1, 1.0)));
+    assert!(in_circle(&at(Some(notre_dame)), "inside", c(eiffel.0, eiffel.1, d)));
+    // across the antimeridian: Fiji's 179.9° E and 179.9° W are 22 km apart, not 40 000
+    let east = at(Some((-17.0, 179.9)));
+    let west = at(Some((-17.0, -179.9)));
+    assert!(in_circle(&west, "inside", c(-17.0, 179.9, 25_000.0)));
+    assert!(in_circle(&east, "inside", c(-17.0, -179.9, 25_000.0)));
+    assert!(in_circle(&at(Some((-17.0, 180.0))), "inside", c(-17.0, -180.0, 1.0)));
+    // around a pole: a 500 km circle at 87° N holds the pole and the far side of it
+    let polar = c(87.0, 0.0, 500_000.0);
+    assert!(in_circle(&at(Some((90.0, 0.0))), "inside", polar.clone()));
+    // over the pole: 3° + 1° ≈ 445 km away; 3° + 2° ≈ 556 km is outside
+    assert!(in_circle(&at(Some((89.0, 180.0))), "inside", polar.clone()));
+    assert!(in_circle(&at(Some((88.0, 180.0))), "outside", polar.clone()));
+    assert_eq!(GpsCircle::parse(&polar).unwrap().pole(), Some(true));
+    assert_eq!(GpsCircle::parse(&c(-89.0, 10.0, 200_000.0)).unwrap().pole(), Some(false));
+    assert_eq!(GpsCircle::parse(&c(48.0, 2.0, 1_000_000.0)).unwrap().pole(), None);
+    // no position, or not one: neither inside nor outside
+    for gps in [None, Some((f64::NAN, 2.0)), Some((91.0, 2.0)), Some((48.0, -181.0))] {
+        assert!(!in_circle(&at(gps), "inside", c(0.0, 0.0, MAX_RADIUS_M)), "{gps:?}");
+        assert!(!in_circle(&at(gps), "outside", c(0.0, 0.0, 1.0)), "{gps:?}");
+    }
+    // hostile values match nothing and are reported
+    let check = |v: serde_json::Value| {
+        rs(json!({"rules": [{"field": "gpsRadius", "op": "inside", "value": v}]}))
+            .check(&Catalog::new())
+            .into_iter()
+            .map(|p| p.issue)
+            .collect::<Vec<_>>()
+    };
+    assert!(check(c(48.0, 2.0, 500.0)).is_empty());
+    for bad in [
+        c(91.0, 0.0, 500.0),
+        c(0.0, 181.0, 500.0),
+        c(0.0, 0.0, 0.5),
+        c(0.0, 0.0, 1_000_001.0),
+        c(0.0, 0.0, -5.0),
+        json!({"lat": 0.0, "lon": 0.0}),
+        json!({"lat": "0", "lon": 0.0, "radius": 10.0}),
+        json!(null),
+        json!([1, 2, 3]),
+    ] {
+        assert_eq!(check(bad.clone()), vec![Issue::NeedsCircle], "{bad}");
+        assert!(!in_circle(&at(Some(eiffel)), "inside", bad.clone()) && !in_circle(&at(Some(eiffel)), "outside", bad), "matches nothing");
+    }
+    assert_eq!(GpsCircle::new(f64::NAN, 0.0, 10.0), Err(Issue::NeedsCircle));
+    assert_eq!(GpsCircle::new(0.0, 0.0, f64::INFINITY), Err(Issue::NeedsCircle));
+    // the latitude band holds every position inside, clamped at the poles
+    let (s, n) = GpsCircle::parse(&polar).unwrap().lat_range();
+    assert!(n == 90.0 && (82.0..83.0).contains(&s), "{s} {n}");
+    // a summary people can read
+    assert_eq!(GpsCircle::new(48.5, 2.25, 1500.0).unwrap().describe(), "within 1.5 km of 48.5, 2.25");
+    assert_eq!(format_distance(850.0), "850 m");
+    assert_eq!(format_distance(120_400.0), "120 km");
+}
+
+/// The point `destination` gives is at the distance asked, and its longitude stays continuous
+/// (unwrapped) past ±180.
+#[test]
+fn destination_is_at_the_distance_and_unwrapped() {
+    for (lat, lon, b, d) in [(48.0, 2.0, 0.0, 1000.0), (0.0, 179.9, 90.0, 50_000.0), (-60.0, -10.0, 225.0, 900_000.0), (89.0, 0.0, 180.0, 10.0)] {
+        let (la, lo) = destination(lat, lon, b, d);
+        assert!((distance_m(lat, lon, la, lo) - d).abs() < 0.01 * d.max(1.0), "{lat} {lon} {b} {d} → {la} {lo}");
+    }
+    let (_, lo) = destination(0.0, 179.9, 90.0, 50_000.0);
+    assert!(lo > 180.0, "unwrapped: {lo}");
 }

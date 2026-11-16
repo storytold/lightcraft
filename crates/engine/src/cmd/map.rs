@@ -7,8 +7,9 @@ use lightcraft_catalog::Op;
 use lightcraft_geom::{GeoBounds, LatLon};
 use serde_json::{Value, json};
 
-use super::{CommandSpec, always, bad, cmd, f64_req, has_selection, str_param};
-use crate::map::{LocationFilter, SavedLocation, TileSource, cache};
+use super::{CommandSpec, always, bad, cmd, f64_req, has_selection};
+use crate::locations::{LocationChange, PositionIndex, SavedLocation};
+use crate::map::{LocationFilter, TileSource, cache};
 use crate::{EngineError, Result, Session};
 
 const SOURCE: &str = "map.tileSource";
@@ -235,6 +236,163 @@ fn clear_cache(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({"bytes": gone.bytes, "tiles": gone.tiles, "dir": root.to_string_lossy()}))
 }
 
+// ---------------------------------------------------------------- saved locations
+// (ported from PR #906, Jason Baldwin)
+
+/// An optional number parameter (finite), `None` when absent or null.
+fn opt_num(id: &str, p: &Value, key: &str) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_f64().filter(|v| v.is_finite()).map(Some).ok_or_else(|| bad(id, format!("`{key}` must be a number"))),
+    }
+}
+
+fn opt_bool(id: &str, p: &Value, key: &str) -> Result<Option<bool>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v.as_bool().map(Some).ok_or_else(|| bad(id, format!("`{key}` is true or false"))),
+    }
+}
+
+/// The saved location named by `id`.
+fn location_id(cmd: &str, s: &Session, p: &Value) -> Result<u64> {
+    let id = p.get("id").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "`id` is a saved location's id (map.locations)"))?;
+    if s.map.locations.get(id).is_none() {
+        return Err(bad(cmd, format!("no saved location {id}")));
+    }
+    Ok(id)
+}
+
+/// Every library photo's position (not the deleted ones), for counting.
+fn library_index(s: &Session) -> PositionIndex {
+    PositionIndex::new(s.catalog.photos().filter(|p| !p.deleted).map(|p| (p.id.0, p.meta.gps)))
+}
+
+/// The positions of the photos in view (source, filter and sort: the grid's; before the Map
+/// view's location filter).
+fn view_index(s: &mut Session) -> PositionIndex {
+    let (_, ids) = s.visible_base_shared();
+    PositionIndex::new(ids.iter().map(|id| (id.0, s.catalog.photo(*id).and_then(|p| p.meta.gps))))
+}
+
+fn with_counts(l: &SavedLocation, library: &PositionIndex, view: &PositionIndex) -> Value {
+    let mut v = l.to_json();
+    v["photos"] = json!(library.count(&l.circle()));
+    v["inView"] = json!(view.count(&l.circle()));
+    v
+}
+
+fn locations(s: &mut Session, _: &Value) -> Result<Value> {
+    let t0 = web_time::Instant::now();
+    let (library, view) = (library_index(s), view_index(s));
+    let list: Vec<Value> = s.map.locations.list().iter().map(|l| with_counts(l, &library, &view)).collect();
+    Ok(json!({"locations": list, "count": list.len(), "countMs": t0.elapsed().as_secs_f64() * 1000.0}))
+}
+
+/// Where a new location goes when made from photos: the middle of their positions, and a radius
+/// that holds them all (10 % to spare, at least 100 m, at most 1000 km).
+fn around_photos(s: &Session, ids: &[lightcraft_catalog::PhotoId]) -> Option<(f64, f64, f64)> {
+    let pos: Vec<(f64, f64)> =
+        ids.iter().filter_map(|id| s.catalog.photo(*id)).filter_map(|p| lightcraft_catalog::rules::valid_gps(p.meta.gps)).collect();
+    let b = crate::map::Bounds::of(pos.iter().copied())?;
+    let c = b.center();
+    let lon = crate::map::mercator::wrap_lon(c.lon);
+    let far = pos.iter().map(|(la, lo)| lightcraft_catalog::rules::distance_m(c.lat, lon, *la, *lo)).filter(|d| d.is_finite()).fold(0.0, f64::max);
+    let radius = (far * 1.1).clamp(100.0, lightcraft_catalog::rules::MAX_RADIUS_M);
+    Some((c.lat, lon, radius))
+}
+
+fn location_add(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "map.location.add";
+    let name = match p.get("name") {
+        Some(Value::String(n)) => n.clone(),
+        _ => return Err(bad(C, "`name` is the location's name (text)")),
+    };
+    let private = opt_bool(C, p, "private")?.or(opt_bool(C, p, "isPrivate")?).unwrap_or(false);
+    let (lat, lon, radius) = (opt_num(C, p, "lat")?, opt_num(C, p, "lon")?, opt_num(C, p, "radius")?);
+    let from = opt_bool(C, p, "fromSelection")?.unwrap_or(false);
+    let (lat, lon, radius) = match (lat, lon) {
+        (Some(lat), Some(lon)) => (lat, lon, radius.unwrap_or(1000.0)),
+        (None, None) if from => {
+            let ids = s.targets(p).map_err(|e| match e {
+                EngineError::BadParams { msg, .. } => bad(C, msg),
+                other => other,
+            })?;
+            let (la, lo, r) = around_photos(s, &ids).ok_or_else(|| bad(C, "none of the selected photos has a GPS position"))?;
+            (la, lo, radius.unwrap_or(r))
+        }
+        _ => return Err(bad(C, "give `lat` and `lon` (degrees), or `fromSelection: true`")),
+    };
+    let l = s.map.locations.add(&name, lat, lon, radius, private).map_err(|e| bad(C, e))?;
+    if let Err(e) = s.save_locations() {
+        // it stays for this session; say why it wasn't saved
+        log::error!("{C}: {e}");
+        let mut v = l.to_json();
+        v["notSaved"] = json!(e.to_string());
+        return Ok(v);
+    }
+    let (library, view) = (library_index(s), view_index(s));
+    Ok(with_counts(&l, &library, &view))
+}
+
+fn location_update(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "map.location.update";
+    let id = location_id(C, s, p)?;
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) => Some(n.clone()),
+        Some(_) => return Err(bad(C, "`name` is text")),
+    };
+    let change = LocationChange {
+        name,
+        lat: opt_num(C, p, "lat")?,
+        lon: opt_num(C, p, "lon")?,
+        radius: opt_num(C, p, "radius")?,
+        private: opt_bool(C, p, "private")?,
+    };
+    let l = s.map.locations.update(id, &change).map_err(|e| bad(C, e))?;
+    let saved = s.save_locations();
+    let (library, view) = (library_index(s), view_index(s));
+    let mut v = with_counts(&l, &library, &view);
+    if let Err(e) = saved {
+        v["notSaved"] = json!(e.to_string());
+    }
+    Ok(v)
+}
+
+fn location_remove(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "map.location.remove";
+    let id = location_id(C, s, p)?;
+    let gone = s.map.locations.remove(id).ok_or_else(|| bad(C, format!("no saved location {id}")))?;
+    let mut v = json!({"removed": gone.id, "name": gone.name, "deleted": true});
+    if let Err(e) = s.save_locations() {
+        v["notSaved"] = json!(e.to_string());
+    }
+    Ok(v)
+}
+
+fn location_photos(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "map.location.photos";
+    let id = location_id(C, s, p)?;
+    let in_view = opt_bool(C, p, "inView")?.unwrap_or(false);
+    let circle = s.map.locations.get(id).map(SavedLocation::circle).ok_or_else(|| bad(C, format!("no saved location {id}")))?;
+    let ids: Vec<u64> = if in_view {
+        // in the order of the view
+        let (_, view) = s.visible_base_shared();
+        view.iter()
+            .filter(|i| {
+                s.catalog.photo(**i).is_some_and(|ph| lightcraft_catalog::rules::valid_gps(ph.meta.gps).is_some_and(|(a, b)| circle.contains(a, b)))
+            })
+            .map(|i| i.0)
+            .collect()
+    } else {
+        let mut v = library_index(s).inside(&circle);
+        v.sort_unstable();
+        v
+    };
+    Ok(json!({"id": id, "ids": ids, "count": ids.len()}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "map.providers", "Map Providers", [], None, "{} → [{id, label, maxZoom, attribution, offline, current}] — the tile sources the map offers now (the Esri layers only once an ArcGIS API key is set with map.setEsriKey: see docs/map.md); set one with map.tileSource", always, providers),
@@ -267,76 +425,46 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             clear_cache
         ),
-        cmd!(query "map.savedLocations.list", "List Saved Locations", [], None, "{} → [{id, name, lat, lon, radius, isPrivate, photoCount}] — lists user saved locations with count of photos within boundary", always, |s, _| {
-            let visible_ids = s.visible().to_vec();
-            let mut list = Vec::new();
-            for loc in &s.saved_locations {
-                let mut count = 0;
-                for id in &visible_ids {
-                    if let Some(ph) = s.catalog.photo(*id)
-                        && let Some((lat, lon)) = ph.meta.gps
-                        && let Some(p) = LatLon::new(lat, lon)
-                        && loc.contains(p)
-                    {
-                        count += 1;
-                    }
-                }
-                list.push(json!({
-                    "id": loc.id,
-                    "name": loc.name,
-                    "lat": loc.lat,
-                    "lon": loc.lon,
-                    "radius": loc.radius,
-                    "isPrivate": loc.is_private,
-                    "photoCount": count,
-                }));
-            }
-            Ok(json!(list))
-        }),
+        cmd!(query "map.locations", "Saved Locations", [], None, "{} → the library's saved locations: {locations: [{id, name, lat, lon, radius (metres), private, photos (in the library inside it), inView (of the photos in view)}], count, countMs}", always, locations),
+        cmd!(query "map.savedLocations.list", "List Saved Locations", [], None, "{} → the older name of map.locations (same answer)", always, locations),
+        cmd!(
+            "map.location.add",
+            "New Saved Location",
+            [],
+            None,
+            "{name, lat, lon, radius?: metres 1–1000000 (default 1000), private?: bool} or {name, fromSelection: true, ids?, radius?, private?} (centred on the selected (or named) photos' positions, a radius that holds them) — save a location (saved at once in locations.json; not an undo step) → the location with its counts",
+            always,
+            location_add
+        ),
         cmd!(
             "map.savedLocations.create",
             "Create Saved Location",
             [],
             None,
-            "{name: str, lat: f64, lon: f64, radius?: f64 (meters, default 1000), isPrivate?: bool} → {id, name, ...} — creates a new saved location",
+            "the older name of map.location.add (same parameters; isPrivate is taken for private)",
             always,
-            |s, p| {
-                const C: &str = "map.savedLocations.create";
-                let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing `name`"))?.to_string();
-                let lat = f64_req(p, "lat", C)?;
-                let lon = f64_req(p, "lon", C)?;
-                if LatLon::new(lat, lon).is_none() {
-                    return Err(bad(C, "lat/lon out of valid range or non-finite"));
-                }
-                let radius = p.get("radius").and_then(Value::as_f64).unwrap_or(1000.0).max(1.0);
-                let is_private = p.get("isPrivate").and_then(Value::as_bool).unwrap_or(false);
-
-                let id = format!("loc-{}", s.saved_locations.len() + 1);
-                let loc = SavedLocation::new(&id, &name, lat, lon, radius, is_private);
-                s.saved_locations.push(loc.clone());
-                let _ = s.save_prefs();
-                Ok(json!(loc))
-            }
+            location_add
         ),
         cmd!(
-            "map.savedLocations.delete",
+            "map.location.update",
+            "Edit Saved Location",
+            [],
+            None,
+            "{id, name?, lat?, lon?, radius?, private?} — change a saved location (checked as a whole: nothing changes when any part is refused; not an undo step) → the location with its counts",
+            always,
+            location_update
+        ),
+        cmd!(
+            "map.location.remove",
             "Delete Saved Location",
             [],
             None,
-            "{id: str} → {deleted: true} — removes a saved location",
+            "{id} — delete a saved location (not an undo step; the photos keep their positions) → {removed, name, deleted}",
             always,
-            |s, p| {
-                const C: &str = "map.savedLocations.delete";
-                let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
-                let before_len = s.saved_locations.len();
-                s.saved_locations.retain(|loc| loc.id != id);
-                if s.saved_locations.len() == before_len {
-                    return Err(bad(C, format!("saved location `{id}` not found")));
-                }
-                let _ = s.save_prefs();
-                Ok(json!({ "deleted": true }))
-            }
+            location_remove
         ),
+        cmd!("map.savedLocations.delete", "Remove Saved Location", [], None, "{id} — the older name of map.location.remove", always, location_remove),
+        cmd!(query "map.location.photos", "Photos in Saved Location", [], None, "{id, inView?: bool} → {id, ids, count}: the library's photos inside the location (inView: only the photos in view, in their order)", always, location_photos),
         cmd!(query "map.filterPhotos", "Filter Photos for Map", [], None, "{bounds?: {minLat, maxLat, minLon, maxLon}, mode?: \"visible\"|\"tagged\"|\"untagged\"|\"none\"} → {photos: [{id, lat, lon, selected}]} — filters photos for map view", always, |s, p| {
             let mode = p.get("mode").and_then(Value::as_str).and_then(LocationFilter::parse).unwrap_or(LocationFilter::None);
             let bounds: Option<GeoBounds> = p.get("bounds").and_then(|b| {

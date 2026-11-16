@@ -2,8 +2,7 @@
 
 The Map view (View ▸ Map, ⌘⌥3 / Ctrl+Alt+3) shows the photos that have a GPS position on a slippy map.
 This page describes the view, geotagging, where the map's tiles come from, what is sent over the network,
-and the commands behind it. Later sections (saved locations,
-track logs, keys and menus) are filled in as those parts land.
+and the commands behind it. Later sections (track logs, keys and menus) are filled in as those parts land.
 
 ## Map view
 
@@ -121,6 +120,56 @@ It is made of two smart-rule fields that `library.filter`, smart albums and the 
 
 **Performance.** Narrowing 50,000 photos to an area took 9 ms, and counting 20,000 positions in one 0.1 ms, in a
 release build (`narrowing_and_counting_many_photos`).
+
+## Saved locations
+
+Saved locations are named circles on the map: a centre and a radius (1 m to 1000 km), measured along the
+Earth's surface, so a circle across ±180° or around a pole holds what it should.
+
+- **The list** is in the navigator panel at the left of the map (Window ▸ Map ▸ Map Navigator). Each location
+  shows how many photos in view are inside it. A click goes to it (the map centres and zooms to show it) and
+  makes it the active one. Its checkbox selects its photos in view, or takes them out of the selection. Its
+  right-click menu has Go To, Select Photos, Rename…, Private, and Delete…, which asks first.
+- **`+`** makes a new location around the selected photos that have a position (a radius that holds them, 10 % to
+  spare, at least 100 m), or at the map's centre with a 1 km radius when none has. Its name is offered for
+  editing at once.
+- **On the map** every location in view is drawn as a circle with its name; private ones are red. The active
+  one has a centre handle and a radius handle: drag them to move it or change its size (saved when let go over
+  the map). Lock Markers keeps them in place; a drag then pans the map.
+- **Private locations.** A photo inside one is exported without its location, as if "Remove location info" were
+  on for it: no GPS and no place fields (sublocation, city, state, country) in rendered exports. An Original or
+  DNG export of such a photo is refused when the file itself carries GPS or place names, as with Remove location
+  info. The photo keeps its position in the library. The Info panel shows no map for it (so no tiles of the
+  place are fetched) until you click Show Map.
+- **Where they are kept.** In `locations.json` in the library folder, written atomically on every change, outside
+  the catalog's journal: they are not undo steps. The file is hostile input: one that doesn't parse is kept aside
+  as `locations.json.corrupt-<time>` with a warning and the library opens without locations; entries that aren't
+  valid (NaN, out of range, an empty name, a duplicate id, past 10,000) are left out one by one after the file is
+  kept aside. A file that can't be read is never overwritten in that session.
+- **Older libraries.** Builds of this branch before kept saved locations in `prefs.json` (`savedLocations`). On
+  first open they are written to `locations.json`, read back to confirm, and only then left out of `prefs.json`
+  (from its next save). Until confirmed, and when `locations.json` is damaged, `prefs.json` keeps them. Their ids
+  become numbers.
+
+The rule editor and smart albums also have **GPS Radius** (`gpsRadius`, Location group): is inside / is outside
+`{lat, lon, radius}` (degrees, metres).
+
+| Command | Params | Result |
+|---|---|---|
+| `map.locations` | — | `{locations: [{id, name, lat, lon, radius, private, photos, inView}], count, countMs}` (`photos`: library photos inside; `inView`: of the photos in view) |
+| `map.location.add` | `{name, lat, lon, radius?, private?}` or `{name, fromSelection: true, ids?, radius?, private?}` | The new location with its counts |
+| `map.location.update` | `{id, name?, lat?, lon?, radius?, private?}` | Checked as a whole: nothing changes when any part is refused |
+| `map.location.remove` | `{id}` | `{removed, name, deleted}`; the photos keep their positions |
+| `map.location.photos` | `{id, inView?}` | `{id, ids, count}` |
+| `map.location.show` / `map.location.select` / `map.location.new` | `{id}` / `{id}` / `{name?}` | Go to a location / select its photos in view / a new one at the map's centre or around the selection (app only) |
+
+`map.savedLocations.list`, `.create` and `.delete` are the older names of `map.locations`, `map.location.add` and
+`map.location.remove` (ids are numbers now). `map.state` reports `locations` (each drawn: `{id, x, y, radiusPx,
+active}`), `activeLocation` and `locationDrag`. Widgets: `map:location:new`, `map:location:<id>`,
+`map:location:check:<id>`, `map:location:menu:<goto|select|rename|private|delete>`, `map:location:confirmDelete`,
+`button:showPrivateMap`.
+
+The list stays in the navigator panel of this branch's Map view rather than over the map's top-left corner.
 
 ## Tile sources and cache
 

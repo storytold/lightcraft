@@ -52,6 +52,7 @@ mod preview_prep;
 mod print;
 mod process;
 mod recheck;
+mod saved_locations;
 mod segment;
 mod settings_files;
 mod shelved_folder;

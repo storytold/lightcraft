@@ -324,5 +324,8 @@
   "{n} folder{} could not be read": "Kansiot, joita ei voitu lukea: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Ohitetut tiedostot (ei tuettu valokuvatyyppi): {n}{:.0}",
   "Set the location of {n} photos": "Aseta {n} kuvan sijainti",
-  "{n} photos without GPS": "{n} kuvaa ilman GPS:ää"
+  "{n} photos without GPS": "{n} kuvaa ilman GPS:ää",
+  "Location {n}": "Sijainti {n}",
+  "In private location “{name}”": "Yksityisessä sijainnissa ”{name}”",
+  "within {d} of {lat}, {lon}": "{d} säteellä pisteestä {lat}, {lon}"
 }

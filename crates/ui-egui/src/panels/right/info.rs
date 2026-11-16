@@ -159,9 +159,24 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let width = r.response.rect.width();
         // the map of the shown (active) photo's place, also while the selected photos' places
         // differ; a click on it opens the Map view there
-        if let Some(pos) = app.session.catalog.photo(id).and_then(|ph| lightcraft_engine::map::from_gps(ph.meta.gps)) {
+        let gps = app.session.catalog.photo(id).and_then(|ph| ph.meta.gps);
+        if let Some(pos) = lightcraft_engine::map::from_gps(gps) {
+            // inside a private saved location: no map (and so no tiles of the place fetched) until asked
+            let private = app.session.map.locations.private_at(gps).map(|l| l.name.clone());
             ui.add_space(6.0);
-            crate::panels::map::mini_map(app, ui, id, pos, width);
+            match private {
+                Some(name) if !app.ui.map.private_shown.contains(&id.0) => {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr_format!("In private location “{name}”", name = name)).size(11.0).color(t.text_dim),
+                        );
+                        if text_button(ui, "showPrivateMap", crate::i18n::tr("Show Map"), false).clicked() {
+                            app.ui.map.private_shown.push(id.0);
+                        }
+                    });
+                }
+                _ => crate::panels::map::mini_map(app, ui, id, pos, width),
+            }
             ui.add_space(4.0);
         }
         // (one photo's place: not shown while the selected photos' places differ)

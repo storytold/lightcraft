@@ -348,9 +348,11 @@ struct PrefsFile {
     slide_titles: crate::slide_title::TitleSettings,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`).
     hold_view: bool,
-    /// User-saved map locations.
+    /// Saved map locations of older builds (`{id, name, lat, lon, radius, isPrivate}`): read once
+    /// into `locations.json`, and written back here only until that file is confirmed. Read
+    /// leniently (one bad entry costs only itself).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    saved_locations: Vec<crate::map::SavedLocation>,
+    saved_locations: Vec<serde_json::Value>,
     /// The map's tile source (missing = OpenStreetMap; re-checked when read). A damaged one is
     /// dropped on its own, never taking the other preferences with it.
     #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_tile_source")]
@@ -425,6 +427,26 @@ struct SettingsLoad {
 }
 
 impl SettingsLoad {
+    /// Keep a copy of `name` as `<name>.corrupt-<unix time>` before it is written again without
+    /// some of its content (`why`), with a warning; when the copy can't be made the file isn't
+    /// overwritten this session. (From PR #906.)
+    fn set_aside(&mut self, store: &mut dyn Store, name: &'static str, why: &str) {
+        let bytes = match store.read(name) {
+            Ok(Some(b)) => b,
+            _ => return,
+        };
+        let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let keep = format!("{name}.corrupt-{secs}");
+        log::error!("library: {name}: {why}");
+        match store.write_atomic(&keep, &bytes) {
+            Ok(()) => self.warnings.push(format!("{name}: {why}. The file was kept as {keep}.")),
+            Err(w) => {
+                self.blocked.push(name);
+                self.warnings.push(format!("{name}: {why}, and it couldn't be set aside ({w}). LightCraft won't overwrite the file."));
+            }
+        }
+    }
+
     fn read<T: serde::de::DeserializeOwned>(&mut self, store: &mut dyn Store, name: &'static str) -> Option<T> {
         let bytes = match store.read(name) {
             Ok(b) => b?,
@@ -458,6 +480,90 @@ impl SettingsLoad {
 }
 
 impl Session {
+    /// The library's saved locations: `locations.json` (hostile input, checked entry by entry; a
+    /// damaged file or bad entries are set aside as `locations.json.corrupt-<time>` with a warning).
+    /// A library of an older build keeps them in `prefs.json` (`legacy`): when `locations.json`
+    /// doesn't exist they are written there first, read back to confirm, and only then left out of
+    /// `prefs.json` (by its next save). Until confirmed they stay in `prefs.json`.
+    fn load_locations(&mut self, files: &mut dyn Store, settings: &mut SettingsLoad, legacy: Vec<serde_json::Value>) {
+        use crate::locations::{FILE, LocationsFile, SavedLocations};
+        let revision = self.map.locations.revision();
+        let exists = matches!(files.read(FILE), Ok(Some(_)) | Err(_));
+        self.legacy_locations = Vec::new();
+        if exists {
+            let read = settings.read::<LocationsFile>(files, FILE);
+            // a damaged (or unreadable) locations.json confirms nothing: an older prefs.json copy stays
+            if read.is_none() {
+                self.legacy_locations = legacy;
+            }
+            let file = read.unwrap_or_default();
+            let (locations, dropped) = SavedLocations::load(file, revision);
+            if dropped > 0 {
+                settings.set_aside(files, FILE, &format!("{dropped} saved location(s) in it aren't valid and were left out"));
+                // the copy is safe: write the good ones back, so the next open doesn't set it aside again
+                if !settings.blocked.contains(&FILE)
+                    && let Err(e) = files.write_atomic(FILE, &locations.to_file())
+                {
+                    log::error!("library: {FILE}: {e}");
+                }
+            }
+            self.map.locations.replace(locations);
+            return;
+        }
+        if legacy.is_empty() {
+            self.map.locations.replace(SavedLocations::default());
+            return;
+        }
+        // an older build's: take them over (`isPrivate` → `private`, new numeric ids)
+        let entries: Vec<serde_json::Value> = legacy
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let mut e = v.clone();
+                if let Some(o) = e.as_object_mut() {
+                    o.insert("id".into(), serde_json::json!(i as u64 + 1));
+                    if let Some(p) = o.remove("isPrivate") {
+                        o.insert("private".into(), p);
+                    }
+                }
+                e
+            })
+            .collect();
+        let (locations, dropped) = SavedLocations::load(LocationsFile { version: 1, locations: entries }, revision);
+        if dropped > 0 {
+            settings.warnings.push(format!("{dropped} saved location(s) in prefs.json aren't valid and were left out of {FILE}"));
+        }
+        let bytes = locations.to_file();
+        let confirmed = files.write_atomic(FILE, &bytes).is_ok()
+            && matches!(files.read(FILE), Ok(Some(back)) if serde_json::from_slice::<LocationsFile>(&back).is_ok_and(|f| f.locations.len() == locations.len()));
+        if !confirmed {
+            log::error!("library: the saved locations couldn't be moved to {FILE}; they stay in prefs.json");
+            self.legacy_locations = legacy;
+        }
+        self.map.locations.replace(locations);
+    }
+
+    /// Save the saved locations (`locations.json`, atomically; no-op for in-memory sessions).
+    /// Once it is written, the older `prefs.json` copy is no longer kept.
+    pub fn save_locations(&mut self) -> Result<()> {
+        let v = self.map.locations.to_file();
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if lib.blocked.contains(&crate::locations::FILE) {
+            return Err(EngineError::Other(format!(
+                "{0} couldn't be read when the library opened, so it isn't overwritten; reopen the library to save locations",
+                crate::locations::FILE
+            )));
+        }
+        lib.files.write_atomic(crate::locations::FILE, &v).map_err(|e| EngineError::Other(format!("saved locations: {e}")))?;
+        if !self.legacy_locations.is_empty() {
+            self.legacy_locations.clear();
+            if let Err(e) = self.save_prefs() {
+                log::warn!("prefs.json: {e}");
+            }
+        }
+        Ok(())
+    }
+
     /// Take over what the thumbnail cache wrote under its name of before (`.jpg` files, which
     /// photo galleries took for the person's photos: issues #610, #1066), once for a cache
     /// folder that was not made or tidied by this build yet. On a thread of its own, with a row
@@ -674,7 +780,7 @@ impl Session {
         self.slide_titles = prefs.slide_titles.sanitized();
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
-        self.saved_locations = prefs.saved_locations;
+        self.load_locations(files.as_mut(), &mut settings, prefs.saved_locations);
         if let Some(notice) = self.map.load_source(prefs.map_source) {
             settings.warnings.push(notice);
         }
@@ -999,7 +1105,7 @@ impl Session {
             slide_overlays: self.slide_overlays.clone(),
             slide_titles: self.slide_titles.clone(),
             hold_view: self.hold_view,
-            saved_locations: self.saved_locations.clone(),
+            saved_locations: self.legacy_locations.clone(),
             map_source: Some(self.map.source().clone()),
         })
         .unwrap_or_default();

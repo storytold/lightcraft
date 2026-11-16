@@ -328,5 +328,8 @@
   "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys}).",
   "Set the location of {n} photos": "Definir a localização de {n} fotos",
-  "{n} photos without GPS": "{n} fotos sem GPS"
+  "{n} photos without GPS": "{n} fotos sem GPS",
+  "Location {n}": "Local {n}",
+  "In private location “{name}”": "No local privado “{name}”",
+  "within {d} of {lat}, {lon}": "a até {d} de {lat}, {lon}"
 }

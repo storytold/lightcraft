@@ -1,6 +1,7 @@
 //! The Map module below the UI: Web Mercator maths ([`mercator`]), tile sources ([`source`]), the
 //! on-disk tile cache ([`cache`]) and the tile fetch queue ([`service`]), plus the map's state in
-//! the session ([`MapState`]), saved locations and the location filter.
+//! the session ([`MapState`]), with the saved locations ([`crate::locations`]) and the location
+//! filter.
 //!
 //! Nothing touches the network until a map view asks for tiles: the service is created on first
 //! use ([`Session::map_tiles`]) and only fetches the tiles of the views it is shown, following the
@@ -28,7 +29,6 @@ mod tests_service;
 
 use std::path::PathBuf;
 
-use lightcraft_geom::LatLon;
 use serde::{Deserialize, Serialize};
 
 use crate::Session;
@@ -125,6 +125,8 @@ pub struct MapState {
     /// ([`Session::with_default_map_cache`]), so tests and sessions without one never go online.
     pub online: bool,
     service: Option<TileService>,
+    /// The library's saved locations (`locations.json`, see [`crate::locations`]).
+    pub locations: crate::locations::SavedLocations,
 }
 
 impl Default for MapState {
@@ -137,6 +139,7 @@ impl Default for MapState {
             cache_bytes: DEFAULT_CACHE_BYTES,
             online: false,
             service: None,
+            locations: Default::default(),
         }
     }
 }
@@ -320,36 +323,6 @@ impl Session {
     }
 }
 
-/// User-saved geographical bookmark with circular radius and privacy control.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SavedLocation {
-    pub id: String,
-    pub name: String,
-    pub lat: f64,
-    pub lon: f64,
-    /// Radius in meters.
-    pub radius: f64,
-    /// When true, GPS and location IPTC metadata are stripped upon export.
-    pub is_private: bool,
-}
-
-impl SavedLocation {
-    pub fn new(id: impl Into<String>, name: impl Into<String>, lat: f64, lon: f64, radius: f64, is_private: bool) -> Self {
-        Self { id: id.into(), name: name.into(), lat, lon, radius: radius.max(1.0), is_private }
-    }
-
-    /// Center coordinate as `LatLon`.
-    pub fn center(&self) -> LatLon {
-        LatLon { lat: self.lat, lon: self.lon }
-    }
-
-    /// Whether `coord` falls inside this saved location's circular perimeter.
-    pub fn contains(&self, coord: LatLon) -> bool {
-        self.center().distance_meters(coord) <= self.radius
-    }
-}
-
 /// The filter state for the Map Location Filter bar.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -385,18 +358,6 @@ impl LocationFilter {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_saved_location_contains() {
-        let loc = SavedLocation::new("loc1", "Home", 51.5074, -0.1278, 1000.0, true);
-        assert!(loc.is_private);
-        // Point right at center
-        assert!(loc.contains(LatLon { lat: 51.5074, lon: -0.1278 }));
-        // Point ~100 meters away
-        assert!(loc.contains(LatLon { lat: 51.5080, lon: -0.1278 }));
-        // Point 10 km away
-        assert!(!loc.contains(LatLon { lat: 51.6000, lon: -0.1278 }));
-    }
 
     fn key() -> ApiKey {
         ApiKey::parse("AAPK0123456789abcdef_TEST-key.x").unwrap()

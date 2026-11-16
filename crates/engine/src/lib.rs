@@ -56,6 +56,7 @@ pub mod lightroom_catalog;
 pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
+pub mod locations;
 pub mod logging;
 pub mod map;
 pub mod media;
@@ -368,8 +369,10 @@ pub struct Session {
     pub print: print::template::PrintSettings,
     /// Saved print templates (`print.template.*`), persisted in prefs.json.
     pub print_templates: Vec<print::template::PrintTemplate>,
-    /// Saved geographical bookmarks for the Map module (`map.savedLocations.*`).
-    pub saved_locations: Vec<map::SavedLocation>,
+    /// Saved locations read from an older `prefs.json` (`savedLocations`) and not yet confirmed
+    /// in `locations.json`: written back to `prefs.json` until they are, never dropped before
+    /// (see [`crate::locations`]).
+    pub(crate) legacy_locations: Vec<serde_json::Value>,
     /// The map's tile source (persisted in prefs.json), tile cache folder and tile service.
     pub map: map::MapState,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
@@ -555,7 +558,7 @@ impl Session {
             export_presets: Vec::new(),
             print: Default::default(),
             print_templates: Vec::new(),
-            saved_locations: Vec::new(),
+            legacy_locations: Vec::new(),
             map: map::MapState::default(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),

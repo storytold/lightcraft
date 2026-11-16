@@ -25,6 +25,7 @@
 //!   (`photo.setGps`, `photo.removeGps`). Pin moves, the pin menu and the lock are ported from PR
 //!   #810, the clustering from PR #797 (Jason Baldwin).
 
+pub mod locations;
 pub mod tiles;
 
 use std::collections::HashSet;
@@ -189,6 +190,8 @@ pub struct MapDrawn {
     pub without_gps: usize,
     /// Time the clustering took this frame (ms).
     pub cluster_ms: f64,
+    /// The saved locations drawn (circles in view).
+    pub locations: Vec<locations::DrawnLocation>,
 }
 
 /// A pin or cluster as drawn: its photos, how many of them are selected, its screen point and
@@ -233,6 +236,9 @@ pub fn state(app: &LightcraftApp) -> Value {
         "hovered": d.hovered,
         "drop": d.drop.map(|(n, at, to)| json!({"count": n, "x": at.x, "y": at.y, "lat": to.lat, "lon": to.lon})),
         "locationFilter": location_state(app),
+        "locations": locations::state(app),
+        "activeLocation": app.ui.map.active_location,
+        "locationDrag": app.ui.map.location_drag.map(|d| json!({"id": d.id, "handle": format!("{:?}", d.handle).to_lowercase(), "x": d.at.x, "y": d.at.y})),
         // the Info panel's map, when it was drawn in the last frame
         "miniMap": app.mini_map.as_ref().map(|m| json!({
             "photo": m.photo,
@@ -283,6 +289,40 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
             s["shown"] = json!(app.session.visible().len());
             Ok(s)
         }
+        // a saved location: centre the map on it (and make it the active one) / select its photos in
+        // view / a new one at the map's centre or around the selected photos
+        "map.location.show" | "map.location.select" => {
+            let Some(loc) = p.get("id").and_then(Value::as_u64).filter(|l| app.session.map.locations.get(*l).is_some()) else {
+                return Some(Err(format!("{id}: `id` is a saved location's id (map.locations)")));
+            };
+            if id == "map.location.show" {
+                return Some(show_location(app, loc).map(|()| state(app)));
+            }
+            let ids = match app.session.execute("map.location.photos", &json!({"id": loc, "inView": true})) {
+                Ok(r) => r["ids"].clone(),
+                Err(e) => return Some(Err(e.to_string())),
+            };
+            app.run("library.select", json!({"ids": ids}))
+        }
+        "map.location.new" => {
+            let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| {
+                let n = app.session.map.locations.len() + 1;
+                crate::i18n::tr_format!("Location {n}", n = n)
+            });
+            let placed = app
+                .session
+                .selection
+                .ids
+                .iter()
+                .any(|id| app.session.catalog.photo(*id).is_some_and(|ph| lightcraft_engine::map::from_gps(ph.meta.gps).is_some()));
+            let m = &app.ui.map;
+            let q = if placed {
+                json!({"name": name, "fromSelection": true})
+            } else {
+                json!({"name": name, "lat": m.center_lat, "lon": m.center_lon, "radius": 1000.0})
+            };
+            app.run("map.location.add", q).inspect(|v| app.ui.map.active_location = v["id"].as_u64())
+        }
         // {on?}: without it, toggles (Cmd/Ctrl+K in the Map view, the toolbar's Lock Markers)
         "map.lockMarkers" | "map.toggleLock" | "map.lock" => {
             let on = match p.get("on") {
@@ -298,6 +338,19 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
         _ => return None,
     };
     Some(r)
+}
+
+/// Centre the map on saved location `id`, zoomed to show it, and make it the active one.
+fn show_location(app: &mut LightcraftApp, id: u64) -> Result<(), String> {
+    let l = app.session.map.locations.get(id).cloned().ok_or_else(|| format!("no saved location {id}"))?;
+    let m = &mut app.ui.map;
+    m.center_lat = l.lat.clamp(-lightcraft_engine::map::MAX_LATITUDE, lightcraft_engine::map::MAX_LATITUDE);
+    m.center_lon = l.lon;
+    m.zoom = locations::zoom_for(l.radius);
+    m.fitted = true;
+    m.active_location = Some(id);
+    apply_view_area(app);
+    Ok(())
 }
 
 /// Visible on Map follows a view a command set at once (no wait for it to rest).
@@ -461,20 +514,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
 
-    // 4.5. Render active / matching saved location boundary circle
-    for loc in &app.session.saved_locations {
-        if (loc.lat - center.lat).abs() < 0.0001 && (loc.lon - center.lon).abs() < 0.0001 {
-            let screen_pos = screen(vp.to_screen(LatLon { lat: loc.lat, lon: loc.lon }));
-            let meters_per_px = (40075016.686 * (loc.lat.to_radians().cos().abs())) / (256.0 * 2.0_f64.powf(zoom));
-            if meters_per_px > 0.0 {
-                let radius_px = (loc.radius / meters_per_px) as f32;
-                if radius_px > 4.0 && radius_px < 8000.0 {
-                    painter.circle_filled(screen_pos, radius_px, Color32::from_rgba_unmultiplied(255, 204, 0, 20));
-                    painter.circle_stroke(screen_pos, radius_px, Stroke::new(1.5, Color32::from_rgba_unmultiplied(255, 204, 0, 160)));
-                }
-            }
-        }
-    }
+    // 4.5. The saved locations in view (the active one with its handles)
+    locations::draw(app, &painter, canvas_rect, &vp, &map_ui);
 
     // the hovered pin's thumbnail (not while something is carried)
     if let Some(ids) = hovered.as_ref().filter(|_| !carrying && map_ui.pin_drag.is_none())
@@ -537,12 +578,14 @@ fn navigate(
     let local = |p: Pos2| Point::new(f64::from(p.x - canvas_rect.min.x), f64::from(p.y - canvas_rect.min.y));
     let screen = |p: Point| pos2(canvas_rect.min.x + p.x as f32, canvas_rect.min.y + p.y as f32);
     let carrying = app.ui.dragging_photos.is_some();
-    // a drag that starts on a single photo's pin moves it (unless markers are locked); any other
-    // drag (the empty map, a cluster) pans
+    // the active saved location's handles come first; then a drag that starts on a single photo's
+    // pin moves it (unless markers are locked); any other drag (the empty map, a cluster) pans
+    let busy = drag_location(app, ui, canvas_response, &vp, (canvas_rect, zone), map_ui);
     let before = lightcraft_engine::map::cluster::cluster(&app.map_points.points, &vp, CLUSTER_CELL);
     if canvas_response.drag_started() {
         map_ui.pin_drag = None;
         if !map_ui.locked
+            && !busy
             && !carrying
             && let Some(origin) = ui.input(|i| i.pointer.press_origin())
             && let Some(c) = pin_at(&before, local(origin))
@@ -563,7 +606,7 @@ fn navigate(
     }
 
     // Pan with mouse drag
-    if canvas_response.dragged() && !canvas_response.drag_started() && map_ui.pin_drag.is_none() {
+    if canvas_response.dragged() && !canvas_response.drag_started() && map_ui.pin_drag.is_none() && !busy {
         let d = canvas_response.drag_delta();
         vp = vp.panned(f64::from(d.x), f64::from(d.y));
     }
@@ -599,6 +642,40 @@ fn navigate(
     }
 
     vp
+}
+
+/// The active saved location's handles: a drag that starts on one moves the centre or the radius
+/// (unless markers are locked), saved when let go over the map. Returns whether such a drag is
+/// under way (or ended this frame), so the map doesn't pan.
+fn drag_location(
+    app: &mut LightcraftApp,
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    vp: &Viewport,
+    (canvas, zone): (Rect, Rect),
+    m: &mut crate::state::MapUi,
+) -> bool {
+    if resp.drag_started() {
+        m.location_drag = ui.input(|i| i.pointer.press_origin()).and_then(|o| locations::grab(app, m, vp, canvas.min, o));
+    } else if !resp.dragged() && !resp.drag_stopped() {
+        m.location_drag = None;
+    }
+    let pointer = ui.input(|i| i.pointer.latest_pos());
+    if let Some(d) = m.location_drag.as_mut()
+        && let Some(p) = pointer
+    {
+        d.at = p;
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    if resp.drag_stopped()
+        && let Some(d) = m.location_drag.take()
+    {
+        if pointer.is_some_and(|p| zone.contains(p)) {
+            locations::drop_drag(app, ui.ctx(), &d, vp, canvas.min);
+        }
+        return true;
+    }
+    m.location_drag.is_some()
 }
 
 /// Height of the Info panel's map of a photo's place.
@@ -1139,24 +1216,6 @@ fn render_loupe_popover(app: &mut LightcraftApp, ui: &mut egui::Ui, pin_pos: Pos
     });
 }
 
-fn zoom_from_radius(radius_meters: f64) -> f64 {
-    if radius_meters <= 300.0 {
-        16.5
-    } else if radius_meters <= 800.0 {
-        15.5
-    } else if radius_meters <= 2000.0 {
-        14.0
-    } else if radius_meters <= 5000.0 {
-        12.5
-    } else if radius_meters <= 15000.0 {
-        11.0
-    } else if radius_meters <= 50000.0 {
-        9.5
-    } else {
-        8.0
-    }
-}
-
 fn render_left_navigator(
     app: &mut LightcraftApp,
     ui: &mut egui::Ui,
@@ -1246,62 +1305,8 @@ fn render_left_navigator(
         // Frame
         ui.painter().rect_stroke(mini_rect, 4.0, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
 
-        // Saved Locations header
         ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new(crate::i18n::tr("Saved Locations")).strong().color(Color32::WHITE));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(8.0);
-                if ui.button("+").on_hover_text(crate::i18n::tr("Save current map location")).clicked() {
-                    let _ = app.run(
-                        "map.savedLocations.create",
-                        json!({
-                            "name": format!("Location {}", app.session.saved_locations.len() + 1),
-                            "lat": center.lat,
-                            "lon": center.lon,
-                            "radius": 1500.0,
-                        }),
-                    );
-                }
-            });
-        });
-
-        ui.add_space(8.0);
-        let mut delete_id = None;
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            if app.session.saved_locations.is_empty() {
-                ui.horizontal(|ui| {
-                    ui.add_space(12.0);
-                    ui.label(egui::RichText::new(crate::i18n::tr("No saved locations. Click + to save.")).small().italics().color(Color32::GRAY));
-                });
-            } else {
-                for loc in &app.session.saved_locations {
-                    let is_active = (loc.lat - center.lat).abs() < 0.0001 && (loc.lon - center.lon).abs() < 0.0001;
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        let resp = ui.selectable_label(is_active, &loc.name);
-                        if resp.clicked()
-                            && let Some(target) = LatLon::new(loc.lat, loc.lon)
-                        {
-                            *center = target;
-                            *zoom = zoom_from_radius(loc.radius);
-                            ui.ctx().request_repaint();
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add_space(8.0);
-                            if ui.small_button("✕").on_hover_text(crate::i18n::tr("Delete location")).clicked() {
-                                delete_id = Some(loc.id.clone());
-                            }
-                        });
-                    });
-                }
-            }
-        });
-        if let Some(id) = delete_id {
-            let _ = app.run("map.savedLocations.delete", json!({"id": id}));
-            ui.ctx().request_repaint();
-        }
+        locations::list(app, ui, map_ui, center, zoom);
     });
 }
 
@@ -1353,41 +1358,6 @@ mod tests {
         assert!(app.ui.map.center_lon.is_finite());
         assert!((app.ui.map.center_lat - 45.57).abs() < 1.0);
         assert!((app.ui.map.center_lon - (-73.2)).abs() < 1.0);
-    }
-
-    #[test]
-    fn saved_location_selection_updates_map_center() {
-        let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
-        app.ui.view = ViewMode::Map;
-        app.ui.map.center_lat = 0.0;
-        app.ui.map.center_lon = 0.0;
-        app.ui.map.zoom = 5.0;
-
-        let _ = app.run(
-            "map.savedLocations.create",
-            json!({
-                "name": "Beloeil",
-                "lat": 45.57,
-                "lon": -73.2,
-                "radius": 1500.0,
-            }),
-        );
-
-        let mut view = HeadlessView::new();
-        let raw = HeadlessView::raw_input(vec2(1000.0, 700.0), 1.0, 0.0, vec![]);
-        view.run(raw, |ui| {
-            show(&mut app, ui);
-        });
-
-        assert_eq!(app.session.saved_locations.len(), 1);
-        let loc = &app.session.saved_locations[0];
-        app.ui.map.center_lat = loc.lat;
-        app.ui.map.center_lon = loc.lon;
-        app.ui.map.zoom = zoom_from_radius(loc.radius);
-
-        assert_eq!(app.ui.map.center_lat, 45.57);
-        assert_eq!(app.ui.map.center_lon, -73.2);
-        assert_eq!(app.ui.map.zoom, 14.0);
     }
 
     #[test]

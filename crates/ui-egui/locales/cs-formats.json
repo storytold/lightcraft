@@ -327,5 +327,8 @@
   "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}",
   "Set the location of {n} photos": "Nastavit polohu {n} fotek",
-  "{n} photos without GPS": "{n} fotek bez GPS"
+  "{n} photos without GPS": "{n} fotek bez GPS",
+  "Location {n}": "Místo {n}",
+  "In private location “{name}”": "V soukromém místě „{name}“",
+  "within {d} of {lat}, {lon}": "do {d} od {lat}, {lon}"
 }

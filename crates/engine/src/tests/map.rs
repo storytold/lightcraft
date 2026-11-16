@@ -178,42 +178,21 @@ fn test_photo_set_and_clear_gps_with_undo() {
     assert_eq!(ph.meta.gps, Some((45.57, -73.2)));
 }
 
+/// The older command names of the saved locations still work (map.savedLocations.*).
 #[test]
-fn test_saved_locations_crud() {
+fn the_older_saved_location_commands_still_work() {
     let mut s = Session::with_demo();
     let id0 = s.visible()[0];
-
-    // Tag photo in Beloeil area
     s.execute("photo.setGps", &json!({"ids": [id0.0], "lat": 45.57, "lon": -73.2})).unwrap();
-
-    // Create saved location covering Beloeil (2000m radius)
     let created = s
-        .execute(
-            "map.savedLocations.create",
-            &json!({
-                "name": "Beloeil Studio",
-                "lat": 45.57,
-                "lon": -73.2,
-                "radius": 2000.0,
-                "isPrivate": true,
-            }),
-        )
+        .execute("map.savedLocations.create", &json!({"name": "Beloeil Studio", "lat": 45.57, "lon": -73.2, "radius": 2000.0, "isPrivate": true}))
         .unwrap();
-
-    let loc_id = created.get("id").and_then(|v| v.as_str()).unwrap().to_string();
-
-    // List saved locations
+    let id = created["id"].as_u64().unwrap();
     let list = s.execute("map.savedLocations.list", &json!({})).unwrap();
-    let arr = list.as_array().unwrap();
-    assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0].get("name").and_then(|v| v.as_str()), Some("Beloeil Studio"));
-    assert_eq!(arr[0].get("photoCount").and_then(|v| v.as_u64()), Some(1));
-    assert_eq!(arr[0].get("isPrivate").and_then(|v| v.as_bool()), Some(true));
-
-    // Delete saved location
-    s.execute("map.savedLocations.delete", &json!({"id": loc_id})).unwrap();
-    let list_after = s.execute("map.savedLocations.list", &json!({})).unwrap();
-    assert_eq!(list_after.as_array().unwrap().len(), 0);
+    let l = &list["locations"][0];
+    assert_eq!((l["name"].as_str(), l["photos"].as_u64(), l["private"].as_bool()), (Some("Beloeil Studio"), Some(1), Some(true)), "{list}");
+    s.execute("map.savedLocations.delete", &json!({"id": id})).unwrap();
+    assert_eq!(s.execute("map.locations", &json!({})).unwrap()["count"], 0);
 }
 
 #[test]

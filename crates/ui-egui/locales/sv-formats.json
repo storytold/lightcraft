@@ -327,5 +327,8 @@
   "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}",
   "Set the location of {n} photos": "Ange platsen för {n} foton",
-  "{n} photos without GPS": "{n} foton utan GPS"
+  "{n} photos without GPS": "{n} foton utan GPS",
+  "Location {n}": "Plats {n}",
+  "In private location “{name}”": "På den privata platsen ”{name}”",
+  "within {d} of {lat}, {lon}": "inom {d} från {lat}, {lon}"
 }

@@ -36,6 +36,21 @@ pub struct MapUi {
     /// The view's area last seen, and when it was first seen (to wait for the view to rest).
     #[serde(skip)]
     pub seen_area: Option<(lightcraft_catalog::rules::GpsArea, f64)>,
+    /// The saved location picked in the list (its handles are shown). Not saved.
+    #[serde(skip)]
+    pub active_location: Option<u64>,
+    /// The active location's handle being dragged. Not saved.
+    #[serde(skip)]
+    pub location_drag: Option<crate::panels::map::locations::LocationDrag>,
+    /// The location being renamed in the list, and the name typed so far. Not saved.
+    #[serde(skip)]
+    pub renaming: Option<(u64, String)>,
+    /// The location whose Delete… asks for confirmation. Not saved.
+    #[serde(skip)]
+    pub confirm_delete: Option<u64>,
+    /// Photos in a private location whose Info panel map was asked for (Show Map). Not saved.
+    #[serde(skip)]
+    pub private_shown: Vec<u64>,
 }
 
 impl Default for MapUi {
@@ -59,6 +74,11 @@ impl Default for MapUi {
             menu_for: Vec::new(),
             applied_area: None,
             seen_area: None,
+            active_location: None,
+            location_drag: None,
+            renaming: None,
+            confirm_delete: None,
+            private_shown: Vec::new(),
         }
     }
 }

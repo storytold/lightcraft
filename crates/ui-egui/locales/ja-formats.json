@@ -328,5 +328,8 @@
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。",
   "Set the location of {n} photos": "{n} 枚の写真の位置を設定",
-  "{n} photos without GPS": "GPS なしの写真 {n} 枚"
+  "{n} photos without GPS": "GPS なしの写真 {n} 枚",
+  "Location {n}": "場所 {n}",
+  "In private location “{name}”": "非公開の場所「{name}」内",
+  "within {d} of {lat}, {lon}": "{lat}, {lon} から {d} 以内"
 }

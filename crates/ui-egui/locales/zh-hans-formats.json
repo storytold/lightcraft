@@ -328,5 +328,8 @@
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。",
   "Set the location of {n} photos": "设置 {n} 张照片的位置",
-  "{n} photos without GPS": "{n} 张照片没有 GPS"
+  "{n} photos without GPS": "{n} 张照片没有 GPS",
+  "Location {n}": "位置 {n}",
+  "In private location “{name}”": "在私密位置“{name}”内",
+  "within {d} of {lat}, {lon}": "距 {lat}, {lon} {d} 以内"
 }

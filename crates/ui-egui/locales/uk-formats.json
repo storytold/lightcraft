@@ -328,5 +328,8 @@
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
   "Set the location of {n} photos": "Задати місце {n} фото",
-  "{n} photos without GPS": "Фото без GPS: {n}"
+  "{n} photos without GPS": "Фото без GPS: {n}",
+  "Location {n}": "Місце {n}",
+  "In private location “{name}”": "У приватному місці «{name}»",
+  "within {d} of {lat}, {lon}": "у межах {d} від {lat}, {lon}"
 }
