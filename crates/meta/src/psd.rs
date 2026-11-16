@@ -174,7 +174,7 @@ mod tests {
         }
     }
 
-    /// The export location guard's fail-closed case (storytold/lightcraft#4247): the declared
+    /// The export location guard's fail-closed case (upstream issue 4247): the declared
     /// image-resource section ends with bytes that form no complete resource record. Best-effort
     /// extraction stays silent (no GPS), but `try_extract` refuses instead of returning metadata
     /// whose location cannot be verified.
