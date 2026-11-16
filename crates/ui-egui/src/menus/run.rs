@@ -1470,7 +1470,7 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             }
             let r = app.session.execute("preset.export", &params).map_err(|e| e.to_string());
             if let Ok(v) = &r {
-                app.toast(ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
+                exported_presets_toast(app, ctx, v);
             }
             r
         }
@@ -1478,6 +1478,12 @@ fn ui_commands_11(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         _ => return None,
     };
     Some(r)
+}
+
+/// The toast after File → Export Presets wrote `v["count"]` presets. Its own function: every
+/// language adds an arm to `tr_format!`, which would push `ui_commands_11` past the complexity limit.
+fn exported_presets_toast(app: &mut LightcraftApp, ctx: &egui::Context, v: &Value) {
+    app.toast(ctx, crate::i18n::tr_format!("Exported {} preset{}", v["count"], if v["count"] == 1 { "" } else { "s" }));
 }
 
 /// Part 12 of 12 of the UI commands; `None` means the id is not one of this part's.

@@ -6,7 +6,7 @@ use super::*;
 #[test]
 fn languages_switch_persist_and_keep_user_values() {
     use crate::control::{ControlRequest, Outcome};
-    let languages: [(Locale, &str, &[&str], &str); 8] = [
+    let languages: [(Locale, &str, &[&str], &str); 9] = [
         (Locale::Cs, "czech", &["cs", "cs-CZ", "cs_CZ.UTF-8", "cs-Latn-CZ"], "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ„“"),
         (Locale::Id, "indonesian", &["id", "id-ID", "id_ID.UTF-8", "id-Latn-ID"], ""),
         (Locale::Sv, "swedish", &["sv", "sv-SE", "sv_SE.UTF-8", "sv-FI"], "åäöÅÄÖé”’"),
@@ -15,6 +15,7 @@ fn languages_switch_persist_and_keep_user_values() {
         (Locale::It, "italian", &["it", "it-IT", "it_IT.UTF-8", "it-Latn-IT", "it-CH"], ""),
         (Locale::Fi, "finnish", &["fi", "fi-FI", "fi_FI.UTF-8", "fi-Latn-FI"], ""),
         (Locale::Vi, "vietnamese", &["vi", "vi-VN", "vi_VN", "vi_VN.UTF-8"], ""),
+        (Locale::Ta, "tamil", &["ta", "ta-IN", "ta_IN.UTF-8", "ta-LK", "ta-Taml-IN"], ""),
     ];
     for (locale, command, tags, letters) in languages {
         let command = format!("app.language.{command}");
@@ -391,6 +392,7 @@ fn language_commands_cover_every_language() {
         ("app.language.finnish", Locale::Fi),
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
+        ("app.language.tamil", Locale::Ta),
     ];
     // One command per language, and every command reachable from the menu table.
     assert_eq!(commands.len(), Locale::ALL.len());
@@ -969,6 +971,39 @@ fn traditional_chinese_presets_and_panel_headers_are_painted() {
     set_language(Locale::En);
 }
 
+/// Tamil: the menu selects it, dates read day/month/year, and counts read right for any number.
+/// A Tamil noun takes its plural after any count but one, and a translation can't pick the form,
+/// so counts follow their noun ("இறக்குமதி செய்யப்பட்ட புகைப்படங்கள்: 22") and the English plural
+/// ending is dropped. Tamil letters come from the craft-fonts Noto Sans Tamil face (`Taml`), which
+/// `catalog_characters_are_paintable` checks against every catalog letter when a build has it.
+#[test]
+fn tamil_switches_formats_dates_and_reads_every_count() {
+    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    app.run("app.language.tamil", serde_json::json!({})).unwrap();
+    assert_eq!(app.ui.language, Locale::Ta);
+    assert_eq!((Locale::Ta.name(), Locale::Ta.script()), ("தமிழ்", "Taml"));
+    assert_eq!(crate::menubar::checked(&app, "app.language.tamil"), Some(true));
+    assert_eq!(tr("File"), "கோப்பு");
+    assert_eq!(tr("Exposure"), "வெளிப்பாடு");
+    assert_eq!(date_group_label("2026-09-20", false), "ஞாயிறு, 20/09/2026");
+    assert_eq!(date_group_label("2026-09-20", true), "ஞாயிறு, 20");
+    assert_eq!(date_group_label("2026-09", false), "09/2026");
+    assert_eq!(date_group_label("2026", false), "2026");
+    assert_eq!(display_time("2026-09-20T16:04:05"), "ஞாயிறு, 20/09/2026 16:04:05");
+    for n in [0, 1, 2, 5, 11, 22] {
+        let s = if n == 1 { "" } else { "s" };
+        assert_eq!(tr_format!("Imported {} photo{}", n, s), format!("இறக்குமதி செய்யப்பட்ட புகைப்படங்கள்: {n}"));
+        assert_eq!(tr_format!("{n} preset{}", s, n = n), format!("முன்னமைவுகள்: {n}"));
+    }
+    let name = String::from("Color 1234.56 {title} 日本語");
+    assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("“{name}”-இல் சேர்க்கப்பட்டவை: 22"));
+    let ctx = egui::Context::default();
+    // (not the menu titles: a language whose titles don't fit shows one Menu button)
+    let text = painted_text(&ctx, &mut app, Locale::Ta);
+    assert!(text.contains("வெளிப்பாடு"), "{text}");
+    set_language(Locale::En);
+}
+
 #[test]
 fn vietnamese_panels_dialogs_and_diacritics_paint_with_bundled_fonts() {
     let ctx = fonts_ctx(&[]);
@@ -1232,15 +1267,21 @@ fn assert_polish_counts() {
     for n in [0, 1, 2, 3, 4, 5, 12, 21, 22, 25, 111] {
         let s = if n == 1 { "" } else { "s" };
         assert_eq!(tr_format!("Imported {} photo{}", n, s), format!("Zaimportowane zdjęcia: {n}"));
-        for (one, many, noun) in [
-            ("photo waiting", "photos waiting", "Oczekujące zdjęcia"),
-            ("cached picture", "cached pictures", "Obrazy w pamięci podręcznej"),
-            ("photo has its denoised picture.", "photos have their denoised picture.", "Zdjęcia z odszumioną wersją"),
-        ] {
-            assert_eq!(tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many })), format!("{noun}: {n}"));
-        }
+        assert_polish_noun_counts(n);
         assert_eq!(tr_format!("Delete {n} Photos", n = n), format!("Usuń zdjęcia ({n})"));
         assert_eq!(tr_format!("{n} preset{}", s, n = n), format!("Ustawienia: {n}"));
+    }
+}
+
+/// Its own function: every language adds an arm to `tr_format!`, which would push
+/// `assert_polish_counts` past the complexity limit.
+fn assert_polish_noun_counts(n: usize) {
+    for (one, many, noun) in [
+        ("photo waiting", "photos waiting", "Oczekujące zdjęcia"),
+        ("cached picture", "cached pictures", "Obrazy w pamięci podręcznej"),
+        ("photo has its denoised picture.", "photos have their denoised picture.", "Zdjęcia z odszumioną wersją"),
+    ] {
+        assert_eq!(tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many })), format!("{noun}: {n}"));
     }
 }
 
