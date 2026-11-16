@@ -916,9 +916,9 @@ enum WhatsNewBlock {
 /// The blocks of `docs/whats-new.md`. Its paragraphs and bullets are wrapped across several lines
 /// in the file; a wrapped line continues the block above it instead of starting a new one, so a
 /// sentence isn't broken where the file wraps it (#4383). Each line is still translated on its
-/// own (`tr`), as the catalogs hold it, and the translations are joined with a space. Code ticks
-/// go, and a link `[text](target)` shows its text: the targets are pages of the documentation,
-/// which the dialog can't open.
+/// own (`tr`), as the catalogs hold it, and the translations are joined with a space. The joined
+/// text then loses its Markdown ([`plain_markdown`]), so a link or emphasis that the file wraps
+/// over two lines is read whole.
 fn whats_new_blocks(text: &str, tr: impl Fn(&str) -> String) -> Vec<WhatsNewBlock> {
     let mut blocks = Vec::new();
     let mut open: Option<WhatsNewBlock> = None;
@@ -939,9 +939,9 @@ fn whats_new_blocks(text: &str, tr: impl Fn(&str) -> String) -> Vec<WhatsNewBloc
             flush(&mut open, &mut blocks);
         } else if let Some(b) = l.strip_prefix("- ") {
             flush(&mut open, &mut blocks);
-            open = Some(WhatsNewBlock::Bullet(plain_markdown(&tr(b))));
+            open = Some(WhatsNewBlock::Bullet(tr(b)));
         } else {
-            let more = plain_markdown(&tr(l.trim()));
+            let more = tr(l.trim());
             match &mut open {
                 Some(WhatsNewBlock::Bullet(s) | WhatsNewBlock::Paragraph(s)) => {
                     s.push(' ');
@@ -952,7 +952,6 @@ fn whats_new_blocks(text: &str, tr: impl Fn(&str) -> String) -> Vec<WhatsNewBloc
         }
     }
     flush(&mut open, &mut blocks);
-    // A link split across two lines of the file is whole once its lines are joined.
     for block in &mut blocks {
         if let WhatsNewBlock::Bullet(s) | WhatsNewBlock::Paragraph(s) = block {
             *s = plain_markdown(s);
@@ -961,32 +960,79 @@ fn whats_new_blocks(text: &str, tr: impl Fn(&str) -> String) -> Vec<WhatsNewBloc
     blocks
 }
 
-/// `text` with code ticks removed and each Markdown link `[label](target)` reduced to its label.
+/// `text` as it reads without its Markdown:
+/// - a code span keeps its text as written, without its ticks (so `*.jpg` stays);
+/// - a link `[label](target)` shows its label;
+/// - `**bold**` and `*emphasis*` show their text.
+///
+/// A `[` or `*` that doesn't open one of these stays.
 fn plain_markdown(text: &str) -> String {
-    let text = text.replace('`', "");
+    plain_markdown_within(text, 0)
+}
+
+/// Spans nested deeper than this are shown as written; the text is ours, but recursion stays bounded.
+const MARKDOWN_DEPTH: usize = 4;
+
+fn plain_markdown_within(text: &str, depth: usize) -> String {
     let mut out = String::with_capacity(text.len());
-    let mut rest = text.as_str();
-    while let Some(open) = rest.find('[') {
-        let (before, from) = rest.split_at(open);
+    let mut rest = text;
+    while let Some(at) = rest.find(['`', '[', '*']) {
+        let (before, from) = rest.split_at(at);
         out.push_str(before);
-        let link = from.find("](").and_then(|mid| {
-            let label = from.get(1..mid)?;
-            let close = from.get(mid + 2..)?.find(')')? + mid + 2;
-            (!label.contains(['[', ']'])).then_some((label, close))
-        });
-        match link {
-            Some((label, close)) => {
-                out.push_str(label);
-                rest = from.get(close + 1..).unwrap_or_default();
-            }
-            None => {
-                out.push('[');
-                rest = from.get(1..).unwrap_or_default();
-            }
-        }
+        let prev = out.chars().next_back();
+        let (shown, used) = markdown_span(from, prev, depth);
+        out.push_str(&shown);
+        rest = from.get(used..).unwrap_or_default();
     }
     out.push_str(rest);
     out
+}
+
+/// The span `from` starts (at a `` ` ``, `[` or `*`): what it shows and how many bytes it takes.
+/// `prev` is the character before it. Not a span: the character itself, shown as it is (a
+/// lone code tick is dropped, as before).
+fn markdown_span(from: &str, prev: Option<char>, depth: usize) -> (String, usize) {
+    let bytes = from.as_bytes();
+    let inner = |text: &str| if depth < MARKDOWN_DEPTH { plain_markdown_within(text, depth + 1) } else { text.to_string() };
+    match bytes.first() {
+        Some(b'`') => match from.get(1..).and_then(|s| s.find('`')) {
+            Some(end) => (from.get(1..end + 1).unwrap_or_default().to_string(), end + 2),
+            None => (String::new(), 1),
+        },
+        Some(b'[') => {
+            let link = from.find("](").and_then(|mid| {
+                let label = from.get(1..mid)?;
+                let close = from.get(mid + 2..)?.find(')')? + mid + 2;
+                (!label.contains(['[', ']'])).then_some((label, close))
+            });
+            match link {
+                Some((label, close)) => (inner(label), close + 1),
+                None => ("[".into(), 1),
+            }
+        }
+        Some(b'*') => {
+            let marker = if bytes.get(1) == Some(&b'*') { "**" } else { "*" };
+            let inner_start = marker.len();
+            // Emphasis opens at the start of a word and closes at the end of one, around text
+            // that neither starts nor ends with a space: `a * b` and `lightcraft*` aren't emphasis.
+            let opens = prev.is_none_or(|c| !c.is_alphanumeric() && c != '*')
+                && from.get(inner_start..).and_then(|s| s.chars().next()).is_some_and(|c| !c.is_whitespace() && c != '*');
+            let close = from.get(inner_start..).and_then(|s| s.find(marker)).map(|i| i + inner_start);
+            match close {
+                Some(end) if opens && end > inner_start => {
+                    let text = from.get(inner_start..end).unwrap_or_default();
+                    let after = from.get(end + marker.len()..).and_then(|s| s.chars().next());
+                    if text.ends_with(char::is_whitespace) || after.is_some_and(char::is_alphanumeric) {
+                        (marker.into(), marker.len())
+                    } else {
+                        (inner(text), end + marker.len())
+                    }
+                }
+                _ => (marker.into(), marker.len()),
+            }
+        }
+        _ => (from.chars().next().map(String::from).unwrap_or_default(), from.chars().next().map_or(1, char::len_utf8)),
+    }
 }
 
 /// The body of the WhatsNew dialog.
@@ -2298,6 +2344,29 @@ mod whats_new_tests {
     }
 
     #[test]
+    fn emphasis_shows_its_text_and_code_keeps_its_asterisks() {
+        assert_eq!(
+            plain_markdown("Settings ▸ **At launch**: *Open the last library* or *Ask me*."),
+            "Settings ▸ At launch: Open the last library or Ask me."
+        );
+        assert_eq!(plain_markdown("**View ▸ Show Focus Point** (⌥F)"), "View ▸ Show Focus Point (⌥F)");
+        // In a code span, text is kept as written.
+        assert_eq!(plain_markdown("matched `*.jpg` case-sensitively"), "matched *.jpg case-sensitively");
+        assert_eq!(plain_markdown("With `RUST_LOG=warn,lightcraft*=info`, the log"), "With RUST_LOG=warn,lightcraft*=info, the log");
+        assert_eq!(plain_markdown("Agents use `slideshow.templates.*`, and **this**"), "Agents use slideshow.templates.*, and this");
+        // An asterisk that doesn't open emphasis stays.
+        for text in ["2 * 3 = 6", "a*b*c", "lightcraft*", "* not", "**", "*x *"] {
+            assert_eq!(plain_markdown(text), text, "{text}");
+        }
+        // Emphasis wrapped over two lines of the file, and a link inside emphasis.
+        let blocks = whats_new_blocks("- the window's **Remove from\n  List** does the same; **[docs](a.md)**.\n", str::to_string);
+        assert_eq!(blocks, [B::Bullet("the window's Remove from List does the same; docs.".into())]);
+        // Deep nesting stops at the limit instead of recursing on.
+        let deep = format!("{}x{}", "**[".repeat(40), "](a)**".repeat(40));
+        assert!(!plain_markdown(&deep).is_empty());
+    }
+
+    #[test]
     fn the_shipped_notes_have_no_raw_links_or_split_bullets() {
         let blocks = whats_new_blocks(WHATS_NEW, str::to_string);
         let wrapped = WHATS_NEW.lines().filter(|l| l.starts_with("  ") && !l.trim().is_empty()).count();
@@ -2306,6 +2375,7 @@ mod whats_new_tests {
             if let B::Bullet(s) | B::Paragraph(s) = block {
                 assert!(!s.contains("]("), "raw link in {s}");
                 assert!(!s.contains('`'), "code tick in {s}");
+                assert!(!s.contains("**"), "raw emphasis in {s}");
             }
         }
         // Every wrapped line was joined into the block above it: no block starts with lower-case
