@@ -16,8 +16,8 @@ File → Import Photos… (`Cmd+Shift+I`) or Import from Folder… (`library.imp
 - Duplicates are detected and reported; a file in Recently Deleted can be skipped, restored with its edits, or
   imported fresh. Library → Find Duplicates… later finds copies already in the library ([duplicates.md](../duplicates.md)).
 - Auto Import (Settings → Import) can watch subfolders, rename copies and apply a develop preset, metadata preset and
-  keywords to arriving photos (`library.autoImport`). On Android the camera roll is a watched source (Settings → Folders,
-  Watch for new photos).
+  keywords to arriving photos (`library.autoImport`). On Android the camera roll is added in place and is a watched source (the review's Keep adding new
+  photos from the camera roll, or Settings → Folders, Watch for new photos).
 - **Browse** (the Import tab, Settings → Import → Import as a tab): the bar's **Import** button imports the picks, the
   selection or all; a folder browsed for the first time includes its sub-folders (**Include subfolders** in the bar
   re-browses without them; re-browsing the same folder keeps the choice); **Develop** opens the selected photo without

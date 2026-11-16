@@ -12,10 +12,11 @@ Partial: runs and is verified on an emulator, not yet on a phone or tablet.
 - **Install** from [Google Play](https://play.google.com/store/apps/details?id=<app_id>), or sideload the `.apk` from Releases (arm64 and x86_64). Play runs a little behind Releases because of Google's review process.
 - **Modern layout** is the default, with touch controls: tap for tools, drag to adjust, hold for the original, swipe to scroll (in the Library, a fast-scroll handle appears on the right edge while the grid moves — drag it to jump to the start or end), long-press to multi-select, system Back.
 - **Import** from the system picker, the camera roll (**Settings ▸ Folders ▸ Camera roll**), or by sharing photos to the app from another app.
-- The **camera roll is a watched source**: it is listed again when the app opens, comes to the front and every few minutes, and new photos are imported in place without the review. Untick **Watch for new photos** on its row in **Settings ▸ Folders** to stop.
+- The **camera roll is added in place** (no Copy or Move) and its review has **Keep adding new photos from the camera roll**: on, it is a watched source, listed again when the app opens, comes to the front and every few minutes, and new photos are imported in place without the review. The same switch is **Watch for new photos** on its row in **Settings ▸ Folders**. With **Collection** left at **None** the photos are in All Photographs; while the catalog syncs every camera roll photo is also in **Camera Roll - ‹device›** (see [Device sync](../../sync/devices/#camera-roll)).
 - **HEIC / HEIF** photos (what iPhones shoot) open, with the same pure-Rust decoder as the desktop.
 - A picked folder is **copied** into the app, and new files in it are copied in while the app is in front. Photos are read in place only in the GitHub build, with "All files access".
 - **Develop** works with the Basic, Colour, Tone, Detail, Optics and Effects groups. Not yet: pinch in adjust mode, touch UIs for Crop and Masks.
+- **Collections**: tap the Library's title (**All Photographs ▾**) for All Photographs, Picks, Recently Added, Recently Deleted and every collection under its set (Immich albums under **Immich**); tap one to show it.
 - **Library** lives in the app's folder, reachable from the Files app, and is removed with the app.
 - **Export** sheet saves to Pictures or opens the share sheet.
 - **Sync** with your desktop: pair in **Settings ▸ Sync**, then sync the catalog or chosen collections. See [Device sync](../../sync/devices/).

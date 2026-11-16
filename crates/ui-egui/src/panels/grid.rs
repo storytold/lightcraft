@@ -471,7 +471,7 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
                 bw_taken = bw + 10.0;
             }
             // the title gives way to the count: a long album or folder name is trimmed, in full on hover
-            let room = (hr.width() - 20.0 - count_w - 36.0).max(0.0);
+            let room = (hr.width() - 20.0 - count_w - 36.0 - if crate::modern::on(app) { 20.0 } else { 0.0 }).max(0.0);
             let font = t.semibold(17.0);
             let title = crate::widgets::elide_head(&full, room, |s| ui.painter().layout_no_wrap(s.to_string(), font.clone(), t.text).size().x);
             let title_rect = ui.painter().text(pos2(hr.left() + 20.0, hr.center().y), Align2::LEFT_CENTER, &title, font, t.text);
@@ -487,6 +487,10 @@ fn show_inner(app: &mut LccApp, ui: &mut egui::Ui) {
             let count_rect = count.rect;
             count.on_hover_text(cnt.as_str());
             crate::widgets::register(ui.ctx(), "grid:title", title_rect);
+            // Modern has no source panel: its title opens the list of sources and collections
+            if crate::modern::on(app) {
+                crate::modern_sources::title(app, ui, title_rect, hr);
+            }
             crate::widgets::register(ui.ctx(), "grid:count", count_rect);
             if title != full {
                 ui.interact(title_rect, ui.id().with("grid-title"), Sense::hover()).on_hover_text(full);

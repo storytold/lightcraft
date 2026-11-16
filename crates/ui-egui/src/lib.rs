@@ -97,6 +97,7 @@ mod modern_input;
 mod modern_library;
 mod modern_menu;
 pub mod modern_sheets;
+mod modern_sources;
 pub mod module;
 pub mod motion;
 pub mod overlay;
@@ -452,6 +453,8 @@ mod tests_surface;
 mod tests_switch_library;
 #[cfg(test)]
 mod tests_sync;
+#[cfg(test)]
+mod tests_sync_onboarding;
 #[cfg(test)]
 mod tests_tallies;
 #[cfg(test)]
