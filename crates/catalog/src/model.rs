@@ -197,6 +197,11 @@ pub struct Meta {
     /// The camera body's serial number.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub serial_number: String,
+    /// The file carries recorded depth ([`lightcraft_meta::Metadata::has_depth`]), such as an iPhone Portrait photo's
+    /// depth map. Left out of the catalog JSON when false, so older catalogs read unchanged; photos imported before
+    /// it was read get it at Reload from Disk.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_depth: bool,
     /// Place (sublocation, e.g. a landmark).
     pub location: String,
     pub city: String,
@@ -798,6 +803,19 @@ mod shutter_tests {
         m.exposure_time = Some(2.5);
         let back: Meta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
         assert_eq!(back.exposure_time, Some(2.5));
+    }
+
+    /// Issue #4334: recorded depth stays out of the catalog JSON when absent, so older catalogs (and photos without
+    /// it) read unchanged, and round-trips when present.
+    #[test]
+    fn has_depth_is_left_out_unless_set() {
+        let mut m = Meta::default();
+        assert!(!serde_json::to_string(&m).unwrap().contains("has_depth"));
+        let old: Meta = serde_json::from_str(r#"{"camera":"Apple iPhone 15 Pro Max"}"#).unwrap();
+        assert!(!old.has_depth, "a catalog written before the field existed");
+        m.has_depth = true;
+        let back: Meta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert!(back.has_depth);
     }
 
     #[test]
