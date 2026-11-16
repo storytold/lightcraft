@@ -931,10 +931,10 @@ fn whats_new_blocks(text: &str, tr: impl Fn(&str) -> String) -> Vec<WhatsNewBloc
         let l = line.trim_end();
         if let Some(h) = l.strip_prefix("### ") {
             flush(&mut open, &mut blocks);
-            blocks.push(WhatsNewBlock::Change(tr(h)));
+            blocks.push(WhatsNewBlock::Change(plain_markdown(&tr(h))));
         } else if let Some(h) = l.strip_prefix("## ") {
             flush(&mut open, &mut blocks);
-            blocks.push(WhatsNewBlock::Release(tr(h)));
+            blocks.push(WhatsNewBlock::Release(plain_markdown(&tr(h))));
         } else if l.starts_with("# ") || l.trim().is_empty() {
             flush(&mut open, &mut blocks);
         } else if let Some(b) = l.strip_prefix("- ") {
@@ -2363,6 +2363,9 @@ mod whats_new_tests {
         // Emphasis wrapped over two lines of the file, and a link inside emphasis.
         let blocks = whats_new_blocks("- the window's **Remove from\n  List** does the same; **[docs](a.md)**.\n", str::to_string);
         assert_eq!(blocks, [B::Bullet("the window's Remove from List does the same; docs.".into())]);
+        // Headings lose their code ticks too.
+        let blocks = whats_new_blocks("### `--import <folder>` takes HEIC\n### `>=` and `<=` work\n", str::to_string);
+        assert_eq!(blocks, [B::Change("--import <folder> takes HEIC".into()), B::Change(">= and <= work".into())]);
         // Deep nesting stops at the limit instead of recursing on.
         let deep = format!("{}x{}", "**[".repeat(40), "](a)**".repeat(40));
         assert!(!plain_markdown(&deep).is_empty());
@@ -2374,11 +2377,10 @@ mod whats_new_tests {
         let wrapped = WHATS_NEW.lines().filter(|l| l.starts_with("  ") && !l.trim().is_empty()).count();
         assert!(wrapped > 0, "the notes wrap their bullets");
         for block in &blocks {
-            if let B::Bullet(s) | B::Paragraph(s) = block {
-                assert!(!s.contains("]("), "raw link in {s}");
-                assert!(!s.contains('`'), "code tick in {s}");
-                assert!(!s.contains("**"), "raw emphasis in {s}");
-            }
+            let (B::Bullet(s) | B::Paragraph(s) | B::Change(s) | B::Release(s)) = block;
+            assert!(!s.contains("]("), "raw link in {s}");
+            assert!(!s.contains('`'), "code tick in {s}");
+            assert!(!s.contains("**"), "raw emphasis in {s}");
         }
         // Every wrapped line was joined into the block above it: no block starts with lower-case
         // text cut from the middle of a sentence because of a wrap.
