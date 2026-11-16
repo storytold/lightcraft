@@ -452,7 +452,7 @@ fn merge_dialog_retries_a_failed_preview_when_it_opens_again() {
     std::fs::rename(&file, &away).unwrap();
     crate::merge::open(&mut h.app, "merge.panorama").unwrap();
     h.step();
-    assert!(h.step_until(T, |h| h.app.merge.preview_task.is_none()));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
     assert!(h.app.merge.error.is_some(), "the preview failed");
     h.app.ui.dialog = None;
     h.step();
@@ -464,7 +464,7 @@ fn merge_dialog_retries_a_failed_preview_when_it_opens_again() {
         h.app.merge.preview.is_some() || h.app.merge.preview_task.is_some() || h.app.merge.error.is_some(),
         "the dialog shows a preview, one being made, or why not"
     );
-    assert!(h.step_until(T, |h| h.app.merge.preview_task.is_none()));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.preview_task.is_none()));
     assert!(h.app.merge.preview.is_some(), "{:?}", h.app.merge.error);
     h.app.ui.dialog = None;
     h.step();
