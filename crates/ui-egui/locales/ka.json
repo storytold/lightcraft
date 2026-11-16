@@ -3761,5 +3761,14 @@
   "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "მიეცით გასაღებს მხოლოდ სტატიკური საბაზისო რუკის ფილების უფლება. ის ინახება LightCraft-ის პარამეტრების საქაღალდეში (map-keys.json), არასოდეს თქვენს ბიბლიოთეკაში, და იგზავნება მხოლოდ Esri-ის ფილების სერვერზე. სტილი აირჩიეთ რუკის ხედის „რუკის სტილის“ სიაში.",
   "Esri Streets": "Esri Streets",
   "Esri Outdoor (topographic)": "Esri Outdoor (ტოპოგრაფიული)",
-  "Set ArcGIS API Key": "ArcGIS API გასაღების დაყენება"
+  "Set ArcGIS API Key": "ArcGIS API გასაღების დაყენება",
+  "Remove GPS Coordinates": "GPS კოორდინატების წაშლა",
+  "Remove GPS Coordinates of These Photos": "ამ ფოტოების GPS კოორდინატების წაშლა",
+  "Pins can't be dragged to move photos": "ქინძისთავების გადათრევით ფოტოების გადატანა შეუძლებელია",
+  "Fit to Photos": "ფოტოებზე მორგება",
+  "1 photo without GPS": "1 ფოტო GPS-ის გარეშე",
+  "Fit Map to Photos": "რუკის ფოტოებზე მორგება",
+  "Set Map View": "რუკის ხედის დაყენება",
+  "Zoom In on Map": "რუკის მიახლოება",
+  "Zoom Out on Map": "რუკის დაშორება"
 }

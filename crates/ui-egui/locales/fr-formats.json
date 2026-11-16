@@ -327,5 +327,6 @@
   "Bring photos in with File › Import Photos… ({keys}).": "Importez des photos avec Fichier › Importer des photos… ({keys}).",
   "View › Detail View ({keys}).": "Affichage › Vue de détail ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fichier › Exporter… · Fichier › Imprimer… ({keys}).",
-  "Set the location of {n} photos": "Définir le lieu de {n} photos"
+  "Set the location of {n} photos": "Définir le lieu de {n} photos",
+  "{n} photos without GPS": "{n} photos sans GPS"
 }

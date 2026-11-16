@@ -2466,5 +2466,14 @@
   "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Beri kunci hanya hak ubin peta dasar statis. Kunci disimpan di folder pengaturan LightCraft (map-keys.json), tidak pernah di pustaka Anda, dan hanya dikirim ke server ubin Esri. Pilih gaya di daftar Gaya Peta pada tampilan Peta.",
   "Esri Streets": "Esri Streets",
   "Esri Outdoor (topographic)": "Esri Outdoor (topografi)",
-  "Set ArcGIS API Key": "Atur Kunci API ArcGIS"
+  "Set ArcGIS API Key": "Atur Kunci API ArcGIS",
+  "Remove GPS Coordinates": "Hapus Koordinat GPS",
+  "Remove GPS Coordinates of These Photos": "Hapus Koordinat GPS Foto Ini",
+  "Pins can't be dragged to move photos": "Pin tidak bisa diseret untuk memindahkan foto",
+  "Fit to Photos": "Paskan ke Foto",
+  "1 photo without GPS": "1 foto tanpa GPS",
+  "Fit Map to Photos": "Paskan Peta ke Foto",
+  "Set Map View": "Atur Tampilan Peta",
+  "Zoom In on Map": "Perbesar Peta",
+  "Zoom Out on Map": "Perkecil Peta"
 }

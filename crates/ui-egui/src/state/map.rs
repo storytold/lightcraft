@@ -17,6 +17,19 @@ pub struct MapUi {
     pub tracklog_visible: bool,
     pub legend_open: bool,
     pub navigator_open: bool,
+    /// The view was set (fitted, moved, zoomed) this session: the first showing fits the photos
+    /// only while this is false. Not saved.
+    #[serde(skip)]
+    pub fitted: bool,
+    /// The map canvas last drawn (Fit to Photos sizes the view to it). Not saved.
+    #[serde(skip)]
+    pub last_canvas: Option<egui::Rect>,
+    /// A single photo's pin being dragged to a new place. Not saved.
+    #[serde(skip)]
+    pub pin_drag: Option<crate::panels::map::PinDrag>,
+    /// The photos of the pin whose right-click menu is open. Not saved.
+    #[serde(skip)]
+    pub menu_for: Vec<u64>,
 }
 
 impl Default for MapUi {
@@ -34,6 +47,10 @@ impl Default for MapUi {
             tracklog_visible: true,
             legend_open: true,
             navigator_open: true,
+            fitted: false,
+            last_canvas: None,
+            pin_drag: None,
+            menu_for: Vec::new(),
         }
     }
 }

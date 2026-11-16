@@ -327,5 +327,6 @@
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
-  "Set the location of {n} photos": "Задати місце {n} фото"
+  "Set the location of {n} photos": "Задати місце {n} фото",
+  "{n} photos without GPS": "Фото без GPS: {n}"
 }

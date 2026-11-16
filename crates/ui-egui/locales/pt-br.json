@@ -2339,5 +2339,14 @@
   "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Dê à chave apenas o privilégio de blocos estáticos de mapa base. Ela fica na pasta de configurações do LightCraft (map-keys.json), nunca na sua biblioteca, e é enviada só ao servidor de blocos da Esri. Escolha o estilo na lista Estilo do mapa da visualização Mapa.",
   "Esri Streets": "Esri Streets",
   "Esri Outdoor (topographic)": "Esri Outdoor (topográfico)",
-  "Set ArcGIS API Key": "Definir chave de API do ArcGIS"
+  "Set ArcGIS API Key": "Definir chave de API do ArcGIS",
+  "Remove GPS Coordinates": "Remover coordenadas GPS",
+  "Remove GPS Coordinates of These Photos": "Remover coordenadas GPS destas fotos",
+  "Pins can't be dragged to move photos": "Os marcadores não podem ser arrastados para mover fotos",
+  "Fit to Photos": "Ajustar às fotos",
+  "1 photo without GPS": "1 foto sem GPS",
+  "Fit Map to Photos": "Ajustar mapa às fotos",
+  "Set Map View": "Definir visualização do mapa",
+  "Zoom In on Map": "Aproximar o mapa",
+  "Zoom Out on Map": "Afastar o mapa"
 }

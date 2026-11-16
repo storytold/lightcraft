@@ -2494,5 +2494,14 @@
   "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "只给密钥授予静态底图图块权限。它保存在 LightCraft 的设置文件夹（map-keys.json）中，从不保存在图库里，只发送给 Esri 的图块服务器。在地图视图的“地图样式”列表中选择样式。",
   "Esri Streets": "Esri Streets",
   "Esri Outdoor (topographic)": "Esri Outdoor（地形）",
-  "Set ArcGIS API Key": "设置 ArcGIS API 密钥"
+  "Set ArcGIS API Key": "设置 ArcGIS API 密钥",
+  "Remove GPS Coordinates": "移除 GPS 坐标",
+  "Remove GPS Coordinates of These Photos": "移除这些照片的 GPS 坐标",
+  "Pins can't be dragged to move photos": "无法拖动图钉来移动照片",
+  "Fit to Photos": "适合照片",
+  "1 photo without GPS": "1 张照片没有 GPS",
+  "Fit Map to Photos": "使地图适合照片",
+  "Set Map View": "设置地图视图",
+  "Zoom In on Map": "放大地图",
+  "Zoom Out on Map": "缩小地图"
 }

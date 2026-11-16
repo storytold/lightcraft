@@ -326,7 +326,7 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
 fn grid_key_command(keymap: &Keymap, grid: bool, map: bool, fullscreen: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
     let command = match (grid, id, shortcut) {
         (_, "view.showOriginal", (m, Key::Backslash)) if map && m == Modifiers::NONE && !fullscreen => "view.toggleMapFilter",
-        (_, "panel.addKeywords", (m, Key::K)) if map && m == Modifiers::COMMAND && !fullscreen => "map.toggleLock",
+        (_, "panel.addKeywords", (m, Key::K)) if map && m == Modifiers::COMMAND && !fullscreen => "map.lockMarkers",
         (true, "brush.smaller", (m, Key::OpenBracket)) if m == Modifiers::NONE => "photo.decreaseRating",
         (true, "brush.larger", (m, Key::CloseBracket)) if m == Modifiers::NONE => "photo.increaseRating",
         (true, "view.showOriginal", (m, Key::Backslash)) if m == Modifiers::NONE && !fullscreen => "view.filterBar",

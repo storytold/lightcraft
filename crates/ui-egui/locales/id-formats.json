@@ -326,5 +326,6 @@
   "File › Export… · File › Print… ({keys}).": "File › Ekspor… · File › Cetak… ({keys}).",
   "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
   "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}",
-  "Set the location of {n} photos": "Tetapkan lokasi {n} foto"
+  "Set the location of {n} photos": "Tetapkan lokasi {n} foto",
+  "{n} photos without GPS": "{n} foto tanpa GPS"
 }

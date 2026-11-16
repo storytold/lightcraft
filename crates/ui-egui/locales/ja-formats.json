@@ -327,5 +327,6 @@
   "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。",
-  "Set the location of {n} photos": "{n} 枚の写真の位置を設定"
+  "Set the location of {n} photos": "{n} 枚の写真の位置を設定",
+  "{n} photos without GPS": "GPS なしの写真 {n} 枚"
 }

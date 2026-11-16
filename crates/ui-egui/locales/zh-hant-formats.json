@@ -327,5 +327,6 @@
   "Bring photos in with File › Import Photos… ({keys}).": "透過 檔案 › 匯入照片… ({keys}) 匯入照片。",
   "View › Detail View ({keys}).": "檢視 › 詳細檢視 ({keys})。",
   "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。",
-  "Set the location of {n} photos": "設定 {n} 張照片的位置"
+  "Set the location of {n} photos": "設定 {n} 張照片的位置",
+  "{n} photos without GPS": "{n} 張照片沒有 GPS"
 }

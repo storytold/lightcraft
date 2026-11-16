@@ -13,11 +13,14 @@
 //! (Jason Baldwin), moved from its own crate into the engine.
 
 pub mod cache;
+pub mod cluster;
 mod http_date;
 pub mod mercator;
 pub mod service;
 pub mod source;
 
+#[cfg(test)]
+mod tests_cluster;
 #[cfg(test)]
 mod tests_mercator;
 #[cfg(test)]
@@ -30,6 +33,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Session;
 pub use cache::{CacheInfo, DEFAULT_CACHE_BYTES, TileCache, TileMeta};
+pub use cluster::{CLUSTER_CELL, Cluster, MapPoint};
 pub use mercator::{Bounds, MAX_LATITUDE, MAX_ZOOM, TILE_SIZE, TileKey, Viewport, VisibleTile, fit_bounds, from_gps};
 pub use service::{HttpResponse, ServiceStats, TileEvent, TileImage, TileService, Transport};
 pub use source::{Crop, OSM_ATTRIBUTION, OSM_TILE_URL, TileSource, USER_AGENT};

@@ -2541,5 +2541,14 @@
   "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Dejte klíči jen oprávnění ke statickým dlaždicím podkladových map. Je uložen ve složce nastavení LightCraftu (map-keys.json), nikdy ve vaší knihovně, a posílá se jen na server dlaždic Esri. Styl zvolte v seznamu Styl mapy v zobrazení Mapa.",
   "Esri Streets": "Esri Streets",
   "Esri Outdoor (topographic)": "Esri Outdoor (topografická)",
-  "Set ArcGIS API Key": "Nastavit klíč API ArcGIS"
+  "Set ArcGIS API Key": "Nastavit klíč API ArcGIS",
+  "Remove GPS Coordinates": "Odebrat souřadnice GPS",
+  "Remove GPS Coordinates of These Photos": "Odebrat souřadnice GPS těchto fotek",
+  "Pins can't be dragged to move photos": "Špendlíky nelze přetáhnout pro přesun fotek",
+  "Fit to Photos": "Přizpůsobit fotkám",
+  "1 photo without GPS": "1 fotka bez GPS",
+  "Fit Map to Photos": "Přizpůsobit mapu fotkám",
+  "Set Map View": "Nastavit pohled mapy",
+  "Zoom In on Map": "Přiblížit mapu",
+  "Zoom Out on Map": "Oddálit mapu"
 }

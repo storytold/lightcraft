@@ -1,37 +1,73 @@
 # Map
 
 The Map view (View ▸ Map, ⌘⌥3 / Ctrl+Alt+3) shows the photos that have a GPS position on a slippy map.
-This page describes where the map's tiles come from, what is sent over the network, and the commands
-behind it. Later sections (pins and clusters, the Info panel map, geotagging, the location filter, saved
-locations, track logs, keys and menus) are filled in as those parts land.
+This page describes the view, geotagging, where the map's tiles come from, what is sent over the network,
+and the commands behind it. Later sections (the Info panel map, the location filter, saved locations,
+track logs, keys and menus) are filled in as those parts land.
 
 ## Map view
 
+The map shows the photos of the current list (the same source, filter and sort as the grid) that have a
+valid GPS position as pins. A position that is out of range or not a number counts as no position.
+
+- **Pins and clusters.** Pins closer than about 60 points merge into a cluster with their count. The
+  groups are cells anchored to the world, not the screen, and each zoom's cells nest in the one above, so
+  panning never regroups the pins and zooming in only splits clusters. Positions are projected once per
+  change of the photo list; clustering then costs one hash lookup per photo in view (see Performance).
+- **Selection.** Selected photos' pins are yellow. A cluster holding selected photos is yellow and carries a
+  small blue bubble with how many of its photos are selected. A click on a pin selects its photo; a click on
+  a cluster selects all its photos, the first one active. The filmstrip shows them selected and scrolls to
+  the active one. ⌘-click (Ctrl-click) adds them to the selection instead.
+- **Opening.** A double-click on a pin opens its photo in Detail; on a cluster it zooms in two levels.
+  Hovering a pin shows its (first) photo's thumbnail, with the cluster's count.
+- **Moving around.** Drag the map to pan, scroll to zoom around the pointer, double-click the empty map to
+  zoom in. The bottom toolbar has the Map Style list, Fit to Photos, − / the zoom slider / +, and Lock
+  Markers. The first time the map is shown in a session it fits the photos with a position; after that it
+  stays where you left it.
+- **Photos without a position.** "N photos without GPS" at the bottom left counts the photos of the list
+  that have none. Drag them onto the map from the filmstrip (below), type a position in the Info panel, or use
+  Photo ▸ Auto-Tag from Tracklog….
+
 The filmstrip runs under the map, as in Detail: View ▸ Filmstrip, `/` (F6), or the Filmstrip button at the
-right of the bottom bar, which in the Map view takes the place of the grid's thumbnail size. It shows the
-same photos as the grid. The selection shows both ways:
+right of the bottom bar, which in the Map view takes the place of the grid's thumbnail size.
 
-- Selected photos' pins are yellow. A cluster holding selected photos is yellow and carries a small blue
-  bubble with how many of its photos are selected.
-- A click on a pin selects its photo; a click on a cluster selects all its photos, the first one active.
-  The filmstrip shows them selected and scrolls to the active one. ⌘-click (Ctrl-click) adds them to the
-  selection instead. A double-click on a pin opens Detail; on a cluster it zooms in.
-
-`map.state` reports the view (`lat`, `lon`, `zoom`), the map canvas, whether the filmstrip is drawn, every pin
-or cluster drawn in the last frame (`ids`, `count`, `selected`, screen `x` / `y`) and a drop in progress.
+**Performance.** Clustering 50,000 photos in view (spread over Europe, zoom 5, 240 clusters) took 1.7 ms in a
+release build on the machine this was measured on (the `many_photos_cluster_quickly` test prints it).
 
 ## Geotagging
 
-Drag photos from the filmstrip onto the map to set where they were taken. The drag carries the selection,
-or only the photo dragged when it isn't selected. While they are over the map a pin with their count
-follows the pointer; release to give every one of them that point's position, overwriting a position they
-had. That is one undo step, "Set GPS Coordinates" (`photo.setGps`). A release over the map's toolbar or
-location filter bar, or outside the map, changes nothing. Drops are limited to the map's ±85.05° latitude
-(the edge of the Web Mercator projection); the longitude of a drop on the world's repeat at low zoom is
-wrapped into −180…180.
+As in Lightroom Classic's Map module:
 
-Not yet: moving a pin by dragging it, Lock Markers stopping that, and Remove GPS Coordinates in the Photo
-menu and a pin's menu (`photo.clearGps` removes a position today).
+- **Drop photos on the map.** Drag photos from the filmstrip onto the map and let go where they were taken.
+  The drag carries the selection, or only the photo dragged when it isn't selected. While they are over the
+  map a pin with their count follows the pointer; the drop gives every one of them that point's position,
+  overwriting a position they had. That is one undo step, "Set GPS Coordinates" (`photo.setGps`). A release
+  over the map's toolbar or location filter bar, or outside the map, changes nothing.
+- **Move a pin.** Drag a single photo's pin to its new place: one undo step. A cluster isn't moved:
+  dragging it pans the map, as a drag on the empty map does, so zoom in until the photo has its own pin. A
+  pin let go outside the map (over the filmstrip, say) stays where it was.
+- **Lock Markers** (the bottom toolbar, ⌘K / Ctrl+K in the Map view, `map.lockMarkers {on?}`) stops pins
+  from being moved; dragging one then pans the map. It is saved with the window state (`ui.json`).
+- **Remove GPS Coordinates.** Photo ▸ Remove GPS Coordinates clears the position of the selected photos; a
+  right-click on a pin offers the same for that pin's photos. One undo step, "Remove GPS Coordinates"
+  (`photo.removeGps`; `photo.clearGps` is its older name).
+- **The poles.** The map can't show them (Web Mercator stops at ±85.05° latitude), so a drop or a pin move
+  reaches 85.05° north or south at most. The longitude of a drop on the world's repeat at low zoom is
+  wrapped into −180…180. Type a position closer to a pole in the Info panel's GPS field.
+- **Sidecars.** Positions are written to XMP sidecars as EXIF GPS (`exif:GPSLatitude`, `exif:GPSLongitude`)
+  when sidecars are written (Photo ▸ Save Metadata to File, or at once with automatic XMP writing on). For a
+  photo whose position you set or cleared in LightCraft this session (a drop, a pin move, Remove GPS
+  Coordinates, the Info panel's GPS field), the sidecar takes LightCraft's position as it is: clearing it,
+  or undoing a geotag, removes the GPS from the sidecar. A photo whose position you never touched here keeps
+  whatever GPS another app put in its sidecar, since LightCraft doesn't read GPS from sidecars.
+
+`map.state` reports the view (`lat`, `lon`, `zoom`, `maxZoom`, `source`, `offline`, `attribution`), the map
+canvas, whether the filmstrip is drawn, every pin or cluster drawn in the last frame (`pins`: `ids`, `count`,
+`selected`, screen `x` / `y`, `lat` / `lon`; at most 500 listed, `clusterCount` counts them all),
+`clusterMs`, `withGps` / `withoutGps`, `lockMarkers`, `movingPin` (`{id, x, y}` while a pin is dragged),
+`hovered` (the hovered pin's photos) and `drop` (`{count, x, y, lat, lon}` while photos are carried over the
+map). Widgets: `map:canvas`, `map:pin:<first photo id>`, `map:fit`, `map:lockMarkers`, `map:withoutGps`,
+`map:hoverThumb`, `map:pinMenu:removeGps`, `map:attribution`.
 
 ## Tile sources and cache
 
@@ -171,9 +207,14 @@ GeoNames). Choose Offline to fetch nothing.
 | `map.providers` | The sources offered now, with credit and max zoom |
 | `map.cacheInfo` | `{bytes, tiles, capBytes, dir}` of the tile cache |
 | `map.clearCache` | Deletes every cached tile |
-| `map.state` | The view, the pins drawn (with how many of their photos are selected) and a drop in progress (app only) |
+| `map.state` | The view, the pins drawn (with how many of their photos are selected), counts, a pin move or a drop in progress (app only; see Map view) |
+| `map.fit` | Fit the view to the photos with a position (app only) |
+| `map.setView` | `{lat?, lon?, zoom?}`: centre and zoom; lat −90…90 (shown within ±85.05°), lon wrapped, zoom 1 to the source's max; anything else is refused (app only) |
+| `map.zoomIn` / `map.zoomOut` | One zoom level in / out (app only) |
+| `map.lockMarkers` | `{on?}`: Lock Markers on / off, toggles without `on` (app only) |
 | `photo.setGps` | `{ids?, lat, lon}`: sets the position of the photos (default: the selection), one undo step; lat −90…90, lon wrapped into −180…180; unknown ids are refused |
-| `photo.clearGps` | `{ids?}`: removes the position of the photos, one undo step |
+| `photo.removeGps` | `{ids?}`: removes the position of the photos (default: the selection), one undo step; unknown ids are refused; `photo.clearGps` is its older name |
 
-The tile core (Web Mercator maths, source checks, cache, fetch queue) is ported from PR #797 by Jason
-Baldwin.
+The tile core (Web Mercator maths, source checks, cache, fetch queue) and the pin clustering are ported
+from PR #797, and the pin moves, Lock Markers, Remove GPS Coordinates and the sidecar GPS rule from PR #810,
+both by Jason Baldwin.

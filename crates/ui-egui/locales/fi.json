@@ -2452,5 +2452,14 @@
   "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Anna avaimelle vain staattisten taustakarttaruutujen oikeus. Se tallennetaan LightCraftin asetuskansioon (map-keys.json), ei koskaan kirjastoosi, ja lähetetään vain Esrin ruutupalvelimelle. Valitse tyyli Kartta-näkymän Karttatyyli-luettelosta.",
   "Esri Streets": "Esri Streets",
   "Esri Outdoor (topographic)": "Esri Outdoor (topografinen)",
-  "Set ArcGIS API Key": "Aseta ArcGIS-API-avain"
+  "Set ArcGIS API Key": "Aseta ArcGIS-API-avain",
+  "Remove GPS Coordinates": "Poista GPS-koordinaatit",
+  "Remove GPS Coordinates of These Photos": "Poista näiden kuvien GPS-koordinaatit",
+  "Pins can't be dragged to move photos": "Nastoja ei voi vetää kuvien siirtämiseksi",
+  "Fit to Photos": "Sovita kuviin",
+  "1 photo without GPS": "1 kuva ilman GPS:ää",
+  "Fit Map to Photos": "Sovita kartta kuviin",
+  "Set Map View": "Aseta karttanäkymä",
+  "Zoom In on Map": "Lähennä karttaa",
+  "Zoom Out on Map": "Loitonna karttaa"
 }

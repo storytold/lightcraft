@@ -2701,5 +2701,14 @@
   "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "Дайте ключу только право на статические тайлы базовых карт. Он хранится в папке настроек LightCraft (map-keys.json), никогда в библиотеке, и отправляется только на сервер тайлов Esri. Стиль выбирается в списке «Стиль карты» в режиме «Карта».",
   "Esri Streets": "Esri Streets",
   "Esri Outdoor (topographic)": "Esri Outdoor (топографическая)",
-  "Set ArcGIS API Key": "Задать API-ключ ArcGIS"
+  "Set ArcGIS API Key": "Задать API-ключ ArcGIS",
+  "Remove GPS Coordinates": "Удалить GPS-координаты",
+  "Remove GPS Coordinates of These Photos": "Удалить GPS-координаты этих фото",
+  "Pins can't be dragged to move photos": "Маркеры нельзя перетаскивать, чтобы переместить фото",
+  "Fit to Photos": "Показать все фото",
+  "1 photo without GPS": "1 фото без GPS",
+  "Fit Map to Photos": "Подогнать карту под фото",
+  "Set Map View": "Задать вид карты",
+  "Zoom In on Map": "Приблизить карту",
+  "Zoom Out on Map": "Отдалить карту"
 }

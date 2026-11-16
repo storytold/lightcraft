@@ -2493,5 +2493,14 @@
   "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.": "キーには静的ベースマップタイルの権限だけを与えてください。キーは LightCraft の設定フォルダー（map-keys.json）に保存され、ライブラリには保存されず、Esri のタイルサーバーにだけ送信されます。スタイルはマップ表示の「マップスタイル」で選びます。",
   "Esri Streets": "Esri Streets",
   "Esri Outdoor (topographic)": "Esri Outdoor（地形図）",
-  "Set ArcGIS API Key": "ArcGIS API キーを設定"
+  "Set ArcGIS API Key": "ArcGIS API キーを設定",
+  "Remove GPS Coordinates": "GPS 座標を削除",
+  "Remove GPS Coordinates of These Photos": "これらの写真の GPS 座標を削除",
+  "Pins can't be dragged to move photos": "ピンをドラッグして写真を移動できなくします",
+  "Fit to Photos": "写真に合わせる",
+  "1 photo without GPS": "GPS なしの写真 1 枚",
+  "Fit Map to Photos": "マップを写真に合わせる",
+  "Set Map View": "マップの表示を設定",
+  "Zoom In on Map": "マップを拡大",
+  "Zoom Out on Map": "マップを縮小"
 }
