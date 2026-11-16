@@ -1,4 +1,4 @@
-//! Encoders: JPEG (`jpeg-encoder`), PNG (`png`), TIFF (`tiff`), flat PSD (our own), lossless WebP (`image-webp`) and,
+//! Encoders: JPEG (`craft-jpeg`), PNG (`png`), TIFF (`tiff`), flat PSD (our own), lossless WebP (`image-webp`) and,
 //! on native targets with the `avif` feature, AVIF (`ravif`/`rav1e`); JPEG XL is in `jxl_encode`.
 //! Metadata (ICC/EXIF/XMP) is embedded where the format allows.
 
@@ -128,50 +128,20 @@ pub fn encode_jpeg(img: &EncodeImage, quality: u8, subsampling: ChromaSubsamplin
     if img.width > u16::MAX as u32 || img.height > u16::MAX as u32 {
         return Err(Error::Encode("JPEG dimensions are limited to 65535".into()));
     }
-    let n = img.width as usize * img.height as usize;
-    if subsampling != ChromaSubsampling::S422 {
-        // Parallel encoder (restart-interval bands on all cores).
-        let data: std::borrow::Cow<[u8]> = match img.channels {
-            1 => data[..n].into(),
-            2 => data.as_chunks::<2>().0.iter().take(n).map(|c| c[0]).collect::<Vec<_>>().into(),
-            3 => data[..n * 3].into(),
-            _ => data[..n * 4].into(),
-        };
-        let segs = jpeg_app_segments(meta)?;
-        let ch = if img.channels == 2 { 1 } else { img.channels as usize };
-        // `data` is already gray for 2-channel input (see above)
-        return Ok(crate::jpeg_par::encode(&data, img.width as usize, img.height as usize, ch, quality, subsampling, &segs));
-    }
-    if let Some(exif) = meta.exif
-        && exif.len() > 65_527
-    {
-        return Err(Error::Encode("EXIF larger than one APP1 segment (64 KiB)".into()));
-    }
-    if let Some(xmp) = meta.xmp
-        && XMP_NS.len() + xmp.len() > 65_533
-    {
-        return Err(Error::Encode("XMP larger than one APP1 segment (extended XMP not supported)".into()));
-    }
-    let (layout, rgb_data): (craft_image_codecs::ChannelLayout, Vec<u8>) = match img.channels {
-        1 => (craft_image_codecs::ChannelLayout::Gray, data[..n].to_vec()),
-        2 => (craft_image_codecs::ChannelLayout::Gray, data.as_chunks::<2>().0.iter().take(n).map(|c| c[0]).collect()),
-        3 => (craft_image_codecs::ChannelLayout::Rgb, data[..n * 3].to_vec()),
-        _ => (craft_image_codecs::ChannelLayout::Rgb, data.as_chunks::<4>().0.iter().take(n).flat_map(|c| [c[0], c[1], c[2]]).collect()),
+    let pixels = img.width as usize * img.height as usize;
+    let (data, channels): (std::borrow::Cow<'_, [u8]>, usize) = match img.channels {
+        1 => (data[..pixels].into(), 1),
+        2 => (data.as_chunks::<2>().0.iter().take(pixels).map(|c| c[0]).collect::<Vec<_>>().into(), 1),
+        3 => (data[..pixels * 3].into(), 3),
+        _ => (data[..pixels * 4].into(), 4),
     };
-    let mut ic_img = craft_image_codecs::Image::from_u8(img.width, img.height, layout, rgb_data).map_err(|e| Error::Encode(e.to_string()))?;
-    ic_img.icc = meta.icc.map(<[u8]>::to_vec);
-    ic_img.meta.exif = meta.exif.map(<[u8]>::to_vec);
-    ic_img.meta.xmp = meta.xmp.map(str::to_owned);
-    ic_img.meta.dpi = meta.ppi.filter(|&p| p > 0).map(|p| (p as f32, p as f32));
-    let ic_opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality.clamp(1, 100), jpeg_chroma_subsampling: true, ..Default::default() };
-    let mut out = craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Jpeg, &ic_opts).map_err(|e| Error::Encode(e.to_string()))?;
-    if let Some(exif) = meta.exif
-        && let Some(pos) = out.windows(6).position(|w| w == b"Exif\0\0")
-        && let Some(dst) = out.get_mut(pos + 6..pos + 6 + exif.len())
-    {
-        dst.copy_from_slice(exif);
-    }
-    Ok(out)
+    let subsampling = match subsampling {
+        ChromaSubsampling::S444 => craft_jpeg::ChromaSubsampling::S444,
+        ChromaSubsampling::S422 => craft_jpeg::ChromaSubsampling::S422,
+        ChromaSubsampling::S420 => craft_jpeg::ChromaSubsampling::S420,
+    };
+    craft_jpeg::encode_baseline(&data, img.width as usize, img.height as usize, channels, quality, subsampling, &jpeg_app_segments(meta)?)
+        .map_err(|e| Error::Encode(e.to_string()))
 }
 
 /// `img` (already validated) as a `craft-image-codecs` image. `refuse_float` is the error for
