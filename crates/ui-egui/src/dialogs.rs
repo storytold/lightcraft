@@ -2354,6 +2354,8 @@ mod whats_new_tests {
         assert_eq!(plain_markdown("matched `*.jpg` case-sensitively"), "matched *.jpg case-sensitively");
         assert_eq!(plain_markdown("With `RUST_LOG=warn,lightcraft*=info`, the log"), "With RUST_LOG=warn,lightcraft*=info, the log");
         assert_eq!(plain_markdown("Agents use `slideshow.templates.*`, and **this**"), "Agents use slideshow.templates.*, and this");
+        // What would be emphasis or a link outside a code span is kept inside one.
+        assert_eq!(plain_markdown("glob `*x*` and `[a](b)` and `**not bold**`"), "glob *x* and [a](b) and **not bold**");
         // An asterisk that doesn't open emphasis stays.
         for text in ["2 * 3 = 6", "a*b*c", "lightcraft*", "* not", "**", "*x *"] {
             assert_eq!(plain_markdown(text), text, "{text}");
