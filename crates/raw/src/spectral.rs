@@ -63,7 +63,6 @@ const SAME_SENSOR: &[(&str, &str, &str)] = &[
     ("Fujifilm", "X-S20", "X-T4"),
     ("Fujifilm", "X-M5", "X-T3"),
     ("Fujifilm", "GFX100S II", "GFX 100"),
-    ("Sony", "ILCE-7CM2", "ILCE-7M4"), // A7C II: same 33 MP sensor as the A7 IV
 ];
 
 /// Model names compared without case, the brand, a leading `EOS` or a trailing `DIGITAL`
@@ -202,12 +201,13 @@ mod tests {
     }
 
     #[test]
-    fn ilce_7cm2_finds_ilce_7m4_matrices() {
+    fn ilce_7cm2_uses_its_own_matrices() {
         // ILCE-7M2 (A7 II, 24.3 MP) does NOT use the same sensor as the A7 IV (ILCE-7M4, 33 MP),
-        // so it stays without matrices (issue 2113); the A7C II (ILCE-7CM2, 33 MP) borrows them.
+        // so it stays without matrices (issue 2113); the A7C II (ILCE-7CM2, 33 MP) has its own row,
+        // which find returns instead of another body's.
         assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);
-        assert_eq!(find(Some("SONY"), "ILCE-7CM2").map(|c| c.model), Some("ILCE-7M4"));
-        assert_eq!(find_camera("SONY ILCE-7CM2").map(|c| c.model), Some("ILCE-7M4"));
+        assert_eq!(find(Some("SONY"), "ILCE-7CM2").map(|c| c.model), Some("ILCE-7CM2"));
+        assert_eq!(find_camera("SONY ILCE-7CM2").map(|c| c.model), Some("ILCE-7CM2"));
     }
 
     #[test]
