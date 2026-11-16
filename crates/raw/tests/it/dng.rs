@@ -805,21 +805,18 @@ fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
     let (w, h) = (512, 512);
     let grey: Vec<u16> = (0..w * h).map(|i| ((i % w) * 97 + (i / w) * 31) as u16 & 0x0fff).collect();
     let with_alpha: Vec<u16> = grey.iter().flat_map(|&v| [v, 4095 - v]).collect();
-    let img = craft_jxl::ImageRef {
-        width: w as u32,
-        height: h as u32,
-        layout: craft_jxl::Layout::GrayAlpha,
-        samples: craft_jxl::Samples::U16(&with_alpha),
-    };
-    let opts = craft_jxl::EncodeOptions { lossless: true, ..Default::default() };
-    let tile = craft_jxl::encode(&img, opts, &craft_jxl::Metadata::default()).unwrap();
+    // The public craft-jxl image encoder widens GrayAlpha to RGBA. This budget fixture
+    // specifically needs two encoded planes, not a four-plane layout mismatch.
+    let config = jixel::EncodeConfig::default().with_lossless(true);
+    let tile = jixel::encode_image_gray_alpha_16bit(&with_alpha, w, h, &config).unwrap();
     let one = |tile: Vec<u8>| {
         let mut raw = base_ifd(w, h, 12, 1, true);
         raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
         raw.set_image(ImageData::Tiles { tile_width: w as u32, tile_height: h as u32, tiles: vec![tile] });
         dng(raw, ByteOrder::Little)
     };
-    assert!(matches!(decode(&one(tile)), Err(RawError::Corrupt(_))));
+    let Err(RawError::Corrupt(error)) = decode(&one(tile)) else { panic!("the extra plane must exceed the tile budget") };
+    assert!(!error.contains("colour planes"), "must fail the budget, not the fixture layout: {error}");
     assert_eq!(decode(&one(jxl_encode(&grey, w, h, 1, false))).unwrap().data, RawData::U16(grey));
 }
 

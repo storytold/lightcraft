@@ -1169,6 +1169,22 @@ mod tests {
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     #[test]
+    fn av1_preserves_frame_sizes_above_the_old_area_limit() {
+        for (width, height) in [(5120, 2160), (4096, 4096)] {
+            let cfg = VideoConfig { width, height, fps: 30, quality: 60, speed: 10 };
+            let mut encoder = Av1Encoder::new(&cfg).unwrap();
+            let mut samples = encoder.push(&vec![[80, 120, 180, 255]; width as usize * height as usize], 7, true).unwrap();
+            samples.extend(encoder.finish().unwrap());
+            assert_eq!(samples.len(), 1, "{width}x{height}");
+            assert!(!samples[0].data.is_empty());
+            assert_eq!(samples[0].duration, 7);
+            assert!(samples[0].key);
+            assert!(encoder.config_record().is_some());
+        }
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
     fn av1_quality_100_preserves_the_exact_zero_quantizer() {
         assert_eq!(quantizer(100), 0);
         let image: Vec<[u8; 4]> = (0..64 * 48).map(|i| [(i * 13) as u8, (i * 41) as u8, (i * 73) as u8, 255]).collect();
