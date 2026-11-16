@@ -1102,7 +1102,10 @@ fn video_duration_badge(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, id: PhotoI
     if w > img_rect.width() - 10.0 || img_rect.height() < 48.0 {
         return None;
     }
-    let x = (img_rect.right() - 6.0 - w).max(img_rect.left() + 4.0);
+    // On the picture's own corner (a portrait poster in a square cell is narrower than the cell),
+    // or the cell's when the picture is too narrow for the pill.
+    let across = if photo_rect.width() >= w + 10.0 { photo_rect } else { img_rect };
+    let x = (across.right() - 6.0 - w).max(across.left() + 4.0);
     // Hang above the photo's own badge bar (the placeholder's in the square grid), not the cell's
     // lower margin. A placeholder too short for the pill keeps the old position: it has no room
     // above its bar.

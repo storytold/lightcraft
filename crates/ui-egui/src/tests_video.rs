@@ -366,3 +366,28 @@ fn an_undecodable_clip_keeps_its_card_and_says_why_once() {
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), asked, "a failed poster is not retried every frame");
     shot(&mut h, "video-undecodable-loupe.png");
 }
+
+/// A portrait clip's poster is narrower than its square cell: the running time sits on the
+/// picture's own corner, not out at the cell's edge beside it.
+#[test]
+fn a_portrait_poster_keeps_its_running_time_on_the_picture() {
+    let portrait: lightcraft_engine::media::FileLoader = std::sync::Arc::new(|_path: &str, max_edge: usize, _with| {
+        let (w, h) = (180.min(max_edge), 320.min(max_edge));
+        Ok((lightcraft_raster::Rgb32f { width: w, height: h, data: vec![[0.3, 0.3, 0.3]; w * h] }, Default::default()))
+    });
+    let mut h = video_app_with(ViewMode::SquareGrid, Some(portrait));
+    h.app.ui.show_filenames = false;
+    let mut p = h.app.session.catalog.photo(PhotoId(1)).unwrap().as_ref().clone();
+    (p.width, p.height) = (1080, 1920);
+    h.app.session.catalog.apply(Op::RemovePhoto { id: PhotoId(1) }).unwrap();
+    h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    h.settle(SETTLE);
+    assert!(h.app.renderer.thumb(PhotoId(1)).is_some(), "the poster is drawn");
+    let rect = |name: &str| h.app.widgets.iter().find(|(w, _)| w == name).map(|(_, r)| *r);
+    let cell = rect("thumb:1").expect("the cell");
+    let badge = rect("badge:videoDuration:1").expect("the running time");
+    // the 9:16 picture is at most the cell's height × 9/16 wide, centred in the cell
+    let half = cell.height() * 9.0 / 32.0;
+    assert!(badge.right() <= cell.center().x + half + 0.5, "{badge:?} past the picture's right edge in {cell:?}");
+    assert!(badge.left() >= cell.center().x - half - 0.5, "{badge:?} past the picture's left edge in {cell:?}");
+}
