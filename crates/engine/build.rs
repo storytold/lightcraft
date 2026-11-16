@@ -1,5 +1,5 @@
 //! Optional build input: with `CRAFT_FONTS_DIR=<storytold/craft-fonts checkout>`, embed every font
-//! in its `fonts/manifest.txt` as `CRAFT_FONTS` (see src/fonts.rs). Unset, `CRAFT_FONTS` is empty.
+//! in its `fonts/manifest.txt` as `fonts::craft_fonts` (see src/fonts.rs). Unset, it is empty.
 //! Recipe from craft-fonts' docs/integration.md; craft-fonts is never a Cargo dependency, and this
 //! script only reads a local directory (no network).
 //!
@@ -7,6 +7,11 @@
 //! and Noto Sans Hebrew Regular (~65 KiB, for Hebrew file and folder names), to keep the `.wasm`
 //! within the web size budget (Cloudflare serves at most 25 MiB per file); the export watermark
 //! falls back to it there. Native builds embed every font.
+//!
+//! `CRAFT_FONTS_EMBED=0` (native only) checks the manifest as usual but embeds nothing: the
+//! package puts the manifest and its fonts beside the program instead (the macOS app bundle's
+//! `Contents/Resources/fonts/`), where `fonts::craft_fonts` reads them at run time, so the app and
+//! the CLI inside it share one copy.
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -14,14 +19,26 @@ fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
     println!("cargo::rerun-if-env-changed=CRAFT_FONTS_REQUIRED");
+    println!("cargo::rerun-if-env-changed=CRAFT_FONTS_EMBED");
     let required = std::env::var_os("CRAFT_FONTS_REQUIRED").is_some();
-    let mut src = String::from("pub static CRAFT_FONTS: &[CraftFont] = &[\n");
+    let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
+    // the web build has no files beside it: it always embeds
+    let beside = !wasm && std::env::var_os("CRAFT_FONTS_EMBED").is_some_and(|v| v == "0");
+    let mut src = String::from("static EMBEDDED: &[CraftFont] = &[\n");
     let mut embedded = 0;
     if let Some(dir) = std::env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from).map(resolve) {
         match craft_fonts(&dir, required) {
             Ok(entries) => {
+                // the checkout, for the tests that load it the way a package's copy is loaded
+                if let Ok(root) = dir.canonicalize()
+                    && !root.display().to_string().contains(['\n', '\r'])
+                {
+                    println!("cargo::rustc-env=CRAFT_FONTS_CHECKOUT={}", root.display());
+                }
                 embedded = entries.lines().count();
-                src.push_str(&entries);
+                if !beside {
+                    src.push_str(&entries);
+                }
             }
             Err(e) if required => {
                 println!("cargo::error=CRAFT_FONTS_DIR={}: {e}", dir.display());
@@ -32,9 +49,15 @@ fn main() {
         println!("cargo::error=CRAFT_FONTS_REQUIRED is set but CRAFT_FONTS_DIR is missing");
     }
     src.push_str("];\n");
+    if !wasm {
+        let _ = writeln!(src, "/// Built with `CRAFT_FONTS_EMBED=0`: the fonts are files beside the program.\nconst BESIDE: bool = {beside};");
+    }
+    if beside && std::env::var_os("CRAFT_FONTS_DIR").is_none() {
+        println!("cargo::warning=CRAFT_FONTS_EMBED=0 without CRAFT_FONTS_DIR: the manifest was not checked");
+    }
     // Without them the app still runs and every language still selectable, so Chinese and Japanese
     // just paint boxes — the one failure a user cannot diagnose from what they see.
-    if embedded == 0 {
+    if embedded == 0 && !beside {
         println!(
             "cargo::warning=no craft-fonts embedded: Chinese and Japanese text will render as empty boxes. \
              Clone https://github.com/storytold/craft-fonts next to this repo and rebuild with \

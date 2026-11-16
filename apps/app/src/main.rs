@@ -1606,6 +1606,7 @@ fn main() -> eframe::Result {
                 app.notices.extend(window_notice);
                 app.pending_link = launch_link;
                 app.gpu_notice = true;
+                app.font_problems = Some(lcc_engine::fonts::craft_font_problems());
                 // the start-up update check, when the user turned it on (off by default)
                 app.startup_update_check = startup_update_check(keeps_settings, no_update_check);
                 // an empty library opens where Import is offered (a grid, with the sidebar); before

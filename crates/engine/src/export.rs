@@ -453,7 +453,7 @@ pub fn draw_watermark_preview(img: &mut Rgba8, wm: &Watermark, export_short_edge
 
 fn blend_watermark(img: &mut Rgba8, wm: &Watermark, floor_scale: f32) {
     let width = img.width;
-    watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, floor_scale, |x, y, k, col| {
+    watermark_coverage(img.width, img.height, wm, crate::fonts::craft_fonts(), floor_scale, |x, y, k, col| {
         let p = &mut img.data[y * width + x];
         if p[3] == 255 {
             for c in 0..3 {
@@ -479,7 +479,7 @@ fn blend_watermark(img: &mut Rgba8, wm: &Watermark, floor_scale: f32) {
 /// anchored as on an image of that size (a slideshow slide's photo). The area is clipped to `img`.
 pub fn draw_watermark_in(img: &mut Rgba8, wm: &Watermark, x0: usize, y0: usize, w: usize, h: usize) {
     let (width, height) = (img.width, img.height);
-    watermark_coverage(w, h, wm, crate::fonts::CRAFT_FONTS, 1.0, |x, y, k, col| {
+    watermark_coverage(w, h, wm, crate::fonts::craft_fonts(), 1.0, |x, y, k, col| {
         let (px, py) = (x0.saturating_add(x), y0.saturating_add(y));
         if px >= width || py >= height {
             return;
@@ -515,7 +515,7 @@ fn draw_watermark_deep_over(img: &mut DeepImage, mut alpha: Option<&mut Plane>, 
         Some(if out <= 0.0 { (0.0, 1.0) } else { (k / out, before * (1.0 - k) / out) })
     };
     match &mut img.samples {
-        DeepSamples::U16(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, 1.0, |x, y, k, col| {
+        DeepSamples::U16(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::craft_fonts(), 1.0, |x, y, k, col| {
             let w = over(y * width + x, k);
             let i = (y * width + x) * 3;
             for c in 0..3 {
@@ -528,7 +528,7 @@ fn draw_watermark_deep_over(img: &mut DeepImage, mut alpha: Option<&mut Plane>, 
                 v[i + c] = blended.round().clamp(0.0, 65535.0) as u16;
             }
         }),
-        DeepSamples::F32(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::CRAFT_FONTS, 1.0, |x, y, k, col| {
+        DeepSamples::F32(v) => watermark_coverage(img.width, img.height, wm, crate::fonts::craft_fonts(), 1.0, |x, y, k, col| {
             let w = over(y * width + x, k);
             let i = (y * width + x) * 3;
             for c in 0..3 {
@@ -543,7 +543,7 @@ fn draw_watermark_deep_over(img: &mut DeepImage, mut alpha: Option<&mut Plane>, 
 }
 
 /// Lay out `wm` on a `width × height` image and call `blend(x, y, coverage × opacity, colour)` for
-/// every covered pixel (shadow pass first). `craft` is [`crate::fonts::CRAFT_FONTS`] (a parameter
+/// every covered pixel (shadow pass first). `craft` is [`crate::fonts::craft_fonts()`] (a parameter
 /// so tests can render without it). `floor_scale` is this image's size over the exported file's
 /// (1 when drawing the file itself): the 6 px minimum text size is a minimum in the file.
 fn watermark_coverage(
@@ -4254,7 +4254,7 @@ mod tests {
     #[test]
     fn biz_ud_vertical_watermarks_place_punctuation_at_the_top_right() {
         use ab_glyph::Font;
-        let Some(entry) = crate::fonts::CRAFT_FONTS.iter().find(|f| f.family == "BIZ UDMincho") else {
+        let Some(entry) = crate::fonts::craft_fonts().iter().find(|f| f.family == "BIZ UDMincho") else {
             lcc_testkit::skip!(Fonts, "built without BIZ UDMincho from craft-fonts");
             return;
         };
@@ -4322,9 +4322,9 @@ mod tests {
         for (composed, decomposed) in [("éA", "e\u{301}A"), ("Å\nA", "A\u{30a}\nA"), ("A\nB", "A\r\nB"), ("日A", "日\u{e0100}A")] {
             compare(composed, decomposed, &[]);
         }
-        if crate::fonts::CRAFT_FONTS.iter().any(|f| f.family == "BIZ UDMincho") {
+        if crate::fonts::craft_fonts().iter().any(|f| f.family == "BIZ UDMincho") {
             for (composed, decomposed) in [("が日", "か\u{3099}日"), ("ぱ\n日", "は\u{309a}\n日")] {
-                compare(composed, decomposed, crate::fonts::CRAFT_FONTS);
+                compare(composed, decomposed, crate::fonts::craft_fonts());
             }
         } else {
             lcc_testkit::skip!(Fonts, "Japanese comparisons: built without BIZ UDMincho from craft-fonts");
@@ -4349,7 +4349,7 @@ mod tests {
     #[test]
     fn japanese_watermarks_support_vertical_columns() {
         use ab_glyph::Font;
-        let fonts = watermark_fonts(crate::fonts::CRAFT_FONTS);
+        let fonts = watermark_fonts(crate::fonts::craft_fonts());
         if fonts.len() < 2 {
             lcc_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR, so there is no Japanese watermark face");
             return;

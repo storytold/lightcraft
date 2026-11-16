@@ -1,10 +1,21 @@
 //! Fonts from the optional craft-fonts build input (storytold/craft-fonts).
 //!
-//! Built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`, [`CRAFT_FONTS`] holds every font in its
+//! Built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`, [`craft_fonts`] holds every font in its
 //! manifest (today: the Japanese and Simplified-Chinese UI and document fonts); otherwise it is
 //! empty and the app uses only its own bundled fonts (Inter). Both the egui UI and the export
 //! watermark renderer read it from here. Font rules: `AGENTS.md` → Assets (OFL, unmodified,
 //! credited in assets/ATTRIBUTION.md).
+//!
+//! The fonts are embedded in the binary, unless it was built with `CRAFT_FONTS_EMBED=0`: then the
+//! package carries them as files, once for the app and the CLI beside it (the macOS bundle's
+//! `Contents/Resources/fonts/`, the checkout's `fonts/` layout with its manifest), and they are
+//! read on first use. A file that is missing or damaged leaves its face out and is reported
+//! ([`craft_font_problems`]); the rest still load, and Latin text never needs them (Inter).
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod package;
+#[cfg(not(target_arch = "wasm32"))]
+pub use package::{LoadedFace, read_package};
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
 pub struct CraftFont {
@@ -16,6 +27,42 @@ pub struct CraftFont {
 }
 
 include!(concat!(env!("OUT_DIR"), "/craft_fonts.rs"));
+
+/// The craft-fonts faces: embedded, or read once from the package's files (built with
+/// `CRAFT_FONTS_EMBED=0`). Empty without craft-fonts; every user must work with an empty list.
+pub fn craft_fonts() -> &'static [CraftFont] {
+    #[cfg(not(target_arch = "wasm32"))]
+    if BESIDE {
+        return package::loaded().fonts;
+    }
+    EMBEDDED
+}
+
+/// Faces the package should carry but that could not be read (always empty for embedded fonts).
+/// Each one is also logged as a warning when the fonts are read.
+pub fn craft_font_problems() -> &'static [FontProblem] {
+    #[cfg(not(target_arch = "wasm32"))]
+    if BESIDE {
+        return &package::loaded().problems;
+    }
+    &[]
+}
+
+/// A craft-fonts face the package lists but that could not be used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FontProblem {
+    /// What is affected, for people: the face (`"Noto Sans Arabic Regular"`), or the font list's
+    /// path when the list itself could not be read.
+    pub what: String,
+    /// What went wrong (English, for the log).
+    pub detail: String,
+}
+
+impl std::fmt::Display for FontProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.what, self.detail)
+    }
+}
 
 impl CraftFont {
     /// Whether the font is meant for `script` (ISO 15924, e.g. `"Jpan"`).
@@ -95,20 +142,20 @@ mod tests {
 
     #[test]
     fn craft_fonts_are_well_formed_or_absent() {
-        if CRAFT_FONTS.is_empty() {
+        if craft_fonts().is_empty() {
             eprintln!("built without CRAFT_FONTS_DIR: no craft-fonts to check");
             return;
         }
-        for f in CRAFT_FONTS {
+        for f in craft_fonts() {
             assert!(!f.family.is_empty() && !f.style.is_empty() && !f.scripts.is_empty(), "{}", f.family);
             assert!(ab_glyph::FontRef::try_from_slice(f.bytes).is_ok(), "{} {} parses", f.family, f.style);
         }
-        assert!(japanese(CRAFT_FONTS).next().is_some(), "craft-fonts carries Japanese faces");
+        assert!(japanese(craft_fonts()).next().is_some(), "craft-fonts carries Japanese faces");
         // Every script face that ships is a UI fallback, and has the glyphs of its script (#736).
         use ab_glyph::Font;
         for (script, text) in [("Thai", "ภาพถ่ายสวัสดี๑๒๓"), ("Arab", "صورة"), ("Geor", "ფოტო"), ("Hebr", "תמונות טנזניה ךםןףץ־׳״ָׁ₪")]
         {
-            let Some(face) = ui_fallback(CRAFT_FONTS, "Latn", "Regular").into_iter().find(|f| f.covers(script)) else { continue };
+            let Some(face) = ui_fallback(craft_fonts(), "Latn", "Regular").into_iter().find(|f| f.covers(script)) else { continue };
             let font = ab_glyph::FontRef::try_from_slice(face.bytes).expect("parses");
             assert!(text.chars().all(|c| font.glyph_id(c).0 != 0), "{} draws {script}", face.family);
         }

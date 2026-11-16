@@ -67,9 +67,8 @@ Or check a project-scoped `.mcp.json` into your repo:
 
 ### Codex
 
-The macOS release includes a separate `<cli>-<version>-macos-universal.zip`;
-unpack it alongside the desktop app if you do not want to build from source. Use the CLI
-and app from the same release. Verify both downloads against that release's `SHA256SUMS.txt`.
+On macOS the CLI is inside the app, `/Applications/<app>.app/Contents/MacOS/<cli>`, so the CLI and
+app always come from the same release (verify the download against that release's `SHA256SUMS.txt`).
 
 Register the CLI's stdio server with Codex using its **absolute** installed path:
 
@@ -103,13 +102,15 @@ The release packages ship `<cli>` alongside the desktop app, so no build is need
 |---|---|
 | Windows (MSI) | `C:\Program Files\<app>\<cli>.exe` by default (wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/<cli>` |
-| macOS | the separate `<cli>-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
+| macOS | inside the app: `/Applications/<app>.app/Contents/MacOS/<cli>`, not on `PATH` (the manual's Install page shows how to link it there) |
 
 ```sh
 # Windows, default install folder
 claude mcp add <binary> -- "C:\Program Files\<app>\<cli>.exe" mcp
-# Linux, or macOS with the CLI unzipped onto PATH
+# Linux, or macOS with the CLI linked onto PATH
 claude mcp add <binary> -- <cli> mcp
+# macOS, from inside the app
+claude mcp add <binary> -- /Applications/<app>.app/Contents/MacOS/<cli> mcp
 ```
 
 ### Other clients (Claude Desktop, Cursor, …)

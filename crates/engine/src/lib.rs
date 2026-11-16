@@ -166,7 +166,7 @@ use std::sync::Arc;
 pub use cmd::plugin_filters::ROLL_KEY;
 pub use cmd::{CommandInfo, CommandSpec, canonical_id, command_specs, find_command};
 pub use errors::{AiModel, ErrorKind};
-pub use fonts::{CRAFT_FONTS, CraftFont};
+pub use fonts::{CraftFont, craft_fonts};
 use lcc_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use lcc_develop::DevelopSettings;
 pub use media::{RenderJob, SourceLevel};

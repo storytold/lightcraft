@@ -1,5 +1,5 @@
 //! The Modern layout's menu (fork-owned): the ☰ button in the top left opens the whole menu bar
-//! across the top, with Shortcuts (Import, Export) open first and then every menu Classic has (File,
+//! across the top, with Shortcuts (Import, Export, Settings) open first and then every menu Classic has (File,
 //! Edit, Library, Photo, Metadata, View, Window, Help), built from the same model
 //! ([`crate::menubar::menu_bar`]) and run the same way. A tap outside, Back or Esc closes it. On a
 //! narrow window the bar scrolls sideways.
@@ -17,7 +17,7 @@ use crate::widgets::register;
 /// The first menu, open when the bar opens: the actions people reach for most.
 pub const SHORTCUTS: &str = "Shortcuts";
 /// Shortcuts' items: (key, label).
-const SHORTCUT_ITEMS: [(&str, &str); 2] = [("import", "Import…"), ("export", "Export…")];
+const SHORTCUT_ITEMS: [(&str, &str); 3] = [("import", "Import…"), ("export", "Export…"), ("settings", "Settings…")];
 
 /// A shortcut's command: Export is the save-and-share sheet where the host keeps a gallery
 /// (Android), else the Export dialog.
@@ -26,6 +26,7 @@ fn shortcut_command(app: &LccApp, key: &str) -> (&'static str, Value) {
         "export" if app.services.write_shared.is_some() => ("modern.exportSheet", json!({"on": true})),
         "export" => ("dialog.export", json!({})),
         "histogram" => ("view.histogram", json!({})),
+        "settings" => ("app.settings", json!({})),
         _ => ("file.addPhotos", json!({})),
     }
 }

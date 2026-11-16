@@ -467,6 +467,31 @@ fn options_column(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDialog, bes
     go
 }
 
+/// The camera roll's review: keep adding the photos taken later (the same switch as Settings ▸
+/// Folders ▸ Camera roll ▸ Watch for new photos), and where they go.
+fn camera_roll_watch(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens) {
+    let mut on = app.ui.camera_roll_watch;
+    let c = ui.checkbox(&mut on, crate::i18n::tr("Keep adding new photos from the camera roll"));
+    register(ui.ctx(), "check:importWatchCameraRoll", c.rect);
+    if c.changed() {
+        crate::camera_roll::set_watch(app, on);
+    }
+    // (device sync isn't in the web build)
+    #[cfg(not(target_arch = "wasm32"))]
+    let syncing = crate::panels::peer_sync::catalog_syncs(app);
+    #[cfg(target_arch = "wasm32")]
+    let syncing = false;
+    let line = match (on, syncing) {
+        (true, true) => {
+            "Photos you take later are added on their own. While this catalog syncs, every camera roll photo is in the collection “Camera Roll - this device's name”; Collection below adds only these photos to another one."
+        }
+        (true, false) => "Photos you take later are added on their own, to All Photographs. Collection below adds only these photos to a collection.",
+        (false, _) => "Only these photos are added. Turn this on, or Settings ▸ Folders ▸ Watch for new photos, to add new ones as you take them.",
+    };
+    let r = ui.label(egui::RichText::new(crate::i18n::tr(line)).color(t.text_dim).small());
+    register(ui.ctx(), "label:importWatchCameraRollHelp", r.rect);
+}
+
 /// The option rows (in a dialog form, so their groups are cards).
 fn options(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
     options_for(app, ui, d, false);
@@ -478,7 +503,8 @@ pub(crate) fn options_for(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDia
     let t = Tokens::get(ui.ctx());
     use crate::dialog_frame::{form_row, group_begin, help};
     group_begin(ui, Some("How"));
-    let can_copy = app.session.library.as_ref().is_some_and(|l| l.on_disk) || app.services.pick_folder.is_some();
+    // the camera roll is added where it is (the camera keeps writing there; a copy would double it)
+    let can_copy = !d.camera_roll && (app.session.library.as_ref().is_some_and(|l| l.on_disk) || app.services.pick_folder.is_some());
     form_row(ui, "Transfer", |ui| {
         let labels: Vec<&str> = if can_copy { vec!["Copy", "Move", "Add in place"] } else { vec!["Add in place"] };
         let chosen = match (d.copy, d.move_files, can_copy) {
@@ -518,6 +544,9 @@ pub(crate) fn options_for(app: &mut LccApp, ui: &mut egui::Ui, d: &mut ImportDia
         .small(),
     );
     register(ui.ctx(), "label:importModeHelp", r.rect);
+    if d.camera_roll && !tab {
+        camera_roll_watch(app, ui, &t);
+    }
     if d.copy {
         form_row(ui, "Into", |ui| {
             ui.horizontal_wrapped(|ui| {

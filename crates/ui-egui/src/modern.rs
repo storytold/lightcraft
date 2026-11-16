@@ -866,7 +866,9 @@ fn open_tapped(app: &mut LccApp, ui: &egui::Ui, area: Rect, before: Option<lcc_c
     }
     // (a tap on a card floating over the grid, the search pill or the Info card, is the card's)
     let at = ui.input(|i| i.pointer.interact_pos());
-    let on_grid = at.is_some_and(|p| area.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l == ui.layer_id()));
+    let on_grid = at.is_some_and(|p| {
+        area.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l == ui.layer_id()) && !crate::modern_sources::owns_tap(ui.ctx(), p)
+    });
     let tapped = ui.input(|i| {
         i.pointer.primary_released()
             && on_grid

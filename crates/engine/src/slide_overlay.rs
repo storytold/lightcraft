@@ -760,7 +760,7 @@ impl SlideOverlays {
             return Some(PlateContent::Image(img, w as usize, h as usize));
         }
         let text = p.text.trim();
-        crate::text::TextLayout::new(text, px as f32, false, crate::fonts::CRAFT_FONTS).map(PlateContent::Text)
+        crate::text::TextLayout::new(text, px as f32, false, crate::fonts::craft_fonts()).map(PlateContent::Text)
     }
 
     fn text_layout(&self, i: usize, l: &Layout) -> Option<crate::text::TextLayout> {
@@ -769,7 +769,7 @@ impl SlideOverlays {
         if t.opacity <= 0.0 {
             return None;
         }
-        crate::text::TextLayout::new(text, (t.size * Self::short(l)).max(1.0) as f32, false, crate::fonts::CRAFT_FONTS)
+        crate::text::TextLayout::new(text, (t.size * Self::short(l)).max(1.0) as f32, false, crate::fonts::craft_fonts())
     }
 
     fn stars_size(&self, l: &Layout) -> Option<(usize, f64)> {
@@ -1325,11 +1325,11 @@ mod tests {
     /// CJK text draws with the craft-fonts faces (skips without them).
     #[test]
     fn cjk_text_uses_the_craft_fonts() {
-        if crate::fonts::cjk(crate::fonts::CRAFT_FONTS).next().is_none() {
+        if crate::fonts::cjk(crate::fonts::craft_fonts()).next().is_none() {
             eprintln!("skipped: built without craft-fonts (CRAFT_FONTS_DIR)");
             return;
         }
-        let cjk = crate::text::TextLayout::new("日本語", 40.0, false, crate::fonts::CRAFT_FONTS).unwrap();
+        let cjk = crate::text::TextLayout::new("日本語", 40.0, false, crate::fonts::craft_fonts()).unwrap();
         let tofu = crate::text::TextLayout::new("日本語", 40.0, false, &[]).unwrap();
         let count = |t: &crate::text::TextLayout| {
             let mut n = 0usize;

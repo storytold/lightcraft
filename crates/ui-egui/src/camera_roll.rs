@@ -67,11 +67,14 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
     app.pending_camera_roll = None;
     match answer {
         Ok(paths) if paths.is_empty() => app.toast(ctx, crate::i18n::tr("There are no photos in the camera roll")),
-        Ok(paths) => {
-            if let Err(e) = crate::import::open(app, paths) {
-                app.toast_error(ctx, e);
+        Ok(paths) => match crate::import::open(app, paths) {
+            Ok(_) => {
+                if let Some(scan) = app.scan.as_mut() {
+                    scan.camera_roll = true;
+                }
             }
-        }
+            Err(e) => app.toast_error(ctx, e),
+        },
         Err(e) => app.toast_error(ctx, format!("{}: {e}", crate::i18n::tr("Couldn't add the camera roll"))),
     }
 }

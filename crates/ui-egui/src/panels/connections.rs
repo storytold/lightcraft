@@ -942,37 +942,31 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
         if let Some(e) = link["error"].as_str() {
             ui.label(RichText::new(e).color(t.caution));
         }
-        // (wraps: on a narrow window the buttons take two rows instead of running off the edge)
+        // the everyday buttons; the rest behind More (wraps: on a narrow window the buttons take
+        // two rows instead of running off the edge)
+        let more_id = egui::Id::new(("immichMore", i));
+        let any_open = app.immich.libraries.contains_key(&id) || app.immich.sidecars_open.contains(&id) || app.immich.locked_open.contains(&id);
+        let mut more = any_open || ui.data(|d| d.get_temp::<bool>(more_id).unwrap_or(false));
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if text_button(ui, &format!("immichLink-{i}"), crate::i18n::tr("Link Now"), false).clicked() {
-                let r = app.run("immich.link", json!({"account": id}));
-                report(app, ui.ctx(), r);
-            }
-            if text_button(ui, &format!("immichLinkFull-{i}"), crate::i18n::tr("Full Link Pass"), false)
-                .on_hover_text(crate::i18n::tr("Looks at every photo on the server again, not only those changed since the last pass."))
+            if text_button(ui, &format!("immichSync-{i}"), crate::i18n::tr("Sync Now"), false)
+                .on_hover_text(crate::i18n::tr("Exchanges ratings, captions, keywords and the other fields set below with Immich now."))
                 .clicked()
             {
-                let r = app.run("immich.link", json!({"account": id, "full": true}));
-                report(app, ui.ctx(), r);
-            }
-            if text_button(ui, &format!("immichRecheck-{i}"), crate::i18n::tr("Check"), false).clicked() {
-                let _ = app.session.execute("immich.status", &json!({"check": true, "background": true}));
-            }
-            if text_button(ui, &format!("immichLibraries-{i}"), crate::i18n::tr("External Libraries…"), false).clicked() {
-                // the section opens now and fills in when the server has answered
-                app.immich.maps_reload.insert(id.clone());
-                app.immich.libraries.entry(id.clone()).or_insert_with(|| json!({"loading": true}));
-                ask_bg(app, ui.ctx(), "immich.libraries", &id, json!({}));
-            }
-            if text_button(ui, &format!("immichSync-{i}"), crate::i18n::tr("Sync Now"), false).clicked() {
                 let r = app.run("immich.sync", json!({"account": id, "background": true}));
                 report(app, ui.ctx(), r);
                 app.immich.sync_open.insert(id.clone());
                 app.immich.sync_view.remove(&id);
             }
+            if text_button(ui, &format!("immichImport-{i}"), crate::i18n::tr("Import…"), false).clicked() {
+                open_import(app, Some(id.clone()));
+            }
+            if a["collections"] == true && text_button(ui, &format!("immichCollectionsOpen-{i}"), crate::i18n::tr("Choose Albums…"), false).clicked()
+            {
+                let _ = app.run("app.settings", json!({"tab": "sync"}));
+            }
             let open = app.immich.sync_open.contains(&id);
-            if text_button(ui, &format!("immichSyncPanel-{i}"), crate::i18n::tr("Sync…"), open).clicked() {
+            if text_button(ui, &format!("immichSyncPanel-{i}"), crate::i18n::tr("Metadata Sync…"), open).clicked() {
                 if open {
                     app.immich.sync_open.remove(&id);
                 } else {
@@ -980,41 +974,67 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
                     app.immich.sync_view.remove(&id);
                 }
             }
-            if text_button(ui, &format!("immichImport-{i}"), crate::i18n::tr("Import…"), false).clicked() {
-                open_import(app, Some(id.clone()));
-            }
-            let sidecars_open = app.immich.sidecars_open.contains(&id);
-            if text_button(ui, &format!("immichSidecars-{i}"), crate::i18n::tr("XMP Sidecars"), sidecars_open).clicked() {
-                if sidecars_open {
-                    app.immich.sidecars_open.remove(&id);
-                } else {
-                    app.immich.sidecars_open.insert(id.clone());
-                }
-            }
-            let locked_open = app.immich.locked_open.contains(&id);
-            if text_button(ui, &format!("immichLocked-{i}"), crate::i18n::tr("Locked Folders…"), locked_open).clicked() {
-                if locked_open {
-                    app.immich.locked_open.remove(&id);
-                } else {
-                    // (a fresh status every time the section opens)
-                    app.immich.locked_open.insert(id.clone());
-                    app.immich.locked_view.remove(&id);
-                }
-            }
-            if text_button(ui, &format!("immichDisconnect-{i}"), crate::i18n::tr("Disconnect"), false).clicked() {
-                app.immich.confirm = Some(Confirm {
-                    account: id.clone(),
-                    place: "card",
-                    text: crate::i18n::tr(
-                        "Disconnect this server? Its stored API key is removed. The photos and their Immich links stay in the catalog.",
-                    )
-                    .to_string(),
-                    button: "Disconnect",
-                    command: "immich.disconnect",
-                    params: json!({"account": id}),
-                });
+            if text_button(ui, &format!("immichMore-{i}"), crate::i18n::tr("More"), more).clicked() && !any_open {
+                more = !more;
+                ui.data_mut(|d| d.insert_temp(more_id, more));
             }
         });
+        if more {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                if text_button(ui, &format!("immichLink-{i}"), crate::i18n::tr("Link Now"), false).clicked() {
+                    let r = app.run("immich.link", json!({"account": id}));
+                    report(app, ui.ctx(), r);
+                }
+                if text_button(ui, &format!("immichLinkFull-{i}"), crate::i18n::tr("Full Link Pass"), false)
+                    .on_hover_text(crate::i18n::tr("Looks at every photo on the server again, not only those changed since the last pass."))
+                    .clicked()
+                {
+                    let r = app.run("immich.link", json!({"account": id, "full": true}));
+                    report(app, ui.ctx(), r);
+                }
+                if text_button(ui, &format!("immichRecheck-{i}"), crate::i18n::tr("Check"), false).clicked() {
+                    let _ = app.session.execute("immich.status", &json!({"check": true, "background": true}));
+                }
+                if text_button(ui, &format!("immichLibraries-{i}"), crate::i18n::tr("External Libraries…"), false).clicked() {
+                    // the section opens now and fills in when the server has answered
+                    app.immich.maps_reload.insert(id.clone());
+                    app.immich.libraries.entry(id.clone()).or_insert_with(|| json!({"loading": true}));
+                    ask_bg(app, ui.ctx(), "immich.libraries", &id, json!({}));
+                }
+                let sidecars_open = app.immich.sidecars_open.contains(&id);
+                if text_button(ui, &format!("immichSidecars-{i}"), crate::i18n::tr("XMP Sidecars"), sidecars_open).clicked() {
+                    if sidecars_open {
+                        app.immich.sidecars_open.remove(&id);
+                    } else {
+                        app.immich.sidecars_open.insert(id.clone());
+                    }
+                }
+                let locked_open = app.immich.locked_open.contains(&id);
+                if text_button(ui, &format!("immichLocked-{i}"), crate::i18n::tr("Locked Folders…"), locked_open).clicked() {
+                    if locked_open {
+                        app.immich.locked_open.remove(&id);
+                    } else {
+                        // (a fresh status every time the section opens)
+                        app.immich.locked_open.insert(id.clone());
+                        app.immich.locked_view.remove(&id);
+                    }
+                }
+                if text_button(ui, &format!("immichDisconnect-{i}"), crate::i18n::tr("Disconnect"), false).clicked() {
+                    app.immich.confirm = Some(Confirm {
+                        account: id.clone(),
+                        place: "card",
+                        text: crate::i18n::tr(
+                            "Disconnect this server? Its stored API key is removed. The photos and their Immich links stay in the catalog.",
+                        )
+                        .to_string(),
+                        button: "Disconnect",
+                        command: "immich.disconnect",
+                        params: json!({"account": id}),
+                    });
+                }
+            });
+        }
         collections_rows(app, ui, t, i, &id, a);
         confirm_box(app, ui, t, i, &id, "card");
         if app.immich.libraries.contains_key(&id) {
@@ -1037,20 +1057,21 @@ fn account_card(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, a: &V
 /// The account in device sync: its albums as collections (each device picks what it keeps of
 /// each in Settings ▸ Sync).
 fn collections_rows(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id: &str, a: &Value) {
-    ui.horizontal_wrapped(|ui| {
-        let mut on = a["collections"] == true;
-        let c = ui.checkbox(&mut on, crate::i18n::tr("Show Immich albums as collections"));
-        register(ui.ctx(), format!("check:immichCollections-{i}"), c.rect);
-        if c.changed() {
-            let r = app.run("immich.collections", json!({"account": id, "on": on}));
-            if report(app, ui.ctx(), r) && on {
-                let _ = app.run("app.settings", json!({"tab": "sync"}));
-            }
-        }
-        if a["collections"] == true && text_button(ui, &format!("immichCollectionsOpen-{i}"), crate::i18n::tr("Choose in Sync…"), false).clicked() {
+    let mut on = a["collections"] == true;
+    let c = ui.checkbox(&mut on, crate::i18n::tr("Sync Immich albums"));
+    register(ui.ctx(), format!("check:immichCollections-{i}"), c.rect);
+    if c.changed() {
+        let r = app.run("immich.collections", json!({"account": id, "on": on}));
+        if report(app, ui.ctx(), r) && on {
             let _ = app.run("app.settings", json!({"tab": "sync"}));
         }
-    });
+    }
+    let note = if on {
+        "Each album is a collection. In Choose Albums… pick Previews or Full Quality for the albums this device keeps in step; the rest stay on the server."
+    } else {
+        "Keeps chosen albums in step with collections here, both ways. Import… only copies or links photos once."
+    };
+    ui.label(RichText::new(crate::i18n::tr(note)).size(11.0).color(t.text_dim));
     let mut shared = a["shared"] == true;
     let c = ui.checkbox(&mut shared, crate::i18n::tr("Share with synced devices"));
     register(ui.ctx(), format!("check:immichShare-{i}"), c.rect);
@@ -1058,22 +1079,14 @@ fn collections_rows(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, i
         let r = app.run("immich.share", json!({"account": id, "on": shared}));
         report(app, ui.ctx(), r);
     }
-    ui.label(
-        RichText::new(crate::i18n::tr(
-            "Shared: this server's API key goes to the devices this catalog syncs with, over their encrypted link, into their key storage, and they see its albums too. Off: the connection and its albums stay on this device.",
-        ))
-        .size(11.0)
-        .color(t.text_dim),
-    );
-    if a["collections"] == true {
-        ui.label(
-            RichText::new(crate::i18n::tr(
-                "Each album is a collection in the Immich set; in Settings ▸ Sync each device chooses None, Previews or Full Quality.",
-            ))
+    let r = ui.label(
+        RichText::new(crate::i18n::tr("Your other devices get this connection and its albums too, over their encrypted link."))
             .size(11.0)
             .color(t.text_dim),
-        );
-    }
+    );
+    r.on_hover_text(crate::i18n::tr(
+        "Shared: this server's API key goes to the devices this catalog syncs with, over their encrypted link, into their key storage, and they see its albums too. Off: the connection and its albums stay on this device.",
+    ));
 }
 
 /// IMM-SIDECARS: push the catalog's metadata to Immich (whole sidecars for external-library

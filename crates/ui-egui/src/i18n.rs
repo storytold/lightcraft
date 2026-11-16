@@ -910,7 +910,7 @@ mod tests {
     #[test]
     fn catalog_characters_are_paintable() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions(lcc_engine::CRAFT_FONTS));
+        ctx.set_fonts(crate::theme::font_definitions(lcc_engine::craft_fonts()));
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         for language in Locale::ALL {
@@ -920,7 +920,8 @@ mod tests {
             }
             // The faces this language's script needs; a language the craft-fonts input does not
             // cover (a translation added ahead of its font) is reported, not failed.
-            let mut faces: Vec<&str> = lcc_engine::CRAFT_FONTS.iter().filter(|font| font.serves(language.script())).map(|font| font.family).collect();
+            let mut faces: Vec<&str> =
+                lcc_engine::craft_fonts().iter().filter(|font| font.serves(language.script())).map(|font| font.family).collect();
             faces.dedup();
             if faces.is_empty() {
                 lcc_testkit::skip!(Fonts, "{}: built without a craft-fonts face for {}", language.code(), language.script());
@@ -952,7 +953,7 @@ mod tests {
     #[test]
     fn interface_symbols_are_paintable() {
         let ctx = egui::Context::default();
-        ctx.set_fonts(crate::theme::font_definitions(lcc_engine::CRAFT_FONTS));
+        ctx.set_fonts(crate::theme::font_definitions(lcc_engine::craft_fonts()));
         let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
         // ⌥ and ⌫ come from egui's bundled fonts; ▸ and ▾ are in neither (measured 2026-10-07).
@@ -1384,12 +1385,12 @@ mod tests {
     fn craft_fonts_render_cjk_in_the_ui() {
         let samples = [(Locale::Ja, "日本語の文字"), (Locale::ZhHans, "简体中文字"), (Locale::ZhHant, "繁體中文字")];
         for (language, sample) in samples {
-            if !lcc_engine::CRAFT_FONTS.iter().any(|font| font.serves(language.script())) {
+            if !lcc_engine::craft_fonts().iter().any(|font| font.serves(language.script())) {
                 lcc_testkit::skip!(Fonts, "{}: built without a craft-fonts face for {}", language.code(), language.script());
                 continue;
             }
             set_language(language);
-            let ctx = fonts_ctx(lcc_engine::CRAFT_FONTS);
+            let ctx = fonts_ctx(lcc_engine::craft_fonts());
             ctx.fonts_mut(|fonts| {
                 for family in
                     [egui::FontFamily::Proportional, egui::FontFamily::Name(crate::theme::FONT_SEMIBOLD.into()), egui::FontFamily::Monospace]

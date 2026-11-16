@@ -7,11 +7,14 @@ use egui::{Align2, RichText, vec2};
 use crate::theme::Tokens;
 use crate::{LccApp, QuitPrompt};
 
-/// Collect the library's settings-file warnings (each is shown once), and the no-GPU notice once the GPU device has
-/// been tried.
+/// Collect the library's settings-file warnings (each is shown once), the no-GPU notice once the GPU device has
+/// been tried, and the missing-fonts notice once.
 pub fn logic(app: &mut LccApp) {
     let new = app.session.take_library_warnings();
     app.notices.extend(new);
+    if let Some(problems) = app.font_problems.take() {
+        app.notices.extend(font_notice(problems));
+    }
     use lcc_engine::gpu;
     if app.gpu_notice && app.gpu_applied == Some(true) && gpu::ready() {
         app.gpu_notice = false;
@@ -19,6 +22,20 @@ pub fn logic(app: &mut LccApp) {
             app.notices.extend(gpu_notice(gpu::unavailable_reason().as_deref(), app.ui.settings.gpu));
         }
     }
+}
+
+/// What to tell the user when fonts the package carries could not be read (`problems`, also in the log): which ones,
+/// and that reinstalling brings them back. Text in their scripts shows as empty boxes; Latin text never needs them.
+/// Nothing when every font loaded, or when they are built into the program.
+pub fn font_notice(problems: &[lcc_engine::fonts::FontProblem]) -> Option<String> {
+    if problems.is_empty() {
+        return None;
+    }
+    let fonts = problems.iter().map(|problem| problem.what.as_str()).collect::<Vec<_>>().join(", ");
+    Some(crate::i18n::tr_format!(
+        "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.",
+        fonts = fonts
+    ))
 }
 
 /// What to tell the user when GPU rendering is on (`enabled`) but the GPU could not be used for `reason`: only when no
@@ -222,7 +239,21 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests {
-    use super::gpu_notice;
+    use super::{font_notice, gpu_notice};
+
+    /// A font the package lists but couldn't read is named, with what to do; nothing to say when all loaded.
+    #[test]
+    fn the_font_notice_names_the_fonts_and_says_to_reinstall() {
+        use lcc_engine::fonts::FontProblem;
+        assert_eq!(font_notice(&[]), None, "every font loaded");
+        let problems = [
+            FontProblem { what: "Noto Sans Arabic Regular".into(), detail: "missing".into() },
+            FontProblem { what: "NanumGothic Regular".into(), detail: "damaged".into() },
+        ];
+        let text = font_notice(&problems).expect("say which fonts");
+        assert!(text.contains("Noto Sans Arabic Regular") && text.contains("NanumGothic Regular"), "{text}");
+        assert!(text.contains("Reinstall") && text.contains(lcc_brand::DISPLAY_NAME), "{text}");
+    }
 
     #[test]
     fn the_gpu_notice_is_only_for_a_missing_adapter() {
