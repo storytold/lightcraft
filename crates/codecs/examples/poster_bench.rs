@@ -20,6 +20,12 @@ fn main() {
             _ => clips.push(a),
         }
     }
+    if std::env::var_os("POSTER_STAGES").is_some() {
+        for clip in &clips {
+            stages(clip, &opts);
+        }
+        return;
+    }
     let m = lightcraft_color::REC2020.to_space(&lightcraft_color::SRGB);
     for clip in clips {
         let name = std::path::Path::new(&clip).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -75,4 +81,31 @@ fn main() {
             None => {}
         }
     }
+}
+
+/// Time each stage of one poster: decoding to the target, colour conversion, fitting.
+fn stages(clip: &str, opts: &PosterOptions) {
+    use lightcraft_codecs::video_stream::{SeekMode, VideoStream};
+    use lightcraft_codecs::yuv::Converter;
+    let Ok(src) = FileSource::open(clip) else { return };
+    let t = Instant::now();
+    let Ok(mut s) = VideoStream::open(src, &opts.stream) else { return };
+    let start = s.info().start_seconds;
+    let _ = s.seek(start + 1.0, SeekMode::Exact);
+    let Ok(Some(f)) = s.next_frame() else { return };
+    let decode = t.elapsed().as_secs_f64() * 1e3;
+    let t = Instant::now();
+    let Ok(conv) = Converter::new(f.colour, f.bit_depth, f.width, f.height) else { return };
+    let mut lin = vec![[0f32; 3]; f.width * f.height];
+    let _ = conv.to_linear_rec2020(&f.picture(), &mut lin);
+    let convert = t.elapsed().as_secs_f64() * 1e3;
+    let img = lightcraft_raster::Rgb32f { width: f.width, height: f.height, data: lin };
+    let t = Instant::now();
+    let _ = lightcraft_raster::resample::fit(&img, opts.max_edge, opts.max_edge, lightcraft_raster::resample::Filter::Lanczos3);
+    let fit = t.elapsed().as_secs_f64() * 1e3;
+    println!(
+        "{clip}: decode {decode:.1} ms ({} pictures), convert {convert:.1} ms, fit {fit:.1} ms, colour {:?}",
+        s.frames_decoded(),
+        conv.resolved()
+    );
 }

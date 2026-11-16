@@ -16,7 +16,8 @@
 //!
 //! Interpretation choices, the same for both outputs:
 //!
-//! - **SDR transfer curves** (BT.709, BT.601, BT.2020 10/12-bit, sRGB) are read with the sRGB curve,
+//! - **SDR transfer curves** (BT.709, BT.601, BT.2020 10/12-bit, sRGB, and BT.709 with extended range:
+//!   xvYCC, BT.1361, clipped to SDR) are read with the sRGB curve,
 //!   as browsers and most players show such video, so a picture looks the way the clip looks in a
 //!   player. An 8-bit BT.709 stream in BT.709 primaries therefore converts to display sRGB without
 //!   any linearisation (the fast path).
@@ -205,7 +206,9 @@ enum Transfer {
 impl Transfer {
     fn from_code(code: u8) -> Option<Transfer> {
         Some(match code {
-            1 | 6 | 13 | 14 | 15 => Transfer::Sdr,
+            // (11 and 12, xvYCC and BT.1361, are the BT.709 curve with room beyond black and white,
+            // which an SDR picture clips)
+            1 | 6 | 11 | 12 | 13 | 14 | 15 => Transfer::Sdr,
             4 => Transfer::Gamma(2.2),
             5 => Transfer::Gamma(2.8),
             8 => Transfer::Linear,

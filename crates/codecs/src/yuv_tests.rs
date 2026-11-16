@@ -287,3 +287,18 @@ proptest! {
         prop_assert!(rgba.iter().all(|p| p[3] == 255));
     }
 }
+
+/// Sony XAVC S cameras tag their clips xvYCC (transfer 11, IEC 61966-2-4): the BT.709 curve, with
+/// codes beyond nominal black and white allowed. It reads as BT.709 and keeps its own code.
+#[test]
+fn extended_gamut_bt709_curves_read_as_bt709() {
+    for code in [11, 12] {
+        let desc = ColourDescription { transfer: code, ..ColourDescription::BT709 };
+        let conv = Converter::new(desc, 8, 1920, 1080).unwrap();
+        assert_eq!(conv.resolved().transfer, code);
+        assert!(!conv.is_hdr());
+        for ycc in [[16, 128, 128], [126, 128, 128], [235, 128, 128], [81, 90, 240]] {
+            assert_eq!(srgb(desc, 8, ycc), srgb(ColourDescription::BT709, 8, ycc), "transfer {code}: {ycc:?}");
+        }
+    }
+}
