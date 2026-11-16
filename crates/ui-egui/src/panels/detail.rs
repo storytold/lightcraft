@@ -372,9 +372,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // below what else lives in the canvas' top-left corner: the filter pill, the info overlay
     let pill_inset = if !fullscreen && filter_pill_shown(app) { FILTER_PILL_INSET + FILTER_PILL_HEIGHT } else { 0.0 };
     let badge_top_inset = pill_inset.max(info_overlay_extent(app, &p, &photo));
-    // A catalogued video has no frame to decode or show yet (playback, trim and cover frames come
-    // in a later update): its card stands in for the picture in every view mode, instead of the
-    // error a broken photo shows or a blank pane.
+    // A catalogued video without a frame on screen (its poster on its way, undecodable, or a build
+    // without video decoding): its card stands in for the picture in every view mode, instead of
+    // the error a broken photo shows or a blank pane.
     if shows_video_card(app, &photo, id) {
         video_card(ui, &p, &t, &photo, canvas, "canvas:videoCard", video_frame_problem(app, id));
         shown = "video";
