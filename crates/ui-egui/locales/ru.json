@@ -2710,5 +2710,7 @@
   "Fit Map to Photos": "Подогнать карту под фото",
   "Set Map View": "Задать вид карты",
   "Zoom In on Map": "Приблизить карту",
-  "Zoom Out on Map": "Отдалить карту"
+  "Zoom Out on Map": "Отдалить карту",
+  "Open in Browser": "Открыть в браузере",
+  "Show in the Map view": "Показать в режиме «Карта»"
 }

@@ -90,6 +90,7 @@ impl LightcraftApp {
             film_scroll: None,
             map_drawn: Default::default(),
             map_points: Default::default(),
+            mini_map: None,
             widgets: vec![],
             widget_hits: vec![],
             next_widgets: vec![],

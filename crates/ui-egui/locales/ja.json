@@ -2502,5 +2502,7 @@
   "Fit Map to Photos": "マップを写真に合わせる",
   "Set Map View": "マップの表示を設定",
   "Zoom In on Map": "マップを拡大",
-  "Zoom Out on Map": "マップを縮小"
+  "Zoom Out on Map": "マップを縮小",
+  "Open in Browser": "ブラウザーで開く",
+  "Show in the Map view": "マップ表示で見る"
 }

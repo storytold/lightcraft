@@ -2461,5 +2461,7 @@
   "Fit Map to Photos": "Sovita kartta kuviin",
   "Set Map View": "Aseta karttanäkymä",
   "Zoom In on Map": "Lähennä karttaa",
-  "Zoom Out on Map": "Loitonna karttaa"
+  "Zoom Out on Map": "Loitonna karttaa",
+  "Open in Browser": "Avaa selaimessa",
+  "Show in the Map view": "Näytä Kartta-näkymässä"
 }

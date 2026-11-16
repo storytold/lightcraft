@@ -2503,5 +2503,7 @@
   "Fit Map to Photos": "使地图适合照片",
   "Set Map View": "设置地图视图",
   "Zoom In on Map": "放大地图",
-  "Zoom Out on Map": "缩小地图"
+  "Zoom Out on Map": "缩小地图",
+  "Open in Browser": "在浏览器中打开",
+  "Show in the Map view": "在地图视图中显示"
 }

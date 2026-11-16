@@ -3770,5 +3770,7 @@
   "Fit Map to Photos": "რუკის ფოტოებზე მორგება",
   "Set Map View": "რუკის ხედის დაყენება",
   "Zoom In on Map": "რუკის მიახლოება",
-  "Zoom Out on Map": "რუკის დაშორება"
+  "Zoom Out on Map": "რუკის დაშორება",
+  "Open in Browser": "ბრაუზერში გახსნა",
+  "Show in the Map view": "რუკის ხედში ჩვენება"
 }

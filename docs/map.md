@@ -2,7 +2,7 @@
 
 The Map view (View ▸ Map, ⌘⌥3 / Ctrl+Alt+3) shows the photos that have a GPS position on a slippy map.
 This page describes the view, geotagging, where the map's tiles come from, what is sent over the network,
-and the commands behind it. Later sections (the Info panel map, the location filter, saved locations,
+and the commands behind it. Later sections (the location filter, saved locations,
 track logs, keys and menus) are filled in as those parts land.
 
 ## Map view
@@ -68,6 +68,22 @@ canvas, whether the filmstrip is drawn, every pin or cluster drawn in the last f
 `hovered` (the hovered pin's photos) and `drop` (`{count, x, y, lat, lon}` while photos are carried over the
 map). Widgets: `map:canvas`, `map:pin:<first photo id>`, `map:fit`, `map:lockMarkers`, `map:withoutGps`,
 `map:hoverThumb`, `map:pinMenu:removeGps`, `map:attribution`.
+
+## Info panel map
+
+Under the location fields, the Info panel shows a small map of the active photo's place (with several photos
+selected, the active one's): the fields' width, 160 points tall, zoom 14 (or the tile source's deepest zoom),
+the photo's pin and the tile credit. Near a pole, where the map stops at ±85.05°, the pin stays on the map's edge.
+A photo without a valid position has no map. The map doesn't pan; a click opens the Map view centred there at
+zoom 14. **Open in Browser** (formerly Show on Map) still opens the place on openstreetmap.org.
+
+It draws from the same tile service and texture cache as the Map view, so tiles it loaded are not fetched again
+when you open the Map view. It asks only for the tiles it shows (no ring around them), and only while it is on
+screen: with the Info panel closed or the map scrolled out of view, nothing is fetched for it. Offline it stays
+grey with the pin and "Map tiles are off".
+
+`map.state` reports it as `miniMap`: `{photo, lat, lon, zoom, rect, pin, tiles: {drawn, fromParent, missing,
+offline}}` (null when it wasn't drawn in the last frame). Widgets: `info:miniMap`, `info:miniMapAttribution`.
 
 ## Tile sources and cache
 

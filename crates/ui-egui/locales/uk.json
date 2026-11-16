@@ -2500,5 +2500,7 @@
   "Fit Map to Photos": "Припасувати карту до фото",
   "Set Map View": "Задати вигляд карти",
   "Zoom In on Map": "Наблизити карту",
-  "Zoom Out on Map": "Віддалити карту"
+  "Zoom Out on Map": "Віддалити карту",
+  "Open in Browser": "Відкрити в браузері",
+  "Show in the Map view": "Показати в режимі «Карта»"
 }

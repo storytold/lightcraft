@@ -2427,5 +2427,7 @@
   "Fit Map to Photos": "Dopasuj mapę do zdjęć",
   "Set Map View": "Ustaw widok mapy",
   "Zoom In on Map": "Powiększ mapę",
-  "Zoom Out on Map": "Pomniejsz mapę"
+  "Zoom Out on Map": "Pomniejsz mapę",
+  "Open in Browser": "Otwórz w przeglądarce",
+  "Show in the Map view": "Pokaż w widoku Mapa"
 }

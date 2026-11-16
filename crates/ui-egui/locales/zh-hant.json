@@ -2504,5 +2504,7 @@
   "Fit Map to Photos": "使地圖符合照片",
   "Set Map View": "設定地圖檢視",
   "Zoom In on Map": "放大地圖",
-  "Zoom Out on Map": "縮小地圖"
+  "Zoom Out on Map": "縮小地圖",
+  "Open in Browser": "在瀏覽器中開啟",
+  "Show in the Map view": "在地圖檢視中顯示"
 }

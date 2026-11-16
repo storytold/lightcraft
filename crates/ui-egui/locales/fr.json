@@ -3687,5 +3687,7 @@
   "Fit Map to Photos": "Ajuster la carte aux photos",
   "Set Map View": "Définir la vue de la carte",
   "Zoom In on Map": "Zoom avant sur la carte",
-  "Zoom Out on Map": "Zoom arrière sur la carte"
+  "Zoom Out on Map": "Zoom arrière sur la carte",
+  "Open in Browser": "Ouvrir dans le navigateur",
+  "Show in the Map view": "Afficher dans la vue Carte"
 }

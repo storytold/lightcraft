@@ -155,6 +155,16 @@ pub fn state(app: &LightcraftApp) -> Value {
         "movingPin": d.moving.map(|(id, at)| json!({"id": id, "x": at.x, "y": at.y})),
         "hovered": d.hovered,
         "drop": d.drop.map(|(n, at, to)| json!({"count": n, "x": at.x, "y": at.y, "lat": to.lat, "lon": to.lon})),
+        // the Info panel's map, when it was drawn in the last frame
+        "miniMap": app.mini_map.as_ref().map(|m| json!({
+            "photo": m.photo,
+            "lat": m.center.lat,
+            "lon": m.center.lon,
+            "zoom": m.zoom,
+            "rect": {"x": m.rect.left(), "y": m.rect.top(), "width": m.rect.width(), "height": m.rect.height()},
+            "pin": {"x": m.pin.x, "y": m.pin.y},
+            "tiles": {"drawn": m.tiles.tiles, "fromParent": m.tiles.from_parent, "missing": m.tiles.missing, "offline": m.tiles.offline},
+        })),
     })
 }
 
@@ -484,6 +494,78 @@ fn navigate(
     }
 
     vp
+}
+
+/// Height of the Info panel's map of a photo's place.
+pub const MINI_HEIGHT: f32 = 160.0;
+/// Zoom of the Info panel's map (or the source's max when lower).
+pub const MINI_ZOOM: f64 = 14.0;
+
+/// What the Info panel's map drew this frame (`map.state` → `miniMap`).
+#[derive(Clone, Debug)]
+pub struct MiniShown {
+    pub photo: u64,
+    pub center: LatLon,
+    pub zoom: f64,
+    pub rect: Rect,
+    pub pin: Pos2,
+    pub tiles: tiles::Drawn,
+}
+
+/// The Info panel's map of `photo`'s place `pos`: `width` × [`MINI_HEIGHT`], zoom 14 (or the
+/// source's max), the photo's pin and the tile credit, from the same tile service and textures as
+/// the Map view. It asks for only the tiles it shows (no ring), and only while it is on screen:
+/// scrolled out of view, or with the Info panel closed, nothing is fetched for it. It doesn't pan;
+/// a click opens the Map view centred there. Offline it stays grey with the pin and "Map tiles are
+/// off". Ported in spirit from PR #804 (Jason Baldwin).
+pub fn mini_map(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId, pos: LatLon, width: f32) {
+    let t = Tokens::get(ui.ctx());
+    let w = if width.is_finite() { width.clamp(0.0, ui.available_width().max(0.0)) } else { 0.0 };
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, MINI_HEIGHT), Sense::click());
+    if w < 1.0 || !ui.is_rect_visible(rect) {
+        return;
+    }
+    crate::widgets::register(ui, "info:miniMap", rect);
+    let zoom = MINI_ZOOM.min(f64::from(app.session.map.effective_source().max_zoom()));
+    let vp = Viewport::new(pos, zoom, f64::from(w), f64::from(MINI_HEIGHT));
+    let painter = ui.painter_at(rect);
+    let drawn = tiles::draw(&mut app.session, &painter, rect, vp.center, zoom, 0);
+    // the pin (near the poles the map stops short of the photo's place: keep it on the map)
+    let p = vp.to_screen(pos);
+    let pin = keep_on_map(pos2(rect.min.x + p.x as f32, rect.min.y + p.y as f32), rect);
+    render_single_pin(&painter, pin, true, false);
+    // the tile provider's credit, always visible (tile licences require it)
+    let credit = app.session.map.attribution();
+    if !credit.is_empty() {
+        let g = painter.layout(credit, FontId::proportional(9.5), Color32::from_gray(40), (w - 8.0).max(20.0));
+        let r = Rect::from_min_size(pos2(rect.right() - g.size().x - 6.0, rect.bottom() - g.size().y - 4.0), g.size() + vec2(6.0, 4.0));
+        painter.rect_filled(r, 2.0, Color32::from_white_alpha(200));
+        painter.galley(r.min + vec2(3.0, 2.0), g, Color32::from_gray(40));
+        crate::widgets::register(ui, "info:miniMapAttribution", r);
+    }
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
+    app.mini_map = Some(MiniShown { photo: photo.0, center: vp.center, zoom, rect, pin, tiles: drawn });
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if resp.on_hover_text(crate::i18n::tr("Show in the Map view")).clicked() {
+        let shown = app.run("view.map", json!({}));
+        let centred = app.run("map.setView", json!({"lat": pos.lat, "lon": pos.lon, "zoom": zoom}));
+        if let Err(e) = shown.and(centred) {
+            app.toast(ui.ctx(), e);
+        }
+    }
+}
+
+/// `pin` kept 8 points inside `rect` (the centre of a map narrower than that, or of a non-finite
+/// point). From PR #804's review fix: `f32::clamp` panics when min > max.
+pub(crate) fn keep_on_map(pin: Pos2, rect: Rect) -> Pos2 {
+    if !(pin.x.is_finite() && pin.y.is_finite()) {
+        return rect.center();
+    }
+    let lo = (rect.min + vec2(8.0, 8.0)).min(rect.center());
+    let hi = (rect.max - vec2(8.0, 8.0)).max(rect.center());
+    pin.clamp(lo, hi)
 }
 
 /// Where photos or a pin may be dropped: the map, less its filter bar and bottom toolbar.

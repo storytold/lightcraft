@@ -2565,5 +2565,7 @@
   "Fit Map to Photos": "Anpassa kartan till foton",
   "Set Map View": "Ange kartvy",
   "Zoom In on Map": "Zooma in kartan",
-  "Zoom Out on Map": "Zooma ut kartan"
+  "Zoom Out on Map": "Zooma ut kartan",
+  "Open in Browser": "Öppna i webbläsaren",
+  "Show in the Map view": "Visa i kartvyn"
 }

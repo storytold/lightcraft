@@ -280,6 +280,8 @@ pub struct LightcraftApp {
     pub map_drawn: panels::map::MapDrawn,
     /// The Map view's pins: the current list's positions, projected once per change of the list.
     pub map_points: panels::map::Points,
+    /// What the Info panel's map drew this frame (`map.state` → `miniMap`); reset every frame.
+    pub mini_map: Option<panels::map::MiniShown>,
     /// Widget registry from the last completed, nondiscarded frame (automation ids → rects).
     pub widgets: Vec<(String, egui::Rect)>,
     /// Egui hit owners for [`Self::widgets`] from the same completed pass. A press is delivered

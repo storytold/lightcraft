@@ -2,7 +2,8 @@
 //! (`lightcraft_engine::map::TileService`), drawn for a map view of any size.
 //!
 //! - One texture cache for every map on screen, keyed by (tile source, z, x, y), least recently
-//!   used evicted past [`TEXTURE_CAP`]; a tile drawn in the current frame is never evicted.
+//!   used evicted past [`TEXTURE_CAP`]; a tile drawn in the current frame is never evicted. It lives
+//!   in the egui context's memory, so each window (and each headless test) has its own.
 //! - A tile not loaded yet is drawn from a loaded ancestor (up to [`PARENT_LEVELS`] zooms up),
 //!   scaled; with none, the map's grey shows through with a faint outline.
 //! - The service is told the union of the tiles the maps wanted this frame and the last; when no
@@ -12,7 +13,7 @@
 //! The attribution of the source is painted by the views (always visible, bottom right).
 
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use egui::{Align2, Color32, ColorImage, FontId, Painter, Rect, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
@@ -30,7 +31,7 @@ pub const MAP_GREY: Color32 = Color32::from_rgb(214, 218, 222);
 type TexKey = (String, TileKey);
 
 #[derive(Default)]
-struct Store {
+pub(crate) struct Store {
     textures: HashMap<TexKey, (TextureHandle, u64)>,
     /// Tiles wanted by the maps drawn in the pass `frame`, and in the pass before.
     this_frame: Vec<TileKey>,
@@ -92,7 +93,11 @@ impl Store {
     }
 }
 
-static STORE: Mutex<Option<Store>> = Mutex::new(None);
+/// The context's store (created on first use).
+fn store(ctx: &egui::Context) -> Arc<Mutex<Store>> {
+    let id = egui::Id::unique("lightcraft-map-tiles");
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Arc<Mutex<Store>>>(id).clone())
+}
 
 /// What [`draw`] did (for tests and `ui.inspect`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -121,13 +126,8 @@ pub fn draw(session: &mut Session, painter: &Painter, rect: Rect, center: LatLon
     painter.rect_filled(rect, 0.0, MAP_GREY);
     let source = session.map.effective_source();
     if source.is_offline() {
-        painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            crate::i18n::tr("Map tiles are off"),
-            FontId::proportional(12.0),
-            Color32::from_rgb(90, 96, 104),
-        );
+        let at = if rect.height() < 240.0 { egui::pos2(rect.center().x, rect.top() + 14.0) } else { rect.center() };
+        painter.text(at, Align2::CENTER_CENTER, crate::i18n::tr("Map tiles are off"), FontId::proportional(12.0), Color32::from_rgb(90, 96, 104));
         return Drawn { offline: true, ..Drawn::default() };
     }
     let Some(svc) = session.map_tiles() else { return Drawn { offline: true, ..Drawn::default() } };
@@ -135,8 +135,9 @@ pub fn draw(session: &mut Session, painter: &Painter, rect: Rect, center: LatLon
     let max_zoom = source.max_zoom();
     let source_id = source.id().to_string();
 
-    let mut guard = STORE.lock().unwrap_or_else(PoisonError::into_inner);
-    let store = guard.get_or_insert_with(Store::default);
+    let shared = store(&ctx);
+    let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
+    let store = &mut *guard;
     store.roll(pass);
     // a refreshed tile replaces its texture (uploaded again from the service on the next draw)
     let events = svc.poll();
@@ -202,8 +203,9 @@ pub fn draw(session: &mut Session, painter: &Painter, rect: Rect, center: LatLon
 /// view). Never starts a service.
 pub fn end_frame(session: &Session, ctx: &egui::Context) {
     let pass = ctx.cumulative_pass_nr();
-    let mut guard = STORE.lock().unwrap_or_else(PoisonError::into_inner);
-    let Some(store) = guard.as_mut() else { return };
+    let shared = store(ctx);
+    let mut guard = shared.lock().unwrap_or_else(PoisonError::into_inner);
+    let store = &mut *guard;
     if store.frame == pass {
         return;
     }
@@ -214,14 +216,8 @@ pub fn end_frame(session: &Session, ctx: &egui::Context) {
 }
 
 /// Texture count, for tests and diagnostics.
-pub fn texture_count() -> usize {
-    STORE.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map_or(0, |s| s.textures.len())
-}
-
-/// Forget every texture (tests).
-#[cfg(test)]
-pub fn reset() {
-    *STORE.lock().unwrap_or_else(PoisonError::into_inner) = None;
+pub fn texture_count(ctx: &egui::Context) -> usize {
+    store(ctx).lock().unwrap_or_else(PoisonError::into_inner).textures.len()
 }
 
 #[cfg(test)]

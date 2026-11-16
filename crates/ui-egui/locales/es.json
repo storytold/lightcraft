@@ -2504,5 +2504,7 @@
   "Fit Map to Photos": "Ajustar el mapa a las fotos",
   "Set Map View": "Establecer vista del mapa",
   "Zoom In on Map": "Acercar el mapa",
-  "Zoom Out on Map": "Alejar el mapa"
+  "Zoom Out on Map": "Alejar el mapa",
+  "Open in Browser": "Abrir en el navegador",
+  "Show in the Map view": "Mostrar en la vista Mapa"
 }

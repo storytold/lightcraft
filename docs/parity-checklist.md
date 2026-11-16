@@ -46,16 +46,16 @@ cited here still exists. Formerly docs/parity.md.
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 14 | 5 | 0 | 0 | 7/7 (100%) | 6/7 (86%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
-| U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
+| U. Map & location (MAP) | 1 | 0 | 1 | 0 | — | 1/1 (100%) |
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 86 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 45 | 26 | 17 | 8 | — | 24/27 (89%) |
-| **Total** | 424 | 71 | 52 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 425 | 70 | 52 | 35 | 193/203 (95%) | 148/163 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **84.0%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 59.4% of 180.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **84.1%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.5% of 163 · P2 59.4% of 180.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -424,7 +424,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-MAP-INFO | Location in the info panel | P1 | 🟡 | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `crates/ui-egui/src/panels/right.rs` | location, city, state/province, country and GPS editable; Show on Map (OpenStreetMap in the browser); no map in the panel |
+| LR-MAP-INFO | Location in the info panel | P1 | ✅ | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `cmd:map.state`, `crates/ui-egui/src/panels/right/info.rs`, `crates/ui-egui/src/panels/map.rs`, `crates/ui-egui/src/tests/map_info.rs` | location, city, state/province, country and GPS editable; under them a map of the active photo's place (zoom 14, its pin, the tile credit; shares the Map view's tiles and textures; fetches only while on screen; grey with a note offline); a click opens the Map view centred there; Open in Browser shows the place on openstreetmap.org. Private saved locations don't hide it yet (LRC-MAP-LOCATIONS) |
 | LR-MAP-MODULE | Map module [Classic] | P2 | ⬜ | | |
 
 ## V. Preferences (PREF)
@@ -803,6 +803,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | LR-MAP-INFO 🟡 → ✅: the Info panel shows a map of the active photo's place under the location fields (shared tiles, fetched only while on screen, offline grey); a click opens the Map view there; Show on Map is now Open in Browser |
 | 2026-11-15 | minor | LRC-MAP-GEOTAG 🟡 → ✅: a single photo's pin can be dragged to move it (a cluster's drag pans), Lock Markers (⌘K / Ctrl+K, `map.lockMarkers`, saved in `ui.json`) stops that, Photo ▸ Remove GPS Coordinates and a pin's menu clear the position (`photo.removeGps`), and a cleared or undone position leaves the XMP sidecar; MENU-PHOTO-REMOVEGPS added. LRC-MAP-VIEW: world-anchored clusters (no regrouping on pan), hover thumbnail, Fit to Photos (also the first showing), `map.fit` / `map.setView` / `map.zoomIn` / `map.zoomOut`, "N photos without GPS"; status unchanged |
 | 2026-11-15 | patch | LRC-MAP-VIEW: the Esri styles (Streets, Outdoor) come back with the user's own ArcGIS Location Platform API key (Settings ▸ Map, `map.setEsriKey`; keyed static tiles service; credit from each style's metadata; the key never reported, logged, journaled or cached by); no keyless Esri endpoint; World Imagery dropped (no raster imagery style in the keyed service). Status unchanged |
 | 2026-11-14 | patch | LRC-MAP-VIEW / LRC-MAP-GEOTAG: the Map view draws the filmstrip under the map (toggle in the bottom bar instead of the thumbnail size); photos dragged from it onto the map get the drop point's position in one undo step; selected photos are marked on the map and a pin click selects its photos in the filmstrip (`map.state`); `photo.setGps` wraps longitude and refuses unknown ids. Status unchanged (geotag stays 🟡: no pin move, Remove GPS menu or sidecar fix yet) |

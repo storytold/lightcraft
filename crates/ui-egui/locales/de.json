@@ -3585,5 +3585,7 @@
   "Fit Map to Photos": "Karte an Fotos anpassen",
   "Set Map View": "Kartenansicht festlegen",
   "Zoom In on Map": "Karte vergrößern",
-  "Zoom Out on Map": "Karte verkleinern"
+  "Zoom Out on Map": "Karte verkleinern",
+  "Open in Browser": "Im Browser öffnen",
+  "Show in the Map view": "In der Kartenansicht zeigen"
 }

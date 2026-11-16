@@ -2550,5 +2550,7 @@
   "Fit Map to Photos": "Přizpůsobit mapu fotkám",
   "Set Map View": "Nastavit pohled mapy",
   "Zoom In on Map": "Přiblížit mapu",
-  "Zoom Out on Map": "Oddálit mapu"
+  "Zoom Out on Map": "Oddálit mapu",
+  "Open in Browser": "Otevřít v prohlížeči",
+  "Show in the Map view": "Zobrazit v pohledu Mapa"
 }
