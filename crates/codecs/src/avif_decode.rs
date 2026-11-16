@@ -31,8 +31,24 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
 fn picture_store_budget(width: u32, height: u32) -> u64 {
     let padded = |n: u32| u64::from(n).div_ceil(128) * 128 + 160;
-    let cap = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 1 << 30 };
-    padded(width).saturating_mul(padded(height)).saturating_mul(3 * 2 * (8 + 1 + 8 + 2)).min(cap)
+    padded(width).saturating_mul(padded(height)).saturating_mul(PICTURE_STORE_BYTES_PER_SAMPLE).min(PICTURE_STORE_CAP)
+}
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+const PICTURE_STORE_BYTES_PER_SAMPLE: u64 = 3 * 2 * (8 + 1 + 8 + 2);
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+const PICTURE_STORE_CAP: u64 = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 1 << 30 };
+
+/// The picture-store budget for any stored AV1 canvas the pixel limit admits. `probe_size` reports
+/// the size after `clap`, but the decoder builds the stored (pre-crop) canvas, which the shared
+/// decoder checks against `max_pixels` from its `ispe` before decoding. A canvas of at most
+/// `max_pixels` samples with AV1's 65,536-sample edge limit has `w + h <= min(max_pixels + 1, 2^17)`,
+/// and each padded edge is under `edge + 288`, so the padded area is below
+/// `max_pixels + 288 * (w + h) + 288^2`.
+#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+fn stored_picture_store_budget(max_pixels: u64) -> u64 {
+    let edge_sum = max_pixels.saturating_add(1).min(2 * 65_536);
+    let area = max_pixels.saturating_add(edge_sum.saturating_mul(288)).saturating_add(288 * 288);
+    area.saturating_mul(PICTURE_STORE_BYTES_PER_SAMPLE).min(PICTURE_STORE_CAP)
 }
 
 #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
@@ -46,7 +62,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
             max_width: u32::MAX,
             max_height: u32::MAX,
             max_pixels: opts.max_pixels,
-            max_alloc: picture_store_budget(w, h),
+            max_alloc: stored_picture_store_budget(opts.max_pixels).max(picture_store_budget(w, h)),
         },
         keep_orientation: false,
     };
@@ -93,6 +109,135 @@ mod tests {
         assert_eq!(picture_store_budget(33, 17), 288 * 288 * 6 * 19);
         let cap = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 1 << 30 };
         assert_eq!(picture_store_budget(u32::MAX, u32::MAX), cap);
+        assert_eq!(stored_picture_store_budget(u64::MAX), cap);
+        // Every canvas the pixel limit admits fits, whatever its shape.
+        for max_pixels in [1u64, 561, 512 * 512, 1 << 20] {
+            let budget = stored_picture_store_budget(max_pixels);
+            for (w, h) in [(1, max_pixels), (max_pixels, 1), (max_pixels.isqrt(), max_pixels.isqrt())] {
+                let (w, h) = (w.min(65_536) as u32, h.min(65_536) as u32);
+                assert!(picture_store_budget(w, h) <= budget, "{w}x{h} under {max_pixels}");
+            }
+        }
+    }
+
+    /// `probe_size` reports the `clap`-cropped size; the decoder still builds the stored canvas.
+    /// A 512×512 picture cropped to 16×16 must decode with the default options and at a pixel
+    /// limit that covers the stored canvas, and fail as too large below it.
+    #[test]
+    fn cropped_avif_decodes_with_a_budget_for_its_stored_canvas() {
+        let pixels = [90u8, 140, 200].repeat(512 * 512);
+        let image = crate::encode::EncodeImage::new(512, 512, 3, crate::encode::Samples::U8(&pixels));
+        let full = crate::encode::encode_avif(&image, 60, 10, &crate::encode::EncodeMeta::default()).unwrap();
+        let cropped = with_clap(&full, 16, 16);
+        assert_eq!(crate::read_header(&cropped).map(|h| (h.width, h.height)).unwrap(), (16, 16));
+        // The old budget, sized from the cropped 16×16, is below what the stored canvas needs.
+        assert!(picture_store_budget(16, 16) < picture_store_budget(512, 512));
+        let decoded = crate::decode(&cropped, DecodeOptions::default()).unwrap();
+        assert_eq!((decoded.source_width, decoded.source_height), (16, 16));
+        let exact = DecodeOptions { max_pixels: 512 * 512, ..DecodeOptions::default() };
+        assert_eq!(crate::decode(&cropped, exact).map(|d| (d.source_width, d.source_height)).unwrap(), (16, 16));
+        let below = DecodeOptions { max_pixels: 512 * 512 - 1, ..DecodeOptions::default() };
+        assert!(crate::decode(&cropped, below).is_err());
+    }
+
+    fn be32(b: &[u8], at: usize) -> usize {
+        u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize
+    }
+    fn put32(b: &mut [u8], at: usize, v: usize) {
+        b[at..at + 4].copy_from_slice(&(v as u32).to_be_bytes());
+    }
+    /// Child boxes of `b[start..end]`: (offset, size, type).
+    fn boxes(b: &[u8], start: usize, end: usize) -> Vec<(usize, usize, [u8; 4])> {
+        let mut out = Vec::new();
+        let mut at = start;
+        while at + 8 <= end {
+            let size = be32(b, at);
+            out.push((at, size, b[at + 4..at + 8].try_into().unwrap()));
+            at += size;
+        }
+        out
+    }
+    fn find(b: &[u8], start: usize, end: usize, kind: &[u8; 4]) -> (usize, usize) {
+        boxes(b, start, end).into_iter().find(|x| &x.2 == kind).map(|x| (x.0, x.1)).unwrap()
+    }
+
+    /// Adds a centred `clap` of `w × h` to the primary item of a single-item AVIF from the encoder,
+    /// fixing the enclosing box sizes and the `iloc` offsets into `mdat`.
+    fn with_clap(file: &[u8], w: u32, h: u32) -> Vec<u8> {
+        let mut b = file.to_vec();
+        let (meta, meta_size) = find(&b, 0, b.len(), b"meta");
+        let children = meta + 12;
+        let (iprp, _) = find(&b, children, meta + meta_size, b"iprp");
+        let (ipco, ipco_size) = find(&b, iprp + 8, iprp + be32(&b, iprp), b"ipco");
+        let index = boxes(&b, ipco + 8, ipco + ipco_size).len() + 1;
+        let mut clap = Vec::new();
+        for v in [w, 1, h, 1, 0, 1, 0, 1] {
+            clap.extend_from_slice(&v.to_be_bytes());
+        }
+        let clap = [&((8 + clap.len()) as u32).to_be_bytes()[..], b"clap", &clap].concat();
+        // ipma: version/flags, entry count, then item id, association count, associations.
+        let (ipma, ipma_size) = find(&b, iprp + 8, iprp + be32(&b, iprp), b"ipma");
+        let (version, flags) = (b[ipma + 8], b[ipma + 11]);
+        assert_eq!(be32(&b, ipma + 12), 1, "one item");
+        let id_len = if version < 1 { 2 } else { 4 };
+        let count_at = ipma + 16 + id_len;
+        let wide = flags & 1 == 1;
+        let assoc_end = count_at + 1 + b[count_at] as usize * if wide { 2 } else { 1 };
+        assert_eq!(assoc_end, ipma + ipma_size);
+        let assoc: Vec<u8> = if wide { (0x8000u16 | index as u16).to_be_bytes().to_vec() } else { vec![0x80 | index as u8] };
+        let grow = clap.len() + assoc.len();
+        b[count_at] += 1;
+        b.splice(assoc_end..assoc_end, assoc.iter().copied());
+        b.splice(ipco + ipco_size..ipco + ipco_size, clap.iter().copied());
+        // ipco precedes ipma inside iprp, so ipma moved by the clap's length.
+        for (at, by) in [(meta, grow), (iprp, grow), (ipco, clap.len()), (ipma + clap.len(), assoc.len())] {
+            let size = be32(&b, at);
+            put32(&mut b, at, size + by);
+        }
+        // iloc (version 0 or 1): shift every absolute extent offset by the growth of `meta`.
+        let (iloc, _) = find(&b, children, meta + be32(&b, meta), b"iloc");
+        let v = b[iloc + 8];
+        let (offset_size, length_size, base_size) = ((b[iloc + 12] >> 4) as usize, (b[iloc + 12] & 15) as usize, (b[iloc + 13] >> 4) as usize);
+        let index_size = if v >= 1 { (b[iloc + 13] & 15) as usize } else { 0 };
+        let mut at = iloc + 14;
+        let items = if v < 2 {
+            let n = u16::from_be_bytes([b[at], b[at + 1]]) as usize;
+            at += 2;
+            n
+        } else {
+            let n = be32(&b, at);
+            at += 4;
+            n
+        };
+        let read = |b: &[u8], at: usize, n: usize| b[at..at + n].iter().fold(0usize, |acc, &x| acc << 8 | x as usize);
+        let write = |b: &mut [u8], at: usize, n: usize, v: usize| {
+            for i in 0..n {
+                b[at + i] = (v >> (8 * (n - 1 - i))) as u8;
+            }
+        };
+        for _ in 0..items {
+            at += if v < 2 { 2 } else { 4 };
+            if v >= 1 {
+                at += 2;
+            }
+            at += 2;
+            let base = read(&b, at, base_size);
+            if base_size > 0 && base > 0 {
+                write(&mut b, at, base_size, base + grow);
+            }
+            at += base_size;
+            let extents = u16::from_be_bytes([b[at], b[at + 1]]) as usize;
+            at += 2;
+            for _ in 0..extents {
+                at += index_size;
+                let off = read(&b, at, offset_size);
+                if base == 0 && offset_size > 0 {
+                    write(&mut b, at, offset_size, off + grow);
+                }
+                at += offset_size + length_size;
+            }
+        }
+        b
     }
     #[test]
     fn hdr_avif_round_trips_highlights_through_public_decoder() {
