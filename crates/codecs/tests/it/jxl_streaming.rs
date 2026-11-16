@@ -58,7 +58,7 @@ fn metadata_in_final_feed_matches_builder() {
 }
 
 #[test]
-fn progressive_truncation_matches_builder() {
+fn progressive_truncation_matches_shared_decoder() {
     let pixels = Rgba8::from_fn(96, 64, |x, y| {
         let mut seed = (y * 96 + x + 1) as u32;
         let mut rgb = [0; 4];
@@ -79,6 +79,13 @@ fn progressive_truncation_matches_builder() {
         assert!(raw.len() > 4096, "fixture must exercise post-header feeds");
         for cut in [0, 1, 2, 12] {
             assert!(decode(&raw[..cut], DecodeOptions::default()).is_err(), "lossless={lossless}, cut={cut}/{}", raw.len());
+        }
+        // Progressive streams may contain a renderable partial frame. Preserve the
+        // post-header feed-boundary cases instead of requiring every truncation to fail.
+        for cut in [4095, 4096, 4097, raw.len() / 2, raw.len() - 1, raw.len()] {
+            let bytes = &raw[..cut];
+            let shared_ok = craft_jxl::decode_with_color(bytes, craft_jxl::DecodeLimits::default(), craft_jxl::OutputColor::LinearRec2020).is_ok();
+            assert_eq!(decode(bytes, DecodeOptions::default()).is_ok(), shared_ok, "lossless={lossless}, cut={cut}/{}", raw.len());
         }
         assert!(decode(&raw, DecodeOptions::default()).is_ok(), "lossless={lossless}");
     }
