@@ -64,6 +64,8 @@ use tests::panels as tests_panels;
 use tests::{fixtures as tests_fixtures, render_fixtures as tests_render_fixtures};
 #[cfg(test)]
 mod tests_video;
+#[cfg(test)]
+mod tests_video_play;
 
 use std::sync::mpsc::{Receiver, Sender};
 

@@ -534,6 +534,13 @@ fn fire_alias(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: se
         }
         return;
     }
+    // a video in the loupe: Space plays / pauses it (KEY-VIDEO-PLAY); a clip has no zoom to toggle
+    if id == "view.zoomToggle" && crate::panels::video_player::loupe_video(app).is_some() {
+        if let Err(e) = app.run("video.playPause", json!({})) {
+            app.toast_error(ctx, e);
+        }
+        return;
+    }
     // over a tool on the photo, held Space is the view's hand; a tap toggles on its release
     if id == "view.zoomToggle" && crate::space_hand::begin(app, ctx) {
         return;

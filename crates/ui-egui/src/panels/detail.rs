@@ -377,9 +377,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // A catalogued video without a frame on screen (its poster on its way, undecodable, or a build
     // without video decoding): its card stands in for the picture in every view mode, instead of
     // the error a broken photo shows or a blank pane.
-    if shows_video_card(app, &photo, id) {
-        video_card(ui, &p, &t, &photo, canvas, "canvas:videoCard", video_frame_problem(app, id));
-        shown = "video";
+    let video = draw_video(app, ui, &p, &photo, (canvas, main_area));
+    let video_frame = video == Some("videoFrame");
+    if let Some(what) = video {
+        shown = what;
     } else if split {
         // each view stays in its pane: zoomed in, a photo reaches past it (and would cover the
         // other view's margins with its whole-frame render, magnified and blurred)
@@ -410,7 +411,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let camera_full_drawn = camera_full && draw_camera_full(app, &p, id, img_rect, display_aspect, window_cover(&windows));
     // …and the window renders go over the whole-frame ones, all of them, where they belong in the
     // frame (clipped to their pane, or their side of the line)
-    let drawn = draw_windows(app, &p, &window_ctx, &windows, [canvas, img_rect], (show_before, split));
+    // (none over a video's frame: they are renders of its poster)
+    let drawn = draw_windows(app, &p, &window_ctx, if video_frame { &[] } else { &windows }, [canvas, img_rect], (show_before, split));
     let shown = shown_after_windows(shown, camera_full_drawn, drawn);
     app.loupe_shown = Some((id, shown));
     app.loupe_timing.observe(id, shown, now);
@@ -436,7 +438,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // A video card is not the picture: a crop overlay would draw handles on a frame that is not
     // there. The other tools (masks, remove, red eye) have no video surface either but keep their
     // existing navigation guard.
-    if !navigating && (shown != "video" || right != RightPanel::Crop) {
+    let crop_over_video = matches!(shown, "video" | "videoFrame") && right == RightPanel::Crop;
+    if !navigating && !crop_over_video {
         let tv = ToolView { right, map: &map, frame: &frame, d: &d, id, split, native, aspect };
         tool_interaction(app, ui, &resp, &tv, &Views { img_rect, target_rect, before_img, before_target, areas: &areas, main_area, canvas });
     }
@@ -458,6 +461,32 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         photo.preview_only.as_deref().inspect(|why| preview_only_pill(ui, canvas, why));
     }
     loupe_context_menu(app, &resp, id);
+    // a video's transport bar, last: above the loupe and its tools for the pointer
+    super::video_player::transport(app, ui, canvas, &photo);
+}
+
+/// What the loupe shows of a catalogued video instead of a photo render: the player's frame,
+/// upright, when the clip is open (`"videoFrame"`), else its card while it has no frame on screen
+/// (its poster on its way, undecodable, or a build without video decoding: `"video"`), instead of
+/// the error a broken photo shows or a blank pane. `None`: a photo, or a video whose poster shows.
+fn draw_video(
+    app: &LightcraftApp,
+    ui: &egui::Ui,
+    p: &egui::Painter,
+    photo: &lightcraft_catalog::Photo,
+    (canvas, area): (Rect, Rect),
+) -> Option<&'static str> {
+    if !photo.is_video() {
+        return None;
+    }
+    if super::video_player::draw_frame(app, ui, p, photo.id, area).is_some() {
+        return Some("videoFrame");
+    }
+    if shows_video_card(app, photo, photo.id) {
+        video_card(ui, p, &Tokens::get(ui.ctx()), photo, canvas, "canvas:videoCard", video_frame_problem(app, photo.id));
+        return Some("video");
+    }
+    None
 }
 
 /// Names the loupe for screen readers as the grid names the same photo (file, rating, flag, label), not
