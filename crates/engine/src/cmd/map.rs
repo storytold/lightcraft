@@ -1,5 +1,7 @@
 //! Map module commands: tile sources and the tile cache, saved locations, location filtering, and
-//! GPS tagging. The tile-source commands are ported from PR #797 (Jason Baldwin).
+//! GPS tagging (`photo.setGps`, `photo.removeGps`: what dropping photos on the Map view, moving a
+//! pin and Photo ▸ Remove GPS Coordinates run). The tile-source commands are ported from PR #797,
+//! the geotag commands from PR #810 (Jason Baldwin).
 
 use lightcraft_catalog::Op;
 use lightcraft_geom::{GeoBounds, LatLon};
@@ -24,37 +26,63 @@ fn set_gps(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, format!("lat must be −90…90 and lon a finite number (got {lat}, {lon})")));
     };
     let pos = ((at.lat * 1e7).round() / 1e7, (at.lon * 1e7).round() / 1e7);
+    let targets = gps_targets(s, p, C)?;
+    let count = commit_gps(s, &targets, Some(pos), "Set GPS Coordinates")?;
+    Ok(json!({ "updated": count, "lat": pos.0, "lon": pos.1 }))
+}
+
+/// The photos a geotag command acts on: those named (`ids` / `id`), else the selection, each once.
+/// A named photo the library doesn't have is an error and nothing changes (a drag of photos deleted
+/// meanwhile, an agent): the caller learns of it instead of a silent no-op.
+fn gps_targets(s: &mut Session, p: &Value, c: &str) -> Result<Vec<lightcraft_catalog::PhotoId>> {
     let mut seen = std::collections::HashSet::new();
     let targets: Vec<_> = s
         .targets(p)
         .map_err(|e| match e {
-            EngineError::BadParams { msg, .. } => bad(C, msg),
+            EngineError::BadParams { msg, .. } => bad(c, msg),
             other => other,
         })?
         .into_iter()
         .filter(|id| seen.insert(*id))
         .collect();
     if let Some(gone) = targets.iter().find(|id| s.catalog.photo(**id).is_none()) {
-        return Err(bad(C, format!("no such photo {}", gone.0)));
+        return Err(bad(c, format!("no such photo {}", gone.0)));
     }
     if targets.is_empty() {
-        return Err(bad(C, "no photos selected"));
+        return Err(bad(c, "no photos selected"));
     }
+    Ok(targets)
+}
+
+/// Set (`Some`) or clear (`None`) the GPS position of `targets` as one undo step `label`; photos
+/// already so are left alone (no empty undo step). The photos become LightCraft's for their
+/// sidecar GPS ([`Session::gps_edited`]), so clearing (or undoing) removes it from the sidecar.
+fn commit_gps(s: &mut Session, targets: &[lightcraft_catalog::PhotoId], gps: Option<(f64, f64)>, label: &str) -> Result<usize> {
     let ops: Vec<Op> = targets
         .iter()
         .filter_map(|id| s.catalog.photo(*id))
-        .filter(|ph| ph.meta.gps != Some(pos))
+        .filter(|ph| ph.meta.gps != gps)
         .map(|ph| {
             let mut meta = ph.meta.clone();
-            meta.gps = Some(pos);
+            meta.gps = gps;
             Op::SetMeta { id: ph.id, meta: Box::new(meta) }
         })
         .collect();
     let count = ops.len();
     if count > 0 {
-        s.commit("Set GPS Coordinates", Op::Batch { ops })?;
+        // before the commit: the sidecar written when it lands already follows LightCraft's position
+        s.gps_edited.extend(targets.iter().copied());
+        s.commit(label, Op::Batch { ops })?;
     }
-    Ok(json!({ "updated": count, "lat": pos.0, "lon": pos.1 }))
+    Ok(count)
+}
+
+/// `photo.removeGps` (and its older name `photo.clearGps`): clear the photos' position, one undo
+/// step "Remove GPS Coordinates".
+fn remove_gps(s: &mut Session, p: &Value) -> Result<Value> {
+    let targets = gps_targets(s, p, "photo.removeGps")?;
+    let count = commit_gps(s, &targets, None, "Remove GPS Coordinates")?;
+    Ok(json!({ "changed": count, "cleared": count }))
 }
 
 fn source_json(s: &Session) -> Value {
@@ -364,29 +392,29 @@ pub fn specs() -> Vec<CommandSpec> {
                 set_gps
             )
         },
-        cmd!(
-            "photo.clearGps",
-            "Clear Photo GPS Coordinates",
-            [],
-            None,
-            "{ids?: [PhotoId]} → {cleared: count} — clears GPS coordinates for target photos (undoable)",
-            has_selection,
-            |s, p| {
-                let mut ops = Vec::new();
-                for id in s.targets(p)? {
-                    let Some(ph) = s.catalog.photo(id) else { continue };
-                    if ph.meta.gps.is_some() {
-                        let mut meta = ph.meta.clone();
-                        meta.gps = None;
-                        ops.push(Op::SetMeta { id, meta: Box::new(meta) });
-                    }
-                }
-                let count = ops.len();
-                if !ops.is_empty() {
-                    s.commit("Clear GPS Location", Op::Batch { ops })?;
-                }
-                Ok(json!({ "cleared": count }))
-            }
-        ),
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.removeGps",
+                "Remove GPS Coordinates",
+                ["Photo"],
+                None,
+                "{ids?: [PhotoId]} → {changed, cleared} — clears the GPS position of the photos (default: the selection), one undo step \"Remove GPS Coordinates\"; Photo ▸ Remove GPS Coordinates and a map pin's right-click menu. Unknown ids are refused. Positions LightCraft set or cleared are removed from the photos' XMP sidecars too",
+                has_selection,
+                remove_gps
+            )
+        },
+        CommandSpec {
+            explicit_targets: true,
+            ..cmd!(
+                "photo.clearGps",
+                "Clear Photo GPS Coordinates",
+                [],
+                None,
+                "{ids?: [PhotoId]} → {changed, cleared} — the older name of photo.removeGps (same command)",
+                has_selection,
+                remove_gps
+            )
+        },
     ]
 }

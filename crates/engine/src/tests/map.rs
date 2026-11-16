@@ -365,3 +365,32 @@ fn set_gps_wraps_longitude_and_refuses_hostile_values() {
     assert_eq!(s.undo.len(), steps, "nothing changed");
     assert_eq!(s.catalog.photo(lightcraft_catalog::PhotoId(id)).and_then(|p| p.meta.gps), Some((-33.9, -170.0)));
 }
+
+/// `photo.removeGps` (Photo ▸ Remove GPS Coordinates, a pin's menu) clears the selection's position
+/// in one undo step; ids the library doesn't have are refused; `photo.clearGps` is the same command.
+#[test]
+fn remove_gps_clears_in_one_undo_step_and_refuses_unknown_ids() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    s.execute("photo.setGps", &json!({"ids": ids, "lat": 51.5, "lon": -0.12})).unwrap();
+    let gps = |s: &Session, id: u64| s.catalog.photo(lightcraft_catalog::PhotoId(id)).and_then(|p| p.meta.gps);
+    s.execute("library.select", &json!({"ids": [ids[0], ids[1]]})).unwrap();
+    let steps = s.undo.len();
+    let r = s.execute("photo.removeGps", &json!({})).unwrap();
+    assert_eq!(r["changed"], 2, "{r}");
+    assert_eq!((gps(&s, ids[0]), gps(&s, ids[1]), gps(&s, ids[2])), (None, None, Some((51.5, -0.12))));
+    assert_eq!(s.undo.len(), steps + 1);
+    assert_eq!(s.undo.last().map(|u| u.label.as_str()), Some("Remove GPS Coordinates"));
+    // nothing to clear: no empty undo step
+    assert_eq!(s.execute("photo.removeGps", &json!({})).unwrap()["changed"], 0);
+    assert_eq!(s.undo.len(), steps + 1);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!((gps(&s, ids[0]), gps(&s, ids[1])), (Some((51.5, -0.12)), Some((51.5, -0.12))));
+    for bad in [json!({"ids": [987_654_321]}), json!({"ids": "1"})] {
+        assert!(matches!(s.execute("photo.removeGps", &bad), Err(crate::EngineError::BadParams { .. })), "{bad}");
+    }
+    assert_eq!(gps(&s, ids[0]), Some((51.5, -0.12)), "a refusal changes nothing");
+    let r = s.execute("photo.clearGps", &json!({"ids": [ids[2]]})).unwrap();
+    assert_eq!((r["changed"].as_u64(), gps(&s, ids[2])), (Some(1), None));
+    assert!(s.gps_edited.contains(&lightcraft_catalog::PhotoId(ids[2])), "its sidecar GPS is LightCraft's now");
+}

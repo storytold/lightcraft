@@ -630,6 +630,8 @@ impl Session {
         }
         self.undo.clear();
         self.redo.clear();
+        // photo ids are per library: positions set in the last one say nothing about this one's
+        self.gps_edited.clear();
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();

@@ -734,6 +734,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     let mut m = ph.meta.clone();
                     if let Some(g) = gps {
                         m.gps = g;
+                        // the position typed in is LightCraft's: its sidecar follows it, cleared too
+                        s.gps_edited.insert(id);
                     }
                     if let Some(st) = status {
                         m.copyright_status = st;
