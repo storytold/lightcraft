@@ -174,6 +174,25 @@ mod tests {
         }
     }
 
+    /// The export location guard's fail-closed case (storytold/lightcraft#4247): the declared
+    /// image-resource section ends with bytes that form no complete resource record. Best-effort
+    /// extraction stays silent (no GPS), but `try_extract` refuses instead of returning metadata
+    /// whose location cannot be verified.
+    #[test]
+    fn try_extract_rejects_trailing_bytes_in_the_resource_section() {
+        let file = dated_image(1);
+        assert_eq!(crate::extract(&file).gps, dated_metadata().gps, "the fixture embeds EXIF GPS");
+        let colour_length = usize::try_from(u32::from_be_bytes(file[26..30].try_into().unwrap())).unwrap();
+        let resource_length_at = 30 + colour_length;
+        let resource_length = usize::try_from(u32::from_be_bytes(file[resource_length_at..resource_length_at + 4].try_into().unwrap())).unwrap();
+        let resource_end = resource_length_at + 4 + resource_length;
+        let mut corrupt = file;
+        corrupt.splice(resource_end..resource_end, *b"BAD!");
+        corrupt[resource_length_at..resource_length_at + 4].copy_from_slice(&u32::try_from(resource_length + 4).unwrap().to_be_bytes());
+        assert!(crate::extract(&corrupt).gps.is_none(), "the malformed trailing bytes hide the GPS from best-effort extraction");
+        assert!(matches!(crate::try_extract(&corrupt), Err(crate::ExtractError::MalformedPsd)));
+    }
+
     #[test]
     fn try_extract_accepts_unknown_exif_tags_in_psd() {
         let mut ifd0 = lcc_tiff::IfdBuilder::new();
