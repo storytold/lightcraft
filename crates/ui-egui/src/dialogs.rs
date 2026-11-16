@@ -900,23 +900,114 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     );
 }
 
+/// A block of `docs/whats-new.md` as the What's New dialog shows it ([`whats_new_blocks`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WhatsNewBlock {
+    /// `## …`: a release.
+    Section(String),
+    /// `### …`: a topic within a release.
+    Heading(String),
+    /// `- …` with its wrapped lines.
+    Bullet(String),
+    /// Any other text, up to a blank line.
+    Paragraph(String),
+}
+
+/// The notes in `src` as the dialog shows them: a hard-wrapped bullet or paragraph is one block (its lines joined
+/// with a space, so a sentence isn't split, issue #4383), and inline Markdown is shown as text ([`plain_markdown`]).
+/// The `# ` title is left out (the dialog has its own).
+pub fn whats_new_blocks(src: &str) -> Vec<WhatsNewBlock> {
+    let mut out = Vec::new();
+    // the bullet or paragraph being gathered (true: a bullet)
+    let mut open: Option<(bool, String)> = None;
+    let close = |open: &mut Option<(bool, String)>, out: &mut Vec<WhatsNewBlock>| {
+        if let Some((bullet, text)) = open.take() {
+            let text = plain_markdown(&text);
+            out.push(if bullet { WhatsNewBlock::Bullet(text) } else { WhatsNewBlock::Paragraph(text) });
+        }
+    };
+    for line in src.lines() {
+        let l = line.trim();
+        if l.is_empty() || l.starts_with("# ") {
+            close(&mut open, &mut out);
+        } else if let Some(h) = l.strip_prefix("### ") {
+            close(&mut open, &mut out);
+            out.push(WhatsNewBlock::Heading(plain_markdown(h)));
+        } else if let Some(h) = l.strip_prefix("## ") {
+            close(&mut open, &mut out);
+            out.push(WhatsNewBlock::Section(plain_markdown(h)));
+        } else if let Some(b) = l.strip_prefix("- ") {
+            close(&mut open, &mut out);
+            open = Some((true, b.to_string()));
+        } else if let Some((_, text)) = &mut open {
+            text.push(' ');
+            text.push_str(l);
+        } else {
+            open = Some((false, l.to_string()));
+        }
+    }
+    close(&mut open, &mut out);
+    out
+}
+
+/// `s` with its inline Markdown shown as text: a link `[text](target)` is its text, and the `**`, `*` and `` ` ``
+/// around bold, italic and code are dropped. A `*` that doesn't open or close emphasis (`3 * 2`) stays.
+fn plain_markdown(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        if c == '['
+            && let Some(close) = rest.find("](")
+            && let Some(end) = rest[close + 2..].find(')')
+            && !rest[1..close].contains(['[', ']'])
+        {
+            out.push_str(&rest[1..close]);
+            rest = &rest[close + 2 + end + 1..];
+            continue;
+        }
+        if c == '`' {
+            rest = &rest[1..];
+            continue;
+        }
+        if c == '*' {
+            let run = rest.len() - rest.trim_start_matches('*').len();
+            let before = out.chars().next_back();
+            let after = rest[run..].chars().next();
+            let opens = after.is_some_and(|a| !a.is_whitespace());
+            let closes = before.is_some_and(|b| !b.is_whitespace());
+            if opens || closes {
+                rest = &rest[run..];
+                continue;
+            }
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
 /// The body of the WhatsNew dialog.
 fn whats_new_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
     let Dialog::WhatsNew = dlg else { return };
     egui::ScrollArea::vertical().max_height(list_height(ui, 460.0)).auto_shrink([false, true]).show(ui, |ui| {
-        for line in WHATS_NEW.lines() {
-            let l = line.trim_end();
-            if let Some(h) = l.strip_prefix("### ") {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
-            } else if let Some(h) = l.strip_prefix("## ") {
-                ui.add_space(8.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
-            } else if l.starts_with("# ") || l.is_empty() {
-            } else if let Some(b) = l.strip_prefix("- ") {
-                ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b).replace('`', ""))).color(t.text_label));
-            } else {
-                ui.label(egui::RichText::new(crate::i18n::tr(l.trim()).replace('`', "")).color(t.text_label));
+        // parsed once: the notes are built in
+        static BLOCKS: std::sync::LazyLock<Vec<WhatsNewBlock>> = std::sync::LazyLock::new(|| whats_new_blocks(WHATS_NEW));
+        for block in BLOCKS.iter() {
+            match block {
+                WhatsNewBlock::Heading(h) => {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(12.5)).color(t.text));
+                }
+                WhatsNewBlock::Section(h) => {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new(crate::i18n::tr(h)).font(t.semibold(14.0)).color(t.text));
+                }
+                WhatsNewBlock::Bullet(b) => {
+                    ui.label(egui::RichText::new(format!("•  {}", crate::i18n::tr(b))).color(t.text_label));
+                }
+                WhatsNewBlock::Paragraph(p) => {
+                    ui.label(egui::RichText::new(crate::i18n::tr(p)).color(t.text_label));
+                }
             }
         }
     });
