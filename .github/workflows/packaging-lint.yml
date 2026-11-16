@@ -81,8 +81,10 @@ jobs:
           # update (windows-arm64.yml checks the real thing on Windows).
           grep -qF 'Advertise="no"' "$OUT/windows/app.wxs" \
             || { echo "::error::the Start-menu shortcut must not be advertised (Advertise=\"no\")"; exit 1; }
-          grep -qF 'Target="[INSTALLDIR]' "$OUT/windows/app.wxs" \
-            || { echo "::error::the Start-menu shortcut needs an explicit Target=\"[INSTALLDIR]...\""; exit 1; }
+          # Nested in the exe's File it targets [#AppExe] on its own; WiX rejects an explicit Target
+          # there (WIX0062), so check the nesting instead.
+          awk '/<File Id="AppExe"/{f=1} f&&/Id="StartMenuShortcut"/{ok=1} f&&/<\/File>/{f=0} END{exit !ok}' "$OUT/windows/app.wxs" \
+            || { echo "::error::the Start-menu shortcut must be nested in the AppExe File so it targets the installed exe"; exit 1; }
           desktop-file-validate "$OUT/linux/$APP_ID.desktop"
           appstreamcli validate --no-net --explain "$OUT/linux/$APP_ID.metainfo.xml"
           python3 - <<'EOF'
