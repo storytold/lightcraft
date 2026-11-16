@@ -89,6 +89,10 @@ pub struct MergeJob {
     pub kind: MergeKind,
     pub finish: MergeFinish,
     pub sources: Vec<(PhotoId, String)>,
+    /// Decoder-size bounds admitted during planning, in the same order as `sources`.
+    decoder_dimensions: Vec<(u32, u32)>,
+    /// Retained frame-size bounds admitted during planning, in the same order as `sources`.
+    frame_dimensions: Vec<(u32, u32)>,
     /// `Some(edge)`: preview at that frame size; `None`: the full-resolution merge.
     pub preview: Option<usize>,
     pub read: ByteReader,
@@ -117,18 +121,62 @@ impl MergeJob {
         use rayon::prelude::*;
         let done = std::sync::atomic::AtomicUsize::new(0);
         let n = self.sources.len();
-        let one = |(_, path): &(PhotoId, String)| {
+        let one = |(index, (_, path)): (usize, &(PhotoId, String))| {
             let bytes = (self.read)(path)?;
+            let Some((max_width, max_height)) = self.decoder_dimensions.get(index).copied() else {
+                return Err(format!("{path}: Photo Merge has no admitted decoder dimensions"));
+            };
+            let Some((max_frame_width, max_frame_height)) = self.frame_dimensions.get(index).copied() else {
+                return Err(format!("{path}: Photo Merge has no admitted frame dimensions"));
+            };
+            let info = crate::files::probe_bytes(path, &bytes)
+                .map_err(|e| format!("{path}: cannot verify source dimensions before Photo Merge decode: {e}"))?;
+            let width = info.source_width.max(info.width);
+            let height = info.source_height.max(info.height);
+            if width == 0 || height == 0 {
+                return Err(format!("{path}: cannot verify source dimensions before Photo Merge decode"));
+            }
+            if width > max_width || height > max_height {
+                return Err(format!(
+                    "{path}: source dimensions changed after Photo Merge was planned ({width}×{height} exceeds the admitted {max_width}×{max_height})"
+                ));
+            }
+            let planned_frame_pixels = u64::from(max_frame_width) * u64::from(max_frame_height);
+            let (probed_frame_width, probed_frame_height) = match self.preview {
+                Some(edge) => preview_dimensions(info.width, info.height, edge).map_err(|e| format!("{path}: {e}"))?,
+                None => (info.width, info.height),
+            };
+            let probed_frame_pixels = u64::from(probed_frame_width) * u64::from(probed_frame_height);
+            if probed_frame_pixels > planned_frame_pixels {
+                return Err(format!(
+                    "{path}: frame dimensions changed after Photo Merge was planned ({}×{} exceeds the admitted {}×{})",
+                    probed_frame_width, probed_frame_height, max_frame_width, max_frame_height
+                ));
+            }
             // a raw without colour matrices of its own starts from the colour it has when opened alone (#965)
             let f = lightcraft_merge::load_frame_with(&bytes, self.preview, orient, &crate::camera_preview::starting_colour_tags)
-                .map_err(|e| format!("{path}: {e}"));
+                .map_err(|e| format!("{path}: {e}"))?;
+            let loaded_frame_pixels = u64::try_from(f.width())
+                .ok()
+                .and_then(|width| u64::try_from(f.height()).ok().and_then(|height| width.checked_mul(height)))
+                .ok_or_else(|| format!("{path}: decoded frame dimensions cannot be safely verified"))?;
+            if loaded_frame_pixels > planned_frame_pixels {
+                return Err(format!(
+                    "{path}: decoded frame dimensions exceed the admitted {}×{} Photo Merge frame",
+                    max_frame_width, max_frame_height
+                ));
+            }
             let k = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             progress(span.0 + (span.1 - span.0) * k as f32 / n as f32, "Reading photos");
-            f
+            Ok(f)
         };
         // Full-size photos are decoded one at a time (the demosaic is parallel inside): decoding several 60 MP raws at
         // once multiplied the decoders' scratch memory, and a 7-frame bracket ran out of memory.
-        if self.preview.is_some() { self.sources.par_iter().map(one).collect() } else { self.sources.iter().map(one).collect() }
+        if self.preview.is_some() {
+            self.sources.par_iter().enumerate().map(one).collect()
+        } else {
+            self.sources.iter().enumerate().map(one).collect()
+        }
     }
 
     /// Run the merge. `progress(fraction, stage)` returns false to cancel.
@@ -161,8 +209,9 @@ impl MergeJob {
                 let p = sub(0.25, 0.9);
                 let input_pixels = frame_pixel_count(&frames)?;
                 let available = merge_memory_bytes(crate::memory::total_ram(), crate::memory::budget());
-                let fit = fit_in_memory(pano, input_pixels as f64, crate::memory::total_ram());
-                let output_limit = panorama_output_pixel_limit(available, input_pixels)?;
+                let available_for_output = available.saturating_sub(preview_cache_reserve(self.preview.is_some()));
+                let fit = fit_in_memory_with_budget(pano, input_pixels as f64, available_for_output, frames.len());
+                let output_limit = panorama_output_pixel_limit(available_for_output, input_pixels, frames.len())?;
                 let r = lightcraft_merge::pano::stitch_with_output_pixel_limit(frames, &fit, output_limit, &p).map_err(err)?;
                 let info = pano_info(&r, &self.sources, pano, &fit);
                 (
@@ -209,8 +258,9 @@ impl MergeJob {
                 let p = sub(0.6, 0.9);
                 let input_pixels = frame_pixel_count(&merged)?;
                 let available = merge_memory_bytes(crate::memory::total_ram(), crate::memory::budget());
-                let fit = fit_in_memory(pano, input_pixels as f64, crate::memory::total_ram());
-                let output_limit = panorama_output_pixel_limit(available, input_pixels)?;
+                let available_for_output = available.saturating_sub(preview_cache_reserve(self.preview.is_some()));
+                let fit = fit_in_memory_with_budget(pano, input_pixels as f64, available_for_output, merged.len());
+                let output_limit = panorama_output_pixel_limit(available_for_output, input_pixels, merged.len())?;
                 let r = lightcraft_merge::pano::stitch_with_output_pixel_limit(merged, &fit, output_limit, &p).map_err(err)?;
                 let mut info = pano_info(&r, &self.sources, pano, &fit);
                 info["bracket"] = json!(b);
@@ -276,13 +326,25 @@ fn pano_info(r: &lightcraft_merge::PanoResult, sources: &[(PhotoId, String)], as
     })
 }
 
-/// Peak memory of a panorama per pixel of its output (bytes), measured as the peak resident size
-/// of synthetic stitches of 20–81 MP from 38–154 MP of photos, rounded up from the smaller ones
-/// (the larger need less): while the photos are projected they are still held, beside the tiles
-/// ([`PANO_TILE_BYTES`] on top of the photos' own 12 bytes a pixel); the blend that follows, the
-/// photos freed, peaks at [`PANO_BLEND_BYTES`]. Writing the DNG takes less than either.
-const PANO_TILE_BYTES: usize = 36;
+/// Each retained frame tile stores RGB (12 bytes) and a feather weight (4 bytes) per canvas pixel.
+const PANO_TILE_BYTES_PER_FRAME: usize = 16;
+/// Base estimate for panorama blending's other per-pixel working buffers.
 const PANO_BLEND_BYTES: usize = 68;
+
+/// Return the per-output-pixel tile and blend working-set bounds for `frame_count` frames.
+fn panorama_output_bytes_per_pixel(frame_count: usize) -> std::result::Result<(usize, usize), String> {
+    if frame_count == 0 {
+        return Err("Photo Merge needs at least one panorama frame".into());
+    }
+    let tiles = frame_count
+        .checked_mul(PANO_TILE_BYTES_PER_FRAME)
+        .ok_or_else(|| "Photo Merge cannot safely estimate memory: panorama tile count overflow".to_string())?;
+    // All frame tiles remain alive throughout blending, so account for them in addition to the
+    // blend buffers. This intentionally errs on the safe side if the measured base included one.
+    let blend =
+        PANO_BLEND_BYTES.checked_add(tiles).ok_or_else(|| "Photo Merge cannot safely estimate memory: panorama blend size overflow".to_string())?;
+    Ok((tiles, blend))
+}
 
 /// What a merge may use of the computer's memory: three quarters of it (the rest is the system's
 /// and the other apps'), less the app's own memory budget (its caches).
@@ -298,18 +360,27 @@ pub(crate) fn unknown_ram_fallback(target_max: usize) -> usize {
     usize::try_from(8_u64 << 30).unwrap_or(target_max).min(target_max)
 }
 
-fn merge_memory(ram: Option<usize>) -> f64 {
-    merge_memory_bytes(ram, crate::memory::budget()) as f64
+/// `pano` with its size held to what fits in memory beside its photos (`frame_px` pixels, 12
+/// bytes each, loaded already), including tile and blend storage for every frame. Never below 40
+/// megapixels, the size every panorama had before it followed the photos' resolution, and never
+/// above what was asked.
+#[cfg(test)]
+pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, frame_count: usize, ram: Option<usize>) -> PanoOptions {
+    fit_in_memory_with_budget(pano, frame_px, merge_memory_bytes(ram, crate::memory::budget()), frame_count)
 }
 
-/// `pano` with its size held to what fits in memory beside its photos (`frame_px` pixels, 12
-/// bytes each, loaded already): a panorama of five 51 MP photos may have up to 166 MP on a 16 GB
-/// computer, 355 MP on 32 GB. Never below 40 megapixels, the size every panorama had before it
-/// followed the photos' resolution, and never above what was asked.
-pub(crate) fn fit_in_memory(pano: &PanoOptions, frame_px: f64, ram: Option<usize>) -> PanoOptions {
-    let room = merge_memory(ram);
-    let fits = ((room - frame_px * 12.0) / PANO_TILE_BYTES as f64).min(room / PANO_BLEND_BYTES as f64) / 1e6;
+/// Limit a panorama to the memory available after other merge work and preview caches are reserved.
+fn fit_in_memory_with_budget(pano: &PanoOptions, frame_px: f64, available: usize, frame_count: usize) -> PanoOptions {
+    let room = available as f64;
+    let (tile_bytes, blend_bytes) =
+        panorama_output_bytes_per_pixel(frame_count).map(|(tiles, blend)| (tiles as f64, blend as f64)).unwrap_or((f64::INFINITY, f64::INFINITY));
+    let fits = ((room - frame_px * 12.0) / tile_bytes).min(room / blend_bytes) / 1e6;
     PanoOptions { max_megapixels: pano.max_megapixels.min(fits.max(MIN_FITTED_MEGAPIXELS)), ..pano.clone() }
+}
+
+/// Memory held by decoded preview frames while a preview merge runs.
+fn preview_cache_reserve(preview: bool) -> usize {
+    if preview { PREVIEW_CACHE_RESERVE_BYTES } else { 0 }
 }
 
 #[derive(Default)]
@@ -369,7 +440,7 @@ impl MergeDimensions {
         let decoder_bytes = decoder_pixels
             .checked_mul(DECODE_WORKING_BYTES_PER_PIXEL)
             .ok_or_else(|| "Photo Merge cannot safely estimate memory: decoder working set overflow".to_string())?;
-        let cache_bytes = if preview { PREVIEW_CACHE_RESERVE_BYTES } else { 0 };
+        let cache_bytes = preview_cache_reserve(preview);
         let hdr_peak = || -> std::result::Result<usize, String> {
             let hdr_work = self
                 .frame_pixels
@@ -386,7 +457,7 @@ impl MergeDimensions {
                 .ok_or_else(|| "Photo Merge cannot safely estimate memory: HDR working set overflow".to_string())
         };
 
-        let panorama_peak = |pano: &PanoOptions, input_pixels_for_fit: usize| -> std::result::Result<usize, String> {
+        let panorama_peak = |pano: &PanoOptions, input_pixels_for_fit: usize, frame_count: usize| -> std::result::Result<usize, String> {
             let output_mp = if pano.max_megapixels.is_finite() && pano.max_megapixels > 0.0 {
                 pano.max_megapixels.min(MAX_MEGAPIXELS)
             } else {
@@ -394,9 +465,11 @@ impl MergeDimensions {
             };
             // Match fit_in_memory's cap using the same memory budget. Do not cap output at total input
             // area: perspective stitching can produce a larger canvas than the sum of its sources.
-            let room = available as f64;
+            let room = available.saturating_sub(cache_bytes) as f64;
             let input_bytes_for_fit = input_pixels_for_fit as f64 * std::mem::size_of::<[f32; 3]>() as f64;
-            let fitting_megapixels = ((room - input_bytes_for_fit) / PANO_TILE_BYTES as f64).min(room / PANO_BLEND_BYTES as f64) / 1_000_000.0;
+            let (tile_bytes_per_pixel, blend_bytes_per_pixel) = panorama_output_bytes_per_pixel(frame_count)?;
+            let fitting_megapixels =
+                ((room - input_bytes_for_fit) / tile_bytes_per_pixel as f64).min(room / blend_bytes_per_pixel as f64) / 1_000_000.0;
             let fitted_mp = output_mp.min(fitting_megapixels.max(MIN_FITTED_MEGAPIXELS));
             let output_pixel_count = (fitted_mp * 1_000_000.0).floor();
             if !output_pixel_count.is_finite() || output_pixel_count < 1.0 || output_pixel_count > usize::MAX as f64 {
@@ -416,11 +489,11 @@ impl MergeDimensions {
                 requested_output_pixels
             };
             let tile_bytes = output_pixels
-                .checked_mul(PANO_TILE_BYTES)
+                .checked_mul(tile_bytes_per_pixel)
                 .and_then(|bytes| bytes.checked_add(input_bytes))
                 .ok_or_else(|| "Photo Merge cannot safely estimate memory: panorama working set overflow".to_string())?;
             let blend_bytes = output_pixels
-                .checked_mul(PANO_BLEND_BYTES)
+                .checked_mul(blend_bytes_per_pixel)
                 .ok_or_else(|| "Photo Merge cannot safely estimate memory: panorama working set overflow".to_string())?;
             let load_bytes = input_bytes
                 .checked_add(decoder_bytes)
@@ -430,12 +503,12 @@ impl MergeDimensions {
 
         let operation_peak = match kind {
             MergeKind::Hdr { .. } => hdr_peak()?,
-            MergeKind::Panorama { pano } => panorama_peak(pano, self.frame_pixels)?,
+            MergeKind::Panorama { pano } => panorama_peak(pano, self.frame_pixels, self.count)?,
             // Until the HDR panorama work frees each input bracket, allow for every source to remain resident. This
             // remains safe with the one-bracket-at-a-time loader in PR #2010, though it can be conservative there.
             // The stitched HDR frames are smaller than the source bracket set. Do not subtract
             // source pixels when bounding their fitted canvas; zero input gives an upper bound.
-            MergeKind::HdrPanorama { pano, .. } => hdr_peak()?.max(panorama_peak(pano, 0)?),
+            MergeKind::HdrPanorama { pano, .. } => hdr_peak()?.max(panorama_peak(pano, 0, self.count)?),
         };
         operation_peak.checked_add(cache_bytes).ok_or_else(|| "Photo Merge cannot safely estimate memory: preview working set overflow".to_string())
     }
@@ -528,12 +601,14 @@ fn frame_pixel_count(frames: &[Frame]) -> std::result::Result<usize, String> {
     })
 }
 
-fn panorama_output_pixel_limit(available: usize, frame_pixels: usize) -> std::result::Result<usize, String> {
+/// Output-pixel limit that fits the input frames, per-frame tiles and blend buffers in `available` bytes.
+pub(crate) fn panorama_output_pixel_limit(available: usize, frame_pixels: usize, frame_count: usize) -> std::result::Result<usize, String> {
     let input_bytes = frame_pixels
         .checked_mul(std::mem::size_of::<[f32; 3]>())
         .ok_or_else(|| "Photo Merge cannot safely estimate memory: panorama input dimensions overflow".to_string())?;
-    let tile_limit = available.saturating_sub(input_bytes) / PANO_TILE_BYTES;
-    let blend_limit = available / PANO_BLEND_BYTES;
+    let (tile_bytes, blend_bytes) = panorama_output_bytes_per_pixel(frame_count)?;
+    let tile_limit = available.saturating_sub(input_bytes) / tile_bytes;
+    let blend_limit = available / blend_bytes;
     Ok(tile_limit.min(blend_limit))
 }
 
@@ -663,6 +738,8 @@ impl Session {
         available: usize,
     ) -> Result<MergeJob> {
         let mut sources = Vec::new();
+        let mut decoder_dimensions = Vec::new();
+        let mut frame_dimensions = Vec::new();
         let preview_edge = preview.then_some(PREVIEW_EDGE);
         let mut dimensions = MergeDimensions::default();
         let read: ByteReader = match &self.media.file_bytes {
@@ -692,8 +769,14 @@ impl Session {
                     } else {
                         (p.source_width.max(p.width), p.source_height.max(p.height))
                     };
+                    let (frame_width, frame_height) = match preview_edge {
+                        Some(edge) => preview_dimensions(p.width, p.height, edge).map_err(EngineError::Other)?,
+                        None => (p.width, p.height),
+                    };
                     dimensions.add(p.width, p.height, decoder_width, decoder_height, preview_edge).map_err(EngineError::Other)?;
                     sources.push((*id, path.clone()));
+                    decoder_dimensions.push((decoder_width, decoder_height));
+                    frame_dimensions.push((frame_width, frame_height));
                 }
                 Source::Demo { .. } => return Err(EngineError::Other(format!("{} is a demo photo; Photo Merge needs photo files", p.file_name))),
             }
@@ -703,7 +786,7 @@ impl Session {
         }
         let estimated = dimensions.working_bytes(&kind, preview, available).map_err(EngineError::Other)?;
         check_merge_memory_budget(estimated, available).map_err(EngineError::Other)?;
-        Ok(MergeJob { kind, finish, sources, preview: preview_edge, read })
+        Ok(MergeJob { kind, finish, sources, decoder_dimensions, frame_dimensions, preview: preview_edge, read })
     }
 
     /// Write a finished (non-preview) merge next to its first source, import it, select it and

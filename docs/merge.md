@@ -97,8 +97,9 @@ scale in `BaselineExposure`; raw sources keep their DNG colour tags (camera RGB)
   1024 px frames, concurrent decoder work and the retained preview cache (including the four-photo preview loader in
   PR #2010). Inputs above the budget are refused with the estimate and advice to select fewer photos or lower-resolution
   originals. HDR for Each Bracket Set checks each bracket independently.
-- Panorama output is limited to `maxMegapixels` (default 40) and may be scaled down further to fit the available memory,
-  including the output border and multiband tile padding — blending memory is ~25 bytes/pixel.
+- Panorama output is limited to `maxMegapixels` (default: the photos' own resolution, up to 512 MP) and may be scaled down
+  further to fit the available memory, including output border and multiband tile padding. The estimate includes each
+  retained frame's RGB-and-weight tile (16 bytes per output pixel per frame) as well as blend working buffers.
 - HDR memory: every frame is held as 32-bit float RGB (~0.86 GB per 67 MP frame at the peak, plus ~1.2 GB); full-size
   photos are decoded one at a time. Measured on 67 MP raws: 3 frames 3.8 GB, 4 frames 4.7 GB, 5 frames 5.5 GB (was
   4.8 / 6.3 GB for 3 / 4). Half-float frames would halve the per-frame share.

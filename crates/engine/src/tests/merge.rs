@@ -250,6 +250,138 @@ fn panorama_memory_estimate_allows_projected_canvas_larger_than_source_area() {
     );
 }
 
+#[test]
+fn panorama_memory_estimate_bounds_tiles_for_every_frame() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
+    use lightcraft_merge::{PanoOptions, Projection};
+
+    let frames = 16usize;
+    let side = 4_472u32;
+    let frame_pixels = usize::try_from(side).unwrap() * usize::try_from(side).unwrap() * frames;
+    let input_bytes = frame_pixels * std::mem::size_of::<[f32; 3]>();
+    let output_pixels = 40_000_000usize;
+    let pano = PanoOptions { projection: Projection::Cylindrical, max_megapixels: 40.0, ..Default::default() };
+    let estimated = estimate_merge_working_bytes_with_budget(&MergeKind::Panorama { pano }, &[(side, side); 16], None, usize::MAX).unwrap();
+    let minimum_tile_working_set = input_bytes + output_pixels * frames * 16;
+    assert!(
+        estimated >= minimum_tile_working_set,
+        "estimate {estimated} omits some per-frame tile storage; expected at least {minimum_tile_working_set}"
+    );
+}
+
+#[test]
+fn panorama_output_limit_accounts_for_frame_count() {
+    use crate::merge::panorama_output_pixel_limit;
+
+    let available = 2_000_000_000usize;
+    let input_pixels = 10_000_000usize;
+    let one_frame = panorama_output_pixel_limit(available, input_pixels, 1).unwrap();
+    let many_frames = panorama_output_pixel_limit(available, input_pixels, 16).unwrap();
+    assert!(many_frames < one_frame, "16 retained frame tiles should reduce the output limit: {many_frames} vs {one_frame}");
+    assert!(many_frames * (68 + 16 * 16) <= available, "blend and frame tiles exceed available memory");
+}
+
+#[test]
+fn panorama_preview_reserves_memory_for_the_preview_cache() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
+    use lightcraft_merge::{PanoOptions, Projection};
+
+    let available = 5usize << 30;
+    let kind = MergeKind::Panorama { pano: PanoOptions { projection: Projection::Cylindrical, max_megapixels: 512.0, ..Default::default() } };
+    let estimated = estimate_merge_working_bytes_with_budget(&kind, &[(100, 100); 3], Some(1024), available).unwrap();
+    assert!(estimated <= available, "preview estimate {estimated} exceeds its {available}-byte budget after the cache reserve");
+}
+
+#[test]
+fn replaced_merge_sources_are_checked_before_decoding() {
+    use crate::merge::{MergeFinish, MergeKind};
+    use std::sync::Arc;
+
+    let small = lightcraft_merge::synth::bracket_dngs(64, 48, &[0.0]).unwrap().remove(0);
+    let large = lightcraft_merge::synth::bracket_dngs(512, 384, &[0.0]).unwrap().remove(0);
+    let dimensions = crate::files::probe_bytes("small.dng", &small).unwrap();
+    let mut session = Session::new();
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let id = session.catalog.alloc_photo_id();
+        let path = format!("source-{index}.dng");
+        let mut photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            dimensions.width,
+            dimensions.height,
+            "2026-11-16T00:00:00Z",
+        );
+        photo.kind = lightcraft_catalog::MediaKind::Raw;
+        photo.source_width = dimensions.source_width;
+        photo.source_height = dimensions.source_height;
+        session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+
+    let mut job =
+        session.plan_merge_with_budget(MergeKind::Hdr { hdr: Default::default() }, MergeFinish::default(), &ids, false, usize::MAX).unwrap();
+    let replacement = Arc::new(large);
+    job.read = Arc::new(move |_| Ok(replacement.as_ref().clone()));
+
+    let error = match job.run(&|_, _| true) {
+        Ok(_) => panic!("a source larger than the admitted dimensions must not be decoded"),
+        Err(error) => error,
+    };
+    assert!(error.contains("exceeds the admitted"), "{error}");
+}
+
+#[test]
+fn replaced_merge_raw_crop_is_checked_before_decoding() {
+    use crate::merge::{MergeFinish, MergeKind};
+    use std::sync::Arc;
+
+    let sensor = lightcraft_merge::synth::bracket_dngs(512, 384, &[0.0]).unwrap().remove(0);
+    let mut small_raw = lightcraft_raw::decode(&sensor).unwrap();
+    small_raw.crop = lightcraft_raw::Rect::new(0, 0, 16, 12);
+    let small = lightcraft_raw::write_dng(&small_raw, &Default::default()).unwrap();
+    let mut larger_raw = small_raw.clone();
+    larger_raw.crop = lightcraft_raw::Rect::new(0, 0, 128, 96);
+    let larger = lightcraft_raw::write_dng(&larger_raw, &Default::default()).unwrap();
+    let small_probe = crate::files::probe_bytes("small-crop.dng", &small).unwrap();
+    let larger_probe = crate::files::probe_bytes("larger-crop.dng", &larger).unwrap();
+    assert_eq!((small_probe.source_width, small_probe.source_height), (larger_probe.source_width, larger_probe.source_height));
+    assert!(larger_probe.width as u64 * u64::from(larger_probe.height) > u64::from(small_probe.width) * u64::from(small_probe.height));
+
+    let mut session = Session::new();
+    let mut ids = Vec::new();
+    for index in 0..2 {
+        let id = session.catalog.alloc_photo_id();
+        let path = format!("source-{index}.dng");
+        let mut photo = lightcraft_catalog::Photo::new(
+            id,
+            lightcraft_catalog::Source::File { path: path.clone() },
+            &path,
+            "DNG",
+            small_probe.width,
+            small_probe.height,
+            "2026-11-16T00:00:00Z",
+        );
+        photo.kind = lightcraft_catalog::MediaKind::Raw;
+        photo.source_width = small_probe.source_width;
+        photo.source_height = small_probe.source_height;
+        session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        ids.push(id);
+    }
+    let mut job =
+        session.plan_merge_with_budget(MergeKind::Hdr { hdr: Default::default() }, MergeFinish::default(), &ids, false, usize::MAX).unwrap();
+    let replacement = Arc::new(larger);
+    job.read = Arc::new(move |_| Ok(replacement.as_ref().clone()));
+
+    let error = match job.run(&|_, _| true) {
+        Ok(_) => panic!("a changed RAW crop must be refused before frame allocation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("frame dimensions changed after Photo Merge was planned"), "{error}");
+}
+
 fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-merge-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -462,14 +594,14 @@ fn panorama_size_is_held_to_memory() {
     let gb = |g: usize| Some(g << 30);
     let photos = 5.0 * 51e6; // five 51 MP photos
     let mp = |o: lightcraft_merge::PanoOptions| o.max_megapixels;
-    assert_eq!(mp(fit_in_memory(&full, photos, gb(512))), lightcraft_merge::pano::MAX_MEGAPIXELS, "plenty of memory: the full size");
-    let m16 = mp(fit_in_memory(&full, photos, gb(16)));
+    assert_eq!(mp(fit_in_memory(&full, photos, 5, gb(512))), lightcraft_merge::pano::MAX_MEGAPIXELS, "plenty of memory: the full size");
+    let m16 = mp(fit_in_memory(&full, photos, 5, gb(16)));
     assert!(m16 > MIN_FITTED_MEGAPIXELS && m16 < 512.0, "16 GB: {m16} MP");
-    assert!(mp(fit_in_memory(&full, photos, gb(32))) > m16, "more memory, more pixels");
-    assert_eq!(mp(fit_in_memory(&full, photos, gb(4))), MIN_FITTED_MEGAPIXELS, "never below 40 MP");
+    assert!(mp(fit_in_memory(&full, photos, 5, gb(32))) > m16, "more memory, more pixels");
+    assert_eq!(mp(fit_in_memory(&full, photos, 5, gb(4))), MIN_FITTED_MEGAPIXELS, "never below 40 MP");
     let asked = lightcraft_merge::PanoOptions { max_megapixels: 20.0, ..full.clone() };
-    assert_eq!(mp(fit_in_memory(&asked, photos, gb(16))), 20.0, "a size asked for is kept when it fits");
-    assert_eq!(fit_in_memory(&full, 1e6, None), fit_in_memory(&full, 1e6, gb(8)), "memory unknown: taken as 8 GB");
+    assert_eq!(mp(fit_in_memory(&asked, photos, 5, gb(16))), 20.0, "a size asked for is kept when it fits");
+    assert_eq!(fit_in_memory(&full, 1e6, 1, None), fit_in_memory(&full, 1e6, 1, gb(8)), "memory unknown: taken as 8 GB");
 }
 
 /// A photo named twice is merged once (issue #1947): `[a, a, a]` is one photo, too few to merge, and `[a, b, a, b]`
