@@ -1,9 +1,23 @@
-//! The Lens Blur section: Apply, the sliders, what stays in focus (the subject, a mask or a fixed
-//! shape that can be moved on the photo), Find Subject and Brush Refinement.
+//! The Lens Blur section: Apply, the sliders, what stays in focus (the subject, a mask, a fixed
+//! shape that can be moved on the photo, or the photo's recorded depth), Find Subject and Brush Refinement.
 
 use super::{
-    Color32, ControlSpec, Icon, LightcraftApp, Pos2, Rect, RichText, Section, Sense, Stroke, Tokens, Track, control, paint, pos2, register, slider,
-    sub_title, text_button, vec2,
+    Color32, ControlSpec, Icon, LightcraftApp, Pos2, Rect, RichText, Section, Sense, Stroke, Tokens, Track, apply_slider_out, control, paint, pos2,
+    register, slider, sub_title, text_button, vec2,
+};
+
+/// Aperture, shown for a photo focused by its recorded depth: another way to read and set Blur Amount
+/// ([`lightcraft_develop::LensBlur::amount_for_aperture`]), as a phone's Portrait mode offers it.
+const APERTURE: ControlSpec = ControlSpec {
+    id: "lensBlur.aperture",
+    label: "Aperture",
+    section: Section::LensBlur,
+    min: lightcraft_develop::LensBlur::WIDEST_APERTURE,
+    max: lightcraft_develop::LensBlur::NARROWEST_APERTURE,
+    default: lightcraft_develop::LensBlur::DEFAULT_APERTURE,
+    step: 0.1,
+    decimals: 1,
+    track: Track::Plain,
 };
 use lightcraft_develop::DevelopSettings;
 use serde_json::json;
@@ -26,9 +40,30 @@ pub(super) fn lens_blur(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopS
             let _ = app.run("develop.merge", json!({"settings": {"lens_blur": patch}, "label": "Lens Blur"}));
         }
     });
+    // a photo with recorded depth (an iPhone Portrait photo) can focus by it
+    let has_depth = app.session.active().and_then(|id| app.session.catalog.photo(id)).is_some_and(|p| p.meta.has_depth);
+    let by_depth = has_depth && b.depth;
     control(app, ui, d, "lensBlur.amount", b.enabled);
+    if by_depth {
+        let f = lightcraft_develop::LensBlur::aperture_for_amount(b.amount).unwrap_or(lightcraft_develop::LensBlur::NARROWEST_APERTURE);
+        let out = slider(ui, &APERTURE, f, b.enabled, None);
+        apply_slider_out(app, &APERTURE, out, |app, f| {
+            app.run("develop.set", json!({"control": "lensBlur.amount", "value": lightcraft_develop::LensBlur::amount_for_aperture(f)}))
+        });
+        control(app, ui, d, "lensBlur.focalDistance", b.enabled);
+        control(app, ui, d, "lensBlur.focalRange", b.enabled);
+    }
     control(app, ui, d, "lensBlur.boost", b.enabled);
-    control(app, ui, d, "lensBlur.transition", b.enabled);
+    // with recorded depth, the depth grades the blur: Transition, its stand-in, does nothing
+    if !by_depth {
+        control(app, ui, d, "lensBlur.transition", b.enabled);
+    }
+    if app.ui.tool == "lensBlurDepth" && !(by_depth && b.enabled) {
+        app.ui.tool.clear();
+    }
+    if !has_depth {
+        app.ui.lens_depth_view = false;
+    }
     // the focus controls do nothing while the blur is off: shown, but not usable
     let has_mask = b.focus_mask.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_some();
     if app.ui.tool == "lensBlurShape" && (!b.enabled || has_mask || b.shape == lightcraft_develop::FocusShape::Auto) {
@@ -41,36 +76,68 @@ pub(super) fn lens_blur(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopS
             // without a mask: the subject estimate, or the fixed shape chosen below
             let auto = b.shape == lightcraft_develop::FocusShape::Auto;
             let none = if auto { crate::i18n::tr("Subject") } else { crate::i18n::tr(b.shape.label()) };
-            let shown = chosen.map_or_else(|| none.to_string(), |m| m.name.clone());
+            let shown = if by_depth { crate::i18n::tr("Depth").to_string() } else { chosen.map_or_else(|| none.to_string(), |m| m.name.clone()) };
             let r = crate::widgets::dropdown(ui, "lensBlurFocus", &shown, t.font(14.0), t.text_label);
             let r = r.on_hover_text(crate::i18n::tr("What stays sharp: the photo's subject, or the selection of one of its masks"));
             let mut pick: Option<Option<u32>> = None;
+            let mut depth = false;
             egui::Popup::menu(&r).show(|ui| {
-                let item = ui.selectable_label(chosen.is_none() && auto, crate::i18n::tr("Subject"));
+                if has_depth {
+                    let item = ui.selectable_label(by_depth, crate::i18n::tr("Depth")).on_hover_text(crate::i18n::tr(
+                        "What lies at the focal distance on the depth the phone recorded, as its Portrait mode does",
+                    ));
+                    register(ui, "lensBlurFocus:depth", item.rect);
+                    depth |= item.clicked();
+                }
+                let item = ui.selectable_label(!by_depth && chosen.is_none() && auto, crate::i18n::tr("Subject"));
                 register(ui, "lensBlurFocus:subject", item.rect);
                 if item.clicked() {
                     pick = Some(None);
                 }
                 for m in &d.masks {
-                    let item = ui.selectable_label(chosen.is_some_and(|c| c.id == m.id), m.name.as_str());
+                    let item = ui.selectable_label(!by_depth && chosen.is_some_and(|c| c.id == m.id), m.name.as_str());
                     register(ui, format!("lensBlurFocus:mask:{}", m.id), item.rect);
                     if item.clicked() {
                         pick = Some(Some(m.id));
                     }
                 }
             });
+            if depth {
+                match app.run_typed("lensBlur.useDepth", json!({})) {
+                    Ok(_) => {}
+                    Err(e) => app.toast(ui.ctx(), e.to_string()),
+                }
+            }
             if let Some(focus) = pick {
-                // "Subject": the estimate again, not a fixed shape
-                let mut patch = json!({"focus_mask": focus});
+                // "Subject": the estimate again, not a fixed shape; either way not the depth
+                let mut patch = json!({"focus_mask": focus, "depth": false});
                 if focus.is_none() {
                     patch["shape"] = json!("auto");
                 }
                 let _ = app.run("develop.merge", json!({"settings": {"lens_blur": patch}, "label": "Lens Blur Focus"}));
             }
         });
+        // focused by depth: a click on the photo sets the focal distance; the depth can be shown over it
+        if by_depth {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let active = app.ui.tool == "lensBlurDepth";
+                let r = text_button(ui, "lensBlurFocusHere", "Focus Here", active)
+                    .on_hover_text(crate::i18n::tr("Click the photo to focus at the depth there"));
+                if r.clicked() {
+                    if active { app.ui.tool.clear() } else { app.ui.tool = "lensBlurDepth".into() }
+                }
+                let mut view = app.ui.lens_depth_view;
+                let r = ui.checkbox(&mut view, crate::i18n::tr("Visualize Depth"));
+                register(ui, "check:lensBlur.visualizeDepth", r.rect);
+                if r.on_hover_text(crate::i18n::tr("Show the recorded depth over the photo: warm is near, cool is far")).changed() {
+                    app.ui.lens_depth_view = view;
+                }
+            });
+        }
         // without a focus mask: the focus area's shape (the estimate, or a fixed one), which can
         // be moved and resized on the photo
-        if !has_mask {
+        if !has_mask && !by_depth {
             ui.add_space(4.0);
             focus_shape_row(app, ui, b);
             if b.shape != lightcraft_develop::FocusShape::Auto {

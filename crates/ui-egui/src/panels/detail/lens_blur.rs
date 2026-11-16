@@ -1,5 +1,5 @@
-//! Lens Blur's tools on the photo: moving and resizing its fixed focus shape, and painting its
-//! Focus / Blur refinement brushes.
+//! Lens Blur's tools on the photo: moving and resizing its fixed focus shape, painting its
+//! Focus / Blur refinement brushes, focusing by a click on the recorded depth, and showing that depth.
 
 use super::geometry::CanvasMap;
 use super::masks::{frame_long_norm, pen_force, pin, record_pressure};
@@ -145,4 +145,72 @@ pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui
             app.toast(ui.ctx(), e);
         }
     }
+}
+
+/// Focus Here (a photo with recorded depth): a click sets Lens Blur's focal distance to the depth at that point
+/// (`lensBlur.focusAt`, one undo step).
+pub(super) fn lens_blur_depth_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap) {
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    if resp.clicked()
+        && let Some(q) = resp.interact_pointer_pos()
+    {
+        let n = map.norm(q);
+        if let Err(e) = app.run_typed("lensBlur.focusAt", json!({"x": n.x, "y": n.y})) {
+            app.toast(ui.ctx(), e.to_string());
+        }
+    }
+}
+
+/// Visualize Depth: the photo's recorded depth over it, warm near and cool far, half see-through. Rendered through
+/// the photo's crop and orientation like the photo, so it lines up at any zoom; kept between frames until the photo
+/// or its settings change. A view only: nothing is stored or exported.
+pub(super) fn lens_blur_depth_view(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    map: &CanvasMap,
+    d: &DevelopSettings,
+    id: lightcraft_catalog::PhotoId,
+) {
+    let Some(photo) = app.session.catalog.photo(id) else { return };
+    let (sw, sh) = (photo.width as usize, photo.height as usize);
+    let key = format!("{}:{}", id.0, serde_json::to_string(d).unwrap_or_default());
+    let cache = egui::Id::unique("lc-lens-blur-depth-view");
+    let cached: Option<(String, Option<egui::TextureHandle>)> = ui.ctx().data(|m| m.get_temp(cache));
+    let tex = match cached {
+        Some((k, t)) if k == key => t,
+        _ => {
+            let info = app.session.source_info(id);
+            // about the size it is shown at, at most 768 on the long edge
+            let long = map.rect.width().max(map.rect.height()).clamp(64.0, 768.0);
+            let (w, h) = if map.rect.width() >= map.rect.height() {
+                (long as usize, (long * map.rect.height() / map.rect.width().max(1.0)).max(1.0) as usize)
+            } else {
+                ((long * map.rect.width() / map.rect.height().max(1.0)).max(1.0) as usize, long as usize)
+            };
+            let t = lightcraft_pipeline::lens_blur::depth_view(sw, sh, d, info.mattes.as_deref(), w, h).map(|p| {
+                let px: Vec<Color32> = p.data.iter().map(|&v| depth_colour(v)).collect();
+                ui.ctx().load_texture(
+                    "lensBlurDepthView",
+                    egui::ColorImage { size: [w, h], pixels: px, source_size: vec2(w as f32, h as f32) },
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+            ui.ctx().data_mut(|m| m.insert_temp(cache, (key, t.clone())));
+            t
+        }
+    };
+    if let Some(t) = tex {
+        let clip = app.canvas_rect.unwrap_or(map.rect);
+        ui.painter_at(clip).image(t.id(), map.rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+    }
+}
+
+/// Visualize Depth's colour for a depth (0 farthest .. 1 nearest): blue far, through violet, to orange near, half
+/// see-through so the photo shows beneath.
+fn depth_colour(v: f32) -> Color32 {
+    let v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+    let lerp = |a: f32, b: f32| (a + (b - a) * v).round() as u8;
+    Color32::from_rgba_unmultiplied(lerp(40.0, 255.0), lerp(90.0, 140.0), lerp(230.0, 30.0), 150)
 }

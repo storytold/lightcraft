@@ -12,6 +12,13 @@
 //! blurred background around it (no halo). Boost brightens highlights before they are spread, so
 //! they turn into bright discs (bokeh), as a lens does with scene-linear light.
 //!
+//! With recorded depth (an iPhone Portrait photo's depth map, [`MatteKind::Depth`]) and focusing by depth switched
+//! on, the scene has its real depths: what lies within the focal range around the focal distance is in focus, and
+//! the blur grows linearly with the depth difference beyond it, in front and behind, as a lens's does (its circle of
+//! confusion grows with the disparity difference). The depth map is coarse, so where the subject matte that came
+//! with it ([`MatteKind::DepthSubject`]) covers the subject, the subject takes one focus, its own: its edges (hair)
+//! are the matte's. Transition, a stand-in for depth, then does nothing.
+//!
 //! Brush Refinement paints the focus by hand: Focus brush strokes stay sharp, Blur brush strokes
 //! are blurred whatever the focus says.
 //!
@@ -31,7 +38,7 @@ use lightcraft_develop::{BrushStroke, DevelopSettings, Mask, MaskShape};
 use lightcraft_raster::{Plane, Rgb32f};
 
 use crate::geometry::Frame;
-use crate::masks::{self, Mattes};
+use crate::masks::{self, MatteKind, Mattes};
 
 /// The largest circle of confusion (Blur Amount 100), as a fraction of the long edge.
 pub const MAX_RADIUS: f64 = 0.035;
@@ -57,6 +64,67 @@ const MAX_CELLS: usize = 3_000_000;
 const FOCUS_WEIGHT: f32 = 1e-4;
 /// The brightest highlights grow this much brighter at Boost 100 before they are spread.
 const BOOST_GAIN: f32 = 4.0;
+/// With focusing by depth: the share of the photo's recorded depth range, beyond the focal range, over which the blur
+/// grows from none to the full Amount (linearly, as a lens's circle of confusion grows with disparity).
+const DEPTH_SPREAD: f32 = 0.35;
+
+/// Whether the lens blur of `s` focuses by the photo's recorded depth: switched on, and the photo has a depth map.
+pub fn by_depth(s: &DevelopSettings, mattes: Option<&Mattes>) -> bool {
+    s.lens_blur.depth && mattes.is_some_and(|m| m.has(MatteKind::Depth))
+}
+
+/// The recorded depth (0 farthest .. 1 nearest, [`MatteKind::Depth`]) at `p` (normalized coordinates of the upright,
+/// uncropped photo, as masks are placed), for setting the focal distance by clicking the photo; `None` without a
+/// depth map.
+pub fn depth_at(src_w: usize, src_h: usize, s: &DevelopSettings, mattes: Option<&Mattes>, p: lightcraft_geom::Point) -> Option<f64> {
+    let mattes = mattes?;
+    if src_w == 0 || src_h == 0 || !(p.x.is_finite() && p.y.is_finite()) {
+        return None;
+    }
+    // a small whole-photo render of the depth, read at the point
+    let frame = Frame::new(src_w, src_h, s, false);
+    let (w, h) = frame.fit(SUBJECT_EDGE, SUBJECT_EDGE);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let d = mattes.plane(MatteKind::Depth, &frame, w, h)?;
+    let o = frame.norm_to_out(w, h).apply(lightcraft_geom::Point::new(p.x.clamp(0.0, 1.0), p.y.clamp(0.0, 1.0)));
+    let (x, y) = ((o.x.max(0.0) as usize).min(w - 1), (o.y.max(0.0) as usize).min(h - 1));
+    d.data.get(y * w + x).map(|v| f64::from(v.clamp(0.0, 1.0)))
+}
+
+/// The recorded depth (0 farthest .. 1 nearest) at each pixel of a `w × h` render of the framed photo (crop,
+/// orientation and geometry of `s`, as the photo is shown), for Visualize Depth; `None` without a depth map.
+pub fn depth_view(src_w: usize, src_h: usize, s: &DevelopSettings, mattes: Option<&Mattes>, w: usize, h: usize) -> Option<Plane> {
+    if src_w == 0 || src_h == 0 || w == 0 || h == 0 {
+        return None;
+    }
+    mattes?.plane(MatteKind::Depth, &Frame::new(src_w, src_h, s, true), w, h)
+}
+
+/// What is in focus by depth (see the module docs): 1 within the focal range, falling linearly to 0 over
+/// [`DEPTH_SPREAD`] beyond it; the subject matte's subject takes its own focus.
+fn depth_focus(s: &DevelopSettings, frame: &Frame, w: usize, h: usize, mattes: &Mattes) -> Option<Plane> {
+    let mut depth = mattes.plane(MatteKind::Depth, frame, w, h)?;
+    let b = &s.lens_blur;
+    let at = |v: f64| if v.is_finite() { (v.clamp(0.0, 100.0) / 100.0) as f32 } else { 0.0 };
+    let (plane, half) = (at(b.focal_distance), at(b.focal_range) / 2.0);
+    let focus_of = |d: f32| 1.0 - (((d - plane).abs() - half).max(0.0) / DEPTH_SPREAD).clamp(0.0, 1.0);
+    let subject = mattes.plane(MatteKind::DepthSubject, frame, w, h);
+    // the subject's own depth: where the matte is sure of it
+    let own = subject.as_ref().and_then(|m| {
+        let (sum, n) = m.data.iter().zip(&depth.data).filter(|(a, _)| **a >= 0.5).fold((0.0f64, 0usize), |(s, n), (_, d)| (s + f64::from(*d), n + 1));
+        (n > 0).then(|| focus_of((sum / n as f64) as f32))
+    });
+    for (i, d) in depth.data.iter_mut().enumerate() {
+        let f = focus_of(if d.is_finite() { *d } else { 0.0 });
+        *d = match (own, subject.as_ref().and_then(|m| m.data.get(i))) {
+            (Some(own), Some(&a)) => f + (own - f) * a.clamp(0.0, 1.0),
+            _ => f,
+        };
+    }
+    Some(depth)
+}
 
 /// Whether `s` renders a lens blur (switched on, with some amount, and its section's eye open).
 pub fn active(s: &DevelopSettings) -> bool {
@@ -190,16 +258,18 @@ pub fn focus(img: &Rgb32f, s: &DevelopSettings, frame: &Frame, mattes: Option<&M
 fn focus_with(img: &Rgb32f, s: &DevelopSettings, frame: &Frame, mattes: Option<&Mattes>, subject: Option<&SubjectEstimate>) -> Plane {
     let (w, h) = (img.width, img.height);
     let log_l = img.map(crate::local::log_lum);
-    let mut a = match (focus_mask(s), s.lens_blur.focus_area(s.crop_center())) {
-        (Some(m), _) => masks::evaluate_one(m, frame, w, h, img, &log_l, s.light.exposure as f32, mattes),
+    let depth_plane = if by_depth(s, mattes) { mattes.and_then(|m| depth_focus(s, frame, w, h, m)) } else { None };
+    let mut a = match (depth_plane, focus_mask(s), s.lens_blur.focus_area(s.crop_center())) {
+        (Some(depth), ..) => depth,
+        (None, Some(m), _) => masks::evaluate_one(m, frame, w, h, img, &log_l, s.light.exposure as f32, mattes),
         // a fixed shape: where it was moved to, else the middle of the crop (in photo
         // coordinates, so it stays put in a zoomed view)
-        (None, Some(area)) => {
+        (None, None, Some(area)) => {
             let shape = MaskShape::Radial { center: area.center, rx: area.rx, ry: area.ry, angle: 0.0, feather: SHAPE_FEATHER, invert: false };
             masks::shape_alpha(&shape, frame, w, h, img, &log_l, 0.0, mattes)
         }
-        (None, None) if let Some(est) = subject => est.sample(frame, w, h),
-        (None, None) => {
+        (None, None, None) if let Some(est) = subject => est.sample(frame, w, h),
+        (None, None, None) => {
             let mut a = masks::shape_alpha(&MaskShape::Subject, frame, w, h, img, &log_l, 0.0, mattes);
             // the saliency heuristic gives a flat centre about 0.5: in focus too (person mattes
             // are 0 or 1 and stay so)
@@ -270,7 +340,12 @@ impl SubjectEstimate {
 /// subject estimate (switched on, no focus mask, no fixed shape) of a photo without a person
 /// matte; `None` otherwise (the focus then needs no whole-photo data).
 pub fn subject_estimate(src: &Rgb32f, s: &DevelopSettings, mattes: Option<&Mattes>) -> Option<SubjectEstimate> {
-    if !active(s) || focus_mask(s).is_some() || s.lens_blur.focus_area(s.crop_center()).is_some() || mattes.is_some_and(Mattes::selects_subject) {
+    if !active(s)
+        || by_depth(s, mattes)
+        || focus_mask(s).is_some()
+        || s.lens_blur.focus_area(s.crop_center()).is_some()
+        || mattes.is_some_and(Mattes::selects_subject)
+    {
         return None;
     }
     if src.width == 0 || src.height == 0 || src.data.len() != src.width.saturating_mul(src.height) {
@@ -336,8 +411,9 @@ pub fn apply_with(
     if r >= 0.5 {
         let focus = crate::timed("lens blur focus", || focus_with(img, s, frame, mattes, subject));
         if focus.data.len() == img.data.len() {
-            // the blur grows with the distance from what is in focus, as with depth
-            let ramp = crate::timed("lens blur transition", || transition_ramp(&focus, transition_px(s, px_per_long), px_per_long, origin));
+            // the blur grows with the distance from what is in focus, as with depth; with real depth, it already does
+            let d = if by_depth(s, mattes) { 0.0 } else { transition_px(s, px_per_long) };
+            let ramp = crate::timed("lens blur transition", || transition_ramp(&focus, d, px_per_long, origin));
             let coc: Vec<f32> = focus.data.iter().enumerate().map(|(i, f)| (1.0 - f) * ramp.as_ref().map_or(1.0, |r| r.at(i))).collect();
             blur(img, &coc, r, boost_of(s.lens_blur.boost), origin);
         }
@@ -1105,5 +1181,110 @@ mod tests {
         let mut img = Rgb32f { width: 10, height: 10, data: vec![[0.5; 3]; 7] };
         apply(&mut img, &s, &frame(&s, 10, 10), 10.0, None);
         assert_eq!(img.data.len(), 7);
+    }
+
+    /// Recorded depth over a `w × h` source: disparity growing from 0 (far) on the left to 255 (near) on the right,
+    /// and, with `subject`, a subject matte over the middle third.
+    fn depth_mattes(w: usize, h: usize, subject: bool) -> Mattes {
+        let mut m = Mattes::default();
+        let data = (0..w * h).map(|i| ((i % w) * 255 / (w - 1)) as u8).collect();
+        m.push(MatteKind::Depth, lightcraft_raster::Image { width: w, height: h, data });
+        if subject {
+            let data = (0..w * h).map(|i| if (w / 3..2 * w / 3).contains(&(i % w)) { 255 } else { 0 }).collect();
+            m.push(MatteKind::DepthSubject, lightcraft_raster::Image { width: w, height: h, data });
+        }
+        m
+    }
+
+    fn by_depth_at(focal: f64, range: f64) -> DevelopSettings {
+        let mut s = on(60.0);
+        s.lens_blur.depth = true;
+        (s.lens_blur.focal_distance, s.lens_blur.focal_range) = (focal, range);
+        s
+    }
+
+    /// Issue #4328: focusing by depth, what lies within the focal range is in focus and the blur grows linearly with
+    /// the depth beyond it, in front and behind: at the far left of the ramp, 0.4 beyond a 20-wide range around 70,
+    /// it is fully blurred.
+    #[test]
+    fn depth_sets_the_focus() {
+        let (w, h) = (101, 8);
+        let mattes = depth_mattes(w, h, false);
+        let s = by_depth_at(70.0, 20.0);
+        let img = Rgb32f::from_fn(w, h, |_, _| [0.2; 3]);
+        let f = focus(&img, &s, &frame(&s, w, h), Some(&mattes));
+        let at = |x: usize| f.data[3 * w + x];
+        assert!(at(70) > 0.99 && at(62) > 0.99 && at(78) > 0.99, "within the range: {} {} {}", at(62), at(70), at(78));
+        assert!(at(95) < at(85) && at(85) < 1.0, "nearer than the range: blurred more the nearer");
+        assert!(at(40) < at(55) && at(55) < 1.0, "farther: blurred more the farther");
+        assert!(at(5) < 0.01, "0.55 beyond the range: fully blurred, {}", at(5));
+        // linear, not a smooth step: halfway through the spread is half the focus
+        let half = 0.8 + DEPTH_SPREAD / 2.0;
+        let x = (half * 100.0).round() as usize;
+        assert!((at(x) - 0.5).abs() < 0.05, "{}", at(x));
+    }
+
+    /// The subject matte's subject takes one focus, its own (here the middle third of the ramp, around 50): in focus
+    /// when the focal plane is on it, uniformly blurred when it isn't, its edge the matte's.
+    #[test]
+    fn the_subject_matte_gives_the_subject_one_focus() {
+        let (w, h) = (90, 6);
+        let mattes = depth_mattes(w, h, true);
+        let img = Rgb32f::from_fn(w, h, |_, _| [0.2; 3]);
+        let on_subject = by_depth_at(50.0, 0.0);
+        let f = focus(&img, &on_subject, &frame(&on_subject, w, h), Some(&mattes));
+        assert!((31..59).all(|x| f.data[2 * w + x] > 0.95), "the whole subject is sharp, not only its middle depth");
+        let behind = by_depth_at(5.0, 0.0);
+        let f = focus(&img, &behind, &frame(&behind, w, h), Some(&mattes));
+        let row: Vec<f32> = (32..58).map(|x| f.data[2 * w + x]).collect();
+        assert!(row.iter().all(|v| (v - row[0]).abs() < 0.02), "uniform over the subject: {row:?}");
+    }
+
+    /// Without a depth map (settings copied to another photo), or with focusing by depth off, the focus is the
+    /// subject's as before; the depth's own grading replaces Transition, which only applies without it.
+    #[test]
+    fn without_a_depth_map_the_focus_is_as_before() {
+        let (w, h) = (64, 48);
+        let img = scene(w, h, 50, 10);
+        let s = by_depth_at(70.0, 20.0);
+        assert!(!by_depth(&s, None));
+        assert!(!by_depth(&s, Some(&Mattes::default())));
+        let mut off = s.clone();
+        off.lens_blur.depth = false;
+        let fr = frame(&s, w, h);
+        assert_eq!(focus(&img, &s, &fr, None).data, focus(&img, &off, &fr, None).data);
+        assert!(by_depth(&s, Some(&depth_mattes(w, h, false))));
+        assert!(subject_estimate(&img, &s, Some(&depth_mattes(w, h, false))).is_none(), "no estimate needed");
+    }
+
+    /// The blur follows the depth: focused near (the right), the right side keeps its detail and the far left
+    /// loses it.
+    #[test]
+    fn the_blur_follows_the_depth() {
+        let (w, h) = (120, 40);
+        let img = Rgb32f::from_fn(w, h, |x, y| if (x + y) % 2 == 0 { [0.8; 3] } else { [0.05; 3] });
+        let s = by_depth_at(100.0, 10.0);
+        let mattes = depth_mattes(w, h, false);
+        let mut out = img.clone();
+        apply(&mut out, &s, &frame(&s, w, h), w as f64, Some(&mattes));
+        let contrast = |x0: usize, x1: usize| {
+            let v: Vec<f32> = (x0..x1).map(|x| out.get(x, 20)[0]).collect();
+            v.iter().cloned().fold(f32::MIN, f32::max) - v.iter().cloned().fold(f32::MAX, f32::min)
+        };
+        assert!(contrast(110, 118) > 0.7, "near: sharp, {}", contrast(110, 118));
+        assert!(contrast(2, 10) < 0.2, "far: blurred, {}", contrast(2, 10));
+    }
+
+    /// Clicking the photo reads its depth there: 0 at the far left of the ramp, 1 at the near right.
+    #[test]
+    fn depth_at_reads_the_point() {
+        let (w, h) = (200, 100);
+        let mattes = depth_mattes(w, h, false);
+        let s = DevelopSettings::default();
+        let at = |x: f64| depth_at(w, h, &s, Some(&mattes), Point::new(x, 0.5)).unwrap();
+        assert!(at(0.0) < 0.03 && at(1.0) > 0.97 && (at(0.5) - 0.5).abs() < 0.03, "{} {} {}", at(0.0), at(0.5), at(1.0));
+        assert_eq!(depth_at(w, h, &s, None, Point::new(0.5, 0.5)), None);
+        assert_eq!(depth_at(w, h, &s, Some(&Mattes::default()), Point::new(0.5, 0.5)), None);
+        assert!(depth_at(w, h, &s, Some(&mattes), Point::new(f64::NAN, 0.5)).is_none());
     }
 }

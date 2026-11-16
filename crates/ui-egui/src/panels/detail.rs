@@ -49,7 +49,7 @@ use info::{
     preview_only_pill, quick_name,
 };
 pub(crate) use info::{draw_focus_point, failed_pill, loupe_pill, rendering_overdue};
-use lens_blur::{lens_blur_brush_overlay, lens_blur_shape_overlay};
+use lens_blur::{lens_blur_brush_overlay, lens_blur_depth_overlay, lens_blur_depth_view, lens_blur_shape_overlay};
 use look_ahead::BEHIND;
 pub use look_ahead::LookAhead;
 pub(crate) use look_ahead::{Prepare, look_ahead};
@@ -761,12 +761,16 @@ struct ToolView<'a> {
 /// Route the pointer to the right panel's tool on the photo, or to the general interactions.
 fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, tv: &ToolView, v: &Views) {
     let (map, d) = (tv.map, tv.d);
+    if tv.right == RightPanel::Edit && app.ui.lens_depth_view {
+        lens_blur_depth_view(app, ui, map, d, tv.id);
+    }
     match tv.right {
         RightPanel::Crop => crop_overlay(app, ui, resp, map, tv.frame, d, tv.id),
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
         RightPanel::Remove => remove_overlay(app, ui, resp, map, d),
         RightPanel::RedEye => eye_overlay(app, ui, resp, map, d),
         RightPanel::Edit if app.ui.tool == "lensBlurShape" => lens_blur_shape_overlay(app, ui, resp, map, d),
+        RightPanel::Edit if app.ui.tool == "lensBlurDepth" => lens_blur_depth_overlay(app, ui, resp, map),
         RightPanel::Edit if app.ui.tool.starts_with("lensBlur") => lens_blur_brush_overlay(app, ui, resp, map),
         _ => {
             // side by side / stacked: Before shows the same frame, so a click in its view (white

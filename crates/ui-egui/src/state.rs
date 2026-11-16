@@ -247,8 +247,13 @@ pub struct UiState {
     #[serde(skip)]
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove",
-    /// "lensBlurFocus" / "lensBlurBlur" (Lens Blur Brush Refinement, in the Edit panel).
+    /// "lensBlurFocus" / "lensBlurBlur" (Lens Blur Brush Refinement, in the Edit panel), "lensBlurDepth" (Lens Blur
+    /// Focus Here: a click sets the focal distance from the recorded depth).
     pub tool: String,
+    /// Lens Blur's Visualize Depth: the photo's recorded depth drawn over it, warm near and cool far. A view, not
+    /// an edit: never stored in the settings or exported.
+    #[serde(skip)]
+    pub lens_depth_view: bool,
     /// Guided Upright: the selected guide (photo id + index) while the tool is open. A Delete /
     /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
     #[serde(skip)]
@@ -481,6 +486,7 @@ impl Default for UiState {
             grading_mode: "3way".into(),
             grading_hidden: None,
             tool: String::new(),
+            lens_depth_view: false,
             selected_guide: None,
             brush_size: 0.04,
             brush_feather: 50.0,
