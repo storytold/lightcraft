@@ -15,7 +15,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 
 | Format | Target reads | Target writes | LightCraft reads | LightCraft writes | Notes / tests |
 |---|---|---|---|---|---|
-| JPEG | ✅ | ✅ | ✅ (parallel decoder, ICC, EXIF orientation) | ✅ quality, size limit, ICC, metadata; Huffman tables optimized per image (issue #1373) | `crates/codecs/src/jpeg.rs`, `crates/codecs/src/jpeg_par.rs`, export tests |
+| JPEG | ✅ | ✅ | ✅ (parallel decoder, ICC, EXIF orientation) | ✅ quality, size limit, ICC, metadata; Huffman tables optimized per image (issue #1373) | `crates/codecs/src/jpeg.rs`, `crates/codecs/src/encode.rs` (shared `craft-jpeg` encoder), export tests |
 | TIFF | ✅ 8/16/32-bit | ✅ 8/16-bit, LZW/ZIP | ✅ 1–64-bit integer, 16–64-bit float, bilevel, CCITT fax, WhiteIsZero | ✅ 8/16-bit, 32-bit float linear, none / LZW / ZIP | `crates/tiff`, `crates/codecs/src/tiff_codec.rs` |
 | PNG | ✅ | ✅ | ✅ | ✅ | |
 | PSD / PSB | ✅ (maximized-compatibility composite) | ✅ (Classic: PSD export, edit-in round trip) | ✅ merged composite | ⬜ (external-editor round trip writes 16-bit TIFF) | `crates/codecs/src/psd.rs` |

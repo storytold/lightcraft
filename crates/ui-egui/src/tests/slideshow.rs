@@ -457,7 +457,7 @@ fn a_photo_deleted_while_it_plays_does_not_stall_the_slideshow() {
     run(&mut h, "photo.delete", json!({"ids": [next.0]}));
     run(&mut h, "photo.deletePermanently", json!({"ids": [next.0]}));
     assert!(h.app.session.catalog.photo(next).is_none());
-    assert!(h.step_until(SETTLE, |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
     assert!(photos.len() > 3);
     h.settle(SETTLE);
 }
@@ -630,7 +630,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
         assert!(has(&h, w), "{w}");
     }
     // the preview is the composed slide, rendered off the UI thread
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     // a checkbox goes through slideshow.layout, and its controls appear (scrolled into view)
     reveal(&mut h, "check:settings.slideshowShadow");
     let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowShadow"}), T);
@@ -641,7 +641,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
     // a changed layout renders the preview again (once it has settled)
     let before = h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key);
     run(&mut h, "slideshow.layout", json!({"margins": 0.2, "backdropColor": "#00ff00"}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
     h.step();
     // (the preview is pinned above the page: in view already)
     reveal(&mut h, "slideshow:preview");
