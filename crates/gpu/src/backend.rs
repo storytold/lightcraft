@@ -630,9 +630,11 @@ pub fn choose_non_windows_window_renderer(
 ) -> WindowRenderer {
     let forced = forced_window_renderer(app, wgpu);
     let choice = choose(app, wgpu);
-    if glow_without_marker(forced, marker_available, os, glow) && !matches!(choice, BackendChoice::Use(_)) {
-        WindowRenderer::Glow
-    } else if glow && (forced == Some(WindowRenderer::Glow) || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow))) {
+    if glow
+        && (glow_without_marker(forced, marker_available, os, glow) && !matches!(choice, BackendChoice::Use(_))
+            || forced == Some(WindowRenderer::Glow)
+            || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow)))
+    {
         WindowRenderer::Glow
     } else if let Some(WindowRenderer::Wgpu(b)) = forced {
         WindowRenderer::Wgpu(resolve(BackendChoice::Use(b), default_window_backends(os), compiled).unwrap_or_else(|| default_window_backends(os)))
