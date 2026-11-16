@@ -474,6 +474,7 @@ fn placeholder_manifest() -> Manifest {
         base_tone: crate::BaseTone::Camera,
         labels: Vec::new(),
         groups: Vec::new(),
+        remember: Vec::new(),
         header: None,
         icon: None,
         about: Default::default(),

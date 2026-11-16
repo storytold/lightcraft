@@ -111,6 +111,11 @@ pub struct Manifest {
     /// is dropped (the menu stays flat).
     #[serde(skip)]
     pub groups: Vec<(String, Vec<String>)>,
+    /// Parameters that declare `"remember": true` (an ABI v1.1 proposal): the host may start a
+    /// newly added copy of the filter with the values last set for them (the film type, say)
+    /// instead of their defaults. Read by [`Manifest::parse`]; hosts without it ignore the key.
+    #[serde(skip)]
+    pub remember: Vec<String>,
     /// A header picture the host may show at the top of the filter's controls (`"header": "<svg…>"`,
     /// or `{"dark": "<svg…>", "light": "<svg…>"}` for dark and light interface themes). Read by
     /// [`Manifest::parse`]; a picture that isn't an SVG document of at most [`MAX_HEADER_BYTES`]
@@ -326,6 +331,12 @@ impl Manifest {
                     };
                     (names.len() == options.len() && names.iter().all(printable) && names.iter().any(|g| !g.is_empty())).then(|| (k.clone(), names))
                 })
+                .collect();
+            man.remember = man
+                .params
+                .iter()
+                .filter(|(k, _)| ps.get(k).and_then(|p| p.get("remember")).and_then(Value::as_bool) == Some(true))
+                .map(|(k, _)| k.clone())
                 .collect();
         }
         Ok(man)
@@ -743,6 +754,20 @@ mod tests {
             let m = Manifest::parse(format!(r#"{{"id":"a.b","name":"N","kind":"filter",{bad}}}"#).as_bytes()).unwrap();
             assert_eq!(m.shortcut, None, "{bad}");
         }
+    }
+
+    #[test]
+    fn parameters_that_remember_say_so_with_a_true() {
+        let m = Manifest::parse(
+            br#"{"id":"a.b","name":"N","kind":"filter","params":{
+                "film":{"type":"choice","options":["Colour","B&W"],"remember":true},
+                "border":{"type":"number","min":0,"max":25,"default":10,"remember":true},
+                "amount":{"type":"number","min":0,"max":1,"default":0.5},
+                "odd":{"type":"bool","remember":"yes"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(m.remember, ["film", "border"], "in declaration order, `true` only");
+        assert!(Manifest::parse(br#"{"id":"a.b","name":"N","kind":"filter"}"#).unwrap().remember.is_empty());
     }
 
     #[test]

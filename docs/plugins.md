@@ -934,6 +934,15 @@ defaults, its stage) on every selected photo that has none, in one History step,
 Develop ▸ Plug-in Filters and says what it did. `plugin.list` shows the manifest's key as
 `shortcut`.
 
+**Parameters that remember (ABI v1.1 proposal).** A parameter may carry `"remember": true` (a film
+type, a border width: what a user sets the same way on photo after photo). A newly added copy of
+the filter (`develop.pluginFilter.add`, `addTo`, the filter's key) then starts with the value
+last set for it, by `develop.pluginFilter.set` or given to `add`, instead of its default; values
+given to `add` still win, and the other parameters start at their defaults. The values are kept
+per plug-in for the whole app (`filter-remembered.json` in the settings folder) and survive a
+restart; one the manifest no longer takes (a plug-in update changed the parameter) leaves the
+remembered values out for that copy. Hosts without the field ignore it.
+
 **Base tone (ABI v1.1 proposal).** A raw is toned after the Source stage: by its camera's own
 curve when the file has one, else by the default raw curve. A Source filter whose output is
 already a finished picture (a negative conversion with its own tone curve) may set
