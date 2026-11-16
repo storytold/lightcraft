@@ -403,6 +403,8 @@ pub struct Session {
     pub activity: activity::Activity,
     /// The last (or running) slideshow export (`slideshow.export`).
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
+    /// Video playback of the active photo (`video.*` commands, [`Session::video_tick`]).
+    pub video: video_play::Playback,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Preparing photos in the background: settings (app-wide and this library's) and the build
@@ -555,6 +557,7 @@ impl Session {
             prep: Default::default(),
             loupe_edge: 0,
             slideshow_export: None,
+            video: Default::default(),
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
             disk_alert: Default::default(),

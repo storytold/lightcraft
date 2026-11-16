@@ -194,7 +194,7 @@ fn seek_clamps_hostile_times() {
     tick_until(&mut p, |p| index(p) == Some(0));
     p.seek(1e300);
     tick_until(&mut p, |p| index(p) == Some(9));
-    assert!(p.position() <= p.info().duration);
+    assert!(p.position() <= p.info().unwrap().duration);
     p.seek(-5.0);
     tick_until(&mut p, |p| index(p) == Some(0));
 }
@@ -288,4 +288,25 @@ fn dropping_the_player_stops_the_decode_thread() {
     let after = decoded.load(Ordering::SeqCst);
     std::thread::sleep(Duration::from_millis(20));
     assert_eq!(decoded.load(Ordering::SeqCst), after);
+}
+
+#[test]
+fn a_clip_that_cannot_be_opened_reports_why_without_blocking() {
+    let clock = Arc::new(ManualClock::default());
+    let open: Open = Box::new(|| {
+        // a slow drive: the caller is not held up
+        std::thread::sleep(Duration::from_millis(50));
+        Err("The clip could not be opened: no such file".to_string())
+    });
+    let started = Instant::now();
+    let mut p = VideoPlayer::open(PhotoId(3), open, clock).unwrap();
+    assert!(started.elapsed() < Duration::from_millis(40));
+    assert_eq!(p.state()["opening"], true);
+    assert!(p.info().is_none());
+    tick_until(&mut p, |p| p.error().is_some());
+    assert_eq!(p.state()["opening"], false);
+    p.play();
+    p.tick();
+    assert!(!p.playing());
+    assert!(p.frame().is_none());
 }

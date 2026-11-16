@@ -55,6 +55,25 @@ pub struct SourceInfo {
     pub audio: Option<String>,
 }
 
+impl SourceInfo {
+    /// What the player assumes until the decode thread has opened the clip: no end yet.
+    fn pending() -> SourceInfo {
+        SourceInfo {
+            duration: f64::INFINITY,
+            width: 0,
+            height: 0,
+            frame_duration: 1.0 / 30.0,
+            orientation: lightcraft_geom::Orientation::Normal,
+            codec: String::new(),
+            audio: None,
+        }
+    }
+}
+
+/// Opens a clip on the decode thread (reading a clip's headers can take a while on a slow or
+/// sleeping drive, so the UI thread never does it).
+pub type Open = Box<dyn FnOnce() -> Result<Box<dyn FrameSource>, String> + Send>;
+
 /// One display-ready frame: RGBA, 8 bits, sRGB, `width × height` (before rotation).
 #[derive(Clone, Debug)]
 pub struct VideoFrame {
@@ -141,6 +160,8 @@ struct Shared {
     error: Option<String>,
     /// Frames the queue may hold (set from the frame size).
     capacity: usize,
+    /// The clip's description, once the decode thread has opened it.
+    info: Option<SourceInfo>,
     decoded: u64,
     /// RGBA buffers of frames that left the screen, for the decoder to fill again (no 33 MB
     /// allocation per 4K frame).
@@ -194,6 +215,8 @@ pub struct Stats {
 pub struct VideoPlayer {
     photo: PhotoId,
     info: SourceInfo,
+    /// `info` is the clip's (the decode thread has opened it), not [`SourceInfo::pending`].
+    opened: bool,
     channel: Arc<Channel>,
     thread: Option<std::thread::JoinHandle<()>>,
     clock: Arc<dyn Clock>,
@@ -212,22 +235,42 @@ pub struct VideoPlayer {
 }
 
 impl VideoPlayer {
-    /// Start the decode thread for `source` and show its first frame (paused at 0).
+    /// Start the decode thread for an opened `source` and show its first frame (paused at 0).
     pub fn start(photo: PhotoId, source: Box<dyn FrameSource>, clock: Arc<dyn Clock>) -> Result<VideoPlayer, String> {
-        let info = source.info().clone();
-        let frame_bytes = (info.width as usize).saturating_mul(info.height as usize).saturating_mul(4).max(1);
-        let capacity = (QUEUE_BYTES / frame_bytes).clamp(QUEUE_MIN, QUEUE_MAX);
-        let channel =
-            Arc::new(Channel { state: Mutex::new(Shared { capacity, ..Shared::default() }), wake: Condvar::new(), stop: AtomicBool::new(false) });
+        VideoPlayer::open(photo, Box::new(move || Ok(source)), clock)
+    }
+
+    /// Start the decode thread, which opens the clip with `open` and shows its first frame (paused
+    /// at 0). Only failing to start a thread is an error here; a clip that can't be opened ends
+    /// up in [`VideoPlayer::error`].
+    pub fn open(photo: PhotoId, open: Open, clock: Arc<dyn Clock>) -> Result<VideoPlayer, String> {
+        let channel = Arc::new(Channel {
+            state: Mutex::new(Shared { capacity: QUEUE_MIN, ..Shared::default() }),
+            wake: Condvar::new(),
+            stop: AtomicBool::new(false),
+        });
         let worker = channel.clone();
         let thread = std::thread::Builder::new()
             .name("lc-video-decode".into())
-            .spawn(move || decode_loop(source, &worker))
+            .spawn(move || match open() {
+                Ok(source) => {
+                    let info = source.info().clone();
+                    let frame_bytes = (info.width as usize).saturating_mul(info.height as usize).saturating_mul(4).max(1);
+                    {
+                        let mut s = worker.lock();
+                        s.capacity = (QUEUE_BYTES / frame_bytes).clamp(QUEUE_MIN, QUEUE_MAX);
+                        s.info = Some(info);
+                    }
+                    decode_loop(source, &worker);
+                }
+                Err(e) => worker.lock().error = Some(e),
+            })
             .map_err(|e| format!("could not start the video decoder: {e}"))?;
         let now = clock.now();
         let mut player = VideoPlayer {
             photo,
-            info,
+            info: SourceInfo::pending(),
+            opened: false,
             channel,
             thread: Some(thread),
             clock,
@@ -249,8 +292,9 @@ impl VideoPlayer {
         self.photo
     }
 
-    pub fn info(&self) -> &SourceInfo {
-        &self.info
+    /// The clip's description; `None` while it is still being opened.
+    pub fn info(&self) -> Option<&SourceInfo> {
+        self.opened.then_some(&self.info)
     }
 
     pub fn playing(&self) -> bool {
@@ -390,6 +434,12 @@ impl VideoPlayer {
         let mut skipped = 0u64;
         let (end, failed, next_pts) = {
             let mut s = self.channel.lock();
+            if !self.opened
+                && let Some(info) = s.info.clone()
+            {
+                self.info = info;
+                self.opened = true;
+            }
             // drop what an older seek left behind
             while s.queue.front().is_some_and(|(g, _)| *g != cur) {
                 if let Some((_, f)) = s.pop() {
@@ -465,7 +515,8 @@ impl VideoPlayer {
             "playing": self.playing,
             "ended": self.ended,
             "position": self.position(),
-            "duration": self.info.duration,
+            "opening": !self.opened && s.error.is_none(),
+            "duration": self.opened.then_some(self.info.duration),
             "frameRate": if self.info.frame_duration > 0.0 { 1.0 / self.info.frame_duration } else { 0.0 },
             "width": self.info.width,
             "height": self.info.height,
@@ -491,6 +542,28 @@ impl Drop for VideoPlayer {
             // a decoder that panicked has already ended; its result tells nothing more
             let _ = t.join();
         }
+    }
+}
+
+/// Opens the clip at a path for playback: [`crate::video_source::open_file`] in the app, a fake in tests.
+pub type Opener = fn(&str) -> Result<Box<dyn FrameSource>, String>;
+
+/// The session's playback: at most one clip plays, the active photo when it is a video.
+pub struct Playback {
+    pub player: Option<VideoPlayer>,
+    pub opener: Opener,
+    pub clock: Arc<dyn Clock>,
+}
+
+impl Default for Playback {
+    fn default() -> Self {
+        Playback { player: None, opener: crate::video_source::open_file, clock: Arc::new(WallClock::default()) }
+    }
+}
+
+impl std::fmt::Debug for Playback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Playback").field("photo", &self.player.as_ref().map(VideoPlayer::photo)).finish()
     }
 }
 

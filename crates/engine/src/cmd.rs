@@ -44,6 +44,7 @@ pub mod reload;
 pub mod similar;
 mod slideshow;
 mod sync;
+mod video;
 mod xmp;
 
 use serde::Serialize;
@@ -166,6 +167,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(preset_files::specs());
         v.extend(prefs::specs());
         v.extend(slideshow::specs());
+        v.extend(video::specs());
         v.extend(export::specs());
         v.extend(print::specs());
         v.extend(before::specs());
