@@ -910,6 +910,9 @@ impl RawImage {
     /// Full "raw → camera RGB" path: normalise, demosaic with `method`, apply `OpcodeList3`, then the default crop.
     /// The result is camera RGB (not white balanced), white level = 1.0, not oriented.
     pub fn develop(&self, method: Method) -> Result<Rgb32f> {
+        if let Some(rgb) = self.develop_three_samples()? {
+            return Ok(self.finish_demosaiced(rgb));
+        }
         let n = self.normalized()?;
         // the demosaiced picture is the biggest buffer: refuse it with an error rather than abort on allocation
         drop(lcc_raster::Rgb32f::try_new(n.width, n.height).map_err(|_| RawError::Limit("not enough memory to develop this raw"))?);
@@ -917,6 +920,37 @@ impl RawImage {
         let rgb = demosaic::demosaic_with(&n, method, demosaic::Options { balance: self.wb_multipliers });
         drop(n);
         Ok(self.finish_demosaiced(rgb))
+    }
+
+    /// [`Self::normalized`] and the pass-through "demosaic" of three-sample data in one step: the camera RGB of the
+    /// active area, written straight from the samples. The result is the same numbers, but the normalised copy
+    /// (as large as the picture: 2.2 GB for a 181 MP merge) never exists next to it. `None` for data with opcode
+    /// lists on the raw or normalised values (those need the whole copy) or with other than three samples.
+    fn develop_three_samples(&self) -> Result<Option<Rgb32f>> {
+        if self.cpp != 3 || !self.opcodes.list1.is_empty() || !self.opcodes.list2.is_empty() {
+            return Ok(None);
+        }
+        self.validate()?;
+        let (w, a) = (self.width, self.active_area);
+        let mut out = Rgb32f::try_new(a.width, a.height).map_err(|_| RawError::Limit("not enough memory to develop this raw"))?;
+        let whites: [f32; 3] = std::array::from_fn(|s| self.white_at(s));
+        use rayon::prelude::*;
+        if a.width > 0 {
+            out.data.par_chunks_mut(a.width).enumerate().for_each(|(y, row)| {
+                let base = ((a.y + y) * w + a.x) * 3;
+                for (x, px) in row.iter_mut().enumerate() {
+                    for (s, v) in px.iter_mut().enumerate() {
+                        let b = self.black.at(x, y, s, 3);
+                        let range = whites[s] - b;
+                        let scale = if range > 0.0 { 1.0 / range } else { 1.0 };
+                        let n = (self.data.get(base + x * 3 + s) - b) * scale;
+                        // (as `normalized`: a NaN or infinite sample reads as black)
+                        *v = if n.is_finite() { n } else { 0.0 };
+                    }
+                }
+            });
+        }
+        Ok(Some(out))
     }
 
     /// The last steps of [`Self::develop`] for camera RGB made some other way (a denoiser that demosaics too) from
@@ -944,6 +978,59 @@ impl RawImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Three-sample data (a LinearRaw DNG, a merged NEFX) is developed straight from the samples, without the
+    /// normalised copy; the numbers are the ones `normalized` and the pass-through demosaic always gave.
+    #[test]
+    fn three_sample_data_develops_exactly_as_through_the_normalised_copy() {
+        let (w, h) = (14usize, 11usize);
+        let u16s = RawData::U16((0..w * h * 3).map(|i| (900 + (i * 211) % 15000) as u16).collect());
+        let mut floats: Vec<f32> = (0..w * h * 3).map(|i| ((i * 37) % 997) as f32 / 996.0).collect();
+        floats[5] = f32::NAN;
+        floats[40] = f32::INFINITY;
+        floats[41] = f32::NEG_INFINITY;
+        for (data, format, bits, white) in [
+            (u16s, RawFormat::Dng, 14, 16383.0),
+            (RawData::F32(floats), RawFormat::Dng, 32, 1.0),
+            (RawData::U16(vec![0; w * h * 3]), RawFormat::Nef, 14, 16383.0),
+        ] {
+            let mut raw = RawImage {
+                format,
+                width: w,
+                height: h,
+                cpp: 3,
+                data,
+                cfa: None,
+                bits,
+                black: BlackLevel { repeat_rows: 1, repeat_cols: 1, values: vec![1008.0, 990.0, 1030.0], ..Default::default() },
+                white: vec![white],
+                active_area: Rect::new(1, 2, 12, 8),
+                crop: Rect::new(2, 1, 9, 6),
+                orientation: Orientation::Normal,
+                color: ColorData::default(),
+                wb_multipliers: Some([2.0, 1.0, 1.5]),
+                linearized: false,
+                pixel_aspect: 1.0,
+                opcodes: OpcodeLists::default(),
+                metadata: Metadata::default(),
+                lens_metadata: Default::default(),
+            };
+            if bits == 32 {
+                raw.black = BlackLevel::uniform(0.0);
+            }
+            // a per-column black correction and a per-channel white level go through the same arithmetic
+            let variants = [
+                raw.clone(),
+                RawImage { black: BlackLevel { delta_h: (0..w).map(|x| x as f32).collect(), ..raw.black.clone() }, ..raw.clone() },
+                RawImage { white: vec![white, white * 0.9, white * 0.8], ..raw.clone() },
+            ];
+            for raw in variants {
+                let by_hand = raw.finish_demosaiced(demosaic(&raw.normalized().unwrap(), Method::Ahd));
+                assert_eq!(raw.develop(Method::Ahd).unwrap(), by_hand);
+                assert_eq!(raw.develop(Method::Bilinear).unwrap(), by_hand, "the method doesn't matter without a mosaic");
+            }
+        }
+    }
 
     #[test]
     fn a_picture_made_elsewhere_is_finished_like_develop_does() {
