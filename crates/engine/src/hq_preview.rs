@@ -39,6 +39,15 @@ pub(crate) const STAGE_ENTRY_BYTES_PER_PX: usize = 56;
 /// made and area-averaged, so they count against its memory on top of the render itself.
 const STAGE_ENTRIES: usize = 2;
 
+/// Working memory (bytes) a High Quality Preview render of `work_px` pixels needs, checked against
+/// the computer's memory before it is made: the render (as an export's) plus the stage-cache
+/// entries its view keeps. `work_px` is what the pipeline renders: the native frame, or a window
+/// grown for what it reads ([`lightcraft_pipeline::work_window`]), not the part of it shown.
+pub(crate) fn admission_weight(full_px: usize, long: usize, level: SourceLevel, work_px: usize) -> usize {
+    let retained = work_px.saturating_mul(STAGE_ENTRY_BYTES_PER_PX).saturating_mul(STAGE_ENTRIES);
+    crate::export::render_weight(full_px, long, level, work_px).saturating_add(retained)
+}
+
 /// How a High Quality Preview job turns its native-resolution render into the pixels the view
 /// asked for: the rectangle `src` (`[x, y, w, h]` in the native render's pixels, fractional;
 /// `None`: all of it) area-averaged to `out` (w, h) in linear light.
@@ -133,7 +142,13 @@ impl crate::Session {
     /// slide job, an HDR (non-8-bit) request, a view at 100 % or more ([`HqState::Native`]), or a
     /// native frame too big to render in one go ([`HqState::Skipped`], logged).
     pub fn high_quality(&mut self, job: RenderJob) -> (RenderJob, HqState) {
-        match self.hq_plan(&job) {
+        self.high_quality_with_ram(job, crate::memory::total_ram())
+    }
+
+    /// [`Self::high_quality`] against a given amount of physical memory (`None`: unknown), so a
+    /// test doesn't depend on the machine it runs on.
+    pub(crate) fn high_quality_with_ram(&mut self, job: RenderJob, ram: Option<usize>) -> (RenderJob, HqState) {
+        match self.hq_plan(&job, ram) {
             Ok((native, window, hq, level)) => {
                 let Some(p) = self.catalog.photo(job.photo).cloned() else { return (job, HqState::skipped("no such photo")) };
                 let mut job = job;
@@ -171,7 +186,7 @@ impl crate::Session {
     /// What [`Self::high_quality`] renders for `job`: the native frame size, the native window (a
     /// window job), the downscale and the source level; or why it doesn't.
     #[allow(clippy::type_complexity)]
-    fn hq_plan(&self, job: &RenderJob) -> Result<((usize, usize), Option<PixelWindow>, HqDownscale, SourceLevel), HqState> {
+    fn hq_plan(&self, job: &RenderJob, ram: Option<usize>) -> Result<((usize, usize), Option<PixelWindow>, HqDownscale, SourceLevel), HqState> {
         if job.hq.is_some() {
             return Err(HqState::skipped("already a High Quality Preview job"));
         }
@@ -212,8 +227,9 @@ impl crate::Session {
         let native_px = native.0.saturating_mul(native.1);
         let (full_px, long) = ((p.width as usize).saturating_mul(p.height as usize), p.width.max(p.height) as usize);
         let level = SourceLevel::for_size(crate::media::source_edge_needed(p, &job.settings, apply_crop, native.0.max(native.1)));
-        let (window, hq) = match job.request.window {
-            None => (None, HqDownscale { src: None, out: full }),
+        // the pixels the pipeline renders: the whole frame, or a window grown for what it reads
+        let (work_px, window, hq) = match job.request.window {
+            None => (native_px, None, HqDownscale { src: None, out: full }),
             Some(win) => {
                 let win = win.clamped(full.0, full.1);
                 let (nwin, rect) = native_window(full, native, win);
@@ -222,14 +238,17 @@ impl crate::Session {
                 if lightcraft_pipeline::spots::window_for_reads_checked(&job.settings, &frame, native.0, native.1, ppl, nwin).is_none() {
                     return Err(HqState::Refused { reason: "the window's spots or Auto Mask strokes read too far at full resolution".into() });
                 }
-                (Some(nwin), HqDownscale { src: Some(rect), out: (win.w, win.h) })
+                // The pipeline renders the window grown for what its spots, lens blur and noise
+                // reduction read and cuts it back afterwards (`lightcraft_pipeline::plan`), so the
+                // memory it needs is that of the grown window, of the settings it renders
+                let settings = lightcraft_pipeline::profiles::effective(&job.settings);
+                let detail_scale = lightcraft_pipeline::local::detail_scale(ppl, long);
+                let work = lightcraft_pipeline::work_window(&settings, &frame, native, ppl, detail_scale, job.request.depth, nwin);
+                (work.w.saturating_mul(work.h), Some(nwin), HqDownscale { src: Some(rect), out: (win.w, win.h) })
             }
         };
-        let out_px = window.map_or(native_px, |w| w.w.saturating_mul(w.h));
-        // the render (as an export's) plus the stage-cache entries its view keeps
-        let retained = out_px.saturating_mul(STAGE_ENTRY_BYTES_PER_PX).saturating_mul(STAGE_ENTRIES);
-        let weight = crate::export::render_weight(full_px, long, level, out_px).saturating_add(retained);
-        let too_big = match crate::memory::total_ram() {
+        let weight = admission_weight(full_px, long, level, work_px);
+        let too_big = match ram {
             Some(ram) => weight > ram / 2,
             None => native_px > MAX_PIXELS_UNKNOWN_RAM,
         };

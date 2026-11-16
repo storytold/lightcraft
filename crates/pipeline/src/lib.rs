@@ -429,6 +429,42 @@ fn hash_of(parts: impl std::hash::Hash) -> u64 {
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
 }
 
+/// The window a windowed render of `win` (a window of the `full.0 × full.1` output of `frame`)
+/// works on: `win` grown for what its spots and Auto Mask strokes read (8-bit renders only), for
+/// what the lens blur reads (every render) and by the joint colour noise reduction's halo. The
+/// result is cut back to `win` ([`Plan::keep`]). [`plan`] renders this window, so a caller that
+/// budgets memory for a windowed render must size it from this, not from `win`. `s` is what the
+/// pipeline renders ([`profiles::effective`]).
+pub fn work_window(
+    s: &DevelopSettings,
+    frame: &geometry::Frame,
+    full: (usize, usize),
+    px_per_long: f64,
+    detail_scale: f32,
+    depth: OutputDepth,
+    win: PixelWindow,
+) -> PixelWindow {
+    let (full_w, full_h) = full;
+    let win = win.clamped(full_w, full_h);
+    // (spots grow the rendered window of 8-bit renders, the lens blur that of every
+    // render; a grown window is cut back to the request)
+    let work = if depth == OutputDepth::U8 { spots::window_for_reads(s, frame, full_w, full_h, px_per_long, win) } else { win };
+    let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
+    if local::joint_colour_nr(s)
+        && let Some(params) = local::nrc_params(s, detail_scale)
+    {
+        // The joint diffusion reads a chain of neighbours across its scales. Keep
+        // those reads outside the requested zoom window, just as spot reads are, at every depth.
+        let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
+        let x = work.x.saturating_sub(halo);
+        let y = work.y.saturating_sub(halo);
+        let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+        let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+        work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+    }
+    work
+}
+
 /// What a render resolves to before any pixel work: the effective settings (profile and Upright
 /// applied), the geometric frame, the output size and the stage-cache keys. Shared by the CPU
 /// renderer and the GPU renderer (`lightcraft-gpu`), so both key their caches identically.
@@ -511,22 +547,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
                 fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
             }
-            // (spots grow the rendered window of 8-bit renders, the lens blur that of every
-            // render; a grown window is cut back to the request)
-            let work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
-            let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
-            if local::joint_colour_nr(s)
-                && let Some(params) = local::nrc_params(s, detail_scale)
-            {
-                // The joint diffusion reads a chain of neighbours across its scales. Keep
-                // those reads outside the requested zoom window, just as spot reads are, at every depth.
-                let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
-                let x = work.x.saturating_sub(halo);
-                let y = work.y.saturating_sub(halo);
-                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
-                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
-                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
-            }
+            let work = work_window(s, &frame, (full_w, full_h), px_per_long, detail_scale, req.depth, win);
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }

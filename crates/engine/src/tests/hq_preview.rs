@@ -256,3 +256,71 @@ fn hq_stage_cache_fits_the_estimate() {
     assert!(held > 0, "the render kept its stages");
     assert!(held <= W * H * crate::hq_preview::STAGE_ENTRY_BYTES_PER_PX, "{held} B for {} px", W * H);
 }
+
+/// A zoom window whose retouching reads outside it is rendered on a larger window than the one
+/// asked for; the memory check counts that larger window. A window that fits the budget
+/// unexpanded is refused (falls back to the normal render) once a spot makes the pipeline render
+/// a much larger one. The memory is injected, not the machine's.
+#[test]
+fn hq_window_admission_counts_the_read_expanded_work_window() {
+    use lightcraft_develop::{Spot, SpotMode};
+    use lightcraft_geom::Point;
+    let (mut s, id, dir) = sparse("expanded");
+    let (fw, fh) = (1110, 740);
+    let win = PixelWindow { x: 500, y: 300, w: 64, h: 64 };
+    let plain = s.region_job(id, fw, fh, win, true).unwrap();
+    // a clone spot sitting in the window whose source lies a long way off: the window grows to hold both
+    let mut spotted = plain.clone();
+    let mut settings = (*spotted.settings).clone();
+    let (cx, cy) = ((win.x + win.w / 2) as f64 / fw as f64, (win.y + win.h / 2) as f64 / fh as f64);
+    settings.spots.push(Spot {
+        mode: SpotMode::Clone,
+        points: vec![Point::new(cx, cy)],
+        size: 0.03,
+        source_offset: Some(Point::new(0.25, 0.0)),
+        ..Spot::default()
+    });
+    spotted.settings = std::sync::Arc::new(settings);
+
+    // (the work windows' sizes, from the plans with plenty of memory)
+    let big = Some(usize::MAX / 4);
+    let (pj, state) = s.high_quality_with_ram(plain.clone(), big);
+    assert!(matches!(state, HqState::Applied { .. }), "{state:?}");
+    let (sj, state) = s.high_quality_with_ram(spotted.clone(), big);
+    assert!(matches!(state, HqState::Applied { .. }), "{state:?}");
+    // the job asks for the same native window either way
+    assert_eq!(pj.request.window, sj.request.window);
+    let nwin = pj.request.window.unwrap();
+    let p = s.catalog.photo(id).unwrap().clone();
+    let (full_px, long) = (p.width as usize * p.height as usize, p.width.max(p.height) as usize);
+    let plain_px = nwin.w * nwin.h;
+    let frame = lightcraft_pipeline::geometry::Frame::with_lens(p.width as usize, p.height as usize, &sj.settings, true, p.embedded_lens.as_ref());
+    let (nw, nh) = frame.native_size();
+    let native = (nw.round() as usize, nh.round() as usize);
+    let ppl = frame.px_per_long(native.0);
+    let work = lightcraft_pipeline::work_window(
+        &sj.settings,
+        &frame,
+        native,
+        ppl,
+        lightcraft_pipeline::local::detail_scale(ppl, long),
+        lightcraft_pipeline::OutputDepth::U8,
+        nwin,
+    );
+    let spotted_px = work.w * work.h;
+    assert!(spotted_px > 8 * plain_px, "the spot makes the pipeline render {work:?}, much more than {nwin:?}");
+
+    // a budget between the two: half of it is what a render may weigh
+    let level = pj.level;
+    let (light, heavy) =
+        (crate::hq_preview::admission_weight(full_px, long, level, plain_px), crate::hq_preview::admission_weight(full_px, long, level, spotted_px));
+    assert!(light < heavy);
+    let ram = light + heavy;
+    assert!(light <= ram / 2 && heavy > ram / 2, "the budget separates {light} from {heavy}");
+    let (_, state) = s.high_quality_with_ram(plain, Some(ram));
+    assert!(matches!(state, HqState::Applied { .. }), "the window alone fits: {state:?}");
+    let (back, state) = s.high_quality_with_ram(spotted.clone(), Some(ram));
+    assert!(matches!(&state, HqState::Skipped { reason } if reason.contains("too big")), "the grown window does not: {state:?}");
+    assert!(back.hq.is_none() && back.key == spotted.key, "the normal render is kept");
+    let _ = std::fs::remove_dir_all(&dir);
+}
