@@ -374,3 +374,34 @@ fn a_smart_previews_request_waits_for_the_running_build() {
     assert_eq!(r["done"], json!(ids.len()), "{r}");
     let _ = std::fs::remove_dir_all(root);
 }
+
+// Given an original far too big to decode whole within any memory budget, the window and a standard preview build read
+// it smaller, while an export still reads it whole (a 200 MP phone JPEG closed the app on a phone)
+#[test]
+fn a_huge_original_is_read_smaller_for_the_window_and_previews_but_whole_for_an_export() {
+    use crate::media::SourceRef;
+    let mut s = Session::with_demo();
+    let id = s.catalog.alloc_photo_id();
+    // 30 gigapixels: whole, it is ~800 GB decoded
+    let p = lcc_catalog::Photo::new(
+        id,
+        lcc_catalog::Source::File { path: "/nonexistent/huge.jpg".into() },
+        "huge.jpg",
+        "JPEG",
+        200_000,
+        150_000,
+        "2026-01-01T10:00:00",
+    );
+    s.catalog.apply(lcc_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let edge = |src: &SourceRef| match src {
+        SourceRef::File { max_edge, .. } => *max_edge,
+        _ => panic!("a file source"),
+    };
+    assert!(s.full_source_capped(id));
+    let window = s.render_job(id, 4000, 3000, false, true).unwrap();
+    assert!(edge(&window.source) < 200_000, "the window reads a smaller decode");
+    let export = s.export_job(id, 4000, 3000, OutputSpace::Srgb, OutputDepth::U8).unwrap();
+    assert!(edge(&export.source) >= 200_000, "an export reads the original whole");
+    let jobs = crate::cmd::previews::jobs_for(&mut s, id, Some(3000));
+    assert!(edge(&jobs[0].source) <= 3000, "a standard preview reads only what it shows");
+}

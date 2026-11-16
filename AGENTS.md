@@ -49,7 +49,7 @@ never a panic. Never ship a panic path; fix crashes before building on them. Thi
   `#[allow(clippy::expect_used)]` + `.expect("why")`.
 - `unsafe` lives only in: `crates/sysmem` (Win: `GetCurrentThread`+`SetThreadPriority` for render workers,
   `GetDiskFreeSpaceExW` for cache sizing; macOS: `malloc_zone_pressure_relief` after raw decodes, `fsync` for SMB; glibc Linux: `malloc_trim` after raw
-  decodes and preview builds;
+  decodes and preview builds; Android: bionic `mallopt(M_PURGE_ALL)` on entering Develop;
   free space elsewhere = POSIX `df`), `crates/hdrmeta` (wgpu-hal: `VK_EXT_hdr_metadata` + `vkSetHdrMetadataEXT` on
   Linux/BSD Wayland), `crates/gpumem` (wgpu-hal GPU memory budget for the HDR zoom cache), `crates/android-host`
   (JNI VM/activity adoption), `crates/winspool` (Win32 print spooler), `crates/winmsi` (`MsiEnumClientsW` +

@@ -34,6 +34,7 @@ lcc-catalog = { workspace = true }
 lcc-codecs = { workspace = true }
 lcc-engine = { workspace = true }
 lcc-raster = { workspace = true }
+lcc-sysmem = { workspace = true }
 lcc-ui-egui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "android-native-activity"] }
 egui = { workspace = true }

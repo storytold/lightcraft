@@ -4477,6 +4477,7 @@ dependencies = [
  "lcc-codecs",
  "lcc-engine",
  "lcc-raster",
+ "lcc-sysmem",
  "lcc-ui-egui",
  "log",
  "serde_json",

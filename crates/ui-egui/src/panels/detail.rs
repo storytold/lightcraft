@@ -1407,6 +1407,9 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         if now - since >= WARM_FULL_AFTER_S
             && native_long > lcc_engine::SourceLevel::Preview.max_edge()
             && !app.session.media.has_source(id, lcc_engine::SourceLevel::Full)
+            // (an original too big for the memory budget is decoded smaller, and only when the view needs it: ahead of
+            // a zoom that may never come it would take memory a phone does not have)
+            && !app.session.full_source_capped(id)
             && app.renderer.queued() == 0
             && let Some(job) =
                 app.session.region_job(id, native[0], native[1], lcc_engine::pipeline::PixelWindow { x: 0, y: 0, w: 1, h: 1 }, !crop_tool)
@@ -2697,7 +2700,12 @@ pub(crate) fn ahead_only(ids: &[PhotoId], i: usize, n: usize, backward: bool) ->
 /// What the user is doing, for the background preparation: editing (a tool panel open), else
 /// culling a folder or browsing the library.
 pub fn prep_mode(app: &LccApp) -> lcc_engine::prep::Mode {
-    if app.ui.right.is_edit_tool() { lcc_engine::prep::Mode::Develop } else { lcc_engine::prep::Mode::of(&app.session) }
+    // (the touch layout's Develop is editing too, though it has no tool panel open on the right)
+    if app.ui.right.is_edit_tool() || (crate::modern::on(app) && app.ui.module == crate::module::ModuleId::Develop) {
+        lcc_engine::prep::Mode::Develop
+    } else {
+        lcc_engine::prep::Mode::of(&app.session)
+    }
 }
 
 /// How long (s) the whole photo is shown before its full-resolution source is decoded in the
