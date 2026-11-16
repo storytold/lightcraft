@@ -126,6 +126,7 @@
   "Sent {n} page(s) to the printer (job {j})": "已向打印机发送 {n} 页（作业 {j}）",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "先显示模型条款，然后从 {host} 下载 {}、安装并开始使用。不会发送任何其他数据。",
   "Slideshow {n}": "幻灯片 {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "{app} 的部分字体缺失或已损坏（{fonts}），部分文字可能显示为空白方框。重新安装 {app} 即可恢复。",
   "Stacked {n} group{}": "已堆叠 {n} 组{:.0}",
   "Stop waiting: {task}?": "停止等待：{task}？",
   "Style {n}": "样式 {n}",

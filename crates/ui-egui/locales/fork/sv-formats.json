@@ -147,6 +147,7 @@
   "Sent {n} page(s) to the printer (job {j})": "Skickade sidor till skrivaren: {n} (jobb {j})",
   "Service: {name}": "Tjänst: {name}",
   "Slideshow {n}": "Bildspel {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Några av {app}s typsnitt saknas eller är skadade ({fonts}), så viss text kan visas som tomma rutor. Installera om {app} för att återställa dem.",
   "Stacked {n} group{}": "Stackade grupper: {n}{:.0}",
   "Stop waiting: {task}?": "Sluta vänta: {task}?",
   "Style {n}": "Stil {n}",

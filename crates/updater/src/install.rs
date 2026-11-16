@@ -168,9 +168,37 @@ pub fn install_with(
     })
 }
 
-/// The `.app` bundle this program runs from, when it is inside one.
+/// The `.app` bundle this program runs from, when it is that bundle's app.
 fn app_bundle() -> Option<PathBuf> {
-    bundle_of(&current_exe()?)
+    app_bundle_of(&current_exe()?)
+}
+
+/// The `.app` bundle `exe` is the app of. The CLI inside the bundle (`Contents/MacOS/<cli>`)
+/// isn't: it never replaces the app it is part of, nor starts it ([`cli_in_bundle`]).
+fn app_bundle_of(exe: &Path) -> Option<PathBuf> {
+    if is_cli(exe) {
+        return None;
+    }
+    bundle_of(exe)
+}
+
+/// Whether `exe` is the CLI (by its brand name, `<cli>` or `<cli>.exe`).
+fn is_cli(exe: &Path) -> bool {
+    exe.file_stem().is_some_and(|name| name.eq_ignore_ascii_case(lcc_brand::CLI_BINARY))
+}
+
+/// Why the CLI at `exe` doesn't install a disk image, when it runs from inside the app's bundle:
+/// the app installs it, and that replaces the CLI too.
+#[cfg(any(target_os = "macos", test))]
+fn cli_in_bundle(exe: &Path) -> Option<UpdateError> {
+    let bundle = bundle_of(exe).filter(|_| is_cli(exe))?;
+    Some(UpdateError::Install(format!(
+        "{} is part of {} and doesn't install updates itself: open {} and install the update there, which updates {} too",
+        lcc_brand::CLI_BINARY,
+        bundle.display(),
+        lcc_brand::DISPLAY_NAME,
+        lcc_brand::CLI_BINARY
+    )))
 }
 
 /// The `.app` bundle the executable `exe` is inside, if any.
@@ -682,6 +710,21 @@ mod tests {
         assert_eq!(app_bundle(), None);
         let p = plan(Kind::Dmg, Path::new("/tmp/a.dmg"), "1.2.3", &CopyKind::Other);
         assert_eq!(p.destination, None, "a program outside a bundle must not plan an install into {:?}", p.destination);
+    }
+
+    /// The CLI shipped inside the app's bundle is not the app: it has no bundle to replace, plans
+    /// no install into its folder, and is told to update through the app.
+    #[test]
+    fn the_cli_inside_the_bundle_never_installs_the_app() {
+        let app = Path::new("/Applications/X.app/Contents/MacOS/X");
+        let cli = PathBuf::from(format!("/Applications/X.app/Contents/MacOS/{}", lcc_brand::CLI_BINARY));
+        assert_eq!(app_bundle_of(app), Some(PathBuf::from("/Applications/X.app")));
+        assert_eq!(app_bundle_of(&cli), None, "the CLI is not the bundle's app");
+        assert!(cli_in_bundle(app).is_none(), "the app installs its own updates");
+        let err = cli_in_bundle(&cli).expect("the CLI in the bundle is refused");
+        assert!(err.to_string().contains(lcc_brand::DISPLAY_NAME) && err.to_string().contains("install the update there"), "{err}");
+        // a CLI outside any bundle (a zip copy, a source build) is told about the release page instead, as before
+        assert!(cli_in_bundle(&PathBuf::from(format!("/usr/local/bin/{}", lcc_brand::CLI_BINARY))).is_none());
     }
 
     #[cfg(target_os = "macos")]

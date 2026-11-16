@@ -247,19 +247,19 @@ impl TextLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fonts::{CRAFT_FONTS, CraftFont};
+    use crate::fonts::{CraftFont, craft_fonts};
 
     fn assert_script_glyphs(script: &str, text: &str) {
-        if !CRAFT_FONTS.iter().any(|font| font.covers(script)) {
+        if !craft_fonts().iter().any(|font| font.covers(script)) {
             lcc_testkit::skip!(Fonts, "built without the {script} face from craft-fonts");
             return;
         }
-        let layout = TextLayout::new(text, 40.0, false, CRAFT_FONTS).unwrap();
+        let layout = TextLayout::new(text, 40.0, false, craft_fonts()).unwrap();
         assert_eq!(layout.glyphs.len(), text.chars().count());
         for (ch, (face, glyph, _)) in text.chars().zip(&layout.glyphs) {
             assert_ne!(glyph.id.0, 0, "missing {script} glyph for {ch}");
             let font = &layout.fonts[*face];
-            assert!(CRAFT_FONTS.iter().any(|entry| entry.covers(script) && entry.bytes == font.font_data()));
+            assert!(craft_fonts().iter().any(|entry| entry.covers(script) && entry.bytes == font.font_data()));
         }
         let mut covered = 0;
         layout.draw(0.0, 0.0, |_, _, coverage| covered += usize::from(coverage > 0.0));
@@ -268,14 +268,14 @@ mod tests {
 
     #[test]
     fn bundled_arabic_stays_out_of_export_fallback() {
-        if !CRAFT_FONTS.iter().any(|font| font.covers("Arab")) {
+        if !craft_fonts().iter().any(|font| font.covers("Arab")) {
             lcc_testkit::skip!(Fonts, "built without the Arabic face from craft-fonts");
             return;
         }
         // UI names still use their existing Arabic face. Export needs joining and bidi first.
-        assert!(crate::fonts::ui_fallback(CRAFT_FONTS, "Latn", "Regular").iter().any(|font| font.covers("Arab")));
+        assert!(crate::fonts::ui_fallback(craft_fonts(), "Latn", "Regular").iter().any(|font| font.covers("Arab")));
         for vertical in [false, true] {
-            let layout = TextLayout::new("مرحبا", 40.0, vertical, CRAFT_FONTS).unwrap();
+            let layout = TextLayout::new("مرحبا", 40.0, vertical, craft_fonts()).unwrap();
             assert!(layout.glyphs.iter().all(|(face, glyph, _)| *face == 0 && glyph.id.0 == 0));
         }
     }
@@ -299,11 +299,11 @@ mod tests {
 
     #[test]
     fn decomposed_hangul_draws_whole_syllables() {
-        if !CRAFT_FONTS.iter().any(|font| font.covers("Hang")) {
+        if !craft_fonts().iter().any(|font| font.covers("Hang")) {
             lcc_testkit::skip!(Fonts, "built without a Hangul face from craft-fonts");
             return;
         }
-        assert_draws_composed("제주도 바다 여행.jpg", CRAFT_FONTS);
+        assert_draws_composed("제주도 바다 여행.jpg", craft_fonts());
     }
 
     #[test]
@@ -332,7 +332,7 @@ mod tests {
 
     #[test]
     fn latin_and_cjk_rendering_keeps_the_existing_preference() {
-        let mut cjk: Vec<_> = crate::fonts::cjk(CRAFT_FONTS).collect();
+        let mut cjk: Vec<_> = crate::fonts::cjk(craft_fonts()).collect();
         if cjk.is_empty() {
             lcc_testkit::skip!(Fonts, "built without CJK faces from craft-fonts");
             return;
@@ -344,7 +344,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         );
-        let actual = faces(CRAFT_FONTS);
+        let actual = faces(craft_fonts());
         assert!(actual.len() > previous.len());
         assert!(actual[0].font_data() == TEXT_FONT, "Inter stays first");
         for (font, expected) in actual.iter().skip(1).zip(previous) {
@@ -353,7 +353,7 @@ mod tests {
         for vertical in [false, true] {
             for text in ["Photo App AV 123", "日本語、。你好世界한국어"] {
                 let before = TextLayout::new(text, 40.0, vertical, previous).unwrap();
-                let after = TextLayout::new(text, 40.0, vertical, CRAFT_FONTS).unwrap();
+                let after = TextLayout::new(text, 40.0, vertical, craft_fonts()).unwrap();
                 assert_eq!((before.width, before.height), (after.width, after.height));
                 let pixels = |layout: &TextLayout| {
                     let mut pixels = Vec::new();

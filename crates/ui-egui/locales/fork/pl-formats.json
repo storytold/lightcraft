@@ -131,6 +131,7 @@
   "Selected cell {n}": "Zaznaczona komórka {n}",
   "Sent {n} page(s) to the printer (job {j})": "Wysłano do drukarki stron: {n} (zadanie {j})",
   "Slideshow {n}": "Pokaz slajdów {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Brakuje niektórych czcionek aplikacji {app} lub są uszkodzone ({fonts}), więc część tekstu może wyświetlać się jako puste prostokąty. Zainstaluj ponownie {app}, aby je przywrócić.",
   "Stacked {n} group{}": "Pogrupowano w stosy: {n}{:.0}",
   "Stop waiting: {task}?": "Przestać czekać: {task}?",
   "Style {n}": "Styl {n}",

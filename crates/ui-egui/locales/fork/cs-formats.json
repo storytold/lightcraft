@@ -131,6 +131,7 @@
   "Selected cell {n}": "Vybraná buňka {n}",
   "Sent {n} page(s) to the printer (job {j})": "Na tiskárnu odesláno stran: {n} (úloha {j})",
   "Slideshow {n}": "Prezentace {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Některá písma aplikace {app} chybí nebo jsou poškozená ({fonts}), takže část textu se může zobrazovat jako prázdné rámečky. Obnovíte je přeinstalováním aplikace {app}.",
   "Stacked {n} group{}": "Seskupeno do zásobníků: {n}{:.0}",
   "Stop waiting: {task}?": "Přestat čekat: {task}?",
   "Style {n}": "Styl {n}",

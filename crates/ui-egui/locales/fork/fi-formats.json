@@ -142,6 +142,7 @@
   "Sent {n} page(s) to the printer (job {j})": "Tulostimelle lähetettyjä sivuja: {n} (työ {j})",
   "Service: {name}": "Palvelu: {name}",
   "Slideshow {n}": "Diaesitys {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Osa sovelluksen {app} fonteista puuttuu tai on vioittunut ({fonts}), joten osa tekstistä voi näkyä tyhjinä ruutuina. Palauta ne asentamalla {app} uudelleen.",
   "Stacked {n} group{}": "Pinottuja ryhmiä: {n}{:.0}",
   "Stop waiting: {task}?": "Lopetetaanko odottaminen: {task}?",
   "Style {n}": "Tyyli {n}",

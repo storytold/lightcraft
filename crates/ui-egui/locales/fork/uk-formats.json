@@ -119,6 +119,7 @@
   "Selected cell {n}": "Вибрана комірка {n}",
   "Sent {n} page(s) to the printer (job {j})": "Надіслано сторінок на принтер: {n} (завдання {j})",
   "Slideshow {n}": "Слайд-шоу {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Деякі шрифти {app} відсутні або пошкоджені ({fonts}), тому частина тексту може показуватися порожніми прямокутниками. Перевстановіть {app}, щоб відновити їх.",
   "Stacked {n} group{}": "Згруповано в стеки: {n}{:.0}",
   "Stop waiting: {task}?": "Припинити очікування: {task}?",
   "Style {n}": "Стиль {n}",
