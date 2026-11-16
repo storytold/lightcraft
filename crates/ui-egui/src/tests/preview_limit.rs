@@ -811,7 +811,7 @@ mod in_the_loupe {
     fn pinch_display_fit_refreshes_main_and_before_after_a_short_pinch() {
         let (mut h, _) = demo_detail_in([1400.0, 900.0]);
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(super::super::ui_settle_timeout()));
         let slots = [Slot::Main, Slot::Before];
         let keys = slots.map(|slot| h.app.renderer.wanted(slot).unwrap());
         let initial_fit = drawn_fit(&h);
