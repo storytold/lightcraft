@@ -59,6 +59,8 @@ mod slideshow_export;
 mod slow_drive;
 mod spots;
 mod sync;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod video_frames;
 mod view_follow;
 pub(super) mod xmp;
 

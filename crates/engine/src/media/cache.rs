@@ -63,6 +63,7 @@ impl Default for MediaCache {
             budget,
             file_loader: None,
             reduced_loader: None,
+            video_loader: None,
             file_probe: None,
             preview_loader: None,
             file_bytes: None,

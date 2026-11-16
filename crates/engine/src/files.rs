@@ -43,6 +43,7 @@ mod fs;
 mod load;
 mod preview;
 mod probe;
+mod video;
 
 pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
@@ -65,6 +66,7 @@ pub use preview::{PreviewRead, embedded_preview_srgb, fs_preview_loader, load_em
 pub use probe::{embedded_lens, probe_bytes};
 #[cfg(test)]
 use probe::{meta_of, preview_reason};
+pub use video::{VIDEO_FRAMES_KIND, VIDEO_FRAMES_LABEL, VideoFrames};
 
 /// Sensor clip level (normalised) for highlight reconstruction.
 const HIGHLIGHT_CLIP: f32 = 0.99;

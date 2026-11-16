@@ -4,6 +4,29 @@ use super::settings_hash::with_process;
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
 
+/// Bump when a video's poster frame changes (another picture, another conversion), to render
+/// cached video thumbnails afresh.
+pub const POSTER_VERSION: u64 = 1;
+
+/// A video's source: its file, read by the video loader; nothing a still image's decode uses
+/// applies (no smaller raw copies, denoised picture, camera profile or hot pixels). A decoded
+/// source already in memory (the loupe's, fitted for a thumbnail) is kept.
+fn video_source(source: SourceRef, video_loader: super::FileLoader) -> SourceRef {
+    match source {
+        SourceRef::File { path, max_edge, fallback, .. } => SourceRef::File {
+            path,
+            max_edge,
+            loader: Some(video_loader),
+            fallback,
+            denoise: None,
+            camera_profile: None,
+            outliers: false,
+            reduced: None,
+        },
+        other => other,
+    }
+}
+
 impl crate::Session {
     /// Build a render job for `id` fitting `max_w × max_h`. `before` renders the unedited look.
     pub fn render_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, before: bool, apply_crop: bool) -> Option<RenderJob> {
@@ -12,15 +35,15 @@ impl crate::Session {
 
     /// A grid/filmstrip thumbnail job: the long edge is rounded up to one of [`THUMB_SIZES`]
     /// (≥ `long_edge`) and the result comes from / goes to the thumbnail cache (memory + disk).
-    /// `None` for a video: the image decoders can't read one, so none is asked to (issue #2682).
+    /// A video's thumbnail is its poster frame ([`crate::files::VideoFrames`]); `None` when this
+    /// session has no video loader: the image decoders can't read a clip, so none is asked to
+    /// (issue #2682).
     pub fn thumb_job(&mut self, id: PhotoId, long_edge: usize) -> Option<RenderJob> {
-        if self.catalog.photo(id).is_some_and(|p| p.is_video()) {
-            return None;
-        }
+        let video = self.catalog.photo(id)?.is_video();
         let b = thumb_bucket(long_edge);
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
         // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
-        if let SourceRef::File { reduced, .. } = &mut job.source {
+        if !video && let SourceRef::File { reduced, .. } = &mut job.source {
             reduced.clone_from(&self.media.reduced_loader);
         }
         Some(job)
@@ -36,13 +59,12 @@ impl crate::Session {
         apply_crop: bool,
         thumb_bucket: Option<usize>,
     ) -> Option<RenderJob> {
-        // A catalogued video has no frame decoder yet (playback, trim and frame capture come in a
-        // later update): there is nothing to render, and asking would read a multi-gigabyte file
-        // to fail. The UI draws its own video placeholder and card instead (the grid's badges and
-        // the loupe's video card).
-        if self.catalog.photo(id)?.is_video() {
-            return None;
-        }
+        // A catalogued video renders its poster frame through the video loader, which reads the
+        // clip in place (the image loaders would read a multi-gigabyte file to fail). Without one
+        // there is nothing to render: the UI draws its placeholder and card instead (the grid's
+        // badges and the loupe's video card).
+        let video = self.catalog.photo(id)?.is_video();
+        let video_loader = if video { Some(self.media.video_loader.clone()?) } else { None };
         let p = self.catalog.photo(id)?.clone();
         let settings = if before { Arc::new(self.before_settings(&p)) } else { p.develop.clone() };
         let level = SourceLevel::for_size(if thumb_bucket.is_some() {
@@ -57,6 +79,10 @@ impl crate::Session {
             self.media.source_ref(&q, level)
         } else {
             self.media.source_ref(&p, level)
+        };
+        let source = match video_loader {
+            Some(l) => video_source(source, l),
+            None => source,
         };
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
@@ -82,7 +108,8 @@ impl crate::Session {
             ^ salt
             ^ profile_salt.rotate_left(29)
             ^ lens.rotate_left(37)
-            ^ decoder.rotate_left(43);
+            ^ decoder.rotate_left(43)
+            ^ if video { POSTER_VERSION.rotate_left(53) } else { 0 };
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
@@ -101,6 +128,10 @@ impl crate::Session {
             }
             if decoder != 0 {
                 k.str("decoder").u64(decoder);
+            }
+            // (which picture a clip shows: a better choice renders every poster afresh)
+            if video {
+                k.str("poster").u64(POSTER_VERSION);
             }
             (self.media.rendered.clone(), k.finish())
         });
@@ -135,7 +166,8 @@ impl crate::Session {
         let mut p = (**self.catalog.photo(id)?).clone();
         let own_profile = self.media.camera_profile_of(&p).map(|c| c.0);
         p.develop = Arc::new(settings.clone());
-        if self.media.camera_profile_of(&p).map(|c| c.0) != own_profile {
+        // (a clip has no camera profile: its source stays the video loader's)
+        if !p.is_video() && self.media.camera_profile_of(&p).map(|c| c.0) != own_profile {
             job.source = self.media.source_ref(&p, job.level);
         }
         job.settings = Arc::new(settings.clone());
@@ -586,6 +618,11 @@ impl crate::Session {
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
         lightcraft_pipeline::check_output_size(max_w, max_h)?;
+        // a clip's poster frame is what its tile shows, not something to export as a photo (a
+        // rendered export leaves videos out with a warning before it gets here)
+        if self.catalog.photo(id).ok_or("no such photo")?.is_video() {
+            return Err("a video has no frame to export".into());
+        }
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         // An export develops from a source at least twice its size, so it is resized down with a good filter
         // rather than made from a preview just covering it (for a raw, a binned and box-reduced image)

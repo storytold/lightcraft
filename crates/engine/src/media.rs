@@ -69,6 +69,9 @@ pub struct MediaCache {
     pub file_loader: Option<FileLoader>,
     /// What grid thumbnails load files with (see [`ReducedLoader`]); `None`: [`Self::file_loader`].
     pub reduced_loader: Option<ReducedLoader>,
+    /// What catalogued videos load with: their poster frame (see [`crate::files::VideoFrames`]).
+    /// `None`: videos have no picture and keep their placeholder.
+    pub video_loader: Option<FileLoader>,
     pub file_probe: Option<FileProbe>,
     pub preview_loader: Option<PreviewLoader>,
     /// Reads a photo file's bytes (Photo Merge); `None` = the local file system.
