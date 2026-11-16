@@ -1,3 +1,0 @@
-## Performance
-
-- **Progress while the catalog opens:** the launch no longer opens the catalog before the window's first frame — a blank, silent window on a large catalog, or one an update left in an older format, made it look like the app wouldn't start (user report). A small **Opening your catalog** window shows while a worker prepares the library; the format bump after an update (its byte-verified backup copy) reports its phase and copied bytes through the same progress channel as the v3 → v4 migration, and the copy now reports byte progress on that path too. A worker that stops without an answer turns into the usual problem window instead of a dead end (also for the migration window). New strings in every language for the opening window.
