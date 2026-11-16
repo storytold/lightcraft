@@ -1404,6 +1404,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pdf"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=0fd30aeb3e02207d9d4c7c601540d9da45abf8de#0fd30aeb3e02207d9d4c7c601540d9da45abf8de"
+dependencies = [
+ "flate2",
+ "roxmltree",
+]
+
+[[package]]
 name = "craft-psd"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93#9dcbd90c7d16e1a668b3afa057e940e2db328b93"
@@ -4047,6 +4056,7 @@ dependencies = [
  "craft-heif",
  "craft-jxl",
  "craft-mime",
+ "craft-pdf",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=94777dcf7f8962476e96b049d08d22e25b9330c2)",
  "crc32fast",
  "fs4",
@@ -6170,6 +6180,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
