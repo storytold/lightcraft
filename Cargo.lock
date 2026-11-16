@@ -1190,7 +1190,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=753c676f7bc66e9665727712999a6962a81f5c02#753c676f7bc66e9665727712999a6962a81f5c02"
+source = "git+https://github.com/storytold/craft-libs?rev=94777dcf7f8962476e96b049d08d22e25b9330c2#94777dcf7f8962476e96b049d08d22e25b9330c2"
 dependencies = [
  "md-5",
  "rayon",
@@ -1199,7 +1199,7 @@ dependencies = [
 [[package]]
 name = "craft-cms"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=94777dcf7f8962476e96b049d08d22e25b9330c2#94777dcf7f8962476e96b049d08d22e25b9330c2"
+source = "git+https://github.com/storytold/craft-libs?rev=eeb134def2daa7e03512b4946bd59d6b419b9484#eeb134def2daa7e03512b4946bd59d6b419b9484"
 dependencies = [
  "md-5",
  "rayon",
@@ -1353,6 +1353,15 @@ dependencies = [
  "chrono",
  "craft-codepage",
  "encoding_rs",
+]
+
+[[package]]
+name = "craft-pdf"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=0fd30aeb3e02207d9d4c7c601540d9da45abf8de#0fd30aeb3e02207d9d4c7c601540d9da45abf8de"
+dependencies = [
+ "flate2",
+ "roxmltree",
 ]
 
 [[package]]
@@ -3978,6 +3987,7 @@ dependencies = [
  "craft-docpath",
  "craft-heif",
  "craft-mime",
+ "craft-pdf",
  "craft-tiff 0.1.0 (git+https://github.com/storytold/craft-libs?rev=94777dcf7f8962476e96b049d08d22e25b9330c2)",
  "crc32fast",
  "fs4",
@@ -4150,7 +4160,7 @@ dependencies = [
 name = "lightcraft-pipeline"
 version = "0.21.1"
 dependencies = [
- "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=753c676f7bc66e9665727712999a6962a81f5c02)",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eeb134def2daa7e03512b4946bd59d6b419b9484)",
  "craft-image-codecs",
  "dhat",
  "lightcraft-color",
@@ -6103,6 +6113,15 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "roxmltree"
+version = "0.21.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9da7f59328b09405b181fee1018925fad50f157afb43c0c0f5c522c256dd5907"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
