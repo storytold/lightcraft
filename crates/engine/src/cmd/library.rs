@@ -30,9 +30,6 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
         return ok();
     }
     let is_unrated = |id: &PhotoId| s.catalog.photo(*id).is_some_and(|p| p.rating == 0);
-    if !vis.iter().any(&is_unrated) {
-        return Ok(json!({"allRated": true}));
-    }
     let active = s.active();
     let next = active
         .and_then(|a| {
@@ -159,8 +156,8 @@ mod next_unrated_tests {
         s.execute("library.select", &json!({"ids": [1, 2, 3], "active": 3})).unwrap();
         s.active_mask = Some(7);
         s.active_spot = Some(2);
-        let result = s.execute("library.nextUnrated", &json!({}));
-        assert!(result.is_ok(), "library.nextUnrated command should exist");
+        let result = s.execute("library.nextUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"active": 3}), "staying returns the active photo, not the all-rated result");
         assert_eq!(s.active(), Some(PhotoId(3)), "the only unrated photo stays active");
         assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(3)], "staying must preserve the multi-photo selection");
         assert_eq!(s.active_mask, Some(7), "staying must preserve the mask state");
@@ -213,8 +210,8 @@ mod next_unrated_tests {
         s.execute("library.select", &json!({"ids": [1, 2, 3], "active": 3})).unwrap();
         s.active_mask = Some(7);
         s.active_spot = Some(2);
-        let result = s.execute("library.prevUnrated", &json!({}));
-        assert!(result.is_ok(), "library.prevUnrated command should exist");
+        let result = s.execute("library.prevUnrated", &json!({})).unwrap();
+        assert_eq!(result, json!({"active": 3}), "staying returns the active photo, not the all-rated result");
         assert_eq!(s.active(), Some(PhotoId(3)), "the only unrated photo stays active");
         assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(3)], "staying must preserve the multi-photo selection");
         assert_eq!(s.active_mask, Some(7), "staying must preserve the mask state");
