@@ -1239,7 +1239,7 @@ dependencies = [
 [[package]]
 name = "craft-heif"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=ed70d09162f4f932876536cd4bfc0905fc070605#ed70d09162f4f932876536cd4bfc0905fc070605"
+source = "git+https://github.com/storytold/craft-libs?rev=4ffa307f1a0a6fbd8897318cc719440ab06e9c63#4ffa307f1a0a6fbd8897318cc719440ab06e9c63"
 dependencies = [
  "heic-rs",
  "rayon",
