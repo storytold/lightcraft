@@ -1,14 +1,14 @@
 //! Synthetic DNG round trips: every storage variant we decode is written with our own TIFF writer (and LJ92
 //! encoder) and must decode bit-exactly.
 
+use craft_tiff::tags::{self as t, compression, photometric};
+use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 use lightcraft_color::{D65, Mat3, Xy};
 use lightcraft_raw::opcodes::{Area, Opcode};
 use lightcraft_raw::{
     BlackLevel, Cfa, ColorData, DngCompression, DngWriteOptions, Method, OpcodeLists, Orientation, RawData, RawFormat, RawImage, Rect, decode,
     embedded_preview, probe, write_dng,
 };
-use lightcraft_tiff::tags::{self as t, compression, photometric};
-use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
 
 fn scene_value(x: usize, y: usize, c: u8, max: f32) -> f32 {
     let base = [0.55, 0.8, 0.4][c as usize];
@@ -120,7 +120,7 @@ fn writer_camera_identity_tags_roundtrip() {
         raw.metadata.model = model.map(str::to_owned);
         for order in [ByteOrder::Little, ByteOrder::Big] {
             let bytes = write_dng(&raw, &DngWriteOptions { compression: DngCompression::Uncompressed, order, xmp: None }).unwrap();
-            let tiff = lightcraft_tiff::Tiff::parse(&bytes).unwrap();
+            let tiff = craft_tiff::Tiff::parse(&bytes).unwrap();
             let ifd = &tiff.ifds[0];
             assert_eq!(ifd.value(t::UNIQUE_CAMERA_MODEL), Some(&Value::Ascii(unique.into())), "{make:?} / {model:?}, {order:?}");
             for (tag, original) in [(t::MAKE, make), (t::MODEL, model)] {
@@ -631,18 +631,47 @@ fn malformed_profile_look_tags_are_ignored() {
 
 /// Lossless JPEG XL codestream of `px` (`w × h × cpp` interleaved), 16-bit unless `eight`.
 fn jxl_encode(px: &[u16], w: usize, h: usize, cpp: usize, eight: bool) -> Vec<u8> {
-    use zune_core::bit_depth::BitDepth;
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::EncoderOptions;
-    let cs = if cpp == 1 { ColorSpace::Luma } else { ColorSpace::RGB };
-    let (bytes, depth): (Vec<u8>, _) = if eight {
-        (px.iter().map(|&v| v as u8).collect(), BitDepth::Eight)
-    } else {
-        (px.iter().flat_map(|v| v.to_ne_bytes()).collect(), BitDepth::Sixteen)
-    };
-    let mut out = Vec::new();
-    zune_jpegxl::JxlSimpleEncoder::new(&bytes, EncoderOptions::new(w, h, cs, depth)).encode(&mut out).unwrap();
-    out
+    if cpp == 1 {
+        // craft-jxl's public image encoder deliberately widens Gray to RGB. DNG RAW tiles need
+        // a genuine single-plane codestream, so use jixel's grayscale encoder for these fixtures.
+        let config = jixel::EncodeConfig::default().with_lossless(true);
+        let u8_buf: Vec<u8> = if eight { px.iter().map(|&v| v as u8).collect() } else { Vec::new() };
+        return if eight {
+            jixel::encode_image_gray(&u8_buf, w, h, &config).unwrap()
+        } else {
+            jixel::encode_image_gray_16bit(px, w, h, &config).unwrap()
+        };
+    }
+    let layout = craft_jxl::Layout::Rgb;
+    let u8_buf: Vec<u8> = if eight { px.iter().map(|&v| v as u8).collect() } else { Vec::new() };
+    let samples = if eight { craft_jxl::Samples::U8(&u8_buf) } else { craft_jxl::Samples::U16(px) };
+    let img = craft_jxl::ImageRef { width: w as u32, height: h as u32, layout, samples };
+    let opts = craft_jxl::EncodeOptions { lossless: true, ..Default::default() };
+    craft_jxl::encode(&img, opts, &craft_jxl::Metadata::default()).unwrap()
+}
+
+/// The encoder may return an ISO-BMFF container for a level-10 codestream. Extract its `jxlc`
+/// payload so the tile fixture can deliberately exercise the bare-codestream form too.
+fn bare_jxl_codestream(bytes: &[u8]) -> Vec<u8> {
+    const SIGNATURE: &[u8] = &[0, 0, 0, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a];
+    if !bytes.starts_with(SIGNATURE) {
+        return bytes.to_vec();
+    }
+    let mut at = SIGNATURE.len();
+    while let Some(end_header) = at.checked_add(8) {
+        let Some(header) = bytes.get(at..end_header) else { break };
+        let size = u32::from_be_bytes([header[0], header[1], header[2], header[3]]) as usize;
+        if size < 8 {
+            break;
+        }
+        let Some(end) = at.checked_add(size) else { break };
+        let Some(box_bytes) = bytes.get(at..end) else { break };
+        if &header[4..8] == b"jxlc" {
+            return box_bytes[8..].to_vec();
+        }
+        at = end;
+    }
+    panic!("the JPEG XL encoder returned a container without a complete jxlc box");
 }
 
 /// A bare codestream wrapped in the ISO-BMFF container (signature, `ftyp`, `jxlc`).
@@ -674,7 +703,7 @@ fn jxl_tiled(px: &[u16], w: usize, h: usize, cpp: usize, bits: u16, cfa: bool, t
                     }
                 }
             }
-            let cs = jxl_encode(&t, cw, ch, cpp, bits == 8);
+            let cs = bare_jxl_codestream(&jxl_encode(&t, cw, ch, cpp, bits == 8));
             tiles.push(if i % 3 == 1 { jxl_container(&cs) } else { cs });
         }
     }
@@ -773,21 +802,21 @@ fn a_jpeg_xl_tile_that_fails_is_an_error_for_the_image() {
 #[test]
 fn jpeg_xl_tiles_beyond_their_decode_budget_are_errors() {
     use lightcraft_raw::RawError;
-    use zune_core::bit_depth::BitDepth;
-    use zune_core::colorspace::ColorSpace;
-    use zune_core::options::EncoderOptions;
     let (w, h) = (512, 512);
     let grey: Vec<u16> = (0..w * h).map(|i| ((i % w) * 97 + (i / w) * 31) as u16 & 0x0fff).collect();
-    let with_alpha: Vec<u8> = grey.iter().flat_map(|&v| [v, 4095 - v]).flat_map(u16::to_ne_bytes).collect();
-    let mut tile = Vec::new();
-    zune_jpegxl::JxlSimpleEncoder::new(&with_alpha, EncoderOptions::new(w, h, ColorSpace::LumaA, BitDepth::Sixteen)).encode(&mut tile).unwrap();
+    let with_alpha: Vec<u16> = grey.iter().flat_map(|&v| [v, 4095 - v]).collect();
+    // The public craft-jxl image encoder widens GrayAlpha to RGBA. This budget fixture
+    // specifically needs two encoded planes, not a four-plane layout mismatch.
+    let config = jixel::EncodeConfig::default().with_lossless(true);
+    let tile = jixel::encode_image_gray_alpha_16bit(&with_alpha, w, h, &config).unwrap();
     let one = |tile: Vec<u8>| {
         let mut raw = base_ifd(w, h, 12, 1, true);
         raw.set(t::COMPRESSION, Value::Short(vec![compression::JPEG_XL]));
         raw.set_image(ImageData::Tiles { tile_width: w as u32, tile_height: h as u32, tiles: vec![tile] });
         dng(raw, ByteOrder::Little)
     };
-    assert!(matches!(decode(&one(tile)), Err(RawError::Corrupt(_))));
+    let Err(RawError::Corrupt(error)) = decode(&one(tile)) else { panic!("the extra plane must exceed the tile budget") };
+    assert!(!error.contains("colour planes"), "must fail the budget, not the fixture layout: {error}");
     assert_eq!(decode(&one(jxl_encode(&grey, w, h, 1, false))).unwrap().data, RawData::U16(grey));
 }
 
@@ -946,7 +975,7 @@ fn mask_ifd(w: usize, h: usize, name: &str, px: Vec<u8>) -> IfdBuilder {
 /// developed image (default crop of the active area), and doesn't disturb the raw decode.
 #[test]
 fn semantic_masks_are_read_and_placed() {
-    use lightcraft_raw::semantic::MaskSubArea;
+    use lightcraft_raw::semantic::{MaskSubArea, SemanticMaskExt};
     for order in [ByteOrder::Little, ByteOrder::Big] {
         let bytes = profile_dng(order, |ifd0| {
             // a 4 × 2 crop at (top 1, left 2) of an 8 × 4 mask over the 8 × 6 image
@@ -985,6 +1014,7 @@ fn semantic_masks_are_read_and_placed() {
 /// doesn't fit; the raw image still decodes.
 #[test]
 fn malformed_semantic_masks_are_skipped() {
+    use lightcraft_raw::semantic::SemanticMaskExt;
     let bytes = profile_dng(ByteOrder::Little, |ifd0| {
         ifd0.add_sub_ifd(mask_ifd(2, 2, "", vec![1, 2, 3, 4])); // no SemanticName
         let mut rgb = mask_ifd(2, 2, "rgb", vec![0; 12]);
@@ -1015,7 +1045,8 @@ fn malformed_semantic_masks_are_skipped() {
     assert_eq!(decode(&bytes).unwrap().cpp, 3);
     let masks = lightcraft_raw::semantic_masks(&bytes);
     let names: Vec<&str> = masks.iter().map(|m| m.name.as_str()).collect();
-    assert_eq!(names, ["short strip", "sub area too small"]);
+    // Truncated strip pixels are rejected by the shared reader instead of zero-filled.
+    assert_eq!(names, ["sub area too small"]);
     assert!(masks.iter().all(|m| m.sub_area.is_none()), "sub areas the mask doesn't fit are ignored");
     for m in &masks {
         let d = m.developed(Rect::new(0, 0, 8, 6), Rect::new(0, 0, 8, 6)).unwrap();

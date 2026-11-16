@@ -34,7 +34,7 @@ fn write_png(path: &Path, seed: u8) {
 }
 
 fn exif_clock_block(original: Option<&str>, digitized: Option<&str>) -> Vec<u8> {
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
 
     let mut exif = IfdBuilder::new();
     if let Some(value) = original {
@@ -491,6 +491,40 @@ fn find_missing_matches_renamed_files_by_content() {
     );
     assert_eq!(r["missing"], 1);
     assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A renamed file whose size is unknown (0) but whose content hash is known is still found by
+/// content: the hash alone is enough to confirm it is the same photo.
+#[test]
+fn find_missing_matches_renamed_file_by_content_without_size() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir("missing-no-size");
+    std::fs::create_dir_all(dir.join("found")).unwrap();
+    let content = b"same pixels as the original";
+    let renamed = dir.join("found").join("Trip-001.png");
+    std::fs::write(&renamed, content).unwrap();
+    let hash = lightcraft_preview::hash_bytes(content).to_string();
+    let mut s = Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(
+        id,
+        Source::File { path: dir.join("gone").join("orig.png").to_string_lossy().into_owned() },
+        "orig.png",
+        "PNG",
+        48,
+        32,
+        "2026-01-01T10:00:00",
+    );
+    p.file_size = 0;
+    p.content_hash = Some(hash);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("found").to_string_lossy()})).unwrap();
+    let found = r["found"].as_array().map(Vec::len);
+    assert_eq!(found, Some(1), "renamed file matched by content without a recorded size: {r}");
+    assert_eq!(r["found"][0]["to"], json!(renamed.to_string_lossy().to_string()), "{r}");
+    assert_eq!(r["found"][0]["by"], json!("content"), "{r}");
+    assert_eq!(r["missing"], 0, "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2795,7 +2829,7 @@ fn a_file_gone_since_the_import_review_is_not_imported() {
 /// a JPEG. In a build without the codecs' `heif` feature it is reported as failed, saying why.
 #[test]
 fn heic_imports_as_a_normal_photo_or_says_why_not() {
-    use lightcraft_heif::testdata::{Prop, Spec, build};
+    use craft_heif::testdata::{Prop, Spec, build};
     let src = temp_dir("heic");
     let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
     let p3 = lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3);
@@ -2832,8 +2866,8 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
 /// writes as UTC: an iPhone photo landed five hours late and after 19:00 on the wrong day.
 #[test]
 fn a_heic_is_dated_by_its_exif_and_not_by_the_file() {
-    use lightcraft_heif::testdata::{Spec, build};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    use craft_heif::testdata::{Spec, build};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
     let src = temp_dir("heic-capture-time");
     let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
     let mut exif = IfdBuilder::new();

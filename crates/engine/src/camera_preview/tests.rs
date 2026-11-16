@@ -1,6 +1,7 @@
 use super::proxy::{align_profile_geometry, resample_correspondence};
 use super::tone::{ELASTICITY_BLACK, MAX_TONE_ELASTICITY, TONE_REPAIR_ELASTICITY, limit_elasticity};
 use super::*;
+use lightcraft_raw::profile::{HsvTableApply, ProfileLookHueSat};
 
 fn steep_toe_scene() -> (Rgb32f, Rgb32f) {
     let mut sensor = Rgb32f::new(96, 64);
@@ -1133,7 +1134,7 @@ fn configured_lens_geometry_reaches_pool_add_after_raw_decode() {
 
     // A complete, bounded uncompressed NEF: production decode reads a real Bayer strip,
     // EXIF lens identity and an embedded JPEG. No corpus or injected RawImage is involved.
-    use lightcraft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags};
+    use craft_tiff::{IfdBuilder, ImageData, TiffWriter, Value, tags};
     let (w, h) = (768, 512);
     let scene = profile_geometry_scene(w, h);
     let samples: Vec<u8> = scene
@@ -1333,7 +1334,7 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     let pixels: Vec<u8> = target.data.iter().flat_map(|p| to_srgb.apply_f32(*p).map(|v| (srgb(v).clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
     let image = lightcraft_codecs::EncodeImage::new(384, 256, 3, lightcraft_codecs::Samples::U8(&pixels));
     let jpeg = lightcraft_codecs::encode_jpeg(&image, 98, lightcraft_codecs::ChromaSubsampling::S444, &Default::default()).unwrap();
-    use lightcraft_tiff::{IfdBuilder, TiffWriter, Value, tags};
+    use craft_tiff::{IfdBuilder, TiffWriter, Value, tags};
     let mut ifd = IfdBuilder::new();
     ifd.set(tags::MAKE, Value::Ascii("Synthetic".into()));
     ifd.set(tags::MODEL, Value::Ascii("Uncalibrated".into()));
