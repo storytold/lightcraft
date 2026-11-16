@@ -76,6 +76,13 @@
   library's `Originals` folder (their sidecars, Save Metadata to File, rename, delete from disk, duplicate and
   conversion to DNG).
 
+### Local folders
+- Raws you only browsed under Local with LightCraft 0.2.0 or older, and never changed, are forgotten again once their
+  folder hasn't been browsed for the days set in Settings ▸ Performance ▸ Forget unchanged photos (issue #4255):
+  since Remove Hot Pixels existed, each of them counted as changed and was kept. This is for raws whose white
+  balance isn't shown in Kelvin; DNGs and raws of cameras shown in Kelvin are still kept. Files and sidecars are
+  never touched.
+
 ### Remove Hot Pixels
 - Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
   At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue

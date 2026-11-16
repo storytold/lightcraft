@@ -22,9 +22,9 @@
 //! rename or relink, culling scores, file content — keeps it. Records without a fingerprint
 //! (browsed before fingerprints existed) are judged by their data alone and kept unless every
 //! user-editable field is still empty / default: no rating, flag or label; develop settings equal
-//! to the import defaults with no history, versions or edit time; no title, caption, alt text,
-//! description, keywords, creator, copyright, rights, location or GPS; no culling scores.
-//! When in doubt a record is kept.
+//! to the import defaults (Remove Hot Pixels on or off, #4255) with no history, versions or edit
+//! time; no title, caption, alt text, description, keywords, creator, copyright, rights, location
+//! or GPS; no culling scores. When in doubt a record is kept.
 //!
 //! Browsing the folder again catalogues its files afresh (new records, new fingerprints).
 
@@ -113,16 +113,24 @@ impl Photo {
         }
     }
 
-    /// Every user-editable field is still empty / default (records without a baseline).
+    /// Every user-editable field is still empty / default (records without a baseline). Remove Hot
+    /// Pixels doesn't count: raws catalogued since the box exists start with it on, older ones with it
+    /// off (#4255).
     fn looks_unedited(&self) -> bool {
         let m = &self.meta;
+        // (built only once the cheaper checks pass: the defaults look the camera up by name)
+        let develop_as_imported = || {
+            let mut defaults = self.import_defaults();
+            defaults.detail.nr_outliers = self.develop.detail.nr_outliers;
+            *self.develop == defaults
+        };
         self.rating == 0
             && self.flag == crate::Flag::None
             && self.label.is_none()
             && self.edited.is_none()
             && self.history.is_empty()
             && self.versions.is_empty()
-            && *self.develop == self.import_defaults()
+            && develop_as_imported()
             && self.analysis.is_none()
             && m.title.is_empty()
             && m.caption.is_empty()

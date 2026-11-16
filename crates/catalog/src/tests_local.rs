@@ -203,6 +203,27 @@ fn upgrade_without_times_forgets_nothing_then_counts_from_then() {
     assert_eq!(later.kept_touched, 2, "{rated:?} {with_creator:?}");
 }
 
+/// Issue #4255: a baseline-less raw record from before Remove Hot Pixels existed has the box off,
+/// one from since has it on: both are untouched, and an edit on top of either is not.
+#[test]
+fn remove_hot_pixels_on_or_off_leaves_a_legacy_raw_untouched() {
+    let mut p = Photo::new(PhotoId(1), Source::File { path: "/pics/a/L.ARW".into() }, "L.ARW", "ARW", 6, 4, OLD);
+    p.kind = MediaKind::Raw;
+    p.local = true;
+    let now = p.import_defaults();
+    assert!(now.detail.nr_outliers, "a raw imported now has the box on");
+    let mut before = now.clone();
+    before.detail.nr_outliers = false;
+    for (settings, what) in [(before, "from before the box"), (now, "from since")] {
+        p.develop = Arc::new(settings.clone());
+        assert!(p.untouched_local(), "{what}");
+        let mut edited = settings;
+        edited.light.exposure = 0.5;
+        p.develop = Arc::new(edited);
+        assert!(!p.untouched_local(), "{what}: an edit is kept");
+    }
+}
+
 #[test]
 fn in_use_records_are_kept() {
     let mut c = Catalog::new();
