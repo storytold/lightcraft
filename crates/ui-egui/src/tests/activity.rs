@@ -509,7 +509,7 @@ fn batch_merge_runs_each_set_in_turn() {
     let rows = h.app.session.activity.list();
     assert_eq!((rows.len(), rows.first().map(|r| r.kind)), (1, Some("merge")));
     // the first merge finishes and the second starts by itself
-    assert!(h.step_until(T, |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.merge.batch.len() == 1 && h.app.merge.final_task.is_some()));
     assert_eq!(h.app.session.catalog.len(), 10);
     // cancelling the second drops the third
     let rows = h.app.session.activity.list();
