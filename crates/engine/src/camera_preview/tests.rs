@@ -2931,6 +2931,30 @@ fn cr3_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop() {
     let expected_tags = dng_colour(&raw.color, &white, &t, look.as_ref()).unwrap();
     let tags = super::colour::starting_colour_tags_with_correction(&mut raw, &file, Some(&lens)).unwrap();
     assert_eq!(tags, expected_tags, "DNG tags use the resolved correspondence geometry too");
+
+    // External shading is not written into a DNG of these unchanged sensor samples.
+    // Its colour model must therefore be fitted to the same samples as the warp-only route.
+    let mut vignetted = lens;
+    vignetted.vignette =
+        Some(lightcraft_develop::EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.45, 0.55), radius: 0.6 });
+    let mut full_fit = raw.clone();
+    let (_, full_transform, full_look) = starting_colour(&mut full_fit, &file, None, Some(&vignetted));
+    assert_ne!(
+        dng_colour(&full_fit.color, &white, &full_transform, full_look.as_ref()),
+        Some(expected_tags.clone()),
+        "the fixture must distinguish corrected shading from the uncorrected DNG samples"
+    );
+    let actual = super::colour::starting_colour_tags_with_correction(&mut raw, &file, Some(&vignetted)).unwrap();
+    assert_eq!(actual, expected_tags, "DNG colour fitting must exclude external vignette gains");
+    let mut expected_dng = raw.clone();
+    expected_dng.color = expected_tags;
+    let mut actual_dng = raw;
+    actual_dng.color = actual;
+    let options = lightcraft_raw::DngWriteOptions::default();
+    let bytes = lightcraft_raw::write_dng(&actual_dng, &options).unwrap();
+    assert_eq!(bytes, lightcraft_raw::write_dng(&expected_dng, &options).unwrap(), "the saved DNG keeps the warp-only colour contract");
+    let reopened = lightcraft_raw::decode(&bytes).unwrap();
+    assert!(reopened.opcodes.list3.is_empty(), "no external shading opcode is silently introduced");
 }
 
 /// Keep clipped contributors in the resampled mask and mark out-of-frame samples invalid.

@@ -137,17 +137,20 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
 }
 
 /// Build DNG colour tags using `correction` only for CR3 camera-JPEG correspondence geometry.
+/// External vignetting is excluded: a DNG of the unchanged sensor samples does not carry
+/// that database correction. File-local and pooled fits keep their existing vignetting.
 pub(super) fn starting_colour_tags_with_correction(
     raw: &mut RawImage,
     bytes: &[u8],
     correction: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<ColorData> {
-    let correction = correction.filter(|_| raw.format == RawFormat::Cr3);
+    let correction =
+        correction.filter(|_| raw.format == RawFormat::Cr3).map(|correction| lightcraft_develop::EmbeddedLens { vignette: None, ..*correction });
     // the white the source shows, decided before `starting_colour` may fill in measured matrices
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
     // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, correction);
+    let (_, t, look) = starting_colour(raw, bytes, None, correction.as_ref());
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }
 

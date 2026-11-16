@@ -25,7 +25,10 @@ CR3 framing path. All subsequent colour,
 tone, hue/saturation, clipping, and held-out acceptance gates stay unchanged.
 
 The proposal reaches file-local colour and tone, pooled camera-profile pairs, and colour tags
-for merge/DNG conversion. Cache versions advance from upstream look 13/render 76 to look 14/render 77.
+for merge/DNG conversion. The DNG colour fit uses the external profile for correspondence geometry
+without its vignette gains: the unchanged sensor samples and the DNG writer do not carry that
+database shading correction. File-local and pooled fits retain source-position vignetting.
+Cache versions advance from upstream look 13/render 76 to look 14/render 77.
 The loaded database semantic identity also invalidates camera render/view keys, Smart-preview
 headers and scan markers. Fresh original decodes retain the photo’s hot-pixel setting; offline
 proxies remain readable and cannot be relabelled as freshly fitted pixels.
