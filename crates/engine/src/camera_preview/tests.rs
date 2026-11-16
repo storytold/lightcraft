@@ -1209,6 +1209,64 @@ fn configured_lens_geometry_reaches_pool_add_after_raw_decode() {
     assert_eq!(pool.fit(1), vec![Ok(expected)], "Pool::add must forward the database correction after decoding the actual bytes");
 }
 
+/// Exclude unsaved external shading while keeping the resolved DNG correspondence warp.
+fn assert_external_dng_vignette_contract(
+    raw: &RawImage,
+    file: &[u8],
+    lens: &lightcraft_develop::EmbeddedLens,
+    white: &crate::files::DngWhite,
+    expected_tags: &ColorData,
+    converted: &RawImage,
+) {
+    // An external database vignette is absent from a DNG of the original samples.
+    let mut vignetted = *lens;
+    vignetted.vignette =
+        Some(lightcraft_develop::EmbeddedVignette { k: [1.0, 0.0, 0.0, 0.0, 0.0], center: lightcraft_geom::Point::new(0.45, 0.55), radius: 0.6 });
+    let mut full_fit = raw.clone();
+    let (_, full_transform, full_look) = starting_colour(&mut full_fit, file, None, Some(&vignetted));
+    assert_ne!(
+        dng_colour(&full_fit.color, white, &full_transform, full_look.as_ref()),
+        Some(expected_tags.clone()),
+        "the fixture must distinguish corrected shading from the uncorrected DNG samples"
+    );
+    let actual = super::colour::starting_colour_tags_with_correction(&mut raw.clone(), file, Some(&vignetted)).unwrap();
+    assert_eq!(actual, *expected_tags, "DNG colour fitting must exclude external vignette gains");
+    let mut corrected = raw.clone();
+    corrected.color = actual;
+    let options = lightcraft_raw::DngWriteOptions::default();
+    let saved = lightcraft_raw::write_dng(&corrected, &options).unwrap();
+    assert_eq!(saved, lightcraft_raw::write_dng(converted, &options).unwrap(), "saved DNG matches the warp-only colour contract");
+    assert!(lightcraft_raw::decode(&saved).unwrap().opcodes.list3.is_empty());
+}
+
+/// A DNG's own vignette is serialized and must remain in its fit and retained opcodes.
+fn assert_file_owned_dng_vignette_contract(
+    raw: &mut RawImage,
+    file: &[u8],
+    lens: &lightcraft_develop::EmbeddedLens,
+    white: &crate::files::DngWhite,
+    expected_tags: &ColorData,
+) {
+    // A file's own (identity) warp must suppress the unrelated database proposal. This also
+    // checks that colour fitting temporarily strips, then restores, the original opcodes.
+    raw.opcodes.list3.push(lightcraft_raw::Opcode::WarpRectilinear { planes: vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] });
+    raw.opcodes.list3.push(lightcraft_raw::Opcode::FixVignetteRadial { k: [0.3, 0.0, 0.0, 0.0, 0.0], center: [0.5, 0.5] });
+    let ops = raw.opcodes.list3.clone();
+    let own = crate::files::embedded_lens(&raw.info()).unwrap();
+    assert!(own.vignette.is_some(), "file-owned shading must remain part of the DNG fit and opcodes");
+    assert_ne!(own, *lens);
+    let mut opened = raw.clone();
+    let geometry = lens_geometry(&opened.opcodes.list3);
+    opened.opcodes.list3.clear();
+    let (_, t, look) = starting_colour(&mut opened, file, geometry.as_ref(), Some(&own));
+    let expected = dng_colour(&raw.color, white, &t, look.as_ref()).unwrap();
+    assert_ne!(expected, *expected_tags, "fixture distinguishes own warp from database geometry");
+    assert_eq!(starting_colour_tags(&mut raw.clone(), file), Some(expected.clone()));
+    with_starting_colour(raw, file);
+    assert_eq!(raw.color, expected, "standalone DNG colour agrees with opening the RAW");
+    assert_eq!(raw.opcodes.list3, ops, "DNG retains its file corrections");
+}
+
 #[test]
 fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop() {
     const DB: &str = r#"<lensdatabase>
@@ -1331,22 +1389,9 @@ fn external_profile_geometry_reaches_file_and_pooled_pairs_in_the_default_crop()
     with_starting_colour(&mut converted, &file);
     assert_eq!(converted.color, expected_tags);
 
-    // A file's own (identity) warp must suppress the unrelated database proposal. This also
-    // checks that colour fitting temporarily strips, then restores, the original opcodes.
-    raw.opcodes.list3.push(lightcraft_raw::Opcode::WarpRectilinear { planes: vec![[1.0, 0.0, 0.0, 0.0, 0.0, 0.0]], center: [0.5, 0.5] });
-    let ops = raw.opcodes.list3.clone();
-    let own = crate::files::embedded_lens(&raw.info()).unwrap();
-    assert_ne!(own, lens);
-    let mut opened = raw.clone();
-    let geometry = lens_geometry(&opened.opcodes.list3);
-    opened.opcodes.list3.clear();
-    let (_, t, look) = starting_colour(&mut opened, &file, geometry.as_ref(), Some(&own));
-    let expected = dng_colour(&raw.color, &white, &t, look.as_ref()).unwrap();
-    assert_ne!(expected, expected_tags, "fixture distinguishes own warp from database geometry");
-    assert_eq!(starting_colour_tags(&mut raw.clone(), &file), Some(expected.clone()));
-    with_starting_colour(&mut raw, &file);
-    assert_eq!(raw.color, expected, "standalone DNG colour agrees with opening the RAW");
-    assert_eq!(raw.opcodes.list3, ops, "DNG retains its file corrections");
+    assert_external_dng_vignette_contract(&raw, &file, &lens, &white, &expected_tags, &converted);
+
+    assert_file_owned_dng_vignette_contract(&mut raw, &file, &lens, &white, &expected_tags);
 
     // A real configured profile with nonzero vignetting must still be available to Main's
     // per-file CR3 path, while this proposal's new Pool/DNG lookup stays excluded.

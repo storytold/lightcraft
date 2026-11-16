@@ -105,4 +105,4 @@ match score still wins even when its crop is unknown.
 - The focus distance is not read from maker notes yet: vignetting uses the farthest calibrated distance.
 - No manual make / model picker and no choice between sources (in the file, lens database, an own calibration)
   yet; matching is automatic, the file's own correction wins.
-- Automated tests use synthetic profiles and grids. Limited real-file validation of the fixed-mount fallback and its use for colour correspondences covers five private G7 X II photographs; this does not establish geometric accuracy across other cameras or profiles.
+- Automated tests use synthetic profiles and grids. Historical validation of the fixed-mount fallback and its use for colour correspondences covered five private G7 X II photographs; it was not rerun on the subsequently synchronized source and does not establish geometric accuracy across other cameras or profiles.

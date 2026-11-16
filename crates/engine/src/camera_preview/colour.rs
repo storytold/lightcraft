@@ -144,12 +144,17 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     starting_colour_tags_with_correction(raw, bytes, correction.as_ref())
 }
 
+/// Fit DNG colour in the stored sample space. Only a vignette owned by the file's
+/// retained opcodes may enter the fit; external profile geometry still aligns the pairs.
 pub(super) fn starting_colour_tags_with_correction(
     raw: &mut RawImage,
     bytes: &[u8],
     correction: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<ColorData> {
-    let correction = correction.filter(|_| raw.format != RawFormat::Cr3);
+    let correction = correction.filter(|_| raw.format != RawFormat::Cr3).map(|correction| lightcraft_develop::EmbeddedLens {
+        vignette: crate::files::embedded_lens(&raw.info()).and_then(|lens| lens.vignette),
+        ..*correction
+    });
     // the white the source shows, decided before `starting_colour` may fill in measured matrices
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
@@ -158,7 +163,7 @@ pub(super) fn starting_colour_tags_with_correction(
     let lens = super::lens_geometry(&raw.opcodes.list3);
     let list3 = std::mem::take(&mut raw.opcodes.list3);
     raw.opcodes.list3 = list3.iter().filter(|op| !op.is_lens_correction()).cloned().collect();
-    let (_, t, look) = starting_colour(raw, bytes, lens.as_ref(), correction);
+    let (_, t, look) = starting_colour(raw, bytes, lens.as_ref(), correction.as_ref());
     raw.opcodes.list3 = list3;
     dng_colour(&raw.color, &white, &t, look.as_ref())
 }

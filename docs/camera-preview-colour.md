@@ -356,7 +356,10 @@ on the proxy so it can still be recognized as stale. A scan interrupted by a dat
 new database as checked. Existing destinations remain untouched when a build is rejected.
 
 DNG conversion and merge resolve the file's own lens warp and correction before removing lens opcodes from the
-colour-only sensor fit. The opcodes remain in standalone DNGs and in merge reference corrections. Synthetic tests
+colour-only sensor fit. The opcodes remain in standalone DNGs and in merge reference corrections.
+The DNG colour fit retains only file-owned vignette gains: an external database vignette is not
+stored with those sensor samples. External correspondence geometry remains available; normal
+photo and pooled fits keep their existing vignetting. Synthetic tests
 exercise the production database lookup in a fresh child process, file-warp precedence and merge callback ordering;
 they add no real-photo validation beyond the historical evidence above. Profile proposals below 0.90 training
 agreement now skip the unnecessary original-side scan; thresholds are unchanged and no timing improvement is claimed.
