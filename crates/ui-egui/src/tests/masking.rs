@@ -77,7 +77,8 @@ fn mask_coverage(h: &Headless, mask: usize, x: usize, y: usize) -> f32 {
 #[test]
 fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
     let mut h = detail("panel.masking");
-    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    let seg = lightcraft_develop::SegMask::from_logits(4, &[8.0; 16]);
+    exec(&mut h, "mask.add", json!({"kind": "sky", "seg": seg}));
     let r = h.request("ui.set", json!({"brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     click(&mut h, "button:maskMinus:1");
@@ -112,7 +113,8 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
 #[test]
 fn new_brush_starts_a_separate_mask_in_paint_mode() {
     let mut h = detail("panel.masking");
-    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    let seg = lightcraft_develop::SegMask::from_logits(4, &[8.0; 16]);
+    exec(&mut h, "mask.add", json!({"kind": "sky", "seg": seg}));
     let original = develop(&h).masks[0].clone();
     h.app.ui.brush_erase = true;
     h.app.ui.mask_overlay = false;
@@ -1793,6 +1795,33 @@ fn ai_masks_without_the_model_offer_the_download() {
     assert!(t.elapsed() < SETTLE, "{:?}", t.elapsed());
 }
 
+#[test]
+fn sky_without_the_model_uses_legacy_detection_without_a_setup_dialog() {
+    let mut h = detail("panel.masking");
+    if let Some(remote) = h.app.session.segmenter.remote_endpoint() {
+        lightcraft_testkit::skip!(Model, "LIGHTCRAFT_SAM3_REMOTE is set ({remote}), so Sky uses the remote SAM 3 worker");
+        return;
+    }
+    h.app.session.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-sky-missing-{}", std::process::id())));
+    click(&mut h, "maskNew:sky");
+    assert_eq!(h.app.ui.dialog, None);
+    assert_eq!(develop(&h).masks[0].components[0].shape, MaskShape::Sky);
+    for (button, op) in [("button:maskPlus:1", "add"), ("button:maskMinus:1", "subtract")] {
+        h.step();
+        click(&mut h, button);
+        click(&mut h, &format!("maskComp:{op}:sky"));
+        assert_eq!(h.app.ui.dialog, None);
+        let d = develop(&h);
+        let c = d.masks[0].components.last().unwrap();
+        assert_eq!(c.shape, MaskShape::Sky);
+        assert_eq!(serde_json::to_value(c.op).unwrap(), json!(op));
+    }
+    assert_eq!(develop(&h).masks[0].components.len(), 3);
+    assert!(!h.app.session.segmenter.busy());
+    assert!(!h.app.session.segmenter.download_status().running);
+    assert_eq!(h.app.ui.describe, None);
+}
+
 fn color_samples(h: &Headless) -> serde_json::Value {
     let d = develop(h);
     let m = d.masks.last().expect("a mask");
@@ -2154,6 +2183,62 @@ fn effect_dropdown_applies_saves_and_shows_the_matching_effect() {
     let a = develop(&h).masks.last().expect("a mask").adjust;
     assert_eq!((a.exposure, a.shadows, a.clarity, a.amount), (0.7, 25.0, 0.0, 50.0));
     assert_eq!(exec(&mut h, "mask.effects", json!({}))["current"], "Lift");
+}
+
+#[test]
+fn legacy_sky_says_so_once_per_session() {
+    let mut h = detail("panel.masking");
+    if h.app.session.segmenter.remote_endpoint().is_some() || !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        lightcraft_testkit::skip!(Feature, "Sky only falls back with a notice in a SAM build with no remote worker");
+        return;
+    }
+    h.app.session.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-sky-notice-{}", std::process::id())));
+    let toast = |h: &Headless| h.app.ui.toast.as_ref().map(|t| t.0.clone());
+    // a stored SAM sky mask used no fallback, and doesn't use up the notice
+    let seg = lightcraft_develop::SegMask::from_logits(4, &[8.0; 16]);
+    h.app.ui.toast = None; // opening the Masking panel says so
+    exec(&mut h, "mask.add", json!({"kind": "sky", "seg": seg}));
+    assert_eq!(toast(&h), None);
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    assert!(toast(&h).is_some_and(|t| t.contains("SAM 3")), "{:?}", toast(&h));
+    h.app.ui.toast = None;
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    exec(&mut h, "mask.addComponent", json!({"kind": "sky", "op": "add"}));
+    assert_eq!(toast(&h), None, "said once per session");
+    assert_eq!(develop(&h).masks.last().unwrap().components[1].shape, MaskShape::Sky);
+    // a new session says it again
+    h.app.ui.legacy_sky_noticed = false;
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    assert!(toast(&h).is_some());
+}
+
+#[test]
+fn the_sky_button_shows_the_legacy_notice_long_enough_to_read() {
+    let mut h = detail("panel.masking");
+    if h.app.session.segmenter.remote_endpoint().is_some() || !lightcraft_engine::segment::Segmenter::AVAILABLE {
+        lightcraft_testkit::skip!(Feature, "Sky only falls back with a notice in a SAM build with no remote worker");
+        return;
+    }
+    h.app.session.segmenter.dir = Some(std::env::temp_dir().join(format!("lc-sky-button-{}", std::process::id())));
+    h.app.ui.toast = None;
+    click(&mut h, "maskNew:sky");
+    h.step();
+    let (text, until, _) = h.app.ui.toast.clone().expect("the click left a notice");
+    assert!(text.contains("SAM 3"), "{text}");
+    assert!(until - h.app.tick_now() > 4.0, "{}", until - h.app.tick_now());
+}
+
+#[test]
+fn sam_sky_component_rows_read_sky_like_legacy_ones() {
+    use crate::panels::masking::component_label;
+    use lightcraft_develop::{MaskComponent, MaskOp};
+    let comp = |shape| MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
+    let prompt = |text: &str| MaskShape::Prompt { text: text.into(), seg: None, detail: vec![], edge: 0.0 };
+    assert_eq!(component_label(&comp(MaskShape::Sky)), "Sky");
+    assert_eq!(component_label(&comp(prompt("sky"))), "Sky");
+    assert_eq!(component_label(&comp(prompt("red car"))), "“red car”");
+    let named = MaskComponent { name: Some("Clouds".into()), ..comp(prompt("sky")) };
+    assert_eq!(component_label(&named), "Clouds");
 }
 
 /// Lens Blur Brush Refinement: Focus / Blur pick a brush that paints on the photo from the Edit

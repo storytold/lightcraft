@@ -61,7 +61,7 @@ pub(crate) enum Tag {
     /// Object clicks on component `comp` of mask `mask`.
     Clicks { photo: PhotoId, mask: u32, comp: usize, hint: Vec<Point>, exclude: Vec<Point> },
     /// A Describe selection: a new mask (`mask: None`) or a component combined by `op`.
-    NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String },
+    NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String, invert: bool },
     /// A zoomed-in pass for a component, computed from `shape` (without its detail).
     Detail { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
     /// Find Subject for component `comp` of mask `mask` (an Object waiting for it): the people /
@@ -558,7 +558,15 @@ impl Session {
 
     /// Background mode: queue a Describe selection; the mask (or component, combined by `op`
     /// into mask `mask`) is created by [`Session::segment_poll`] when something matches.
-    pub(crate) fn segment_text_later(&mut self, id: PhotoId, mask: Option<u32>, op: &str, name: Option<String>, text: &str) -> Result<(), String> {
+    pub(crate) fn segment_text_later(
+        &mut self,
+        id: PhotoId,
+        mask: Option<u32>,
+        op: &str,
+        name: Option<String>,
+        text: &str,
+        invert: bool,
+    ) -> Result<(), String> {
         self.segmenter.model_dir()?;
         let text = text.trim();
         if text.is_empty() {
@@ -566,12 +574,12 @@ impl Session {
         }
         #[cfg(feature = "sam")]
         {
-            let tag = Tag::NewPrompt { photo: id, mask, op: op.to_string(), name, text: text.to_string() };
+            let tag = Tag::NewPrompt { photo: id, mask, op: op.to_string(), name, text: text.to_string(), invert };
             self.segment_queue(id, worker::Kind::Text(text.to_string()), tag, None)
         }
         #[cfg(not(feature = "sam"))]
         {
-            let _ = (id, mask, op, name);
+            let _ = (id, mask, op, name, invert);
             Err("AI masks are not available in this build".into())
         }
     }
@@ -708,7 +716,7 @@ impl Session {
                     Err(e) => polled.messages.push(e.to_string()),
                 }
             }
-            Tag::NewPrompt { photo, mask, op, name, text } => {
+            Tag::NewPrompt { photo, mask, op, name, text, invert } => {
                 let seg = match o.result {
                     Ok(Some(seg)) => seg,
                     Ok(None) => return polled.messages.push(format!("Nothing matching “{text}” was found in this photo.")),
@@ -718,7 +726,7 @@ impl Session {
                     return polled.messages.push(format!("The photo changed before “{text}” was found; try again."));
                 }
                 let Ok(seg) = serde_json::to_value(seg) else { return };
-                let mut p = serde_json::json!({"kind": "prompt", "text": text, "seg": seg});
+                let mut p = serde_json::json!({"kind": "prompt", "text": text, "seg": seg, "invert": invert});
                 if let Some(n) = name {
                     p["name"] = serde_json::json!(n);
                 }
@@ -814,6 +822,39 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "sam")]
+    #[test]
+    fn completed_sky_requests_keep_the_component_operation_and_do_not_make_empty_masks() {
+        use serde_json::json;
+        let mut s = Session::with_demo();
+        let photo = s.active().unwrap();
+        let seg = seg_box(4, 0, 0, 4, 2);
+        let tag = |mask, op: &str, invert| Tag::NewPrompt { photo, mask, op: op.into(), name: Some("Sky".into()), text: "sky".into(), invert };
+        let mut polled = Polled::default();
+        s.apply_outcome(worker::Outcome { tag: tag(None, "add", false), result: Ok(None), superseded: false, notice: None }, &mut polled);
+        assert!(s.develop_of(photo).unwrap().masks.is_empty());
+        assert!(polled.messages.iter().any(|m| m.contains("Nothing matching")));
+        s.apply_outcome(
+            worker::Outcome { tag: tag(None, "add", false), result: Ok(Some(seg.clone())), superseded: false, notice: None },
+            &mut polled,
+        );
+        assert!(polled.changed);
+        let d = s.develop_of(photo).unwrap();
+        assert_eq!(d.masks[0].name, "Sky");
+        assert!(matches!(&d.masks[0].components[0].shape, MaskShape::Prompt { text, seg: Some(stored), .. } if text == "sky" && stored == &seg));
+        for op in ["add", "subtract", "intersect"] {
+            s.apply_outcome(
+                worker::Outcome { tag: tag(Some(1), op, true), result: Ok(Some(seg.clone())), superseded: false, notice: None },
+                &mut polled,
+            );
+            let d = s.develop_of(photo).unwrap();
+            let c = d.masks[0].components.last().unwrap();
+            assert_eq!(serde_json::to_value(c.op).unwrap(), json!(op));
+            assert!(c.invert);
+            assert!(matches!(&c.shape, MaskShape::Prompt { text, seg: Some(_), .. } if text == "sky"));
+        }
+    }
 
     #[cfg(feature = "sam")]
     #[test]

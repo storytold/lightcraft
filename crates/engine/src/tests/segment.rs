@@ -1,4 +1,4 @@
-//! AI masks without the SAM 3 model (it is never required): every request is a clear error that
+//! AI masks without the SAM 3 model: Sky uses legacy detection; Object / Describe return an error that
 //! comes back at once, nothing waits on the network or the model, a damaged model is an error
 //! (not a crash or a stuck "busy"), and the download command needs consent and fails cleanly.
 //! No test touches the internet: downloads go to a local server.
@@ -9,6 +9,97 @@ use serde_json::json;
 
 use crate::Session;
 use crate::segment::{NOT_INSTALLED, Segmenter};
+
+#[test]
+fn sky_uses_legacy_detection_without_sam() {
+    use lightcraft_develop::{MaskOp, MaskShape};
+    if let Some(remote) = Session::with_demo().segmenter.remote_endpoint() {
+        lightcraft_testkit::skip!(Model, "LIGHTCRAFT_SAM3_REMOTE is set ({remote}), so Sky uses the remote SAM 3 worker");
+        return;
+    }
+    for background in [false, true] {
+        for dir in [None, Some(tmp(&format!("sky-missing-{background}")))] {
+            let mut s = Session::with_demo();
+            s.segmenter.background = background;
+            s.segmenter.dir = dir;
+            let id = s.active().unwrap();
+            let r = s.execute("mask.add", &json!({"kind": "sky", "name": "Sky"})).unwrap();
+            assert_ne!(r["pending"], true);
+            assert_eq!(r["legacySky"], true);
+            assert_eq!(s.develop_of(id).unwrap().masks[0].components[0].shape, MaskShape::Sky);
+            for (op, expected) in [("add", MaskOp::Add), ("subtract", MaskOp::Subtract), ("intersect", MaskOp::Intersect)] {
+                let r = s.execute("mask.addComponent", &json!({"kind": "sky", "op": op, "invert": true})).unwrap();
+                assert_eq!(r["legacySky"], true);
+                let d = s.develop_of(id).unwrap();
+                let c = d.masks[0].components.last().unwrap();
+                assert_eq!(c.shape, MaskShape::Sky);
+                assert_eq!(c.op, expected);
+                assert!(c.invert);
+            }
+            let d = s.develop_of(id).unwrap();
+            s.execute("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.develop_of(id).unwrap().masks[0].components.len(), 3);
+            s.execute("edit.redo", &json!({})).unwrap();
+            assert_eq!(s.develop_of(id).unwrap(), d);
+            assert!(!s.segmenter.busy());
+            assert!(!s.segmenter.download_status().running);
+            // Describe remains an explicit model request, even for the same word.
+            assert!(s.execute("mask.add", &json!({"kind": "prompt", "text": "sky"})).is_err());
+        }
+    }
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn sky_uses_an_installed_model_and_reports_inference_errors() {
+    let mut s = Session::with_demo();
+    s.segmenter.background = true;
+    let dir = damaged_model("sky-installed");
+    s.segmenter.dir = Some(dir.clone());
+    assert!(s.segmenter.installed());
+    let r = s.execute("mask.add", &json!({"kind": "sky"})).unwrap();
+    assert_eq!(r["pending"], true);
+    let messages = settle(&mut s, Duration::from_secs(60));
+    assert!(!messages.is_empty());
+    assert!(s.develop_of(s.active().unwrap()).unwrap().masks.is_empty(), "an installed but damaged model must not silently use a heuristic");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn sky_stores_a_prompt_mask_that_replays_without_the_model() {
+    use lightcraft_develop::{MaskOp, MaskShape, SegMask};
+    for background in [false, true] {
+        let mut s = Session::with_demo();
+        s.segmenter.background = background;
+        let id = s.active().unwrap();
+        let seg = SegMask::from_logits(4, &[8.0; 16]);
+        let r = s.execute("mask.add", &json!({"kind": "sky", "name": "Evening sky", "seg": seg})).unwrap();
+        assert!(r.get("legacySky").is_none(), "a stored SAM sky mask used no fallback");
+        let d = s.develop_of(id).unwrap();
+        assert_eq!(d.masks[0].name, "Evening sky");
+        assert!(matches!(&d.masks[0].components[0].shape, MaskShape::Prompt { text, seg: Some(stored), .. } if text == "sky" && stored == &seg));
+        for (op, expected) in [("add", MaskOp::Add), ("subtract", MaskOp::Subtract), ("intersect", MaskOp::Intersect)] {
+            s.execute("mask.addComponent", &json!({"kind": "sky", "op": op, "seg": seg, "invert": true})).unwrap();
+            let d = s.develop_of(id).unwrap();
+            let c = d.masks[0].components.last().unwrap();
+            assert_eq!(c.op, expected);
+            assert!(c.invert);
+            assert!(matches!(&c.shape, MaskShape::Prompt { text, seg: Some(_), .. } if text == "sky"));
+        }
+        let d = s.develop_of(id).unwrap();
+        let saved = serde_json::to_value(&d.masks).unwrap();
+        let restored: Vec<lightcraft_develop::Mask> = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored, d.masks);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.develop_of(id).unwrap().masks[0].components.len(), 3);
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.develop_of(id).unwrap().masks, restored);
+        // Legacy saved sky edits retain their DNG-matte / heuristic renderer.
+        let legacy: MaskShape = serde_json::from_value(json!({"kind": "sky"})).unwrap();
+        assert_eq!(legacy, MaskShape::Sky);
+        assert!(!s.segmenter.busy());
+    }
+}
 
 fn tmp(name: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-sam3-engine-{name}-{}", std::process::id()));
