@@ -64,7 +64,7 @@ const SAME_SENSOR: &[(&str, &str, &str)] = &[
     ("Fujifilm", "X-M5", "X-T3"),
     ("Fujifilm", "GFX100S II", "GFX 100"),
     ("Sony", "ILCE-7CM2", "ILCE-7M4"), // A7C II: same 33 MP sensor as the A7 IV
-    ];
+];
 
 /// Model names compared without case, the brand, a leading `EOS` or a trailing `DIGITAL`
 /// (Exif "Canon EOS 400D DIGITAL" is the table's "EOS 400D").
