@@ -16,12 +16,16 @@ mod specs;
 pub(crate) use filters::covers_other_disks;
 pub use import::{ImportRequest, import_batch_done, import_params, list_auto_import_folder};
 pub fn specs() -> Vec<CommandSpec> {
-    let mut v = vec![
-        cmd!("library.nextUnrated", "Next Unrated Photo", [], Some("Cmd+Right"), "{}", always, |s, _| step_unrated(s, 1)),
-        cmd!("library.prevUnrated", "Previous Unrated Photo", [], Some("Cmd+Left"), "{}", always, |s, _| step_unrated(s, -1)),
-    ];
+    let mut v = next_unrated_specs();
     v.extend(specs::specs());
     v
+}
+
+fn next_unrated_specs() -> Vec<CommandSpec> {
+    vec![
+        cmd!("library.nextUnrated", "Next Unrated Photo", [], Some("Cmd+Right"), "{}", always, |s, _| step_unrated(s, 1)),
+        cmd!("library.prevUnrated", "Previous Unrated Photo", [], Some("Cmd+Left"), "{}", always, |s, _| step_unrated(s, -1)),
+    ]
 }
 
 fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
@@ -57,11 +61,9 @@ fn step_unrated(s: &mut Session, d: isize) -> Result<serde_json::Value> {
         return Ok(json!({"active": id.0}));
     }
     s.end_interaction()?;
-    if s.selection.ids.len() > 1 {
-        s.selection.active = Some(id);
-    } else {
-        s.selection = Selection::single(id);
-    }
+    // The jump selects the photo it lands on: the active photo is always part of the selection,
+    // so a command sent without explicit ids acts on the photo just navigated to.
+    s.selection = Selection::single(id);
     s.active_mask = None;
     s.active_spot = None;
     Ok(json!({"active": id.0}))
@@ -138,13 +140,15 @@ mod next_unrated_tests {
     }
 
     #[test]
-    fn next_unrated_preserves_multi_selection_when_moving() {
+    fn next_unrated_selects_only_the_jumped_photo() {
         let mut s = session().unwrap();
         s.execute("library.select", &json!({"ids": [1, 2, 4], "active": 1})).unwrap();
         let result = s.execute("library.nextUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
+        // The active photo is always part of the selection, so the jump selects it alone; the
+        // photos it left keep their ratings.
+        assert_eq!(s.selection.ids, vec![PhotoId(3)]);
         assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().rating, 1);
         assert_eq!(s.catalog.photo(PhotoId(4)).unwrap().rating, 0);
     }
@@ -192,13 +196,15 @@ mod next_unrated_tests {
     }
 
     #[test]
-    fn prev_unrated_preserves_multi_selection_when_moving() {
+    fn prev_unrated_selects_only_the_jumped_photo() {
         let mut s = session().unwrap();
         s.execute("library.select", &json!({"ids": [1, 2, 4], "active": 4})).unwrap();
         let result = s.execute("library.prevUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
+        // The active photo is always part of the selection, so the jump selects it alone; the
+        // photos it left keep their ratings.
+        assert_eq!(s.selection.ids, vec![PhotoId(3)]);
         assert_eq!(s.catalog.photo(PhotoId(2)).unwrap().rating, 1);
         assert_eq!(s.catalog.photo(PhotoId(4)).unwrap().rating, 0);
     }
@@ -241,8 +247,9 @@ mod next_unrated_tests {
         let result = s.execute("library.nextUnrated", &json!({})).unwrap();
         assert_eq!(result, json!({"active": 3}));
         assert_eq!(s.active(), Some(PhotoId(3)));
-        // Navigation keeps the selection unchanged; only the active photo moves.
-        assert_eq!(s.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(4)]);
+        // The jump selects the photo it lands on, so the photos it left keep their ratings even
+        // though they were selected before.
+        assert_eq!(s.selection.ids, vec![PhotoId(3)]);
         // A rating command with no explicit ids rates the active (jumped-to) photo.
         s.execute("photo.rate", &json!({"rating": 5})).unwrap();
         assert_eq!(s.catalog.photo(PhotoId(3)).unwrap().rating, 5);
