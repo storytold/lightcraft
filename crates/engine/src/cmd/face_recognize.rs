@@ -180,7 +180,8 @@ fn unnamed_faces_param(s: &Session, cmd: &str, p: &Value) -> Result<Vec<(u64, us
     let mut seen = std::collections::HashSet::new();
     for face in list {
         let id = lcc_catalog::PhotoId(face.get("photo").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "missing `photo`"))?);
-        let index = face.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(cmd, "invalid face `index`"))?;
+        let index =
+            face.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(cmd, "invalid face `index`"))?;
         if !seen.insert((id, index)) {
             continue;
         }
@@ -275,10 +276,8 @@ fn reject_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
     let n = current.len();
     let arranged = imp::arrange_unnamed(s, &mut current, n);
     let day = today();
-    let decisions: Vec<(u64, usize, String)> = chosen
-        .iter()
-        .filter_map(|(photo, index, _)| Some((*photo, *index, arranged.suggestions.get(&(*photo, *index))?.0.clone())))
-        .collect();
+    let decisions: Vec<(u64, usize, String)> =
+        chosen.iter().filter_map(|(photo, index, _)| Some((*photo, *index, arranged.suggestions.get(&(*photo, *index))?.0.clone()))).collect();
     let kept = s
         .with_people(|store| {
             let mut kept = 0usize;
@@ -305,8 +304,7 @@ fn undo_suggestion_decision(s: &mut Session, p: &Value) -> Result<Value> {
     let mut keys = std::collections::BTreeSet::new();
     for face in list {
         let photo = face.get("photo").and_then(Value::as_u64).ok_or_else(|| bad(C, "missing `photo`"))?;
-        let index =
-            face.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "invalid face `index`"))?;
+        let index = face.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "invalid face `index`"))?;
         keys.insert((photo, index));
     }
     let removed = s
@@ -349,8 +347,8 @@ fn suggestion_decisions(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// One page of `listed` (already in the order to show), from `start`, `limit` long.
-fn decisions_page<'a>(listed: &[&'a crate::people_store::SuggestionDecision], start: usize, limit: usize) -> Vec<Value> {
-    let list: Vec<Value> = listed
+fn decisions_page(listed: &[&crate::people_store::SuggestionDecision], start: usize, limit: usize) -> Vec<Value> {
+    listed
         .iter()
         .skip(start)
         .take(limit)
@@ -361,8 +359,7 @@ fn decisions_page<'a>(listed: &[&'a crate::people_store::SuggestionDecision], st
             };
             json!({"photo": d.photo, "index": d.index, "person": d.person, "verdict": verdict, "decided": d.decided})
         })
-        .collect();
-    list
+        .collect()
 }
 
 /// `faces.renamePerson {from, to, merge?}`: give every in-library face of `from` the exact name `to`, as one undo
@@ -497,7 +494,11 @@ struct Arranged {
 ///
 /// Only the faces listed are in a group, so a group says how many of the listed faces it holds; `total` of
 /// `faces.unnamed` says how many unnamed faces the library has.
-fn suggestion_groups(s: &Session, shown: &[(u64, usize, lcc_geom::Rect)], suggestions: &std::collections::HashMap<(u64, usize), (String, f32)>) -> Value {
+fn suggestion_groups(
+    s: &Session,
+    shown: &[(u64, usize, lcc_geom::Rect)],
+    suggestions: &std::collections::HashMap<(u64, usize), (String, f32)>,
+) -> Value {
     // the name each suggested person was first shown as, by lower-cased name (`Ann` and `ann` are one person)
     let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut groups: std::collections::HashMap<String, Vec<(u64, usize, lcc_geom::Rect, f32)>> = std::collections::HashMap::new();
@@ -570,10 +571,16 @@ fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
     // what the user said about a face's suggestion holds: a face rejected as the person it was suggested as is not put
     // under them again (issue #1050); the face itself stays in the list, unknown
     let (mut faces, mut rejected, mut suggestions) = (faces, 0usize, arranged.suggestions.clone());
-    // (`faces` is one entry per listed face, in `all`'s order)
-    for ((photo, index, _), face) in all.iter().zip(faces.iter_mut()) {
-        let Some((name, _)) = suggestions.get(&(*photo, *index)) else { continue };
-        if !s.people_store().rejected_as(*photo, *index, name) {
+    // (`faces` is one entry per listed face, in `all`'s order; the decisions are read in one borrow of the store, which
+    // ends before the session is read again for the groups)
+    let decided: Vec<bool> = {
+        let store = s.people_store();
+        all.iter()
+            .map(|(photo, index, _)| suggestions.get(&(*photo, *index)).is_some_and(|(name, _)| store.rejected_as(*photo, *index, name)))
+            .collect()
+    };
+    for ((photo, index, _), (face, was_rejected)) in all.iter().zip(faces.iter_mut().zip(decided)) {
+        if !was_rejected {
             continue;
         }
         suggestions.remove(&(*photo, *index));

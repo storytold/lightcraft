@@ -89,14 +89,11 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
 fn category_header(app: &mut LccApp, ui: &mut egui::Ui) {
     let people = app.caches.people(&app.session.catalog, &app.session.people_filter());
     let counts = category_counts(&categories(app, ui.input(|i| i.time)), people.len());
-    let labels: Vec<(String, String)> = [
-        (PeopleCategory::Unknown, counts[0]),
-        (PeopleCategory::Suggested, counts[1]),
-        (PeopleCategory::Confirmed, counts[2]),
-    ]
-    .into_iter()
-    .map(|(category, count)| (format!("{} ({count})", crate::i18n::tr(category.title())), category.id().to_string()))
-    .collect();
+    let labels: Vec<(String, String)> =
+        [(PeopleCategory::Unknown, counts[0]), (PeopleCategory::Suggested, counts[1]), (PeopleCategory::Confirmed, counts[2])]
+            .into_iter()
+            .map(|(category, count)| (format!("{} ({count})", crate::i18n::tr(category.title())), category.id().to_string()))
+            .collect();
     let items: Vec<(&str, &str)> = labels.iter().map(|(label, key)| (label.as_str(), key.as_str())).collect();
     let active = Some(match app.ui.people_category {
         PeopleCategory::Unknown => 0,
@@ -139,7 +136,11 @@ impl CategoryFaces {
 
 /// Split a `faces.unnamed {bySuggestion: true}` answer into the categories: a face confirmed in this session is named
 /// now and gone from it, and a face whose suggestion was rejected is unknown again.
-pub fn category_faces(list: &Unnamed, rejected: &std::collections::HashSet<(u64, usize)>, confirmed: &std::collections::HashSet<(u64, usize)>) -> CategoryFaces {
+pub fn category_faces(
+    list: &Unnamed,
+    rejected: &std::collections::HashSet<(u64, usize)>,
+    confirmed: &std::collections::HashSet<(u64, usize)>,
+) -> CategoryFaces {
     let mut unknown = Vec::new();
     let mut suggested: Vec<SuggestionGroup> = Vec::new();
     for face in &list.faces {
@@ -307,7 +308,12 @@ fn confirmed(app: &mut LccApp, ui: &mut egui::Ui) {
                 "Face names written to XMP by Lightroom and other apps show up here, and faces found in your photos can be named.",
             );
         } else {
-            super::empty_message(ui, ui.available_rect_before_wrap(), "No named people in these photos", "Remove a filter above, or choose Clear all");
+            super::empty_message(
+                ui,
+                ui.available_rect_before_wrap(),
+                "No named people in these photos",
+                "Remove a filter above, or choose Clear all",
+            );
         }
         return;
     }
@@ -389,7 +395,8 @@ fn unknown(app: &mut LccApp, ui: &mut egui::Ui) {
     // Select all / Select none, for the faces this category lists
     let all = faces.iter().all(|f| app.ui.unnamed_selected.contains(&(f.photo, f.index)));
     let select = crate::i18n::tr(if all { "Select none" } else { "Select all" }).to_string();
-    let clicked = heading(ui, row, &Heading { title: "Unknown faces", count: faces.len(), note, action: Some((select, "unnamed:selectAll".to_string())) });
+    let clicked =
+        heading(ui, row, &Heading { title: "Unknown faces", count: faces.len(), note, action: Some((select, "unnamed:selectAll".to_string())) });
     if clicked.is_some() {
         let keys: Vec<(u64, usize)> = faces.iter().map(|f| (f.photo, f.index)).collect();
         if all {

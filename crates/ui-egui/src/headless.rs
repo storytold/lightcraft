@@ -2120,7 +2120,8 @@ mod tests {
         // from the engine, which has nothing to say without a model
         let put_listing = |h: &mut Headless| {
             let at = h.time();
-            h.app.caches.unnamed = Some((h.app.session.catalog.revision, h.app.caches.faces_indexed, at, Arc::new(crate::panels::unnamed::parse(&list))));
+            h.app.caches.unnamed =
+                Some((h.app.session.catalog.revision, h.app.caches.faces_indexed, at, Arc::new(crate::panels::unnamed::parse(&list))));
             h.step();
         };
         h.request("engine.execute", json!({"command": "view.people"}), t);

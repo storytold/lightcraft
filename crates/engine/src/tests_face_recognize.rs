@@ -541,7 +541,8 @@ fn unnamed_faces_come_with_look_alikes_together_and_the_name_the_named_ones_sugg
     let groups = r["groups"].as_array().expect("groups are there when asked for");
     assert_eq!(groups.len(), 1, "only Ann is suggested: {groups:?}");
     assert_eq!((groups[0]["name"].clone(), groups[0]["total"].clone()), (json!("Ann"), json!(2)), "{groups:?}");
-    let in_group: Vec<(u64, u64)> = groups[0]["faces"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap())).collect();
+    let in_group: Vec<(u64, u64)> =
+        groups[0]["faces"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap())).collect();
     assert_eq!(in_group.len(), 2, "{groups:?}");
     assert!(in_group.contains(&(b.0, 0)) && in_group.contains(&(c.0, 0)), "{in_group:?}");
     // the most alike first, and each face says which box to show it by and how alike it is
@@ -610,7 +611,12 @@ fn suggested_faces_are_confirmed_or_rejected_and_a_rejection_sticks() {
     let face = |index: usize| json!({"photo": b.0, "index": index});
     let suggestions = |s: &mut Session| -> Vec<(u64, u64, Option<String>)> {
         let r = s.execute("faces.unnamed", &json!({})).unwrap();
-        r["faces"].as_array().unwrap().iter().map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap(), f["suggestion"]["name"].as_str().map(str::to_string))).collect()
+        r["faces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| (f["photo"].as_u64().unwrap(), f["index"].as_u64().unwrap(), f["suggestion"]["name"].as_str().map(str::to_string)))
+            .collect()
     };
     // both unnamed faces are listed, and only the one that looks like Ann is suggested
     assert_eq!(suggestions(&mut s).iter().find(|(_, i, _)| *i == 0).and_then(|s| s.2.clone()), Some("Ann".to_string()));
@@ -622,7 +628,11 @@ fn suggested_faces_are_confirmed_or_rejected_and_a_rejection_sticks() {
     assert_eq!(face_names(&s, b), vec![Some("Ann".into()), None], "only the confirmed face is named");
     assert_eq!(s.undo.len(), undo + 1, "one undo step");
     let r = s.execute("faces.suggestionDecisions", &json!({"photo": b.0})).unwrap();
-    assert_eq!((r["total"].clone(), r["decisions"][0]["person"].clone(), r["decisions"][0]["verdict"].clone()), (json!(1), json!("Ann"), json!("confirmed")), "{r}");
+    assert_eq!(
+        (r["total"].clone(), r["decisions"][0]["person"].clone(), r["decisions"][0]["verdict"].clone()),
+        (json!(1), json!("Ann"), json!("confirmed")),
+        "{r}"
+    );
     assert!(r["decisions"][0]["decided"].as_str().is_some_and(|d| d.len() == 10 && d.as_bytes()[4] == b'-'), "{r}");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(face_names(&s, b), vec![None, None], "undo takes the name back");

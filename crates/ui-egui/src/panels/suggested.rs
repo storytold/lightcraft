@@ -244,8 +244,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
             let top = area.top() + tops.get(gi).copied().unwrap_or(0.0);
             let rows = group.faces.len().div_ceil(cols);
             // only the sections on screen (a library can hold hundreds of them)
-            if top + people::SECTION_H + rows as f32 * (tile + people::TILE_GAP) < viewport.top() + area.top()
-                || top - area.top() > viewport.bottom()
+            if top + people::SECTION_H + rows as f32 * (tile + people::TILE_GAP) < viewport.top() + area.top() || top - area.top() > viewport.bottom()
             {
                 continue;
             }
@@ -254,10 +253,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                 title: &group.name,
                 count: group.total,
                 note: crate::i18n::tr_format!("Suggested as {}. Confirm the faces that are them.", group.name).to_string(),
-                action: Some((
-                    crate::i18n::tr_format!("Confirm all {}", group.total).to_string(),
-                    format!("suggested:confirmAll:{}", group.name),
-                )),
+                action: Some((crate::i18n::tr_format!("Confirm all {}", group.total).to_string(), format!("suggested:confirmAll:{}", group.name))),
             };
             if people::heading(ui, heading_rect, &h).is_some() {
                 decisions.push(Decision { verdict: Verdict::Confirm, person: group.name.clone(), faces: group.faces.clone() });
@@ -275,7 +271,10 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
             }
             for (i, face) in group.faces.iter().enumerate() {
                 let (row, col) = (i / cols, i % cols);
-                let min = pos2(area.left() + PAD + col as f32 * (tile + people::TILE_GAP), top + people::SECTION_H + row as f32 * (tile + people::TILE_GAP));
+                let min = pos2(
+                    area.left() + PAD + col as f32 * (tile + people::TILE_GAP),
+                    top + people::SECTION_H + row as f32 * (tile + people::TILE_GAP),
+                );
                 shown += 1;
                 if let Some(verdict) = tile(app, ui, group, face, Rect::from_min_size(min, vec2(tile, tile)), ppp) {
                     decisions.push(Decision { verdict, person: group.name.clone(), faces: vec![face.clone()] });
@@ -411,11 +410,9 @@ mod tests {
     #[test]
     fn each_verdict_runs_its_own_command_over_the_faces_it_covers() {
         let faces = vec![face(1, 0, Some("Ann")), face(2, 3, Some("Ann"))];
-        for (verdict, cmd) in [
-            (Verdict::Confirm, "faces.confirmSuggestions"),
-            (Verdict::Reject, "faces.rejectSuggestions"),
-            (Verdict::Ignore, "faces.ignore"),
-        ] {
+        for (verdict, cmd) in
+            [(Verdict::Confirm, "faces.confirmSuggestions"), (Verdict::Reject, "faces.rejectSuggestions"), (Verdict::Ignore, "faces.ignore")]
+        {
             let (id, params) = command(&Decision { verdict, person: "Ann".into(), faces: faces.clone() });
             assert_eq!(id, cmd);
             assert_eq!(params["faces"].as_array().map(Vec::len), Some(2));

@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2};
 use serde_json::{Value, json};
 
 use crate::LccApp;
@@ -103,7 +103,6 @@ pub fn parse(v: &Value) -> Unnamed {
     }
 }
 
-
 /// The unnamed faces, asked for again only when the catalog changed, or (while the scan runs and learns more faces) at
 /// most every few seconds, since putting look-alikes together looks at every pair.
 pub fn faces(app: &mut LccApp, now: f64) -> Arc<Unnamed> {
@@ -194,11 +193,7 @@ pub fn naming_bar(app: &mut LccApp, ui: &mut egui::Ui) {
         if field.ending == Some(crate::text_field::Ending::Return) && !chosen.is_empty() {
             submit = Some(chosen.clone());
         }
-        let label = if n == 1 {
-            crate::i18n::tr("Name face").to_string()
-        } else {
-            crate::i18n::tr_format!("Name {} faces", n).to_string()
-        };
+        let label = if n == 1 { crate::i18n::tr("Name face").to_string() } else { crate::i18n::tr_format!("Name {} faces", n).to_string() };
         let b = ui.add_enabled(!chosen.is_empty(), egui::Button::new(label));
         register(ui.ctx(), "unnamed:name", b.rect);
         if b.clicked() {
