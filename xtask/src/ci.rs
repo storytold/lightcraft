@@ -258,6 +258,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
         Some(p) => match step {
             "clippy" | "test" | "wasm" => p.rust(),
             "heif" => p.heif,
+            "video" => p.video,
             "parity" => p.parity,
             _ => true,
         },
@@ -289,6 +290,20 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 test(tests(&with_test_targets(&["-p", "lightcraft-codecs", "--features", "lightcraft-codecs/heif"])), "heif")?;
                 // the engine's HEIC import test, with the decoder (the workspace run checks the error)
                 test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/heif", "heic"]), "heif")
+            }),
+        ),
+        (
+            "video",
+            Box::new(|| {
+                // the H.264 / HEVC decoders (feature video-frames) are off in the workspace build
+                // above, like heif: patents are the maintainers' call (#3244)
+                let mut c = cargo();
+                c.args(["clippy", "-p", "lightcraft-codecs", "--features", "video-frames", "--all-targets", "--", "-D", "warnings"]);
+                run(c, "cargo clippy -p lightcraft-codecs --features video-frames --all-targets -- -D warnings")?;
+                test(tests(&with_test_targets(&["-p", "lightcraft-codecs", "--features", "lightcraft-codecs/video-frames"])), "video")?;
+                // the engine's poster frames and playback, with the decoders (the workspace run
+                // checks what a build without them says)
+                test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/video-frames", "video"]), "video")
             }),
         ),
         (

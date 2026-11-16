@@ -1,6 +1,6 @@
 //! `cargo xtask ci --quick`: the checks a branch's own changes can break, for a pre-push check.
 //!
-//! The full `ci` builds the workspace four ways (clippy, heif, tests, wasm) plus the CLI for the
+//! The full `ci` builds the workspace five ways (clippy, heif, video, tests, wasm) plus the CLI for the
 //! parity check, ~23 minutes cold. `--quick` looks at what changed since the merge base with
 //! `origin/main` (or `--base REF`), committed or not, and runs:
 //!
@@ -8,6 +8,8 @@
 //! - clippy on the whole workspace (check builds only; catches callers broken by an API change);
 //! - the tests of the changed packages only (not their dependents);
 //! - heif when `lightcraft-codecs` changed (or the workspace files, which pin craft-heif);
+//! - video when `lightcraft-codecs` or `lightcraft-engine` changed (or the workspace files, which
+//!   pin craft-video and craft-media);
 //! - parity when the tracker docs, a command/control crate, or a file's path changed (renames and
 //!   deletions: the tracker cites paths);
 //! - the wasm check of the changed packages that must build for wasm32.
@@ -29,6 +31,9 @@ const WORKSPACE_WIDE_DIRS: &[&str] = &[".cargo/"];
 const PARITY_PACKAGES: &[&str] = &["lightcraft-engine", "lightcraft-develop", "lightcraft-ui-egui", "lightcraft-cli"];
 const PARITY_DOCS: &[&str] = &["docs/parity-checklist.md", "docs/gaps.md"];
 const HEIF_PACKAGES: &[&str] = &["lightcraft-codecs"];
+/// Packages with code that runs only with the video decoders (`lightcraft-codecs`' feature
+/// `video-frames`): the codecs' video streams and poster frames, the engine's video loaders.
+const VIDEO_PACKAGES: &[&str] = &["lightcraft-codecs", "lightcraft-engine"];
 /// Files outside a package's directory that it compiles in (`include_str!` / `include_bytes!`,
 /// a build script's `rerun-if-changed`): a change to one counts as a change to those packages.
 /// An entry ending in `/` covers the directory. `embedded_files_are_mapped` keeps this complete.
@@ -66,6 +71,7 @@ pub struct Plan {
     /// A workspace-wide file changed: test everything.
     pub workspace_wide: bool,
     pub heif: bool,
+    pub video: bool,
     pub parity: bool,
     /// What the changes were measured against, for the log and the report.
     pub base: String,
@@ -105,6 +111,7 @@ pub fn plan(changed: &[Changed], packages: &[(String, String)], base: String) ->
         }
     }
     p.heif = p.workspace_wide || HEIF_PACKAGES.iter().any(|h| p.packages.contains(*h));
+    p.video = p.workspace_wide || VIDEO_PACKAGES.iter().any(|h| p.packages.contains(*h));
     p.parity |= p.workspace_wide || PARITY_PACKAGES.iter().any(|h| p.packages.contains(*h));
     p
 }
@@ -206,7 +213,7 @@ mod tests {
     fn changed_files_pick_their_innermost_package() {
         let p = plan(&[ch("crates/raw/src/lib.rs"), ch("crates/raw/nested/src/x.rs"), ch("crates/rawx/y.rs")], &pkgs(), "b".into());
         assert_eq!(p.packages.iter().map(String::as_str).collect::<Vec<_>>(), ["lightcraft-raw", "lightcraft-raw-nested"]);
-        assert!(p.rust() && !p.workspace_wide && !p.heif && !p.parity);
+        assert!(p.rust() && !p.workspace_wide && !p.heif && !p.video && !p.parity);
     }
 
     #[test]
@@ -220,11 +227,11 @@ mod tests {
     #[test]
     fn workspace_files_heif_and_parity_triggers() {
         let p = plan(&[ch("Cargo.lock")], &pkgs(), "b".into());
-        assert!(p.workspace_wide && p.rust() && p.heif && p.parity);
+        assert!(p.workspace_wide && p.rust() && p.heif && p.video && p.parity);
         let p = plan(&[ch("crates/codecs/src/heif.rs")], &pkgs(), "b".into());
-        assert!(p.heif && !p.parity);
+        assert!(p.heif && p.video && !p.parity);
         let p = plan(&[ch("crates/engine/src/commands.rs")], &pkgs(), "b".into());
-        assert!(p.parity && !p.heif);
+        assert!(p.parity && p.video && !p.heif);
         let p = plan(&[Changed { path: "crates/raw/src/old.rs".into(), gone: true }], &pkgs(), "b".into());
         assert!(p.parity, "a removed path may be cited by the tracker");
     }

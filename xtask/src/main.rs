@@ -52,7 +52,7 @@ commands:
                   build the browser app (apps/lightcraft-web) into <target>/web-site/;
                   --serve serves it on http://127.0.0.1:<port> (default 8080)
   ci [--hardware] [--summary-md] [--quick [--base REF]]
-                  fmt --check, clippy -D warnings, heif, test, GPU probe, parity refs, layers, assets, roots, wasm
+                  fmt --check, clippy -D warnings, heif, video, test, GPU probe, parity refs, layers, assets, roots, wasm
                   (stops at first failure). Tests run under cargo test (cargo nextest with
                   LIGHTCRAFT_NEXTEST=1), without examples, then doctests with cargo test --doc; after
                   them it prints the translation gaps report (never a failure). Writes
@@ -60,7 +60,7 @@ commands:
                   steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
                   every backend with a hardware adapter; --summary-md prints the Markdown summary.
                   --quick: only what the changes since the merge base with origin/main (or REF) can
-                  break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
+                  break: clippy, the changed packages' tests, and heif / video / parity / wasm when they apply.
                   One ci runs at a time per machine; others wait (LIGHTCRAFT_CI_SLOTS=N for N at once,
                   LIGHTCRAFT_CI_LOCK=off to skip the lock)
   corpus [--download]
