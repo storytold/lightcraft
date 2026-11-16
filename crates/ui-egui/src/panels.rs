@@ -104,11 +104,12 @@ const TOAST_FADE_SECONDS: f64 = 0.25;
 const TOAST_REPAINT_MS: u64 = 30;
 
 /// The HUD toast at the bottom centre of the canvas. A press on it dismisses it (its rectangle
-/// is registered as `toast` for automation); the press itself passes through to whatever the
-/// canvas holds underneath, as it always has (#3050).
+/// is registered as `toast` for automation); a press on a warning toast opens its full report
+/// instead, and the press itself passes through to whatever the canvas holds underneath, as it
+/// always has (#3050).
 pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let now = app.tick_now();
-    let Some((text, until, label)) = app.ui.toast.clone() else { return };
+    let Some((text, until, label, details)) = app.ui.toast.clone() else { return };
     if now > until {
         app.ui.toast = None;
         return;
@@ -126,7 +127,13 @@ pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let pressed_on_toast =
         ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) && i.pointer.latest_pos().is_some_and(|p| rect.contains(p)));
     if pressed_on_toast {
-        app.ui.toast = None;
+        // A warning toast opens its full report instead of only clearing it; closing the dialog
+        // clears the toast too (#3050). A dialog already on screen keeps its own input.
+        match details {
+            Some(warnings) if app.ui.dialog.is_none() => app.ui.dialog = Some(crate::state::Dialog::ImportWarnings { warnings }),
+            Some(_) => {}
+            None => app.ui.toast = None,
+        }
         return;
     }
     ctx.request_repaint_after(std::time::Duration::from_millis(TOAST_REPAINT_MS));

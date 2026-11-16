@@ -300,6 +300,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
+            Dialog::ImportWarnings { .. } => 620.0,
             Dialog::Print => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
@@ -392,6 +393,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     if close && matches!(dlg, Dialog::Import { .. }) {
         app.renderer.forget_imports();
     }
+    // the report's own toast goes with it: the pair is one notification (#3050)
+    if close && matches!(dlg, Dialog::ImportWarnings { .. }) {
+        app.ui.toast = None;
+    }
     app.ui.dialog = if close { None } else { Some(dlg) };
 }
 
@@ -454,6 +459,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::MergeKeywords { .. } => "Merge Keywords",
         Dialog::NewSmartAlbum { .. } => "Create Smart Album",
         Dialog::AllMetadata { .. } => "All Metadata",
+        Dialog::ImportWarnings { .. } => "Import warnings",
         Dialog::SystemInfo { .. } => "System Info",
         Dialog::DenoiseModel { .. } => "AI Denoise Model",
         Dialog::FaceModel { info, .. } if info["download"].is_string() => "Download Face Model",
@@ -616,6 +622,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         | Dialog::Settings { .. }
         | Dialog::SystemInfo { .. }
         | Dialog::AllMetadata { .. }
+        | Dialog::ImportWarnings { .. }
         | Dialog::WhatsNew
         | Dialog::ManageEffects { .. }
         | Dialog::ViewOptions
@@ -999,6 +1006,27 @@ fn all_metadata_body(ui: &mut egui::Ui, t: &Tokens, dlg: &mut Dialog) {
                     ui.label(egui::RichText::new(n).color(t.text_dim));
                     ui.add(egui::Label::new(egui::RichText::new(v).color(t.text_label)).wrap());
                     ui.end_row();
+                }
+            });
+        }
+    });
+}
+
+/// The body of the import-warnings dialog: the groups the toast shows, each openable to every
+/// photo's line with its path — what the toast's cap holds back (#3050).
+fn import_warnings_body(ui: &mut egui::Ui, t: &Tokens, warnings: &[lightcraft_engine::import::ImportWarning]) {
+    if warnings.is_empty() {
+        ui.label(egui::RichText::new(crate::i18n::tr("No import warnings")).color(t.text_dim));
+        return;
+    }
+    let (order, by_key) = crate::import::task::group_warnings(warnings);
+    egui::ScrollArea::vertical().max_height(list_height(ui, 440.0)).auto_shrink([false, true]).show(ui, |ui| {
+        for key in &order {
+            let members = &by_key[key];
+            let header = crate::import::task::warning_line(members[0], members.len());
+            egui::CollapsingHeader::new(header).id_salt(key).default_open(true).show(ui, |ui| {
+                for w in members {
+                    ui.add(egui::Label::new(crate::import::task::xmp_warning_text(w)).wrap());
                 }
             });
         }
@@ -2087,6 +2115,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::LightroomResult { .. } => lightroom_result_body(ui, dlg),
         Dialog::SystemInfo { .. } => system_info_body(ui, t, dlg),
         Dialog::AllMetadata { .. } => all_metadata_body(ui, t, dlg),
+        Dialog::ImportWarnings { warnings } => import_warnings_body(ui, t, warnings),
         Dialog::SmartRules { .. } => smart_rules_body(app, ui, t, dlg),
         Dialog::NewSmartAlbum { .. } => new_smart_album_body(app, ui, t, confirm, dlg),
         Dialog::CaptureTime { .. } => capture_time_body(app, ui, t, dlg),

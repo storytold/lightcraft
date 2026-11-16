@@ -263,7 +263,7 @@ impl LightcraftApp {
             };
             if let Some(message) = completed {
                 let now = self.tick_now();
-                self.ui.toast = Some((message, now + TOAST_SECONDS, None));
+                self.ui.toast = Some((message, now + TOAST_SECONDS, None, None));
             }
         }
         if r.is_ok() && matches!(id, "photo.label" | "photo.clearLabel") {
@@ -278,7 +278,7 @@ impl LightcraftApp {
                 None => i18n::tr("Color label cleared").into(),
             };
             let now = self.tick_now();
-            self.ui.toast = Some((text, now + TOAST_SECONDS, label));
+            self.ui.toast = Some((text, now + TOAST_SECONDS, label, None));
         }
         match &r {
             Err(e) => {
@@ -449,6 +449,7 @@ impl LightcraftApp {
                     ),
                     t + 6.0,
                     None,
+                    None,
                 ));
             }
             (None, true) => {
@@ -479,7 +480,22 @@ impl LightcraftApp {
     /// A toast that stays `secs` seconds (messages that say where to look or what to do next).
     pub fn toast_for(&mut self, _ctx: &egui::Context, text: impl Into<String>, secs: f64) {
         let t = self.tick_now();
-        self.ui.toast = Some((text.into(), t + secs, None));
+        self.ui.toast = Some((text.into(), t + secs, None, None));
+    }
+
+    /// A warning toast that carries the structured warnings behind it: pressing it opens their
+    /// details dialog instead of only clearing it (#3050).
+    pub fn toast_with_details(
+        &mut self,
+        ctx: &egui::Context,
+        text: impl Into<String>,
+        secs: f64,
+        details: Vec<lightcraft_engine::import::ImportWarning>,
+    ) {
+        self.toast_for(ctx, text, secs);
+        if let Some(toast) = self.ui.toast.as_mut() {
+            toast.3 = Some(details);
+        }
     }
 
     /// Reverse geocoding: say how a place-names download ended (a failure stays readable, with what to do).
@@ -601,7 +617,7 @@ impl LightcraftApp {
     /// A toast for an error the user has to read and act on (stays 6 s).
     pub fn toast_error(&mut self, _ctx: &egui::Context, text: impl Into<String>) {
         let t = self.tick_now();
-        self.ui.toast = Some((text.into(), t + 6.0, None));
+        self.ui.toast = Some((text.into(), t + 6.0, None, None));
     }
 
     /// The process is about to end (settings and library are saved by then): make sure nothing is

@@ -375,7 +375,7 @@ fn commit_batch(app: &mut LightcraftApp, task: &mut ImportTask, prepared: lightc
     }
 }
 
-fn xmp_warning_text(warning: &ImportWarning) -> String {
+pub(crate) fn xmp_warning_text(warning: &ImportWarning) -> String {
     let path = &warning.path;
     match warning.code {
         ImportWarningCode::CameraProfile => crate::i18n::tr_format!(
@@ -432,33 +432,51 @@ const MAX_WARNING_LINES: usize = 6;
 /// The most field names one grouped line lists before a "+N more" line.
 const MAX_WARNING_FIELDS: usize = 8;
 
-/// Warnings that say the same thing about different photos, one entry per distinct message in
-/// first-seen order: the warning to render and how many photos it covers. A profile groups by
-/// name, Upright by mode, unmapped fields by the field set; a group of one keeps its photo's
-/// path in [`xmp_warning_text`].
-fn grouped_warnings(warnings: &[ImportWarning]) -> Vec<(&ImportWarning, usize)> {
-    let mut by_key: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut groups: Vec<(&ImportWarning, usize)> = Vec::new();
-    for w in warnings {
-        let key = match w.code {
-            ImportWarningCode::CameraProfile => format!("profile:{}", w.profile.as_deref().unwrap_or_default()),
-            ImportWarningCode::UprightGeometry => format!("upright:{:?}", w.mode),
-            // the two unmapped buckets hold disjoint fields, so they share one set-shaped key
-            ImportWarningCode::UnmappedXmp | ImportWarningCode::SkippedXmpMetadata => {
-                let mut fields = w.fields.clone();
-                fields.sort_unstable();
-                format!("xmp:{}", fields.join("\u{1f}"))
-            }
-        };
-        match by_key.get(&key) {
-            Some(&i) => groups[i].1 = groups[i].1.saturating_add(1),
-            None => {
-                by_key.insert(key, groups.len());
-                groups.push((w, 1));
-            }
+/// How long the import-finish toast stays, warning details or not.
+const IMPORT_WARNING_TOAST_SECONDS: f64 = 8.0;
+
+/// The group a warning belongs to: a profile by name, Upright by mode, unmapped fields by
+/// their sorted set. The two unmapped buckets hold disjoint fields, so they share one
+/// set-shaped key (#3050).
+pub(crate) fn warning_group_key(w: &ImportWarning) -> String {
+    match w.code {
+        ImportWarningCode::CameraProfile => format!("profile:{}", w.profile.as_deref().unwrap_or_default()),
+        ImportWarningCode::UprightGeometry => format!("upright:{:?}", w.mode),
+        ImportWarningCode::UnmappedXmp | ImportWarningCode::SkippedXmpMetadata => {
+            let mut fields = w.fields.clone();
+            fields.sort_unstable();
+            format!("xmp:{}", fields.join("\u{1f}"))
         }
     }
-    groups
+}
+
+/// The warnings grouped by [`warning_group_key`]: each group's key in first-seen order and its
+/// members in arrival order. The toast counts groups; the details dialog lists members (#3050).
+pub(crate) fn group_warnings(warnings: &[ImportWarning]) -> (Vec<String>, std::collections::HashMap<String, Vec<&ImportWarning>>) {
+    let mut order: Vec<String> = Vec::new();
+    let mut by_key: std::collections::HashMap<String, Vec<&ImportWarning>> = std::collections::HashMap::new();
+    for w in warnings {
+        let key = warning_group_key(w);
+        if !by_key.contains_key(&key) {
+            order.push(key.clone());
+        }
+        by_key.entry(key).or_default().push(w);
+    }
+    (order, by_key)
+}
+
+/// Warnings that say the same thing about different photos, one entry per distinct message in
+/// first-seen order: the warning to render and how many photos it covers; a group of one keeps
+/// its photo's path in [`xmp_warning_text`].
+fn grouped_warnings(warnings: &[ImportWarning]) -> Vec<(&ImportWarning, usize)> {
+    let (order, by_key) = group_warnings(warnings);
+    order
+        .iter()
+        .map(|key| {
+            let members = &by_key[key];
+            (members[0], members.len())
+        })
+        .collect()
 }
 
 /// The field names one grouped line lists: in the grouping key's canonical order, capped with
@@ -476,7 +494,7 @@ fn field_list(fields: &[String]) -> String {
 
 /// One line for a group of `n` photos the same warning covers: a single photo keeps the detailed
 /// per-photo message with its path; several collapse into the count instead of repeating (#3050).
-fn warning_line(w: &ImportWarning, n: usize) -> String {
+pub(crate) fn warning_line(w: &ImportWarning, n: usize) -> String {
     if n == 1 {
         return xmp_warning_text(w);
     }
@@ -565,14 +583,14 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, task: ImportTask) {
     } else {
         msg.push_str("\n\n");
         msg.push_str(&xmp_warnings_text(&task.warnings));
-        app.toast_for(ctx, msg, 8.0);
+        app.toast_with_details(ctx, msg, IMPORT_WARNING_TOAST_SECONDS, task.warnings);
     }
 }
 
 /// The end of an automatic import or of one that only browses: a toast only when there is something to warn about.
 fn quiet_finish(app: &mut LightcraftApp, ctx: &egui::Context, task: &ImportTask) {
     if !task.warnings.is_empty() {
-        app.toast_for(ctx, xmp_warnings_text(&task.warnings), 8.0);
+        app.toast_with_details(ctx, xmp_warnings_text(&task.warnings), IMPORT_WARNING_TOAST_SECONDS, task.warnings.clone());
     } else if task.auto && task.imported > 0 {
         app.toast(ctx, crate::i18n::tr_format!("Auto Import: added {} photo{}", task.imported, crate::i18n::plural_s(task.imported)));
     } else if !task.auto && task.failed > 0 {

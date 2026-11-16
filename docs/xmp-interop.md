@@ -47,7 +47,8 @@ unmapped adjustments. Non-rendering bookkeeping — digests of state LightCraft 
 separately as skipped metadata that cannot make the photo differ from Lightroom.
 Warnings do not change the source packet or become catalog edits. The toast at the end of the import groups
 warnings that say the same thing about different photos into one counted line, caps the list with a “+N more” line,
-and disappears when pressed, so a large import cannot cover the viewer (#3050).
+and, pressed, opens the full report — every photo's line with its path — instead of only clearing itself, so a
+large import cannot cover the viewer (#3050).
 
 Manual rereading and undo leave the JPEG original unchanged. Manual rereading also leaves sidecar files unchanged,
 even with automatic XMP writing on. With automatic XMP writing off (the default), undo/redo leave sidecars unchanged;

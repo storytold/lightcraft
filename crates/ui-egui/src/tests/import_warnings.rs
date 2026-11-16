@@ -163,9 +163,10 @@ fn one_upright_mode_groups_into_one_counted_line() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A press over the toast dismisses it, and its rectangle is registered for automation (#3050).
+/// A press over a warning toast opens its full report instead of only clearing it, and closing
+/// the report clears the toast with it (#3050).
 #[test]
-fn a_press_on_the_toast_dismisses_it() {
+fn a_press_on_a_warning_toast_opens_its_report() {
     let (mut h, dir, text) = import("press", &["AutoToneDigest", "AutoToneDigest"]);
     assert!(text.contains("Import warnings (2):"), "{text}");
     assert!(h.app.ui.dialog.is_none(), "the review closed when the import ran");
@@ -176,8 +177,36 @@ fn a_press_on_the_toast_dismisses_it() {
     let r = h.request("ui.click", json!({"x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
-    assert_eq!(toast(&h), "", "the press on the toast dismissed it");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::ImportWarnings { .. })), "the press opens the report");
+    assert!(!toast(&h).is_empty(), "the toast waits for the report to close");
+    let painted = h.painted_text().join("\n");
+    assert!(painted.contains("for 2 photos"), "the grouped line heads the report: {painted}");
+    assert!(painted.contains("img0.png"), "every photo's line is in the report: {painted}");
+    let r = h.request("ui.dialog.cancel", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.dialog.is_none(), "the report closed");
+    assert_eq!(toast(&h), "", "closing the report clears the toast");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A plain toast without details still disappears on a press (#3050).
+#[test]
+fn a_press_on_a_plain_toast_dismisses_it() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, WINDOW, 1.0);
+    h.step();
+    h.app.ui.toast = Some(("plain toast".into(), h.app.tick_now() + 60.0, None, None));
+    h.settle(SETTLE);
+    let widgets = h.request("ui.widgets", json!({}), T);
+    let all = widgets["result"].as_array().expect("widgets");
+    let w = all.iter().find(|w| w["id"] == "toast").expect("the toast is registered by its rectangle");
+    let rect: Vec<f64> = [0usize, 1, 2, 3].map(|i| w["rect"][i].as_f64().expect("rect")).to_vec();
+    let r = h.request("ui.click", json!({"x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert_eq!(toast(&h), "", "the press dismissed the plain toast");
+    assert!(h.app.ui.dialog.is_none(), "a plain toast opens no dialog");
 }
 
 /// Bookkeeping that cannot change the render keeps its own message with its path and never
