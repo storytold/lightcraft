@@ -544,3 +544,67 @@ mod hlg_tests {
         assert!(encode_avif_hdr(0, 4, &[], 80, 10, &m, HdrTransfer::Hlg).is_err());
     }
 }
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+
+    /// Little-endian TIFF with one IFD0 entry, Orientation = 6 (the case the verbatim helpers exist for).
+    const ORIENTED_EXIF: &[u8] = &[
+        0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x01, 0x00, 0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    ];
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    fn tiny_rgba() -> Vec<u8> {
+        [200u8, 10, 10, 255].repeat(4)
+    }
+
+    #[test]
+    fn metadata_errors_keep_the_encode_message_and_describe_other_errors() {
+        let encode = craft_image_codecs::CodecError::Encode { format: craft_image_codecs::Format::Jpeg, message: "too big".into() };
+        assert!(matches!(metadata_error(encode), Error::Encode(m) if m == "too big"));
+        let other = craft_image_codecs::CodecError::LimitExceeded("riff".into());
+        assert!(matches!(metadata_error(other), Error::Encode(m) if m.contains("riff")));
+    }
+
+    #[test]
+    fn jpeg_segments_come_in_jfif_exif_xmp_icc_order_with_density() {
+        let icc = vec![7u8; 70_000];
+        let meta = EncodeMeta { exif: Some(ORIENTED_EXIF), xmp: Some("<x/>"), icc: Some(&icc), ppi: Some(300) };
+        let segs = jpeg_app_segments(&meta).expect("segments");
+        let markers: Vec<u8> = segs.iter().map(|(m, _)| *m).collect();
+        assert_eq!(markers, [0xE0, 0xE1, 0xE1, 0xE2, 0xE2]);
+        assert_eq!(&segs[0].1[7..12], &[1, 1, 0x2c, 1, 0x2c]);
+        assert_eq!(segs[1].1, [&b"Exif\0\0"[..], ORIENTED_EXIF].concat());
+        assert!(segs[2].1.ends_with(b"<x/>"));
+        assert_eq!(&segs[3].1[12..14], &[1, 2]);
+        assert_eq!(&segs[4].1[12..14], &[2, 2]);
+    }
+
+    #[test]
+    fn oversized_jpeg_metadata_is_an_encode_error() {
+        let big_exif = vec![0u8; 65_528];
+        let meta = EncodeMeta { exif: Some(&big_exif), ..Default::default() };
+        assert!(matches!(jpeg_app_segments(&meta), Err(Error::Encode(m)) if m.contains("EXIF")));
+        let big_xmp = "x".repeat(65_534);
+        assert!(matches!(xmp_segment(&big_xmp), Err(Error::Encode(m)) if m.contains("XMP")));
+        let meta = EncodeMeta { xmp: Some(&big_xmp), ..Default::default() };
+        assert!(matches!(jpeg_app_segments(&meta), Err(Error::Encode(_))));
+    }
+
+    #[test]
+    fn png_and_webp_keep_caller_exif_verbatim() {
+        let px = tiny_rgba();
+        let img = EncodeImage { width: 2, height: 2, channels: 4, samples: Samples::U8(&px) };
+        let meta = EncodeMeta { exif: Some(ORIENTED_EXIF), ..Default::default() };
+        let png = encode_png(&img, &meta).expect("png");
+        assert!(contains(&png, &[&b"eXIf"[..], ORIENTED_EXIF].concat()));
+        let webp = encode_webp_lossless(&img, &meta).expect("webp");
+        assert!(contains(&webp, &[&b"EXIF"[..], &(ORIENTED_EXIF.len() as u32).to_le_bytes(), ORIENTED_EXIF].concat()));
+        assert_eq!(u32::from_le_bytes([webp[4], webp[5], webp[6], webp[7]]) as usize, webp.len() - 8);
+    }
+}
