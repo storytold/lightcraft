@@ -29,7 +29,7 @@ craft-jxl = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-video = { workspace = true, optional = true }
-craft-avif-encode = { workspace = true, optional = true }
+craft-image-codecs = { workspace = true, optional = true, features = ["avif", "threads"] }
 
 [features]
 default = ["parallel", "jxl", "avif"]
@@ -41,7 +41,7 @@ jxl = ["dep:craft-jxl"]
 # PhotoCraft); `cargo xtask ci` clippies and tests it (`--features heif`), releases don't ship it yet.
 heif = ["dep:craft-heif"]
 ## AVIF/AV1 encoding via craft-image-codecs / craft-video (pure Rust). Native targets only; a no-op on wasm32.
-avif = ["dep:craft-video", "dep:craft-avif-encode"]
+avif = ["dep:craft-video", "dep:craft-image-codecs"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
