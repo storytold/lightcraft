@@ -302,3 +302,22 @@ fn extended_gamut_bt709_curves_read_as_bt709() {
         }
     }
 }
+
+/// HLG is shown as its scene light, peak at SDR white (as macOS renders HLG video for an SDR
+/// screen, measured on a 16-step HLG chart): reference white (75 % signal) is a light grey, the
+/// highlights above it keep their steps instead of piling into white.
+#[test]
+fn hlg_shows_its_scene_light_with_highlights_kept() {
+    let hlg = ColourDescription { primaries: 9, transfer: 18, matrix: 9, full_range: false };
+    let code = |signal: f32| (64.0 + 876.0 * signal).round() as u16;
+    let at = |signal: f32| linear(hlg, 10, [code(signal), 512, 512])[1];
+    // macOS (Quick Look): 0.258 at 73 % signal, 0.048 at 33 %, 0.716 at 93 %, white at peak
+    let reference = at(0.75);
+    assert!((0.22..=0.31).contains(&reference), "reference white {reference}");
+    assert!((0.03..=0.06).contains(&at(1.0 / 3.0)), "{}", at(1.0 / 3.0));
+    assert!((0.6..=0.8).contains(&at(14.0 / 15.0)), "{}", at(14.0 / 15.0));
+    assert!(at(1.0) > 0.97, "peak {}", at(1.0));
+    // each step above reference white still brightens
+    let steps: Vec<f32> = (11..=15).map(|k| at(k as f32 / 15.0)).collect();
+    assert!(steps.windows(2).all(|w| w[1] > w[0] + 0.05), "{steps:?}");
+}

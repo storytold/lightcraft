@@ -21,9 +21,11 @@
 //!   as browsers and most players show such video, so a picture looks the way the clip looks in a
 //!   player. An 8-bit BT.709 stream in BT.709 primaries therefore converts to display sRGB without
 //!   any linearisation (the fast path).
-//! - **HDR** (PQ, HLG) gets a simple tone map to SDR: BT.2408 reference white (203 cd/m²) becomes
-//!   SDR white, the range above it is compressed into a shoulder. Good enough for a thumbnail or a
-//!   preview on an SDR screen, not a grading tool.
+//! - **HDR** is mapped to SDR, as macOS shows HDR video on an SDR screen (measured on HLG and PQ
+//!   step charts): PQ's BT.2408 reference white (203 cd/m²) becomes nearly SDR white and the range
+//!   above it is compressed into a shoulder; HLG, which is scene-referred, is shown as its scene
+//!   light with its peak at SDR white (reference white a light grey, highlights kept). Good enough
+//!   for a thumbnail or a preview on an SDR screen, not a grading tool.
 //! - **Unspecified or reserved code points** fall back to what the picture size implies: BT.709 for
 //!   HD and larger, BT.601 (625 or 525 lines) for SD. They never make a conversion fail.
 //! - **Chroma** is upsampled linearly, with the sample positions H.264 and HEVC use by default
@@ -286,9 +288,6 @@ fn matrix_of(code: u8, primaries: &RgbSpace) -> Result<Option<Matrix>, YuvError>
 /// Entries of the transfer lookup tables (over code values 0..=1).
 const CURVE_STEPS: usize = 4096;
 
-/// Peak luminance assumed for HDR content, in cd/m² (BT.2100 HLG's nominal display peak; a common
-/// mastering peak for PQ).
-const HDR_PEAK_NITS: f32 = 1000.0;
 /// BT.2408 HDR reference white, mapped to SDR white.
 const REFERENCE_WHITE_NITS: f32 = 203.0;
 /// Below this (relative to SDR white) the tone map leaves HDR luminance alone.
@@ -318,7 +317,7 @@ pub struct Converter {
     /// Linear source primaries → linear sRGB, and → linear Rec.2020.
     to_srgb: [[f32; 3]; 3],
     to_2020: [[f32; 3]; 3],
-    /// Luma weights of the source primaries (HLG's OOTF and the tone map).
+    /// Luma weights of the source primaries (the tone map).
     luma: [f32; 3],
     /// Source is display sRGB already (SDR curve, BT.709 primaries): no linearisation for sRGB output.
     srgb_passthrough: bool,
@@ -508,12 +507,12 @@ impl Converter {
         let lin = s.map(|v| curve(&self.eotf, v));
         match self.transfer {
             Transfer::Pq => self.tone_map(lin),
-            Transfer::Hlg => {
-                // BT.2100 OOTF for a 1000 cd/m² display (system gamma 1.2), then relative to reference white
-                let ys = dot(self.luma, lin).max(0.0);
-                let gain = if ys > 0.0 { ys.powf(0.2) } else { 0.0 } * (HDR_PEAK_NITS / REFERENCE_WHITE_NITS);
-                self.tone_map(lin.map(|v| v * gain))
-            }
+            // HLG is scene-referred: its scene light (0..1, peak at SDR white) is the SDR picture,
+            // as macOS shows HLG video on an SDR screen. Reference white (75 % signal) lands at a
+            // light grey and the highlights above it keep their steps; mapping reference white to
+            // SDR white (BT.2408, as for PQ) made phone clips a stop and a half brighter than
+            // macOS shows them, their highlights clipped.
+            Transfer::Hlg => lin,
             _ => lin,
         }
     }
