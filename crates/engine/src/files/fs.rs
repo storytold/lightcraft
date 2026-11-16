@@ -98,6 +98,31 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
     (loader, probe)
 }
 
+/// Metadata extraction without hashing or decoding the pixels. Probe the common header first;
+/// containers whose metadata is elsewhere fall back to the bounded, memory-gated file reader.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn fs_metadata_probe() -> FileProbe {
+    Arc::new(|path| {
+        let mut file = crate::read_file::open_for_read(path).map_err(|e| e.to_string())?;
+        let file_meta = file.metadata().map_err(|e| e.to_string())?;
+        if !file_meta.is_file() {
+            return Err("not a regular file".into());
+        }
+        let len = file_meta.len();
+        let prefix = read_prefix_at(&mut file, path, len.min(256 << 10))?;
+        let mut metadata = lightcraft_meta::extract(&prefix);
+        if len > prefix.len() as u64 && !(prefix.starts_with(&[0xff, 0xd8]) && metadata.model.is_some() && metadata.capture_time.is_some()) {
+            use std::io::{Seek, SeekFrom};
+            file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+            let _permit = crate::memory::work_gate().acquire(usize::try_from(len).unwrap_or(usize::MAX));
+            let bytes = crate::read_file::read_open(file, crate::read_file::MAX_MEDIA_BYTES).map_err(|e| e.to_string())?;
+            metadata = lightcraft_meta::extract(&bytes);
+        }
+        let (meta, captured) = super::probe::meta_of(&metadata);
+        Ok(crate::media::ProbeInfo { meta, captured, ..Default::default() })
+    })
+}
+
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
 pub fn fs_reduced_loader() -> ReducedLoader {
     Arc::new(|path: &str, max_edge: usize, with: RawDecode<'_>| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, with)))

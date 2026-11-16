@@ -563,6 +563,12 @@ impl Catalog {
         ids
     }
 
+    /// Matching photos without sorting or collapsing stacks, for metadata tallies.
+    pub fn matching_photos(&self, filter: &Filter) -> impl Iterator<Item = &Photo> {
+        let prepared = filter.prepare(self);
+        self.photos().filter(move |p| filter.matches_in(p, self, &prepared)).map(|p| p.as_ref())
+    }
+
     /// How many photos match `filter`: [`Catalog::query`]'s length without its sorting.
     pub fn count(&self, filter: &Filter) -> usize {
         let prepared = filter.prepare(self);
@@ -571,10 +577,14 @@ impl Catalog {
 
     /// Year → month → day counts for the "By Date" section (newest first).
     pub fn date_groups(&self) -> Vec<DateGroup> {
+        Self::group_capture_dates(self.photos().filter(|p| p.in_library()).filter_map(|p| p.captured.as_deref()))
+    }
+
+    /// Group capture dates from a scoped photo list with the same ordering as the date sidebar.
+    pub fn group_capture_dates<'a>(dates: impl IntoIterator<Item = &'a str>) -> Vec<DateGroup> {
         use std::collections::BTreeMap;
         let mut years: BTreeMap<&str, (BTreeMap<&str, usize>, BTreeMap<&str, usize>)> = BTreeMap::new();
-        for p in self.photos().filter(|p| p.in_library()) {
-            let Some(d) = p.captured.as_deref() else { continue };
+        for d in dates {
             // `get`, not `[..]`: a corrupt or foreign `captured` (a Lightroom catalog's
             // captureTime is copied verbatim) may not be ASCII, and slicing it on a byte index
             // would panic — the same rule as `dates::group_label`.

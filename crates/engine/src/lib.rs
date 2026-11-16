@@ -1327,6 +1327,19 @@ impl Session {
         f
     }
 
+    /// The base view and its missing-file generation for scoping filter-bar choices.
+    pub fn filter_bar_scope(&self) -> (Filter, u64) {
+        let generation = if self.source == LibrarySource::Missing { self.media.availability.gone_generation() } else { 0 };
+        (self.view_filter(self.source, &self.filter), generation)
+    }
+
+    /// Photos offered by a filter-bar column after its own constraint has been removed.
+    pub fn filter_bar_photos(&self, filter: &Filter) -> impl Iterator<Item = &lightcraft_catalog::Photo> {
+        self.catalog
+            .matching_photos(filter)
+            .filter(|p| self.source != LibrarySource::Missing || cmd::missing::is_missing(&self.catalog, &self.media.availability, p.id))
+    }
+
     /// Let go of what a held view kept: the view shows what matches now ([`Session::hold_view`]).
     pub fn refresh_view(&mut self) {
         self.base = None;

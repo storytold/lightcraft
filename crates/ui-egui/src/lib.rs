@@ -623,7 +623,7 @@ pub struct Caches {
     completions: Option<(u64, std::sync::Arc<panels::keywording::Offers>)>,
     counts: Option<(u64, LibraryCounts)>,
     date_groups: Option<(u64, std::sync::Arc<Vec<lightcraft_catalog::DateGroup>>)>,
-    filter_values: Option<(u64, std::sync::Arc<FilterValues>)>,
+    filter_values: Option<((u64, String), std::sync::Arc<FilterValues>)>,
     /// The albums' counts: the minute they are of (while a smart album asks about "the last N days"), the tally
     /// that follows edits, and the counts as the panels take them.
     album_counts:

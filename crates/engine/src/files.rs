@@ -23,6 +23,8 @@ mod probe;
 
 pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use fs::fs_metadata_probe;
 #[cfg(test)]
 use fs::quick_image_srgb;
 pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader};

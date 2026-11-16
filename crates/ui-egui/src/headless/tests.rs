@@ -1577,6 +1577,46 @@ fn filter_bar_labels_from_label_and_labels() {
     h.settle(SETTLE);
 }
 
+#[test]
+fn filter_bar_metadata_stays_in_album_and_combines_columns() {
+    use lightcraft_catalog::Op;
+    let mut h = demo([1400.0, 800.0]);
+    let t = Duration::from_secs(10);
+    let ids = h.app.session.visible_cloned();
+    for (id, date, camera, lens) in [
+        (ids[0], "2024-05-12", "Example Camera A", "Example Lens A"),
+        (ids[1], "2024-05-13", "Example Camera B", "Example Lens B"),
+        (ids[2], "2024-05-12", "Outside Camera", "Outside Lens"),
+    ] {
+        let mut meta = h.app.session.catalog.photo(id).unwrap().meta.clone();
+        meta.camera = camera.into();
+        meta.lens = lens.into();
+        h.app.session.commit("Fixture", Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        h.app.session.commit("Fixture", Op::SetCaptured { id, captured: Some(date.into()) }).unwrap();
+    }
+    let album = h.app.session.execute("album.create", &json!({"name": "Example album"})).unwrap()["id"].as_u64().unwrap();
+    h.app.session.execute("album.addPhotos", &json!({"id": album, "ids": [ids[0].0, ids[1].0]})).unwrap();
+    h.app.session.execute("library.source", &json!({"kind": "album", "id": album})).unwrap();
+    h.request("engine.execute", json!({"command": "view.filterBar"}), t);
+    h.step();
+    let facets = h.app.caches.filter_values(&h.app.session);
+    assert_eq!(facets.cameras, [("Example Camera A".into(), 1), ("Example Camera B".into(), 1)]);
+    for widget in ["filter:date:expand:2024", "filter:date:expand:2024-05", "filter:date:2024-05-12"] {
+        let response = h.request("ui.clickWidget", json!({"id": widget}), t);
+        assert_eq!(response["ok"], true, "{widget}: {response}");
+        h.step();
+    }
+    assert_eq!(h.app.session.visible_cloned(), [ids[0]]);
+    let response = h.request("ui.clickWidget", json!({"id": "filter:camera:value:Example Camera A"}), t);
+    assert_eq!(response["ok"], true, "{response}");
+    let response = h.request("ui.clickWidget", json!({"id": "filter:lens:value:Example Lens A"}), t);
+    assert_eq!(response["ok"], true, "{response}");
+    assert_eq!(h.app.session.filter.camera.as_deref(), Some("Example Camera A"));
+    assert_eq!(h.app.session.filter.lens.as_deref(), Some("Example Lens A"));
+    assert_eq!(h.app.session.visible_cloned(), [ids[0]]);
+    assert_eq!(h.app.session.source, lightcraft_engine::LibrarySource::Album(lightcraft_catalog::AlbumId(album)));
+}
+
 /// The filter bar drives `library.filter` and saves the view as a smart album.
 #[test]
 fn filter_bar_filters_and_saves_a_smart_album() {

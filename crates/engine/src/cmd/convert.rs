@@ -224,7 +224,7 @@ pub(crate) fn content_op(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalo
 }
 
 /// Ops that fill a photo's empty camera fields (camera, lens, exposure, GPS, capture time) from a fresh probe.
-fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
+pub(super) fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::Photo, info: &crate::media::ProbeInfo) -> Vec<Op> {
     let (mut m, src) = (ph.meta.clone(), &info.meta);
     let before = m.clone();
     if m.camera.is_empty() {
@@ -359,10 +359,11 @@ pub(crate) fn reload_ops(
 /// ([`crate::cmd::reload`]) with the files read on a worker thread. → {reloaded: [ids]}
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
     use crate::cmd::reload as r;
+    let metadata_only = r::metadata_only(p)?;
     let items = r::plan(s, p)?;
-    let probe = r::file_probe(s);
+    let probe = r::file_probe_for(s, metadata_only);
     let results = r::probe(probe.as_ref(), &items, &std::sync::atomic::AtomicBool::new(false), &|_| {});
-    let reloaded = r::apply(s, items, results)?;
+    let reloaded = if metadata_only { r::apply_metadata(s, items, results)? } else { r::apply(s, items, results)? };
     Ok(r::to_json(&reloaded))
 }
 
@@ -428,7 +429,7 @@ pub fn edit_specs() -> Vec<CommandSpec> {
             "Reload from Disk",
             ["Photo"],
             None,
-            "{ids?} — re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
+            "{ids?, metadataOnly?: bool} — metadataOnly fills missing camera fields and capture dates in the catalog without changing files, sidecars or develop settings. Otherwise re-read photos whose files changed on disk (e.g. saved by an external editor), or raws shown from their embedded preview that can be decoded now; camera fields the catalog lacks are filled in, and so is the lens data the file carries (an untouched photo then gets its lens correction turned on as import would; an edited one keeps its settings); in the app the files are read in the background (activity row `reload`, cancellable) and the reply is {background: true, count} unless `wait: true` → {reloaded}",
             has_selection,
             reload
         ),
@@ -448,6 +449,31 @@ pub fn edit_specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use lightcraft_catalog::{Photo, PhotoId, Source};
+
+    #[test]
+    fn metadata_only_reload_keeps_content_and_develop_settings() {
+        let mut s = Session::new();
+        let id = PhotoId(1);
+        let mut photo = Photo::new(id, Source::File { path: "demo.nef".into() }, "demo.nef", "NEF", 120, 80, "2024-05-12");
+        photo.meta.title = "Existing title".into();
+        s.commit("Fixture", Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        let before = s.catalog.photo(id).unwrap().clone();
+        let items = crate::cmd::reload::plan(&mut s, &json!({"ids": [id.0]})).unwrap();
+        let info = crate::media::ProbeInfo {
+            width: 600,
+            height: 400,
+            content_hash: Some("unexpected".into()),
+            meta: lightcraft_catalog::Meta { camera: "Example Camera".into(), title: "From file".into(), ..Default::default() },
+            ..Default::default()
+        };
+        assert_eq!(crate::cmd::reload::apply_metadata(&mut s, items, vec![Ok(info)]).unwrap(), [id]);
+        let after = s.catalog.photo(id).unwrap();
+        assert_eq!(after.meta.camera, "Example Camera");
+        assert_eq!(after.meta.title, "Existing title");
+        assert_eq!((after.width, after.height), (before.width, before.height));
+        assert_eq!(after.content_hash, before.content_hash);
+        assert_eq!(after.develop, before.develop);
+    }
 
     /// Reload fills camera fields a photo lacks (a CR3 imported before CR3 metadata was read) and keeps
     /// everything already set.
