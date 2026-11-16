@@ -2,8 +2,8 @@
 # Build, sign and (optionally) notarize the macOS release artifacts:
 #
 #   $DIST/<binary>-<version>-macos-<arch>.dmg          <display_name>.app on a drag-to-Applications DMG
-#   $DIST/<cli_binary>-<version>-macos-<arch>.zip      the headless CLI
-# (names from brand.toml)
+# (names from brand.toml). The headless CLI is inside the app, Contents/MacOS/<cli_binary>, and the
+# craft-fonts faces are files in Contents/Resources/fonts/, one copy read by both programs.
 #
 # Usage: packaging/macos/package.sh [--arch universal|aarch64|x86_64] [--skip-build]
 # Fonts: use CRAFT_FONTS_DIR or ../craft-fonts; download the pinned checkout if absent.
@@ -44,7 +44,6 @@ NAME="$BRAND_DISPLAY_NAME"
 CLI="$BRAND_CLI_BINARY"
 APP="$WORK/$NAME.app"
 DMG="$DIST/$BRAND_BINARY-$VERSION-macos-$ARCH.dmg"
-CLI_ZIP="$DIST/$CLI-$VERSION-macos-$ARCH.zip"
 
 NOTARIZE=0
 if [[ "$IDENTITY" = "-" ]]; then
@@ -58,10 +57,13 @@ fi
 echo "==> $NAME $VERSION for macOS ($ARCH), identity: $IDENTITY, notarize: $NOTARIZE"
 
 # ---- build -------------------------------------------------------------------------------------
+# shellcheck source=../fonts.sh
+. "$ROOT/packaging/fonts.sh"
+# also with --skip-build: the bundle takes its fonts from the checkout
+prepare_fonts
 if [[ "$SKIP_BUILD" = 0 ]]; then
-  # shellcheck source=../fonts.sh
-  . "$ROOT/packaging/fonts.sh"
-  prepare_fonts
+  # The fonts go into the bundle as files (below), not into each binary: the app and the CLI share them.
+  export CRAFT_FONTS_EMBED=0
   args=()
   for t in "${TARGETS[@]}"; do args+=(--target "$t"); done
   (cd "$ROOT" && cargo build --release --locked -p lcc-app -p lcc-cli --features lcc-app/heif,lcc-cli/heif "${args[@]}")
@@ -115,6 +117,67 @@ cp "$ICNS" "$APP/Contents/Resources/$NAME.icns"
 brand_render "$HERE/Info.plist.in" "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 printf 'APPL????' >"$APP/Contents/PkgInfo"
+# The CLI beside the app: signed and updated with it (the updater replaces the whole bundle).
+cp "$WORK/bin/$CLI" "$APP/Contents/MacOS/$CLI"
+# The craft-fonts faces, once, as the checkout lays them out (fonts/manifest.txt, each file and its
+# licence at the path the manifest gives), checked against the manifest's checksums. The binaries
+# read them from here (lcc_engine::fonts::craft_fonts) and must not embed them.
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+copy_fonts() {
+  local src="$1" dest="$2" line file lfile sum n=0
+  mkdir -p "$dest/fonts"
+  cp "$src/fonts/manifest.txt" "$dest/fonts/manifest.txt"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+    # family | style | file | scripts | licence | licence file | sha256 | source
+    IFS='|' read -r _ _ file _ _ lfile sum _ <<<"$line"
+    file="$(trim "$file")" lfile="$(trim "$lfile")" sum="$(trim "$sum")"
+    for f in "$file" "$lfile"; do
+      case "$f" in "" | /* | *..*) echo "error: fonts/manifest.txt: unexpected path '$f'" >&2; return 1 ;; esac
+      mkdir -p "$dest/$(dirname "$f")"
+      cp "$src/$f" "$dest/$f"
+    done
+    if [[ "$(shasum -a 256 "$dest/$file" | cut -d' ' -f1)" != "$sum" ]]; then
+      echo "error: $file does not match its checksum in fonts/manifest.txt" >&2
+      return 1
+    fi
+    n=$((n + 1))
+  done <"$src/fonts/manifest.txt"
+  [[ "$n" -gt 0 ]] || { echo "error: no fonts listed in $src/fonts/manifest.txt" >&2; return 1; }
+  echo "==> $n craft-fonts faces in $dest/fonts"
+}
+# A binary that embeds a face (a build without CRAFT_FONTS_EMBED=0, e.g. --skip-build over an older
+# build) would carry a second copy: refuse it. Looks for 4 KiB from the middle of each face.
+check_no_embedded_fonts() {
+  local fonts="$1"; shift
+  perl -e '
+    my ($fonts, @bins) = @ARGV;
+    open(my $m, "<", "$fonts/fonts/manifest.txt") or die "manifest: $!";
+    my @chunks;
+    while (<$m>) {
+      next if /^\s*(#|$)/;
+      my @f = map { s/^\s+|\s+$//gr } split /\|/;
+      open(my $fh, "<:raw", "$fonts/$f[2]") or die "$f[2]: $!";
+      local $/; my $b = <$fh>;
+      push @chunks, [$f[2], substr($b, int(length($b) / 2), 4096)];
+    }
+    my $bad = 0;
+    for my $bin (@bins) {
+      open(my $fh, "<:raw", $bin) or die "$bin: $!";
+      local $/; my $b = <$fh>;
+      for my $c (@chunks) {
+        if (index($b, $c->[1]) >= 0) { print STDERR "error: $bin embeds $c->[0]\n"; $bad = 1; }
+      }
+    }
+    exit $bad;
+  ' "$fonts" "$@"
+}
+copy_fonts "$CRAFT_FONTS_DIR" "$APP/Contents/Resources"
+check_no_embedded_fonts "$APP/Contents/Resources" "$APP/Contents/MacOS/$NAME" "$APP/Contents/MacOS/$CLI"
 # Licences (and the craft-fonts font licences when built with CRAFT_FONTS_DIR) inside the bundle.
 mkdir -p "$APP/Contents/Resources/Licenses"
 copy_docs "$APP/Contents/Resources/Licenses"
@@ -124,7 +187,11 @@ copy_docs "$APP/Contents/Resources/Licenses"
 xattr -cr "$APP"
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
-# Today the only nested code is the main executable; frameworks/helpers would be signed here too.
+# The nested code is the main executable and the CLI; frameworks/helpers would be signed here too.
+# The CLI has the app's entitlements: `--opt addToPhotos=true` / `app.export {addToPhotos}` send
+# Apple Events to Photos through osascript too (macOS asks about the app that started the CLI,
+# usually the terminal).
+sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/$CLI"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/$NAME"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP"
 codesign --verify --strict --deep --verbose=2 "$APP"
@@ -214,22 +281,6 @@ if [[ "$NOTARIZE" = 1 ]]; then
   spctl --assess --type open --context context:primary-signature -vvv "$DMG"
 fi
 
-# ---- CLI ---------------------------------------------------------------------------------------
-echo "==> building $CLI_ZIP"
-CLI_DIR="$WORK/$CLI-$VERSION-macos-$ARCH"
-mkdir -p "$CLI_DIR"
-cp "$WORK/bin/$CLI" "$CLI_DIR/"
-copy_docs "$CLI_DIR"
-# Same entitlements as the app: `--opt addToPhotos=true` / `app.export {addToPhotos}` send Apple
-# Events to Photos through osascript too (macOS asks about the app that started the CLI, usually
-# the terminal).
-sign --options runtime --entitlements "$HERE/entitlements.plist" "$CLI_DIR/$CLI"
-codesign --verify --strict --verbose=2 "$CLI_DIR/$CLI"
-rm -f "$CLI_ZIP"
-ditto -c -k --keepParent "$CLI_DIR" "$CLI_ZIP"
-# A bare Mach-O can't carry a stapled ticket; Gatekeeper looks the notarization up online.
-if [[ "$NOTARIZE" = 1 ]]; then notarize "$CLI_ZIP"; fi
-
-"$WORK/bin/$CLI" --version
+"$APP/Contents/MacOS/$CLI" --version
 echo "==> done"
-ls -lh "$DMG" "$CLI_ZIP"
+ls -lh "$DMG"

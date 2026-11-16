@@ -27,5 +27,5 @@ prepare_fonts() {
   export CRAFT_FONTS_DIR
   # Fail the build if required faces are missing, rather than ship empty glyph boxes.
   export CRAFT_FONTS_REQUIRED=1
-  echo "==> embedding fonts from $CRAFT_FONTS_DIR"
+  echo "==> craft-fonts from $CRAFT_FONTS_DIR"
 }

@@ -22,8 +22,10 @@ To run it without installing, download `chromaforge-<version>-windows-x64-portab
 
 ## macOS
 
-1. Download `chromaforge-<version>-macos-universal.dmg`. It works on Apple silicon and Intel Macs, and is signed and notarized.
+1. Download `chromaforge-<version>-macos-universal.dmg`. It works on Apple silicon and Intel Macs. It isn't notarized, so the first time you open Chromaforge, macOS asks you to allow it (System Settings → Privacy & Security → Open Anyway).
 2. Open the file and install Chromaforge.
+
+The command-line tool, `chromaforge-cli`, is inside the app: `/Applications/Chromaforge.app/Contents/MacOS/chromaforge-cli`. It updates with the app. To run it from Terminal, link it onto your `PATH`: `mkdir -p ~/.local/bin && ln -sf /Applications/Chromaforge.app/Contents/MacOS/chromaforge-cli ~/.local/bin/chromaforge-cli`. If `~/.local/bin` isn't on your `PATH` yet, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`.
 
 ## Linux
 
