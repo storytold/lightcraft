@@ -1,3 +1,0 @@
-## Release builds and CI
-
-- **The macOS command-line tool is inside the app, with one copy of the fonts:** the CLI is now in the app bundle (`Contents/MacOS`), signed with the app and replaced by its updates, and the separate CLI `.zip` download is gone. The craft-fonts faces (Chinese, Japanese, Korean, Arabic, Hebrew, Thai and more) are files in `Contents/Resources/fonts/`, read by both programs, instead of being built into each binary: one copy instead of four in the universal download. A missing or damaged font file is left out and named in a notice in the app and a warning from the CLI; the rest still load. The CLI inside the app never installs updates itself. The manual's Install page shows how to link the CLI onto `PATH`.
