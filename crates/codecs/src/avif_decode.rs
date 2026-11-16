@@ -141,7 +141,7 @@ mod tests {
     }
 
     fn be32(b: &[u8], at: usize) -> usize {
-        u32::from_be_bytes(b[at..at + 4].try_into().unwrap()) as usize
+        u32::from_be_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]) as usize
     }
     fn put32(b: &mut [u8], at: usize, v: usize) {
         b[at..at + 4].copy_from_slice(&(v as u32).to_be_bytes());
@@ -152,13 +152,13 @@ mod tests {
         let mut at = start;
         while at + 8 <= end {
             let size = be32(b, at);
-            out.push((at, size, b[at + 4..at + 8].try_into().unwrap()));
+            out.push((at, size, [b[at + 4], b[at + 5], b[at + 6], b[at + 7]]));
             at += size;
         }
         out
     }
     fn find(b: &[u8], start: usize, end: usize, kind: &[u8; 4]) -> (usize, usize) {
-        boxes(b, start, end).into_iter().find(|x| &x.2 == kind).map(|x| (x.0, x.1)).unwrap()
+        boxes(b, start, end).into_iter().find(|x| &x.2 == kind).map_or((0, 0), |x| (x.0, x.1))
     }
 
     /// Adds a centred `clap` of `w × h` to the primary item of a single-item AVIF from the encoder,
