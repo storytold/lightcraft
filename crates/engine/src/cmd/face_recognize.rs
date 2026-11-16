@@ -214,7 +214,9 @@ fn confirm_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
     let chosen = unnamed_faces_param(s, C, p)?;
     // what the named faces suggest for these faces now (never a stale name from the list the user looked at)
     let mut current: Vec<(u64, usize, lcc_geom::Rect)> = chosen.iter().map(|(photo, index, rect)| (*photo, *index, *rect)).collect();
-    let arranged = imp::arrange_unnamed(s, &mut current, current.len());
+    // the length is taken first: `&mut current` and `current.len()` in one call would borrow it both ways
+    let n = current.len();
+    let arranged = imp::arrange_unnamed(s, &mut current, n);
     let mut by_photo: std::collections::BTreeMap<u64, Vec<(usize, String)>> = std::collections::BTreeMap::new();
     let mut decisions: Vec<(u64, usize, String)> = Vec::new();
     for (photo, index, _) in &chosen {
@@ -269,7 +271,9 @@ fn reject_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
     let chosen = unnamed_faces_param(s, C, p)?;
     // a rejected face is not suggested again, so the groups are worked out here exactly as the Suggested category does
     let mut current: Vec<(u64, usize, lcc_geom::Rect)> = chosen.iter().map(|(photo, index, rect)| (*photo, *index, *rect)).collect();
-    let arranged = imp::arrange_unnamed(s, &mut current, current.len());
+    // the length is taken first: `&mut current` and `current.len()` in one call would borrow it both ways
+    let n = current.len();
+    let arranged = imp::arrange_unnamed(s, &mut current, n);
     let day = today();
     let decisions: Vec<(u64, usize, String)> = chosen
         .iter()
