@@ -290,9 +290,23 @@ pub fn encode_avif(img: &EncodeImage, quality: u8, speed: u8, meta: &EncodeMeta)
     img.validate()?;
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     {
-        let mut ic_img = shared_image(img, Some("AVIF encoder needs 8- or 16-bit samples"))?;
+        // Keep AVIF on its threading-capable shared revision without changing other codecs.
+        use craft_avif_encode::{ChannelLayout, Image};
+        let n = img.width as usize * img.height as usize * img.channels as usize;
+        let layout = match img.channels {
+            1 => ChannelLayout::Gray,
+            2 => ChannelLayout::GrayA,
+            3 => ChannelLayout::Rgb,
+            _ => ChannelLayout::Rgba,
+        };
+        let mut ic_img = match img.samples {
+            Samples::U8(s) => Image::from_u8(img.width, img.height, layout, s[..n].to_vec()),
+            Samples::U16(s) => Image::from_u16(img.width, img.height, layout, &s[..n]),
+            Samples::F32(_) => return Err(Error::Encode("AVIF encoder needs 8- or 16-bit samples".into())),
+        }
+        .map_err(|e| Error::Encode(e.to_string()))?;
         ic_img.meta.exif = meta.exif.map(|e| e.to_vec());
-        craft_image_codecs::encode_avif_with_speed(&ic_img, quality, speed).map_err(|e| Error::Encode(e.to_string()))
+        craft_avif_encode::encode_avif_with_speed(&ic_img, quality, speed).map_err(|e| Error::Encode(e.to_string()))
     }
     #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
     {
@@ -370,10 +384,10 @@ pub fn encode_avif_hdr(width: u32, height: u32, rgb: &[f32], quality: u8, speed:
     {
         let _ = (w, h, n);
         let t = match transfer {
-            HdrTransfer::Pq => craft_image_codecs::HdrTransfer::Pq,
-            HdrTransfer::Hlg => craft_image_codecs::HdrTransfer::Hlg,
+            HdrTransfer::Pq => craft_avif_encode::HdrTransfer::Pq,
+            HdrTransfer::Hlg => craft_avif_encode::HdrTransfer::Hlg,
         };
-        craft_image_codecs::encode_avif_hdr(width, height, rgb, quality, speed, meta.exif, t).map_err(|e| Error::Encode(e.to_string()))
+        craft_avif_encode::encode_avif_hdr(width, height, rgb, quality, speed, meta.exif, t).map_err(|e| Error::Encode(e.to_string()))
     }
     #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
     {
