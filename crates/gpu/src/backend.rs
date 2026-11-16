@@ -953,8 +953,8 @@ mod tests {
             .collect();
         assert!(forced_expansion.len() >= 2, "Forced expansion should include both requested backends, got: {forced_expansion:?}");
         // GL (platform-preferred) should appear before Vulkan (not in platform order) in the expansion.
-        let gl_pos = forced_expansion.iter().position(|r| matches!(r, WindowRenderer::Wgpu(b) if b == Backends::GL));
-        let vk_pos = forced_expansion.iter().position(|r| matches!(r, WindowRenderer::Wgpu(b) if b == Backends::VULKAN));
+        let gl_pos = forced_expansion.iter().position(|r| matches!(r, WindowRenderer::Wgpu(b) if *b == Backends::GL));
+        let vk_pos = forced_expansion.iter().position(|r| matches!(r, WindowRenderer::Wgpu(b) if *b == Backends::VULKAN));
         assert!(
             gl_pos.is_some() && vk_pos.is_some() && gl_pos.unwrap() < vk_pos.unwrap(),
             "GL should appear before Vulkan in expansion, got: {forced_expansion:?}"
