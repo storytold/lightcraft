@@ -109,14 +109,17 @@ fn add_face(s: &mut Session, p: &Value) -> Result<Value> {
         *slot = v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad(C, "`rect` must be four finite numbers `[x, y, w, h]`"))?;
     }
     let [x, y, w, h] = xywh;
-    if w <= 0.0 || h <= 0.0 || x < 0.0 || y < 0.0 || x + w > 1.0 || y + h > 1.0 {
+    // The endpoints the region is stored with, computed once: `x + w` can round back to `x` for a
+    // width near the float epsilon, which would store an empty box and an undo step for it.
+    let (x1, y1) = (x + w, y + h);
+    if w <= 0.0 || h <= 0.0 || x < 0.0 || y < 0.0 || x1 > 1.0 || y1 > 1.0 || x1 <= x || y1 <= y {
         return Err(bad(C, "`rect` must be a non-empty box wholly inside the photo (0..1)"));
     }
     let name = name_param(p, C)?;
     let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
     let index = meta.regions.len();
     meta.regions.push(lightcraft_meta::Region {
-        rect: lightcraft_geom::Rect::new(x, y, x + w, y + h),
+        rect: lightcraft_geom::Rect::new(x, y, x1, y1),
         kind: lightcraft_meta::RegionKind::Face,
         name: name.clone(),
         description: None,

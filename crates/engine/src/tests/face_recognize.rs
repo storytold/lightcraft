@@ -755,6 +755,9 @@ fn face_add_rejects_bad_boxes_and_unknown_photos() {
         json!({"id": a.0, "rect": [-0.1, 0.2, 0.3, 0.3]}),
         json!({"id": a.0, "rect": [0.9, 0.1, 0.2, 0.2]}),
         json!({"id": a.0, "rect": [0.1, 0.9, 0.2, 0.2]}),
+        // a width or height so small that the endpoint rounds back to the start: an empty box
+        json!({"id": a.0, "rect": [1.0, 0.2, 1e-20, 0.3]}),
+        json!({"id": a.0, "rect": [0.2, 1.0, 0.3, 1e-20]}),
         json!({"id": a.0, "rect": [0.1, 0.1, 0.8, 0.8], "name": "bad\u{7}name"}),
         json!({"id": a.0, "rect": [0.1, 0.1, 0.8, 0.8], "name": "x".repeat(201)}),
         json!({"id": 999_999, "rect": [0.1, 0.1, 0.8, 0.8]}),
