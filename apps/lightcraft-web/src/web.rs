@@ -594,7 +594,7 @@ impl WebApp {
         // nothing is saved while the stored library couldn't be read
         let frozen = Rc::new(Cell::new(read_failed));
         let services = services(originals.clone(), backend.clone(), files.clone(), frozen.clone(), cc.egui_ctx.clone(), bridge.clone());
-        let mut app = LightcraftApp::new(session, services).with_chinese_font(chinese_font);
+        let mut app = LightcraftApp::new(session, services).with_chinese_font(chinese_font).with_control(crate::api::install(cc.egui_ctx.clone()));
         let ui_written = files.get("ui.json").unwrap_or_default();
         // an arrangement from an older docking version starts again from the default
         let mut saved = serde_json::from_slice::<serde_json::Value>(&ui_written).unwrap_or_default();
