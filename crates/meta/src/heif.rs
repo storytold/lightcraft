@@ -37,10 +37,14 @@ pub(crate) fn embeds_location(bytes: &[u8]) -> Option<bool> {
 
 /// Any GPS tag counts, not only a complete coordinate pair: the projected [`crate::Metadata`] keeps
 /// GPS only when latitude and longitude both read, yet a lone latitude is still a location. A GPS
-/// IFD pointer whose directory can't be read counts too.
+/// IFD pointer whose directory can't be read counts too, and so does any directory the reader
+/// couldn't read in full: an entry past its entry limit can be the GPS pointer.
 fn exif_has_location(tiff: &[u8]) -> bool {
-    use craft_tiff::{Tiff, tags as t};
-    let Ok(parsed) = Tiff::parse(tiff) else { return true };
+    use craft_tiff::{ParseOptions, Tiff, tags as t};
+    let Ok((parsed, complete)) = Tiff::parse_with_status(tiff, &ParseOptions::default()) else { return true };
+    if !complete {
+        return true;
+    }
     let gps = parsed.all_ifds().into_iter().any(|ifd| match &ifd.gps {
         Some(gps) => gps.entries.iter().any(|e| e.tag != t::GPS_VERSION_ID),
         None => ifd.contains(t::GPS_IFD),
@@ -538,6 +542,30 @@ mod location_tests {
                 .build();
             assert_eq!(crate::embeds_location(&f), located);
         }
+    }
+
+    /// A GPS pointer the reader never reaches, after its 8,192-entry limit, still counts (#4315
+    /// review): an incompletely read EXIF item is a possible location.
+    #[test]
+    fn a_gps_pointer_past_the_entry_limit_counts_as_a_location() {
+        let entries = 8193u32;
+        let gps_at = 8 + 2 + 12 * entries + 4;
+        let mut tiff = b"II\x2a\0\x08\0\0\0".to_vec();
+        tiff.extend_from_slice(&(entries as u16).to_le_bytes());
+        for tag in 1..entries as u16 {
+            // SHORT, count 1, value 0
+            tiff.extend_from_slice(&[&tag.to_le_bytes()[..], &[3, 0, 1, 0, 0, 0, 0, 0, 0, 0]].concat());
+        }
+        tiff.extend_from_slice(&[&34853u16.to_le_bytes()[..], &[4, 0, 1, 0, 0, 0], &gps_at.to_le_bytes()].concat());
+        tiff.extend_from_slice(&0u32.to_le_bytes());
+        // GPS IFD: GPSLatitudeRef "N", then no next IFD
+        tiff.extend_from_slice(&[1, 0, 1, 0, 2, 0, 2, 0, 0, 0, b'N', 0, 0, 0, 0, 0, 0, 0]);
+        let f = Heif::new()
+            .item(2, b"hvc1", b"thumbnail".to_vec(), Store::File, 1)
+            .item(3, b"Exif", exif_item(&[], &tiff), Store::File, 1)
+            .cdsc(3, &[2])
+            .build();
+        assert!(crate::embeds_location(&f));
     }
 
     /// An IPTC `LocationShown` place is a location even though it isn't projected into
