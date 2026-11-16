@@ -196,16 +196,18 @@ mod tests {
         // the model of another make
         assert_eq!(find(Some("Canon"), "D850"), None);
         assert_eq!(find(Some("SONY"), "X-T4"), None);
+        assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);
         assert_eq!(find(None, ""), None);
         assert_eq!(find(Some(""), ""), None);
     }
 
     #[test]
     fn ilce_7cm2_finds_ilce_7m4_matrices() {
-        // ILCE-7M2 (A7 II, 24.3 MP) does NOT use the same sensor as the A7 IV (ILCE-7M4, 33 MP).
-        // The SAME_SENSOR table incorrectly mapped ILCE-7M2 to ILCE-7M4 (issue 2113).
-        // This regression test ensures the incorrect alias stays removed.
-        assert_eq!(find(Some("SONY"), "ILCE-7M2").map(|c| c.model), None);
+        // ILCE-7M2 (A7 II, 24.3 MP) does NOT use the same sensor as the A7 IV (ILCE-7M4, 33 MP),
+        // so it stays without matrices (issue 2113); the A7C II (ILCE-7CM2, 33 MP) borrows them.
+        assert_eq!(find(Some("SONY"), "ILCE-7M2"), None);
+        assert_eq!(find(Some("SONY"), "ILCE-7CM2").map(|c| c.model), Some("ILCE-7M4"));
+        assert_eq!(find_camera("SONY ILCE-7CM2").map(|c| c.model), Some("ILCE-7M4"));
     }
 
     #[test]
@@ -238,7 +240,7 @@ mod tests {
         // a model alone, as a Lightroom catalog names it
         assert_eq!(find_camera("ILCE-7M3").map(|c| c.model), Some("ILCE-7M3"));
         assert_eq!(find_camera("  ILCE-7M3  ").map(|c| c.model), Some("ILCE-7M3"));
-        for none in ["", "   ", "SONY", "Canon EOS 7D", "D850 SONY", "OLYMPUS IMAGING CORP. E-M5"] {
+        for none in ["", "   ", "SONY", "Canon EOS 7D", "D850 SONY", "SONY ILCE-7M2", "OLYMPUS IMAGING CORP. E-M5"] {
             assert_eq!(find_camera(none), None, "{none:?}");
         }
     }
