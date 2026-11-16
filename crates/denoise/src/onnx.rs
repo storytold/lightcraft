@@ -403,14 +403,14 @@ mod tests {
         p
     }
 
-    fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
-        let mut n = Vec::new();
-        for i in inputs {
-            len_field(1, i.as_bytes(), &mut n);
-        }
-        len_field(2, output.as_bytes(), &mut n);
-        len_field(8, op.as_bytes(), &mut n);
-        for (name, value) in ints {
+fn node(op: &str, inputs: &[&str], output: &str, ints: &[(&str, i64)]) -> Vec<u8> {
+    let mut n = Vec::new();
+    for i in inputs {
+        len_field(1, i.as_bytes(), &mut n);
+    }
+    len_field(2, output.as_bytes(), &mut n);
+    len_field(4, op.as_bytes(), &mut n);
+    for (name, value) in ints {
             let mut a = Vec::new();
             len_field(1, name.as_bytes(), &mut a);
             varint_field(3, *value as u64, &mut a);
@@ -461,14 +461,14 @@ mod tests {
         }
     }
 
-    fn node_with_ints(op: &str, inputs: &[&str], output: &str, ints: &[(&str, &[i64])]) -> Vec<u8> {
-        let mut n = Vec::new();
-        for i in inputs {
-            len_field(1, i.as_bytes(), &mut n);
-        }
-        len_field(2, output.as_bytes(), &mut n);
-        len_field(8, op.as_bytes(), &mut n);
-        for &(name, values) in ints {
+fn node_with_ints(op: &str, inputs: &[&str], output: &str, ints: &[(&str, &[i64])]) -> Vec<u8> {
+    let mut n = Vec::new();
+    for i in inputs {
+        len_field(1, i.as_bytes(), &mut n);
+    }
+    len_field(2, output.as_bytes(), &mut n);
+    len_field(4, op.as_bytes(), &mut n);
+    for &(name, values) in ints {
             let mut a = Vec::new();
             len_field(1, name.as_bytes(), &mut a);
             // field 8: INTS (wire type 2) - varint-encoded list
@@ -487,14 +487,14 @@ mod tests {
         n
     }
 
-    fn leaky_relu_node(inputs: &[&str], output: &str, alpha: f32) -> Vec<u8> {
-        let mut n = Vec::new();
-        for i in inputs {
-            len_field(1, i.as_bytes(), &mut n);
-        }
-        len_field(2, output.as_bytes(), &mut n);
-        len_field(8, b"LeakyRelu", &mut n);
-        // alpha attribute: field 1=name, field 2=float value (wire type 5), field 20=type=1 (FLOAT)
+fn leaky_relu_node(inputs: &[&str], output: &str, alpha: f32) -> Vec<u8> {
+    let mut n = Vec::new();
+    for i in inputs {
+        len_field(1, i.as_bytes(), &mut n);
+    }
+    len_field(2, output.as_bytes(), &mut n);
+    len_field(4, b"LeakyRelu", &mut n);
+    // alpha attribute: field 1=name, field 2=float value (wire type 5), field 20=type=1 (FLOAT)
         let mut a = Vec::new();
         len_field(1, b"alpha", &mut a);
         // field 2 with wire type 5 (fixed 4-byte float)
@@ -802,5 +802,39 @@ mod tests {
         }
         let many_model = model(&nodes, 1, &prev);
         assert!(matches!(read_bytes(&many_model), Err(NetError::Invalid(_))));
+    }
+
+    #[test]
+    fn add_operator_model_is_accepted_review_regression_1() {
+        // An Add residual block: the convolution output is added back to the input.
+        // The fixture builders write op_type to protobuf field 8, but the node
+        // decoder reads it from field 4, so the operator type arrives empty and
+        // the model is rejected as an unknown operator until the builders write
+        // op_type to field 4.
+        let mut graph = Vec::new();
+        len_field(1, &node("Conv", &["data", "w1"], "c1", &[("group", 1)]), &mut graph);
+        len_field(1, &node("Add", &["c1", "data"], "a1", &[]), &mut graph);
+        len_field(1, &node("Conv", &["a1", "w2"], "c2", &[("group", 1)]), &mut graph);
+        let mut depth_to_space = node("DepthToSpace", &["c2"], "rgb", &[("blocksize", 2)]);
+        let mut mode = Vec::new();
+        len_field(1, b"mode", &mut mode);
+        len_field(4, b"CRD", &mut mode);
+        varint_field(20, 3, &mut mode);
+        len_field(5, &mode, &mut depth_to_space);
+        len_field(1, &depth_to_space, &mut graph);
+        len_field(5, &tensor("w1", &[4, 4, 1, 1], &[0.1; 16]), &mut graph);
+        len_field(5, &tensor("w2", &[12, 4, 1, 1], &[0.1; 48]), &mut graph);
+        len_field(11, &value_info_bytes("data", 1, &[Ok(1), Ok(4), Ok(8), Ok(8)]), &mut graph);
+        len_field(12, &value_info_bytes("rgb", 1, &[Ok(1), Ok(3), Ok(16), Ok(16)]), &mut graph);
+        let mut ops = Vec::new();
+        len_field(1, b"", &mut ops);
+        varint_field(2, 13, &mut ops);
+        let mut model = Vec::new();
+        varint_field(1, 8, &mut model);
+        len_field(7, &graph, &mut model);
+        len_field(8, &ops, &mut model);
+
+        let net = read_bytes(&model);
+        assert!(net.is_ok(), "a model with an Add residual was rejected: {:?}", net.err());
     }
 }
