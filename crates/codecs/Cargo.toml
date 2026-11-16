@@ -62,3 +62,7 @@ dhat = { workspace = true }
 # Poster-frame tests encode their clips (H.264, HEVC) and mux them (MP4/MOV) themselves: no committed media.
 craft-video = { workspace = true, features = ["h264-encode", "hevc-encode"] }
 craft-media = { workspace = true, features = ["isobmff"] }
+
+[[example]]
+name = "poster_bench"
+required-features = ["video-frames"]
