@@ -739,7 +739,10 @@ impl Clip {
         for chunk in raw.chunks_exact(self.arch.embed_dim) {
             let mut vec = chunk.to_vec();
             if !l2_normalize(&mut vec) {
-                return Err(JobError::Failed("vision encoder produced non-finite or zero-norm embedding".into()));
+                let err = "vision encoder produced non-finite or zero-norm embedding".to_string();
+                // from the GPU it is the device's fault (a driver passing the check on its test input, then not on a
+                // photo): the CPU takes over instead of the photo failing
+                return Err(if gpu.is_some() { JobError::Device(err) } else { JobError::Failed(err) });
             }
             out.push(vec);
         }
@@ -775,7 +778,8 @@ impl Clip {
         for chunk in raw.chunks_exact(self.arch.embed_dim) {
             let mut vec = chunk.to_vec();
             if !l2_normalize(&mut vec) {
-                return Err(JobError::Failed("text encoder produced non-finite or zero-norm embedding".into()));
+                let err = "text encoder produced non-finite or zero-norm embedding".to_string();
+                return Err(if gpu.is_some() { JobError::Device(err) } else { JobError::Failed(err) });
             }
             for (s, &v) in sum.iter_mut().zip(vec.iter()) {
                 *s += v;
@@ -1139,6 +1143,44 @@ mod tests {
         let device = q.status().device.unwrap();
         assert!(!device.is_gpu());
         assert!(device.why_cpu.unwrap_or_default().contains("differs"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A GPU that gives NaN for a photo (after passing its check on the test input) hands the photo to the CPU: the
+    /// error is the device's, not the photo's, so the queue retries it there instead of failing it.
+    #[test]
+    fn a_non_finite_gpu_embedding_is_a_device_error() {
+        struct Nan(usize);
+        impl Accelerator for Nan {
+            fn device(&self) -> String {
+                "nan".into()
+            }
+            fn run_vision(&self, _: &[f32], batch: usize, _: usize, _: usize) -> Result<Vec<f32>, String> {
+                Ok(vec![f32::NAN; batch * self.0])
+            }
+            fn run_text(&self, _: &[u32], _: &[u32], batch: usize, _: usize) -> Result<Vec<f32>, String> {
+                Ok(vec![f32::NAN; batch * self.0])
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("lcc-ml-clip-nan-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Clip::write_synthetic_dir(&dir, "clip-nan").unwrap();
+        let clip = Clip::load(&dir).unwrap();
+        let gpu = Nan(clip.arch.embed_dim);
+        let img = RgbImage::new(16, 16, vec![128; 16 * 16 * 3]).unwrap();
+        let q = Queue::new(Config { preference: Preference::Cpu, ..Config::default() }, Box::new(|| Err("cpu test".into())), None);
+        let clip = Arc::new(clip);
+        let c = Arc::clone(&clip);
+        q.submit(
+            Job::new("nan", move |ctx| {
+                let image = c.forward_images_on(std::slice::from_ref(&img), ctx, Some(&gpu));
+                let text = c.forward_text_on("sunset", ctx, Some(&gpu));
+                Ok((matches!(image, Err(JobError::Device(_))), matches!(text, Err(JobError::Device(_)))))
+            })
+            .priority(Priority::Interactive),
+        )
+        .unwrap();
+        assert_eq!(wait_result(&q, "nan"), (true, true));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

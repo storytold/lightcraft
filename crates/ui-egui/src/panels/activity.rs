@@ -601,7 +601,11 @@ fn row(ui: &mut egui::Ui, t: &Tokens, task: &TaskInfo, width: f32, kids: usize, 
         bar(ui, task, width);
         let line = detail_line(task);
         if !line.is_empty() {
-            ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());
+            let r = ui.add(egui::Label::new(RichText::new(line).font(t.font(11.0)).color(t.text_dim)).truncate());
+            // what failed and why, while the batch still runs (its end message says it too)
+            if let Some(why) = task.first_failure.as_deref().filter(|_| task.failed > 0) {
+                r.on_hover_text(why);
+            }
         }
         if stoppable && task.stop_warning.is_some() {
             let r = ui.add(egui::Label::new(RichText::new(tr("Stop Waiting…")).font(t.font(11.0)).color(t.accent)).sense(Sense::click()));
