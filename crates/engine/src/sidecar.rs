@@ -841,9 +841,7 @@ fn ns_bindings(data: &str, start: usize, end: usize) -> Vec<(String, String)> {
         } else {
             (false, String::new())
         };
-        if is_decl
-            && let Some((vs, ve)) = value
-        {
+        if is_decl && let Some((vs, ve)) = value {
             out.push((prefix, data.get(vs..ve).unwrap_or_default().to_string()));
         }
     }
