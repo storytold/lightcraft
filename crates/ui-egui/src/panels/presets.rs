@@ -251,11 +251,28 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             ui.data_mut(|d| d.insert_temp(egui::Id::unique("last-preset-hover"), (id, pr.clone(), label)));
                         }
                     }
-                    if resp.clicked() && app.run("preset.apply", json!({"id": pid, "amount": 100})).is_ok() {
+                    if resp.clicked()
+                        && let Ok(reply) = app.run("preset.apply", json!({"id": pid, "amount": 100}))
+                    {
                         AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
                         ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));
-                        app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
+                        // an adaptive preset whose mask needs mattes some of the photos don't carry: say on how many
+                        // it selected nothing (the mask is on them all the same)
+                        let (found_nothing, total) = (reply["nothing"].as_array().map_or(0, Vec::len), reply["applied"].as_u64().unwrap_or(0));
+                        if found_nothing > 0 {
+                            app.toast(
+                                ui.ctx(),
+                                crate::i18n::tr_format!(
+                                    "{name} found nothing to select on {n} of {total} photos",
+                                    name = name,
+                                    n = found_nothing,
+                                    total = total
+                                ),
+                            );
+                        } else {
+                            app.toast(ui.ctx(), crate::i18n::tr_format!("Preset: {name}", name = name));
+                        }
                     }
                     let (builtin, group) = (pr.builtin, pr.group.clone());
                     crate::widgets::context_menu(&resp, |ui| {

@@ -214,6 +214,7 @@
   "{label} {d:+} on every selected photo": "{label} {d:+} på varje markerat foto",
   "{label} {index} of {n}": "{label} {index} av {n}",
   "{label}, {n} photos": "{label}, {n} foton",
+  "{name} found nothing to select on {n} of {total} photos": "{name} hittade inget att markera på {n} av {total} foton",
   "{matching} of {t} photos": "{matching} av {t} foton",
   "{matching} photos": "{matching} foton",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "{missing} original saknas. Deras katalogposter finns kvar; använd Sök efter saknade foton för att länka om dem.",

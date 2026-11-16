@@ -38,6 +38,18 @@ impl MatteKind {
         }
     }
 
+    /// A stable name, as the catalog records which mattes a photo carries (`Meta::mattes`); never rename.
+    pub fn id(self) -> &'static str {
+        match self {
+            MatteKind::Sky => "sky",
+            MatteKind::Person => "person",
+            MatteKind::Skin => "skin",
+            MatteKind::Hair => "hair",
+            MatteKind::Teeth => "teeth",
+            MatteKind::Glasses => "glasses",
+        }
+    }
+
     /// [`MatteKind::code`]'s inverse (`None` for a code this build doesn't know).
     pub fn from_code(code: u8) -> Option<Self> {
         match code {
@@ -138,11 +150,19 @@ fn whole_person(parts: &[String]) -> bool {
 /// those mattes (issue #4356). The whole-subject estimate is no stand-in for a person's teeth: a Whiten Teeth mask
 /// then changes nothing, instead of the middle of the photo. Parts no matte covers keep the estimate.
 pub fn needs_missing_matte(shape: &MaskShape, mattes: Option<&Mattes>) -> bool {
-    let MaskShape::People { parts, .. } = shape else { return false };
-    if whole_person(parts) || !parts.iter().all(|p| part_matte(p).is_some()) {
-        return false;
+    needed_mattes(shape).is_some() && mattes.is_none_or(|m| m.for_shape(shape).is_empty())
+}
+
+/// The mattes `shape` needs to select anything: for a People shape whose parts are all ones a matte selects, those
+/// mattes' kinds (any one of them on the photo is enough); `None` for every other shape, which selects by its own
+/// means. What [`needs_missing_matte`] checks against a loaded photo, for callers that only know which kinds a
+/// photo carries.
+pub fn needed_mattes(shape: &MaskShape) -> Option<Vec<MatteKind>> {
+    let MaskShape::People { parts, .. } = shape else { return None };
+    if whole_person(parts) {
+        return None;
     }
-    mattes.is_none_or(|m| m.for_shape(shape).is_empty())
+    parts.iter().map(|p| part_matte(p)).collect()
 }
 
 pub struct Evaluated {

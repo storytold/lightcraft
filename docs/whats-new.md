@@ -8,6 +8,9 @@
   **Deepen Sky** work on any photo; **Whiten Teeth**, **Smooth Skin** and **Enhance Hair** use the people mattes iPhone
   ProRAW photos carry, and change nothing on a photo without them (Masking says so). Adjust or remove the mask in
   Masking like any other.
+- Applying one of them to several photos now says how many it found nothing to select on ("Whiten Teeth found nothing
+  to select on 12 of 200 photos"). LightCraft notes which mattes a ProRAW carries when it is imported; for photos
+  imported earlier, Photo ▸ Reload from Disk notes them.
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.

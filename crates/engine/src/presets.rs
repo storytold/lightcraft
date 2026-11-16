@@ -713,6 +713,36 @@ mod tests {
         assert_eq!(s.develop_of(id).unwrap().masks.len(), 2, "the same preset twice adds its mask once");
     }
 
+    /// Issue #4361: `preset.apply` says on which photos an adaptive preset's mask selects nothing, from the mattes
+    /// the catalog recorded: a photo that carries the teeth matte isn't listed, one that carries others or none is,
+    /// and a DNG never looked at counts as unknown, not as without. A preset that needs no matte reports nothing.
+    #[test]
+    fn apply_reports_the_photos_an_adaptive_preset_found_nothing_on() {
+        use lightcraft_catalog::Op;
+        let mut s = Session::with_demo();
+        let template = lightcraft_catalog::Photo::clone(s.catalog.photos().next().unwrap());
+        let cases: [(Option<Vec<&str>>, &str); 4] =
+            [(Some(vec!["skin", "teeth"]), "DNG"), (Some(vec!["person", "skin"]), "DNG"), (None, "DNG"), (None, "JPEG")];
+        let mut ids = Vec::new();
+        for (mattes, format) in &cases {
+            let mut p = template.clone();
+            p.id = s.catalog.alloc_photo_id();
+            p.meta.mattes = mattes.as_ref().map(|m| m.iter().map(|k| k.to_string()).collect());
+            p.format = format.to_string();
+            ids.push(p.id);
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+        }
+        let raw: Vec<u64> = ids.iter().map(|i| i.0).collect();
+        let r = s.execute("preset.apply", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        assert_eq!(r["applied"], 4, "the mask is added to every photo all the same: {r}");
+        assert_eq!(r["unknown"], 1, "{r}");
+        let nothing: Vec<u64> = r["nothing"].as_array().unwrap().iter().map(|n| n["id"].as_u64().unwrap()).collect();
+        assert_eq!(nothing, [raw[1], raw[3]], "{r}");
+        assert_eq!(r["nothing"][0]["masks"], json!(["Whiten Teeth"]));
+        let r = s.execute("preset.apply", &json!({"id": "lc.adaptive-darken-background", "ids": raw})).unwrap();
+        assert_eq!((r["nothing"].as_array().unwrap().len(), r["unknown"].as_u64()), (0, Some(0)), "{r}");
+    }
+
     #[test]
     fn every_profile_has_a_look_and_ids_are_unique() {
         let looks = crate::pipeline::profiles::LOOK_IDS;

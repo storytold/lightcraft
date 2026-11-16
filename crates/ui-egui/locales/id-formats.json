@@ -87,6 +87,7 @@
   "{label} Grading": "Grading {label}",
   "{label} {d:+} on every selected photo": "{label} {d:+} pada setiap foto yang dipilih",
   "{label}, {n} photos": "{label}, {n} foto",
+  "{name} found nothing to select on {n} of {total} photos": "{name} tidak menemukan apa pun untuk dipilih pada {n} dari {total} foto",
   "{matching} of {t} photos": "{matching} dari {t} foto",
   "{matching} photos": "{matching} foto",
   "{mode} spot {} of {}": "{mode}: bintik {} dari {}",
