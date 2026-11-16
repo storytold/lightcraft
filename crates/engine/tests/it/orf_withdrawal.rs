@@ -228,6 +228,14 @@ fn withdrawn_orf_decoder_has_distinct_render_keys_without_changing_file_identity
     for (a, b) in keys.0.iter().zip(&other.0) {
         assert_ne!(a, b, "ORF and DNG render keys must differ");
     }
+    // ARW and CR2 both carry decoder_key == 0, so their persistent thumbnail, view and
+    // variant keys differ only through decoder_cache_version: this guards the per-format
+    // version propagation even when the decoder salt is zero.
+    let arw = decoder_keys(&mut decoder_session("ARW"));
+    let cr2 = decoder_keys(&mut decoder_session("CR2"));
+    for i in 0..3 {
+        assert_ne!(arw.1[i], cr2.1[i], "ARW and CR2 persistent key {} must differ by decoder_cache_version", i);
+    }
     // `source_format` reads the path extension, so `decoder_session("DNG")` (path
     // `same-original.orf`) is keyed as ORF for `decoder_cache_version`. Two photos with
     // the same format field must share cache keys regardless of path extension; the path
