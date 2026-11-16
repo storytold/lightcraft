@@ -30,3 +30,10 @@ fn the_shipped_notes_have_no_split_sentences_or_raw_markdown() {
         assert!(s.chars().any(char::is_alphanumeric), "a block with no words: {s:?}");
     }
 }
+
+/// A code span keeps what it says (a file pattern's `*`), and a link's label is made plain too.
+#[test]
+fn code_spans_stay_literal_and_link_labels_lose_their_markers() {
+    let blocks = whats_new_blocks("- Match `*.xmp` and `[a](b)`; see [**film grain**](grain.md) and 3 * 2.\n");
+    assert_eq!(blocks, vec![WhatsNewBlock::Bullet("Match *.xmp and [a](b); see film grain and 3 * 2.".into())]);
+}

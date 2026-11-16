@@ -950,8 +950,9 @@ pub fn whats_new_blocks(src: &str) -> Vec<WhatsNewBlock> {
     out
 }
 
-/// `s` with its inline Markdown shown as text: a link `[text](target)` is its text, and the `**`, `*` and `` ` ``
-/// around bold, italic and code are dropped. A `*` that doesn't open or close emphasis (`3 * 2`) stays.
+/// `s` with its inline Markdown shown as text: a link `[text](target)` is its text (itself made plain), the `**` and
+/// `*` around bold and italic are dropped, and a code span is its content as written, without its backticks. A `*`
+/// that doesn't open or close emphasis (`3 * 2`) stays.
 fn plain_markdown(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -961,12 +962,18 @@ fn plain_markdown(s: &str) -> String {
             && let Some(end) = rest[close + 2..].find(')')
             && !rest[1..close].contains(['[', ']'])
         {
-            out.push_str(&rest[1..close]);
+            out.push_str(&plain_markdown(&rest[1..close]));
             rest = &rest[close + 2 + end + 1..];
             continue;
         }
+        // a code span is shown as written (`*.xmp` keeps its star); only its backticks go
         if c == '`' {
-            rest = &rest[1..];
+            let (code, after) = match rest[1..].find('`') {
+                Some(end) => (&rest[1..1 + end], &rest[end + 2..]),
+                None => (&rest[1..], ""),
+            };
+            out.push_str(code);
+            rest = after;
             continue;
         }
         if c == '*' {
