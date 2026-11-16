@@ -182,6 +182,7 @@
   "Skipped {problem}": "გამოტოვებულია: {problem}",
   "Slideshow exported: {what}": "სლაიდშოუ ექსპორტირებულია: {what}",
   "Slideshow {n}": "სლაიდშოუ {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "{app}-ის ზოგიერთი შრიფტი აკლია ან დაზიანებულია ({fonts}), ამიტომ ტექსტის ნაწილი შეიძლება ცარიელ კვადრატებად გამოჩნდეს. მათ აღსადგენად ხელახლა დააინსტალირეთ {app}.",
   "Stacked {n} group{}": "დაწყობილია ჯგუფი: {n}{:.0}",
   "Stop waiting: {task}?": "ლოდინის შეწყვეტა: {task}?",
   "Style {n}": "სტილი {n}",

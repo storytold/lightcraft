@@ -129,6 +129,7 @@
   "Sent {n} page(s) to the printer (job {j})": "已向印表機傳送 {n} 頁（工作 {j}）",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "先顯示模型的條款，再從 {host} 下載 {}、安裝並開始使用。不會傳送任何其他資料。",
   "Slideshow {n}": "幻燈片 {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "{app} 的部分字型遺失或已損毀（{fonts}），部分文字可能顯示為空白方框。重新安裝 {app} 即可復原。",
   "Stacked {n} group{}": "已堆疊 {n} 組{:.0}",
   "Stop waiting: {task}?": "停止等待：{task}？",
   "Style {n}": "樣式 {n}",

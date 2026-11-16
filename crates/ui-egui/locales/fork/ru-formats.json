@@ -129,6 +129,7 @@
   "Sent {n} page(s) to the printer (job {j})": "Отправлено страниц на принтер: {n} (задание {j})",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "Показывает условия модели, затем загружает {} с {host}, устанавливает её и начинает использовать. Больше ничего не отправляется.",
   "Slideshow {n}": "Слайд-шоу {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Некоторые шрифты {app} отсутствуют или повреждены ({fonts}), поэтому часть текста может отображаться пустыми прямоугольниками. Переустановите {app}, чтобы восстановить их.",
   "Stacked {n} group{}": "Сгруппировано в стопки: {n}{:.0}",
   "Stop waiting: {task}?": "Прекратить ожидание: {task}?",
   "Style {n}": "Стиль {n}",

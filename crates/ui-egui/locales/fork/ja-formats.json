@@ -129,6 +129,7 @@
   "Sent {n} page(s) to the printer (job {j})": "{n} ページをプリンターに送信しました（ジョブ {j}）",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "モデルの利用条件を表示してから、{host}から{}をダウンロードし、インストールして使い始めます。それ以外の情報は送信しません。",
   "Slideshow {n}": "スライドショー {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "{app} のフォントの一部が見つからないか破損しています（{fonts}）。一部の文字が空白の四角で表示されることがあります。{app} を再インストールすると元に戻ります。",
   "Stacked {n} group{}": "{n} グループをスタックしました{:.0}",
   "Stop waiting: {task}?": "待機を中止しますか: {task}",
   "Style {n}": "スタイル {n}",

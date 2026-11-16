@@ -122,6 +122,7 @@
   "Selected cell {n}": "Cellule sélectionnée {n}",
   "Sent {n} page(s) to the printer (job {j})": "{n} page(s) envoyée(s) à l'imprimante (tâche {j})",
   "Slideshow {n}": "Diaporama {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Certaines polices de {app} sont manquantes ou endommagées ({fonts}) : une partie du texte peut s’afficher sous forme de cases vides. Réinstallez {app} pour les restaurer.",
   "Stacked {n} group{}": "Groupes empilés : {n}{:.0}",
   "Stop waiting: {task}?": "Arrêter d’attendre : {task} ?",
   "Style {n}": "Style {n}",

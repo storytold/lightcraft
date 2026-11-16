@@ -50,7 +50,7 @@ pub fn install() {
 /// The scripts craft-fonts already covers (a system CJK face is still taken unless Korean is among
 /// them too: one system CJK face covers Chinese, Japanese and Korean).
 fn covered_scripts() -> Vec<&'static str> {
-    lcc_engine::CRAFT_FONTS.iter().flat_map(|f| f.scripts.iter().copied()).collect()
+    lcc_engine::craft_fonts().iter().flat_map(|f| f.scripts.iter().copied()).collect()
 }
 
 /// The script a system font file is for, when it is one we take.

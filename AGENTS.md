@@ -148,10 +148,12 @@ One rule (2026-11-10): **use only material you may legally derive from.**
   are original, recorded there too.
 - **Fonts live in [craft-fonts](https://github.com/storytold/craft-fonts), not here** (Inter in `assets/fonts/` is the
   one exception). Build input: `git clone https://github.com/storytold/craft-fonts ../craft-fonts` +
-  `CRAFT_FONTS_DIR=../craft-fonts` on any cargo/xtask command; `crates/engine/build.rs` embeds them as
-  `lcc_engine::CRAFT_FONTS` (wasm32: BIZ UDPGothic only). Without it everything builds/runs but CJK glyphs are
-  missing; releases always build with it (`CRAFT_FONTS_REQUIRED=1`) and ship OFL licences; tests needing the fonts
-  skip without them. Ship fonts unmodified with their licence files, credited in `assets/ATTRIBUTION.md`.
+  `CRAFT_FONTS_DIR=../craft-fonts` on any cargo/xtask command; `crates/engine/build.rs` embeds them, read through
+  `lcc_engine::craft_fonts()` (wasm32: BIZ UDPGothic only). Without `CRAFT_FONTS_DIR` everything builds/runs but CJK
+  glyphs are missing; releases always build with it (`CRAFT_FONTS_REQUIRED=1`) and ship OFL licences; tests needing
+  the fonts skip without them. With `CRAFT_FONTS_EMBED=0` the package carries them as files instead of embedding
+  them (macOS: `Contents/Resources/fonts/`, one copy for the app and the CLI). Ship fonts unmodified with their
+  licence files, credited in `assets/ATTRIBUTION.md`.
 - Demo/test images: procedural (`lcc-scenes`) or CC0 in the gitignored `corpus/`. Adobe screenshots live only in
   gitignored `plan/`. When in doubt about a licence: don't use it.
 

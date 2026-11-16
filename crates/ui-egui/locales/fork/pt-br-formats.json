@@ -129,6 +129,7 @@
   "Sent {n} page(s) to the printer (job {j})": "{n} página(s) enviada(s) à impressora (trabalho {j})",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "Mostra os termos do modelo, depois baixa {} de {host}, instala e começa a usá-lo. Nada mais é enviado.",
   "Slideshow {n}": "Apresentação {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Algumas fontes do {app} estão ausentes ou danificadas ({fonts}), então parte do texto pode aparecer como caixas vazias. Reinstale o {app} para restaurá-las.",
   "Stacked {n} group{}": "Empilhados: {n} grupo{}",
   "Stop waiting: {task}?": "Parar de esperar: {task}?",
   "Style {n}": "Estilo {n}",

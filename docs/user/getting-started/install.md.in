@@ -22,8 +22,10 @@ To run it without installing, download `{{binary}}-<version>-windows-x64-portabl
 
 ## macOS
 
-1. Download `{{binary}}-<version>-macos-universal.dmg`. It works on Apple silicon and Intel Macs, and is signed and notarized.
+1. Download `{{binary}}-<version>-macos-universal.dmg`. It works on Apple silicon and Intel Macs. It isn't notarized, so the first time you open {{app}}, macOS asks you to allow it (System Settings → Privacy & Security → Open Anyway).
 2. Open the file and install {{app}}.
+
+The command-line tool, `{{cli_binary}}`, is inside the app: `/Applications/{{app}}.app/Contents/MacOS/{{cli_binary}}`. It updates with the app. To run it from Terminal, link it onto your `PATH`: `mkdir -p ~/.local/bin && ln -sf /Applications/{{app}}.app/Contents/MacOS/{{cli_binary}} ~/.local/bin/{{cli_binary}}`. If `~/.local/bin` isn't on your `PATH` yet, add `export PATH="$HOME/.local/bin:$PATH"` to `~/.zshrc`.
 
 ## Linux
 

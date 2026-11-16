@@ -144,6 +144,7 @@
   "Sent {n} page(s) to the printer (job {j})": "{n} halaman dikirim ke printer (tugas {j})",
   "Service: {name}": "Layanan: {name}",
   "Slideshow {n}": "Tayangan slide {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Beberapa font {app} hilang atau rusak ({fonts}), sehingga sebagian teks mungkin tampil sebagai kotak kosong. Instal ulang {app} untuk memulihkannya.",
   "Stacked {n} group{}": "{n} grup ditumpuk{:.0}",
   "Stop waiting: {task}?": "Berhenti menunggu: {task}?",
   "Style {n}": "Gaya {n}",

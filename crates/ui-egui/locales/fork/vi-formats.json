@@ -171,6 +171,7 @@
   "Skipped {problem}": "Đã bỏ qua {problem}",
   "Slideshow exported: {what}": "Đã xuất trình chiếu: {what}",
   "Slideshow {n}": "Trình chiếu {n}",
+  "Some of {app}'s fonts are missing or damaged ({fonts}), so some text may show as empty boxes. Reinstall {app} to restore them.": "Một số phông chữ của {app} bị thiếu hoặc bị hỏng ({fonts}), nên một số văn bản có thể hiển thị thành ô trống. Hãy cài đặt lại {app} để khôi phục.",
   "Stacked {n} group{}": "Đã chồng {n} nhóm{:.0}",
   "Stop waiting: {task}?": "Dừng chờ: {task}?",
   "Style {n}": "Kiểu {n}",
