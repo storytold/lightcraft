@@ -2502,5 +2502,9 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Reading video frames": "Načítání snímků videa",
+  "No video frame": "Žádný snímek videa",
+  "No video frame: {reason}": "Žádný snímek videa: {reason}",
+  "this build has no video decoding (feature video-frames)": "tato verze nedekóduje video (funkce video-frames)"
 }

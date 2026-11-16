@@ -2662,5 +2662,9 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустите приложение с --control 7980 (или LIGHTCRAFT_CONTROL_PORT), и команда lightcraft-cli mcp --connect подключит к нему одного агента.",
   "Welcome": "Добро пожаловать",
   "Next": "Далее",
-  "Get Started": "Начать"
+  "Get Started": "Начать",
+  "Reading video frames": "Чтение кадров видео",
+  "No video frame": "Нет кадра видео",
+  "No video frame: {reason}": "Нет кадра видео: {reason}",
+  "this build has no video decoding (feature video-frames)": "эта сборка не декодирует видео (функция video-frames)"
 }

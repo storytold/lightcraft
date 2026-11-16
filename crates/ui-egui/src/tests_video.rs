@@ -46,7 +46,13 @@ fn select(h: &mut Headless, id: PhotoId) {
 /// Their files don't exist, so a thumbnail render fails fast — which for a video must not read as
 /// a broken photo.
 fn video_app(view: ViewMode) -> Headless {
+    video_app_with(view, None)
+}
+
+/// [`video_app`] whose session decodes posters with `video_loader` (as `with_fs` installs one).
+fn video_app_with(view: ViewMode, video_loader: Option<lightcraft_engine::media::FileLoader>) -> Headless {
     let mut session = lightcraft_engine::Session::new();
+    session.media.video_loader = video_loader;
     for (id, name, kind, duration, format) in [
         (1u64, "clip.mp4", MediaKind::Video, Some(84.0), "MP4"),
         (2, "photo.jpg", MediaKind::Image, None, "JPEG"),
@@ -301,4 +307,62 @@ fn video_card_never_panics_on_small_pane() {
     h.app.ui.view = ViewMode::Detail;
     h.settle(SETTLE);
     assert!(has(&h, "canvas:videoCard"), "the card is drawn even in small pane without panicking");
+}
+
+/// A video loader that counts its calls and answers with a flat blue-grey picture, or `fail`.
+fn poster_loader(calls: std::sync::Arc<std::sync::atomic::AtomicUsize>, fail: Option<&'static str>) -> lightcraft_engine::media::FileLoader {
+    std::sync::Arc::new(move |_path: &str, max_edge: usize, _with| {
+        calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if let Some(why) = fail {
+            return Err(why.into());
+        }
+        let (w, h) = (320.min(max_edge), 180.min(max_edge));
+        Ok((lightcraft_raster::Rgb32f { width: w, height: h, data: vec![[0.1, 0.2, 0.45]; w * h] }, Default::default()))
+    })
+}
+
+/// With video decoding, a clip's grid cell, filmstrip and loupe show its poster frame: no card,
+/// no failure.
+#[test]
+fn posters_show_in_the_grid_and_the_loupe() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut h = video_app_with(ViewMode::PhotoGrid, Some(poster_loader(calls.clone(), None)));
+    for id in [1, 3, 4] {
+        assert!(h.app.renderer.thumb(PhotoId(id)).is_some(), "clip {id} has its poster in the grid");
+    }
+    shot(&mut h, "video-posters-grid.png");
+    select(&mut h, PhotoId(1));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "info", "filmstrip": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(!has(&h, "canvas:videoCard"), "the poster stands in for the card");
+    assert!(matches!(h.app.loupe_shown.map(|l| l.1), Some("render" | "preview" | "thumb")), "{:?}", h.app.loupe_shown);
+    assert!(!has(&h, "notice:videoFrame:info"));
+    assert!(!has(&h, "loupe:renderFailed"));
+    shot(&mut h, "video-posters-loupe.png");
+}
+
+/// A clip whose frames can't be decoded keeps its card, which says why, as Info does; the failed
+/// poster isn't asked for again frame after frame.
+#[test]
+fn an_undecodable_clip_keeps_its_card_and_says_why_once() {
+    const WHY: &str = "Apple ProRes video can't be decoded yet";
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut h = video_app_with(ViewMode::PhotoGrid, Some(poster_loader(calls.clone(), Some(WHY))));
+    assert!(h.app.renderer.thumb(PhotoId(1)).is_none());
+    assert_eq!(h.app.renderer.failure(crate::render::Slot::Thumb(PhotoId(1))), Some(WHY));
+    select(&mut h, PhotoId(1));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "info", "filmstrip": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(has(&h, "canvas:videoCard"));
+    assert!(has(&h, "notice:videoFrame:info"), "Info says why the clip shows no frame");
+    assert!(!has(&h, "loupe:renderFailed"), "a clip without a frame is not a broken photo");
+    let asked = calls.load(std::sync::atomic::Ordering::Relaxed);
+    for _ in 0..30 {
+        h.step();
+    }
+    h.settle(SETTLE);
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), asked, "a failed poster is not retried every frame");
+    shot(&mut h, "video-undecodable-loupe.png");
 }

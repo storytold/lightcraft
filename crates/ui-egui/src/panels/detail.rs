@@ -135,11 +135,19 @@ pub enum Gesture {
     },
 }
 
-/// The card a catalogued video shows where a frame it can't decode yet would go: what the clip is
-/// (name and running time), and what this build does with it. It keeps a video from reading as a
-/// broken photo in the loupe ("This photo can't be opened" and a warning pill) until playback,
-/// trim and cover frames land.
-pub(super) fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, canvas: Rect, widget: &str) {
+/// The card a catalogued video shows where its frame would go while there is none: what the clip
+/// is (name and running time), and why no frame shows (`problem`, [`video_frame_problem`]) or
+/// what this build does with it. It keeps a video from reading as a broken photo in the loupe
+/// ("This photo can't be opened" and a warning pill).
+pub(super) fn video_card(
+    ui: &egui::Ui,
+    p: &egui::Painter,
+    t: &Tokens,
+    photo: &lightcraft_catalog::Photo,
+    canvas: Rect,
+    widget: &str,
+    problem: Option<&str>,
+) {
     let w = (canvas.width() * 0.6).clamp(160.0, 460.0).min((canvas.width() - 24.0).max(80.0));
     let wrap = (w - 32.0).max(20.0);
     let name = crate::widgets::one_line(p, &photo.file_name, t.semibold(14.0), t.text, wrap);
@@ -147,8 +155,11 @@ pub(super) fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &l
         let text = crate::widgets::format_duration(d);
         (!text.is_empty()).then(|| p.layout_no_wrap(format!("{} · {text}", crate::i18n::tr("Duration")), t.font(12.0), t.text_label))
     });
-    let message =
-        p.layout(crate::i18n::tr("Video catalogued — playback and trim are coming in a later update").to_string(), t.font(12.0), t.text_dim, wrap);
+    let message = match problem {
+        Some(why) => crate::i18n::tr_format!("No video frame: {reason}", reason = crate::i18n::tr(why)),
+        None => crate::i18n::tr("Video catalogued — playback and trim are coming in a later update").to_string(),
+    };
+    let message = p.layout(message, t.font(12.0), t.text_dim, wrap);
     let icon = 36.0;
     let name_h = name.size().y;
     let duration_h = duration.as_ref().map_or(0.0, |g| 6.0 + g.size().y);
@@ -173,13 +184,22 @@ pub(super) fn video_card(ui: &egui::Ui, p: &egui::Painter, t: &Tokens, photo: &l
     register(ui, widget, card);
 }
 
-/// Whether the loupe draws a catalogued video's card: it has no frame on screen to show yet
-/// (playback, trim and cover frames come in a later update), so in every view mode the card stands
-/// in for the picture instead of the error a broken photo shows or a blank pane.
+/// Whether the loupe draws a catalogued video's card: it has no frame on screen (its poster frame
+/// hasn't arrived, can't be decoded, or this build has no video decoding), so in every view mode
+/// the card stands in for the picture instead of the error a broken photo shows or a blank pane.
+/// Its thumbnail's poster stands in for the loupe's while that renders.
 fn shows_video_card(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, id: PhotoId) -> bool {
     photo.is_video()
         && app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
         && app.renderer.textures.get(&Slot::Preview).is_none_or(|t| t.photo != id)
+        && app.renderer.thumb(id).is_none()
+}
+
+/// Why catalogued video `id` shows no frame: the last failed render of its poster frame (the
+/// loupe's, else its thumbnail's), as the video loader worded it. `None` while it renders or once
+/// it shows.
+pub(crate) fn video_frame_problem(app: &LightcraftApp, id: PhotoId) -> Option<&str> {
+    [Slot::Main, Slot::Preview].into_iter().find_map(|s| app.renderer.failure_of(s, id)).or_else(|| app.renderer.failure(Slot::Thumb(id)))
 }
 
 /// Draw the Develop loupe: the optional filmstrip, the fitted or zoomed photo (before/after and
@@ -356,7 +376,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // in a later update): its card stands in for the picture in every view mode, instead of the
     // error a broken photo shows or a blank pane.
     if shows_video_card(app, &photo, id) {
-        video_card(ui, &p, &t, &photo, canvas, "canvas:videoCard");
+        video_card(ui, &p, &t, &photo, canvas, "canvas:videoCard", video_frame_problem(app, id));
         shown = "video";
     } else if split {
         // each view stays in its pane: zoomed in, a photo reaches past it (and would cover the

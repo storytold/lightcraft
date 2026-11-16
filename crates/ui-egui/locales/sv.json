@@ -2517,5 +2517,9 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "Reading video frames": "Läser videobilder",
+  "No video frame": "Ingen videobild",
+  "No video frame: {reason}": "Ingen videobild: {reason}",
+  "this build has no video decoding (feature video-frames)": "den här versionen avkodar inte video (funktionen video-frames)"
 }

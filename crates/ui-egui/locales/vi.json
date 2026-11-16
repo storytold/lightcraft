@@ -2741,5 +2741,9 @@
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
   "Bottom bar": "Thanh dưới cùng",
-  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác"
+  "Stopped at the scan limit: there may be more photos": "Đã dừng ở giới hạn quét: có thể còn ảnh khác",
+  "Reading video frames": "Đang đọc khung hình video",
+  "No video frame": "Không có khung hình video",
+  "No video frame: {reason}": "Không có khung hình video: {reason}",
+  "this build has no video decoding (feature video-frames)": "bản dựng này không giải mã video (tính năng video-frames)"
 }

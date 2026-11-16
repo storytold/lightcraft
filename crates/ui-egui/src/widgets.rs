@@ -267,6 +267,33 @@ pub fn preview_only_notice(ui: &mut Ui, key: &str, reason: &str) -> bool {
     reload
 }
 
+/// Why a catalogued video shows no frame (`reason`, [`crate::panels::detail::video_frame_problem`]:
+/// a codec this build can't decode, a damaged clip, a build without video decoding): the
+/// placeholder is not a broken file. `key` makes its widget id unique (`notice:videoFrame:<key>`).
+pub fn video_frame_notice(ui: &mut Ui, key: &str, reason: &str) {
+    let t = Tokens::get(ui.ctx());
+    let reason = crate::i18n::tr(reason).to_string();
+    let r = egui::Frame::NONE
+        .fill(t.canvas)
+        .stroke(Stroke::new(1.0, t.caution.gamma_multiply(0.45)))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin { left: 10, right: 10, top: 8, bottom: 9 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (ir, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
+                paint(ui.painter(), ir, Icon::Info, t.caution);
+                ui.label(egui::RichText::new(crate::i18n::tr("No video frame")).font(t.semibold(12.5)).color(t.text));
+            });
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(&reason).size(11.5).color(t.text_label));
+        })
+        .response;
+    let label = format!("{}: {reason}", crate::i18n::tr("No video frame"));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, &label));
+    register(ui, format!("notice:videoFrame:{key}"), r.rect);
+}
+
 // ------------------------------------------------------------------ colour helpers
 
 pub fn hex(s: &str) -> Color32 {

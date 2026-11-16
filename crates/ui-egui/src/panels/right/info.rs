@@ -13,6 +13,12 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             ui.add_space(6.0);
         }
+        if p.is_video()
+            && let Some(why) = crate::panels::detail::video_frame_problem(app, id)
+        {
+            crate::widgets::video_frame_notice(ui, "info", why);
+            ui.add_space(6.0);
+        }
         if let Some(name) = &p.copy_name {
             let of = p
                 .copy_of

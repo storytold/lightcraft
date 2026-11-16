@@ -2620,5 +2620,9 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Reading video frames": "Lettura dei fotogrammi video",
+  "No video frame": "Nessun fotogramma video",
+  "No video frame: {reason}": "Nessun fotogramma video: {reason}",
+  "this build has no video decoding (feature video-frames)": "questa build non decodifica i video (funzione video-frames)"
 }

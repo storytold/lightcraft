@@ -2380,5 +2380,9 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Reading video frames": "Odczytywanie klatek wideo",
+  "No video frame": "Brak klatki wideo",
+  "No video frame: {reason}": "Brak klatki wideo: {reason}",
+  "this build has no video decoding (feature video-frames)": "ta wersja nie dekoduje wideo (funkcja video-frames)"
 }

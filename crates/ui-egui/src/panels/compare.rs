@@ -347,7 +347,7 @@ fn photo_tile(
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.id(), display, uv, Color32::WHITE);
     } else if photo.is_video() {
-        super::detail::video_card(ui, &p, &t, &photo, img_area, &format!("cull:{}:videoCard", id.0));
+        super::detail::video_card(ui, &p, &t, &photo, img_area, &format!("cull:{}:videoCard", id.0), super::detail::video_frame_problem(app, id));
     } else {
         p.rect_filled(img.intersect(img_area), 0.0, t.skeleton);
     }
