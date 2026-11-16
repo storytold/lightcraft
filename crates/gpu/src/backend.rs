@@ -1063,10 +1063,7 @@ mod tests {
             choose_non_windows_window_renderer(None, Some("vulkan,gl"), None, false, "linux", all, true),
             WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)
         );
-        assert_eq!(
-            choose_non_windows_window_renderer(Some("vulkan"), None, None, false, "linux", all, true),
-            WindowRenderer::Wgpu(Backends::VULKAN)
-        );
+        assert_eq!(choose_non_windows_window_renderer(Some("vulkan"), None, None, false, "linux", all, true), WindowRenderer::Wgpu(Backends::VULKAN));
         // Non-Linux control keeps its platform wgpu backends with or without a marker
         assert_eq!(
             choose_non_windows_window_renderer(None, None, None, false, "freebsd", all, true),
