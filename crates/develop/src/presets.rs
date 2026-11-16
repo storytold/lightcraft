@@ -279,8 +279,9 @@ fn compose_named(current: &DevelopSettings, original: &DevelopSettings, settings
 /// A `wb` whose base and patch are on different scales, for [`interpolate_object`]: `temp` and
 /// `tint` switch at half amount (below it the baseline applies, from it the preset's value), while
 /// every other `wb` leaf follows the usual rules. A `temp`/`tint` with no baseline is left out
-/// below half amount, so the photo keeps its own value there. Below half amount the result carries
-/// a Kelvin baseline's scale, so the merge keeps it.
+/// below half amount, so the photo keeps its own value there. Below half amount a `temp`/`tint`
+/// the result carries comes from a Kelvin baseline, so the result also carries its scale and the
+/// merge keeps it; a patch naming neither leaves the photo's own numbers on the photo's scale.
 fn interpolate_wb_across_scales(base: Option<&Value>, patch: &Map<String, Value>, t: f64) -> Map<String, Value> {
     let base_map = base.and_then(Value::as_object);
     let mut out = Map::new();
@@ -302,7 +303,10 @@ fn interpolate_wb_across_scales(base: Option<&Value>, patch: &Map<String, Value>
             }
         }
     }
-    if t < 0.5 && wb_is_kelvin(base) && !out.contains_key("scale") {
+    // Only a `temp`/`tint` the result actually carries is read on the baseline's scale: a patch
+    // that names neither (a mode-only preset) leaves the photo's own numbers in place with their
+    // own scale, which a Kelvin label here would reinterpret.
+    if t < 0.5 && wb_is_kelvin(base) && !out.contains_key("scale") && (out.contains_key("temp") || out.contains_key("tint")) {
         out.insert("scale".to_string(), Value::String("kelvin".to_string()));
     }
     out
@@ -745,6 +749,28 @@ mod tests {
                 (4000.0, -12.0, crate::WbScale::Legacy),
                 "apply_on at {amount}"
             );
+        }
+    }
+
+    /// A preset that names only the mode (neither `temp` nor `tint`) must not label the photo's
+    /// own numbers Kelvin: below half amount the merge keeps the photo's Legacy `temp`/`tint`, and
+    /// a Kelvin scale beside them would read them on the other scale (issue #3917 review).
+    #[test]
+    fn a_mode_only_preset_keeps_the_photos_own_scale() {
+        let current = custom_wb(6500.0, 10.0, crate::WbScale::Legacy);
+        let original = custom_wb(6000.0, 5.0, crate::WbScale::Kelvin);
+        let p = Preset {
+            id: "p".into(),
+            name: "P".into(),
+            group: "G".into(),
+            settings: json!({"wb": {"mode": "custom"}}),
+            favorite: false,
+            builtin: false,
+        };
+        for amount in [0.3, 0.7] {
+            let out = p.apply_on(&current, &original, amount);
+            assert_eq!((out.wb.temp, out.wb.tint), (6500.0, 10.0), "{amount}: the photo's own numbers");
+            assert_eq!(out.wb.scale, crate::WbScale::Legacy, "{amount}: the photo's own scale");
         }
     }
 
