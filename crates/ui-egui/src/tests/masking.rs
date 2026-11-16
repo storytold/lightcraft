@@ -1877,6 +1877,43 @@ fn adding_a_gradient_to_a_brush_mask_disarms_the_brush() {
     assert!(matches!(develop(&h).masks[0].components[1].shape, MaskShape::Brush { .. }), "the engine adds a brush component when kind is omitted");
 }
 
+/// Every combination of an armed tool that takes the photo's presses (the colour-range eyedropper,
+/// the brush, the Object tool) and a component kind added to the mask: the tool stays armed only
+/// for a component of its own kind (an omitted kind is a brush, as in the engine); any other kind
+/// disarms it, so that component's handles can be dragged (review of #3475).
+#[test]
+fn adding_a_component_disarms_the_tools_of_other_kinds() {
+    const KINDS: [&str; 10] = ["brush", "linear", "radial", "sky", "subject", "background", "luminanceRange", "colorRange", "object", "prompt"];
+    const AI: [&str; 5] = ["sky", "subject", "background", "object", "prompt"];
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.5], "rx": 0.1, "ry": 0.1}));
+    for tool in ["colorRange", "brush", "object"] {
+        for kind in KINDS.iter().map(|k| Some(*k)).chain([None]) {
+            h.app.ui.tool = tool.into();
+            let mut p = json!({"op": "add"});
+            if let Some(k) = kind {
+                p["kind"] = json!(k);
+            }
+            let r = h.request("engine.execute", json!({"command": "mask.addComponent", "params": p}), T);
+            if r["ok"] != true {
+                // the AI kinds need a model this build may not have: a refused add changes nothing
+                assert!(AI.contains(&kind.unwrap_or("brush")), "{tool}, {kind:?}: {r}");
+                assert_eq!(h.app.ui.tool, tool, "{tool}, {kind:?}: a refused add leaves the tool armed");
+                continue;
+            }
+            let keeps = kind.unwrap_or("brush") == tool;
+            assert_eq!(h.app.ui.tool == tool, keeps, "{tool} armed, {kind:?} added: kept armed {}", h.app.ui.tool == tool);
+            if !keeps {
+                assert!(h.app.ui.tool.is_empty(), "{tool}, {kind:?}: disarmed, no other tool armed instead");
+            }
+        }
+    }
+    // a tool that doesn't take the photo's presses is left alone
+    h.app.ui.tool = "lensBlurFocus".into();
+    exec(&mut h, "mask.addComponent", json!({"kind": "radial", "op": "add"}));
+    assert_eq!(h.app.ui.tool, "lensBlurFocus");
+}
+
 /// The Object tool takes every click on the photo and ignores drags, so a gradient added while it
 /// is armed must disarm it: its handles were drawn but a drag on one did nothing.
 #[test]
