@@ -152,6 +152,31 @@ fn apply(b: usize) {
 /// Each card's GPU buffer pool may hold up to 1/n of the card's memory while it works.
 const GPU_POOL_VRAM_SHARE: u64 = 3;
 
+/// Bytes a full-size decode of an 8-bit file holds per pixel at its peak: the decoder's RGB bytes, the linear picture
+/// (`[f32; 3]`) and the working-space copy made from it, all alive at once.
+const DECODE_PEAK_BYTES_PER_PX: u64 = 3 + 12 + 12;
+
+/// The long edge to decode a `width × height` original at for the window (the loupe zoomed in, a crop, the warm
+/// full-size source), when its full size would not fit the memory budget: the largest of a half, a quarter or an
+/// eighth of it whose decode fits (a JPEG decodes those straight from its DCT, never at full size first), at least the
+/// preview's edge. `None`: the original fits and is decoded whole. A 200 MP phone JPEG decoded whole holds about
+/// 5.4 GB, which on a phone ended with the system killing the app; exports still read the original whole.
+pub fn interactive_edge_cap(width: u32, height: u32) -> Option<usize> {
+    edge_cap_for(budget(), width, height)
+}
+
+/// [`interactive_edge_cap`] for a budget of `budget` bytes.
+fn edge_cap_for(budget: usize, width: u32, height: u32) -> Option<usize> {
+    let (w, h) = (u64::from(width), u64::from(height));
+    let fits = |k: u64| (w / k).saturating_mul(h / k).saturating_mul(DECODE_PEAK_BYTES_PER_PX) <= budget as u64;
+    if fits(1) {
+        return None;
+    }
+    let long = w.max(h);
+    let k = [2, 4].into_iter().find(|&k| fits(k)).unwrap_or(8);
+    Some(usize::try_from(long / k).unwrap_or(usize::MAX).max(crate::media::SourceLevel::Preview.max_edge()))
+}
+
 /// Share of the budget for the engine's caches.
 pub fn cache_share(budget: usize) -> usize {
     budget / 2
@@ -282,6 +307,29 @@ fn export_share_of(budget: usize, ram: Option<usize>) -> usize {
 
 /// Share of the computer's memory an export batch may hold in photos side by side.
 const EXPORT_RAM_PERCENT: usize = 45;
+
+#[cfg(test)]
+mod edge_cap_tests {
+    use super::edge_cap_for;
+
+    /// A huge original is decoded for the window at a DCT step that fits the budget; one that fits is left whole.
+    #[test]
+    fn a_huge_original_is_decoded_smaller_for_the_window() {
+        let gb = 1usize << 30;
+        // a 24 MP raw on a 1.5 GiB budget, a 200 MP JPEG on a 64 GB computer's 16 GB: whole
+        assert_eq!(edge_cap_for(3 * gb / 2, 6000, 4000), None);
+        assert_eq!(edge_cap_for(16 * gb, 12240, 16320), None);
+        // the 200 MP JPEG on a phone's 1.5 GiB: at a half or less, and never past what fits
+        let cap = edge_cap_for(3 * gb / 2, 12240, 16320).unwrap();
+        assert!(cap <= 16320 / 2, "{cap}");
+        let (w, h) = (12240 * cap / 16320, cap);
+        assert!(w * h * 27 <= 3 * gb / 2);
+        // a tiny budget: an eighth, but never below the preview
+        assert_eq!(edge_cap_for(1 << 20, 24480, 32640), Some(32640 / 8));
+        assert_eq!(edge_cap_for(1 << 20, 12240, 16320), Some(2560));
+        assert_eq!(edge_cap_for(0, u32::MAX, u32::MAX).map(|e| e > 0), Some(true), "no overflow");
+    }
+}
 
 #[cfg(test)]
 mod export_share_tests {

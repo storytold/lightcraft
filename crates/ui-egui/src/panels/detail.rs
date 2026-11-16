@@ -1407,6 +1407,9 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
         if now - since >= WARM_FULL_AFTER_S
             && native_long > lcc_engine::SourceLevel::Preview.max_edge()
             && !app.session.media.has_source(id, lcc_engine::SourceLevel::Full)
+            // (an original too big for the memory budget is decoded smaller, and only when the view needs it: ahead of
+            // a zoom that may never come it would take memory a phone does not have)
+            && !app.session.full_source_capped(id)
             && app.renderer.queued() == 0
             && let Some(job) =
                 app.session.region_job(id, native[0], native[1], lcc_engine::pipeline::PixelWindow { x: 0, y: 0, w: 1, h: 1 }, !crop_tool)
