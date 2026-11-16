@@ -21,6 +21,8 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         exposure_bias: m.exposure_bias.map(|v| v as f32),
         // set by the probe for formats it looks into ([`dng_matte_kinds`])
         mattes: None,
+        // stamped by [`probe_bytes`]
+        facts: 0,
         serial_number: m.serial_number.clone().unwrap_or_default(),
         location: m.sublocation.clone().unwrap_or_default(),
         city: m.city.clone().unwrap_or_default(),
@@ -136,6 +138,18 @@ fn dng_matte_kinds(bytes: &[u8]) -> Vec<String> {
     kinds
 }
 
+/// The version of the set of facts the probe records about a file beyond its Exif (issue #4371). Each photo keeps the
+/// version that last looked at its file (`Meta::facts`), so a fact added later can be recorded for photos imported
+/// before it (`cmd::file_facts`). **Adding a fact:** raise this by one and add a row to [`FACTS_ADDED`].
+pub const FACTS_VERSION: u16 = 1;
+
+/// What each version of the probe started to record, and for which formats (as `Photo::format` spells them; an empty
+/// list: every format). A photo stamped below a row's version whose format the row names has a file worth reading
+/// again; other photos are left alone, so a fact about one format doesn't cost a pass over the whole library.
+///
+/// 1: the segmentation mattes a DNG carries (`Meta::mattes`, [`dng_matte_kinds`]).
+pub const FACTS_ADDED: [(u16, &[&str]); 1] = [(1, &["DNG"])];
+
 fn ext_upper(name: &str) -> String {
     std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_uppercase()).unwrap_or_default()
 }
@@ -144,7 +158,15 @@ fn ext_upper(name: &str) -> String {
 /// raws are described from their headers ([`lightcraft_raw::probe_info`]), other images too
 /// ([`lightcraft_codecs::read_header`], which refuses truncated files but can't see damage inside
 /// compressed data that is all there: such a file imports and shows as unreadable when rendered).
+///
+/// The result carries [`FACTS_VERSION`]: whatever the file had, this version of the probe looked.
 pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
+    let mut info = probe_unstamped(name, bytes)?;
+    info.meta.facts = FACTS_VERSION;
+    Ok(info)
+}
+
+fn probe_unstamped(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     let content_hash = Some(lightcraft_preview::hash_bytes(bytes).to_string());
     let m = lightcraft_meta::extract(bytes);
     let (meta, captured) = meta_of(&m);

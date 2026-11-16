@@ -528,6 +528,7 @@ fn image_probe_reads_headers_like_the_decode_did() {
             assert_eq!(p.format, if name == "a.jpg" { "JPEG" } else { "PNG" });
             assert_eq!(p.file_size, bytes.len() as u64);
             assert!(p.content_hash.is_some());
+            assert_eq!(p.meta.facts, super::FACTS_VERSION, "issue #4371: every probe stamps its version");
             assert!(probe_bytes(name, &bytes[..bytes.len() / 2]).is_err(), "{name}: truncated file accepted");
         }
     }

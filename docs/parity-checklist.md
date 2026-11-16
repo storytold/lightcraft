@@ -802,6 +802,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | patch | LR-PRE-ADAPTIVE: each photo records which version of the import probe looked at its file, and the update of photos imported earlier lists by it (#4371); no visible change, status unchanged |
 | 2026-11-15 | patch | LR-PRE-ADAPTIVE: photos imported before their mattes were recorded are updated on request (an offer after an update, Settings, `library.recordFileFacts`) (#4367); status unchanged |
 | 2026-11-15 | patch | LR-PRE-ADAPTIVE: the Presets panel says where an adaptive preset can't tell yet and offers Check (Reload from Disk), updating when done (#4368); status unchanged |
 | 2026-11-15 | patch | LR-PRE-ADAPTIVE: `preset.apply` lists the photos it can't tell about, and a read-only `preset.foundNothing` (#4365); status unchanged |

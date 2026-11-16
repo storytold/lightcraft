@@ -254,6 +254,8 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if src.mattes.is_some() {
         m.mattes = src.mattes.clone();
     }
+    // which version of the probe looked at the file: never lowered
+    m.facts = m.facts.max(src.facts);
     if m.serial_number.is_empty() {
         m.serial_number = src.serial_number.clone();
     }
@@ -490,6 +492,21 @@ mod tests {
         ph.meta.mattes = info.meta.mattes.clone();
         info.meta.mattes = None;
         assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "not looked at: what is recorded stays");
+    }
+
+    /// Issue #4371: Reload from Disk stamps the probe's version on a photo imported before it was recorded, even
+    /// when the file gives nothing else new, and never lowers a stamp.
+    #[test]
+    fn reload_stamps_the_probe_version() {
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.jpg".into() }, "x.jpg", "JPEG", 4032, 3024, "2026-10-06T00:00:00");
+        ph.captured = Some("2026-10-04T08:16:11".into());
+        let mut info = crate::media::ProbeInfo { captured: ph.captured.clone(), ..Default::default() };
+        info.meta.facts = 2;
+        let ops = fill_missing_meta(PhotoId(1), &ph, &info);
+        let Some(Op::SetMeta { meta, .. }) = ops.first() else { panic!("{ops:?}") };
+        assert_eq!(meta.facts, 2);
+        ph.meta.facts = 3;
+        assert!(fill_missing_meta(PhotoId(1), &ph, &info).is_empty(), "an older probe doesn't lower the stamp");
     }
 
     /// Reload from Disk repairs a shutter speed an older import rounded (0.4 s stored as `1/2`, with no
