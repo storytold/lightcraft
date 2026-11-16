@@ -272,8 +272,8 @@ Capture One 16.9.0 on Windows (catalog format 160906).
 - **Photos:** one per variant (`ZVARIANT`); the first variant of an image is the photo, later ones become virtual
   copies ("Variant 2", …). Originals inside the catalog are found relative to the folder holding the database,
   referenced ones by `ZPATHLOCATION` (`ZWINROOT` / `ZMACROOT` + `ZRELATIVEPATH`). Images in Capture One's trash
-  are left out, with a warning, and so is any image whose original is a file type the app doesn't read (a Nikon
-  `.NEFX`, say): it is named in the warnings and its file is never added.
+  are left out, with a warning, and so is any image whose original is a file type the app doesn't read (a Sony
+  `.ARQ` pixel-shift raw, say): it is named in the warnings and its file is never added.
 - **Offline originals** (a drive that isn't connected, a file that is gone) take the capture time (`ZEXP_DATE`, the
   camera's clock, no offset), camera make, model and lens from the catalog; a file that is there keeps its own.
   Capture One's stand-ins for a file without a camera ("Tiff File", "Jpeg File") are no camera.

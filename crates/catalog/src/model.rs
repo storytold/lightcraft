@@ -552,7 +552,7 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "CRW", "MRW"]
+    ["ARW", "NEF", "NEFX", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "CRW", "MRW"]
         .iter()
         .any(|f| format.eq_ignore_ascii_case(f))
 }
@@ -989,12 +989,36 @@ mod edited_tests {
         assert!(p.is_edited(), "an edit still is one");
     }
 
+    /// NEFX joined the relative-WB formats; no other format moved, and a NEFX decides as a NEF of the same body does
+    /// (what white balance a camera NEF gets in a catalog import is the same as before).
+    #[test]
+    fn nefx_joins_the_relative_formats_without_moving_any_other_format() {
+        for format in ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "CRW", "MRW"] {
+            assert!(relative_wb_format(format), "{format}");
+        }
+        for format in ["DNG", "MEF", "IIQ", "3FR", "FFF", "X3F", "KDC", "MOS", "JPG", "TIF", "NEFS", "NE", ".NEF", ""] {
+            assert!(!relative_wb_format(format), "{format}");
+        }
+        assert!(relative_wb_format("nefx") && relative_wb_format("NeFx"));
+        for camera in [
+            "NIKON CORPORATION NIKON Z 8",
+            "NIKON CORPORATION NIKON D850",
+            "NIKON CORPORATION NIKON Z5_2",
+            "NIKON CORPORATION NIKON Z 6_2",
+            "NIKON CORPORATION NIKON Z f",
+            "Acme X-1",
+        ] {
+            assert_eq!(relative_wb_camera("NEFX", camera), relative_wb_camera("NEF", camera), "{camera}");
+        }
+    }
+
     #[test]
     fn supported_raws_use_relative_white_balance() {
         for (name, format, relative) in [
             ("a.arw", "ARW", true),
             ("a.nef", "NEF", true),
             ("a.nrw", "nrw", true),
+            ("a.nefx", "NeFx", true),
             ("a.rw2", "RW2", true),
             ("a.rwl", "RWL", true),
             ("a.raw", "RAW", true),
