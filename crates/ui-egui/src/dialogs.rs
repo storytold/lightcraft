@@ -988,6 +988,27 @@ fn plain_markdown_within(text: &str, depth: usize) -> String {
     out
 }
 
+/// Where `marker` first occurs in `text` outside a code span: the `*` of `` `*.jpg` `` doesn't
+/// close emphasis around it.
+fn find_outside_code(text: &str, marker: &str) -> Option<usize> {
+    let mut at = 0;
+    loop {
+        let rest = text.get(at..)?;
+        let tick = rest.find('`');
+        match rest.find(marker) {
+            Some(m) if tick.is_none_or(|t| m < t) => return Some(at + m),
+            _ => {}
+        }
+        // Skip the code span the tick opens; an unclosed tick is just a character.
+        let t = tick?;
+        let after = at + t + 1;
+        at = match text.get(after..).and_then(|r| r.find('`')) {
+            Some(end) => after + end + 1,
+            None => after,
+        };
+    }
+}
+
 /// The span `from` starts (at a `` ` ``, `[` or `*`): what it shows and how many bytes it takes.
 /// `prev` is the character before it. Not a span: the character itself, shown as it is (a
 /// lone code tick is dropped, as before).
@@ -1017,7 +1038,7 @@ fn markdown_span(from: &str, prev: Option<char>, depth: usize) -> (String, usize
             // that neither starts nor ends with a space: `a * b` and `lightcraft*` aren't emphasis.
             let opens = prev.is_none_or(|c| !c.is_alphanumeric() && c != '*')
                 && from.get(inner_start..).and_then(|s| s.chars().next()).is_some_and(|c| !c.is_whitespace() && c != '*');
-            let close = from.get(inner_start..).and_then(|s| s.find(marker)).map(|i| i + inner_start);
+            let close = from.get(inner_start..).and_then(|s| find_outside_code(s, marker)).map(|i| i + inner_start);
             match close {
                 Some(end) if opens && end > inner_start => {
                     let text = from.get(inner_start..end).unwrap_or_default();
@@ -2363,6 +2384,10 @@ mod whats_new_tests {
         // Emphasis wrapped over two lines of the file, and a link inside emphasis.
         let blocks = whats_new_blocks("- the window's **Remove from\n  List** does the same; **[docs](a.md)**.\n", str::to_string);
         assert_eq!(blocks, [B::Bullet("the window's Remove from List does the same; docs.".into())]);
+        // A code span inside emphasis keeps its asterisk; the emphasis closes after it.
+        assert_eq!(plain_markdown("*Match `*.jpg` files* now"), "Match *.jpg files now");
+        assert_eq!(plain_markdown("**All `*` and `**` kept**."), "All * and ** kept.");
+        assert_eq!(plain_markdown("*open `tick only* here"), "open tick only here");
         // Headings lose their code ticks too.
         let blocks = whats_new_blocks("### `--import <folder>` takes HEIC\n### `>=` and `<=` work\n", str::to_string);
         assert_eq!(blocks, [B::Change("--import <folder> takes HEIC".into()), B::Change(">= and <= work".into())]);
