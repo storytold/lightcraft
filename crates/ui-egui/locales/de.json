@@ -3453,6 +3453,8 @@
   "Paint what should be blurred": "Malen, was unscharf werden soll",
   "Remove the strokes of both brushes": "Die Striche beider Pinsel entfernen",
   "Find Subject": "Motiv finden",
+  "Check": "Prüfen",
+  "Read these photos' files again to see what they carry (Reload from Disk); this line updates when it is done": "Die Dateien dieser Fotos erneut lesen, um zu sehen, was sie enthalten (Von Datenträger neu laden); diese Zeile aktualisiert sich danach",
   "Show only the photos this preset found nothing to select on": "Nur die Fotos zeigen, auf denen diese Vorgabe nichts zum Auswählen gefunden hat",
   "Select the subject with AI (SAM 3), starting where the camera focused when the file records it, and keep it in focus": "Das Motiv per KI (SAM 3) auswählen, ausgehend vom Fokuspunkt der Kamera, wenn die Datei ihn enthält, und scharf halten",
   "Selecting the subject at the camera's focus point…": "Motiv am Fokuspunkt der Kamera wird ausgewählt…",

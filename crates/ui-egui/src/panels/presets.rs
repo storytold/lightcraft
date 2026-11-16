@@ -20,6 +20,114 @@ use crate::{HoverPreview, LightcraftApp};
 const THUMB_EDGE: usize = 128;
 
 /// The preset amount slider may replace only the undo step it created.
+/// Where the adaptive preset last applied found nothing to select, and where it can't tell yet, for the lines under
+/// the Presets header (issues #4364, #4368). Kept apart from [`AppliedPreset`], which goes when a later step owns
+/// the undo: these lines outlive Check's own Reload from Disk, and are asked again of the catalog whenever the
+/// library's history moves (`preset.foundNothing`), so they update when the reload has looked at the photos.
+#[derive(Clone)]
+struct FoundNothing {
+    preset: String,
+    /// The photos the preset was applied to, and the selection then: the lines go when it changes.
+    ids: Vec<u64>,
+    selected: Vec<lightcraft_catalog::PhotoId>,
+    /// The session's history when the answer was read: commits, undo depth, redo depth.
+    at: (u64, usize, usize),
+    /// Photos that still carry the preset's mask.
+    applied: u64,
+    nothing: Vec<u64>,
+    unknown: Vec<u64>,
+}
+
+impl FoundNothing {
+    const ID: &'static str = "preset-found-nothing";
+
+    fn history(session: &lightcraft_engine::Session) -> (u64, usize, usize) {
+        (session.commits(), session.undo.len(), session.redo.len())
+    }
+
+    /// From what `preset.apply` (or `preset.foundNothing`) replied about the selection.
+    fn new(session: &lightcraft_engine::Session, preset: String, reply: &serde_json::Value) -> Self {
+        let mut found = Self {
+            preset,
+            ids: session.selection.ids.iter().map(|i| i.0).collect(),
+            selected: session.selection.ids.clone(),
+            at: Self::history(session),
+            applied: 0,
+            nothing: Vec::new(),
+            unknown: Vec::new(),
+        };
+        found.read(reply);
+        found
+    }
+
+    fn read(&mut self, reply: &serde_json::Value) {
+        let ids = |v: &serde_json::Value| v.as_array().map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect()).unwrap_or_default();
+        self.applied = reply["applied"].as_u64().unwrap_or(0);
+        self.nothing = reply["nothing"].as_array().map(|a| a.iter().filter_map(|n| n["id"].as_u64()).collect()).unwrap_or_default();
+        self.unknown = ids(&reply["unknownIds"]);
+    }
+
+    fn remember(ctx: &egui::Context, found: Self) {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::unique(Self::ID), found));
+    }
+}
+
+/// The lines for [`FoundNothing`]: on how many photos the preset found nothing to select, with Show (the view
+/// narrowed to them), and for how many it can't tell yet, with Check (Reload from Disk on those, which records what
+/// their files carry; the lines update when it is done).
+fn found_nothing_lines(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let id = egui::Id::unique(FoundNothing::ID);
+    let Some(mut found) = ui.data(|d| d.get_temp::<FoundNothing>(id)) else { return };
+    let forget = |ui: &mut egui::Ui| ui.data_mut(|d| d.remove::<FoundNothing>(id));
+    if found.selected != app.session.selection.ids {
+        return forget(ui);
+    }
+    // the library's history moved (a reload looked at the photos, the preset was undone, another edit): ask again
+    if found.at != FoundNothing::history(&app.session) {
+        match app.run("preset.foundNothing", json!({"id": &found.preset, "ids": &found.ids})) {
+            Ok(reply) => found.read(&reply),
+            Err(_) => return forget(ui),
+        }
+        found.at = FoundNothing::history(&app.session);
+        FoundNothing::remember(ui.ctx(), found.clone());
+    }
+    if found.applied == 0 {
+        return forget(ui);
+    }
+    if found.nothing.is_empty() && found.unknown.is_empty() {
+        return;
+    }
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 6 }).show(ui, |ui| {
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let line = |ui: &mut egui::Ui, widget: &str, text: String| {
+            let r = ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_dim).size(11.0)).wrap());
+            register(ui, widget, r.rect);
+        };
+        if !found.nothing.is_empty() {
+            let text = crate::i18n::tr_format!("Found nothing to select on {n} of {total} photos", n = found.nothing.len(), total = found.applied);
+            line(ui, "presetFoundNothing", text);
+            let show = crate::widgets::text_button(ui, "presetShowNothing", "Show", false)
+                .on_hover_text(crate::i18n::tr("Show only the photos this preset found nothing to select on"));
+            if show.clicked() && app.run("library.filter", json!({"only": found.nothing})).is_ok() {
+                // and select them, the first one active: the photo in the loupe is one of those shown
+                let _ = app.run("library.select", json!({"ids": found.nothing, "active": found.nothing.first()}));
+            }
+        }
+        if !found.unknown.is_empty() {
+            line(ui, "presetCantTell", crate::i18n::tr_format!("Can't tell yet for {n} photos", n = found.unknown.len()));
+            let check = crate::widgets::text_button(ui, "presetCheckUnknown", "Check", false).on_hover_text(crate::i18n::tr(
+                "Read these photos' files again to see what they carry (Reload from Disk); this line updates when it is done",
+            ));
+            if check.clicked()
+                && let Err(e) = app.run("photo.reload", json!({"ids": found.unknown}))
+            {
+                app.toast(ui.ctx(), e);
+            }
+        }
+    });
+    divider(ui);
+}
+
 #[derive(Clone)]
 struct AppliedPreset {
     id: String,
@@ -27,25 +135,11 @@ struct AppliedPreset {
     selected: Vec<lightcraft_catalog::PhotoId>,
     active: Option<lightcraft_catalog::PhotoId>,
     commits: u64,
-    /// The photos the preset found nothing to select on (`preset.apply` → `nothing`: an adaptive preset whose mask
-    /// needs mattes they don't carry), and how many it was applied to.
-    nothing: Vec<u64>,
-    applied: u64,
 }
 
 impl AppliedPreset {
-    /// The preset just applied at `amount`, with what `preset.apply` replied.
-    fn new(session: &lightcraft_engine::Session, id: String, amount: f64, reply: &serde_json::Value) -> Self {
-        let nothing = reply["nothing"].as_array().map(|a| a.iter().filter_map(|n| n["id"].as_u64()).collect()).unwrap_or_default();
-        Self {
-            id,
-            amount,
-            selected: session.selection.ids.clone(),
-            active: session.active(),
-            commits: session.commits(),
-            nothing,
-            applied: reply["applied"].as_u64().unwrap_or(0),
-        }
+    fn new(session: &lightcraft_engine::Session, id: String, amount: f64) -> Self {
+        Self { id, amount, selected: session.selection.ids.clone(), active: session.active(), commits: session.commits() }
     }
 
     fn is_current(&self, session: &lightcraft_engine::Session) -> bool {
@@ -158,28 +252,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 // Only replace the most recent preset; never undo intervening edits.
                 if let Ok(reply) = app.run("preset.apply", json!({"id": &last.id, "amount": v})) {
                     AppliedByPhoto::remember(ui.ctx(), &app.session, &last.id);
-                    ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, last.id.clone(), v, &reply)));
+                    ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, last.id.clone(), v)));
+                    FoundNothing::remember(ui.ctx(), FoundNothing::new(&app.session, last.id.clone(), &reply));
                 } else {
                     let _ = app.run("edit.redo", json!({}));
                     ui.data_mut(|d| d.remove::<AppliedPreset>(amt_id));
                 }
-            }
-            // an adaptive preset that found nothing to select on some of the photos: say on how many, and offer
-            // to show them (the view narrowed to those photos, as Find Similar narrows it; issue #4364)
-            if !last.nothing.is_empty() {
-                egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 6 }).show(ui, |ui| {
-                    let t = crate::theme::Tokens::get(ui.ctx());
-                    let text =
-                        crate::i18n::tr_format!("Found nothing to select on {n} of {total} photos", n = last.nothing.len(), total = last.applied);
-                    let r = ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_dim).size(11.0)).wrap());
-                    register(ui, "presetFoundNothing", r.rect);
-                    let show = crate::widgets::text_button(ui, "presetShowNothing", "Show", false)
-                        .on_hover_text(crate::i18n::tr("Show only the photos this preset found nothing to select on"));
-                    if show.clicked() && app.run("library.filter", json!({"only": last.nothing})).is_ok() {
-                        // and select them, the first one active: the photo in the loupe is one of those shown
-                        let _ = app.run("library.select", json!({"ids": last.nothing, "active": last.nothing.first()}));
-                    }
-                });
             }
             divider(ui);
         } else if last.is_some_and(|last| last.is_stale(&app.session)) {
@@ -187,6 +265,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // a later edit, undo or redo owns the step
             ui.data_mut(|d| d.remove::<AppliedPreset>(amt_id));
         }
+        found_nothing_lines(app, ui);
         let active = app.session.active();
         let marked = AppliedByPhoto::of(ui.ctx(), &app.session, active);
         let thumbs = app.ui.preset_thumbs && active.is_some();
@@ -286,7 +365,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         && let Ok(reply) = app.run("preset.apply", json!({"id": pid, "amount": 100}))
                     {
                         AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
-                        ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0, &reply)));
+                        ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
+                        FoundNothing::remember(ui.ctx(), FoundNothing::new(&app.session, pid.clone(), &reply));
                         ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));
                         // an adaptive preset whose mask needs mattes some of the photos don't carry: say on how many
                         // it selected nothing (the mask is on them all the same)
@@ -508,7 +588,7 @@ mod tests {
         let mut session = lightcraft_engine::Session::with_demo();
         let pid = "lc.golden-hour";
         session.execute("preset.apply", &json!({"id": pid})).unwrap();
-        let state = AppliedPreset::new(&session, pid.into(), 100.0, &serde_json::Value::Null);
+        let state = AppliedPreset::new(&session, pid.into(), 100.0);
         assert!(state.is_current(&session));
 
         session.execute("develop.set", &json!({"values": {"light.exposure": 0.75}})).unwrap();
@@ -520,7 +600,7 @@ mod tests {
         let mut session = lightcraft_engine::Session::with_demo();
         let pid = "lc.golden-hour";
         session.execute("preset.apply", &json!({"id": pid})).unwrap();
-        let state = AppliedPreset::new(&session, pid.into(), 100.0, &serde_json::Value::Null);
+        let state = AppliedPreset::new(&session, pid.into(), 100.0);
         let active = session.active();
         let other = session.visible().iter().copied().find(|id| Some(*id) != active).unwrap();
         session.execute("library.select", &json!({"ids": [other.0]})).unwrap();

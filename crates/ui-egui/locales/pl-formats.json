@@ -139,6 +139,7 @@
   "{label}, {n} photos": "{label}, zdjęcia: {n}",
   "{name} found nothing to select on {n} of {total} photos": "{name}: nie znaleziono nic do zaznaczenia na {n} z {total} zdjęć",
   "Found nothing to select on {n} of {total} photos": "Nic do zaznaczenia na {n} z {total} zdjęć",
+  "Can't tell yet for {n} photos": "Na razie nie wiadomo dla {n} zdjęć",
   "{matching} of {t} photos": "{matching} z {t} zdjęć",
   "{matching} photos": "Pasujące zdjęcia: {matching}",
   "{mode} spot {} of {}": "{mode}: plamka {} z {}",

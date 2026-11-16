@@ -150,6 +150,7 @@
   "{label}, {n} photos": "{label}, Fotos: {n}",
   "{name} found nothing to select on {n} of {total} photos": "{name} hat auf {n} von {total} Fotos nichts zum Auswählen gefunden",
   "Found nothing to select on {n} of {total} photos": "Auf {n} von {total} Fotos nichts zum Auswählen gefunden",
+  "Can't tell yet for {n} photos": "Für {n} Fotos noch nicht feststellbar",
   "{matching} of {t} photos": "Fotos: {matching} von {t}",
   "{matching} photos": "Fotos: {matching}",
   "{mode} spot {} of {}": "{mode}: Stelle {} von {}",

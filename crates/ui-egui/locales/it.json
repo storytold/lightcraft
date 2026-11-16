@@ -2414,6 +2414,8 @@
   "Paint what should be blurred": "Dipingi ciò che deve essere sfocato",
   "Remove the strokes of both brushes": "Rimuovi le pennellate di entrambi i pennelli",
   "Find Subject": "Trova soggetto",
+  "Check": "Controlla",
+  "Read these photos' files again to see what they carry (Reload from Disk); this line updates when it is done": "Rileggi i file di queste foto per vedere cosa contengono (Ricarica dal disco); questa riga si aggiorna al termine",
   "Show only the photos this preset found nothing to select on": "Mostra solo le foto in cui questo predefinito non ha trovato nulla da selezionare",
   "Select the subject with AI (SAM 3), starting where the camera focused when the file records it, and keep it in focus": "Seleziona il soggetto con l'IA (SAM 3), partendo dal punto di messa a fuoco della fotocamera se il file lo registra, e lo mantiene a fuoco",
   "Selecting the subject at the camera's focus point…": "Selezione del soggetto nel punto di messa a fuoco della fotocamera…",

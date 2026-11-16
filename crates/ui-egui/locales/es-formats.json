@@ -150,6 +150,7 @@
   "{label}, {n} photos": "{label}, {n} fotos",
   "{name} found nothing to select on {n} of {total} photos": "{name} no encontró nada que seleccionar en {n} de {total} fotos",
   "Found nothing to select on {n} of {total} photos": "Nada que seleccionar en {n} de {total} fotos",
+  "Can't tell yet for {n} photos": "Aún no se puede saber en {n} fotos",
   "{matching} of {t} photos": "{matching} de {t} fotos",
   "{matching} photos": "{matching} fotos",
   "{mode} spot {} of {}": "{mode}: mancha {} de {}",
