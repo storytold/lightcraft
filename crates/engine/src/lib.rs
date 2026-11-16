@@ -64,6 +64,8 @@ mod model_download;
 pub mod open_path;
 pub mod originals;
 mod pdf;
+#[cfg(not(target_arch = "wasm32"))]
+mod person_suggestions;
 pub mod prep;
 pub mod preset_import;
 pub mod preset_luminar;
@@ -723,6 +725,18 @@ impl Session {
             e.folder = Some(folder);
         }
         Ok(())
+    }
+
+    /// Changes when face embeddings or their display boxes are inserted, replaced, or cleared.
+    pub fn face_index_generation(&self) -> u64 {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.faces.index.generation
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            0
+        }
     }
 
     /// The box to cut a face's picture from: the detector's, when the scan has looked at the face (every face is then shown
