@@ -178,6 +178,10 @@ fn immich_card_is_compact() {
     click(&mut h, "button:immichSyncPanel-0");
     assert!(has(&h, "label:immichSyncStatus-0"));
     // IMM-SIDECARS: the account card opens the sidecar push/pull section
+    // the rarely used buttons are behind More
+    crate::settings_screen::reveal(&mut h, "button:immichMore-0");
+    click(&mut h, "button:immichMore-0");
+    assert!(has(&h, "button:immichDisconnect-0"), "More shows the rest of the buttons");
     crate::settings_screen::reveal(&mut h, "button:immichSidecars-0");
     click(&mut h, "button:immichSidecars-0");
     assert!(has(&h, "button:immichPushXmp-0") && has(&h, "button:immichPullXmp-0"), "push and pull are offered");
@@ -319,6 +323,10 @@ fn locked_folders_section_unlocks_with_a_pin() {
     h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "connections"}}), T);
     h.step();
     h.step();
+    // the rarely used buttons are behind More
+    crate::settings_screen::reveal(&mut h, "button:immichMore-0");
+    click(&mut h, "button:immichMore-0");
+    assert!(has(&h, "button:immichDisconnect-0"), "More shows the rest of the buttons");
     crate::settings_screen::reveal(&mut h, "button:immichLocked-0");
     click(&mut h, "button:immichLocked-0");
     assert!(has(&h, "label:immichLockedStatus-0"), "the status line shows");

@@ -13,6 +13,7 @@ between. This page describes what is built, how it works, and its known limits. 
 | The catalog side: the replica of the open catalog, what changed here, applying what changed elsewhere, the exchange threads, files | `crates/engine/src/device_sync/` |
 | `sync.*` commands (UI, CLI, MCP) | `crates/engine/src/cmd/device_sync.rs` |
 | Settings ▸ Sync, the new-collection question, the top bar's waiting count | `crates/ui-egui/src/panels/peer_sync.rs` |
+| The camera roll's review (in place, Keep adding new photos), the Modern library's collection picker | `crates/ui-egui/src/import_screen.rs`, `crates/ui-egui/src/modern_sources.rs` |
 | Pills on grid cells and collection rows | `crates/ui-egui/src/panels/sync_pill.rs` |
 
 ## Model
@@ -59,7 +60,7 @@ uploaded again. A link-only photo doesn't ask other devices for its original: it
 
 ## Immich collections
 
-- **Immich ▸ Show Immich albums as collections** (`immich.collections {account, on}`) on a device that holds the
+- **Immich ▸ Sync Immich albums** (`immich.collections {account, on}`) on a device that holds the
   account's key: each of its albums becomes a shared collection `immich:<user id>:<album id>` inside the set
   `immich:<user id>` named "Immich", owner `immich:<user id>`, grant fixed at Sync. Every device with the account
   writes the same ids, so their copies merge and a renamed album is renamed everywhere.
