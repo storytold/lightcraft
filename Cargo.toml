@@ -10,16 +10,25 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
+craft-plist = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "bea6ed1ff031b81df2d64be470485c1ca808847e" }
+craft-pdf-print = { package = "craft-pdf", git = "https://github.com/storytold/craft-libs", rev = "0fd30aeb3e02207d9d4c7c601540d9da45abf8de", default-features = false, features = ["write-raster"] }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
 craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 # Canon CRW decoder shared with the other Craft apps
-craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
-craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "94777dcf7f8962476e96b049d08d22e25b9330c2" }
+craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "94777dcf7f8962476e96b049d08d22e25b9330c2" }
+craft-mime = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18", version = "0.1.0" }
 craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "b77af389f30bb10de10d8436ca9b39fe94e3bb67", features = ["frames"] }
-craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "b77af389f30bb10de10d8436ca9b39fe94e3bb67", default-features = false, features = ["decode", "encode"] }
+craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d3c6fad3d613af2a30b35c3bc9f4c0f", default-features = false, features = ["decode", "encode"] }
+jixel = "=0.3.4"
 # Photo metadata: EXIF, IPTC-IIM, XMP packets and GPX track logs (craft-libs#949)
-craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
-craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "94777dcf7f8962476e96b049d08d22e25b9330c2" }
+craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d3c6fad3d613af2a30b35c3bc9f4c0f" }
+# Shared TIFF preflight plus image codec compatibility (craft-libs#1630).
+craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "947dc5fb0ec436c0841f560eac0d65c6ad055ed4" }
+craft-video = { git = "https://github.com/storytold/craft-libs", rev = "5c91598ccc86537a779f438d520fa6406c26efe6", features = ["av1", "av1-large-encode", "threads"] }
+# Isolate AVIF threading from the existing PNG/TIFF/WebP shared revision.
+craft-avif-encode = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "5ac7c9664c8d54aaf69d1bb826e187686c1a4e1a", default-features = false, features = ["avif", "threads"] }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
@@ -27,7 +36,8 @@ craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbf
 # HDR gain maps: ISO 21496-1 and hdrgm metadata, compute and apply (moved from crates/codecs; craft-libs#904).
 craft-gainmap = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93" }
 # PSD/PSB: the header, colour mode data and image resources (craft-libs#885).
-craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93" }
+craft-psd = { git = "https://github.com/storytold/craft-libs", rev = "16d838105b07965832bb43132880176f299634d5" }
+jpeg-encoder = { version = "0.7", default-features = false, features = ["std"] }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }
@@ -38,10 +48,10 @@ lightcraft-wincolor = { path = "crates/wincolor" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 # TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
-craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "94777dcf7f8962476e96b049d08d22e25b9330c2" }
 # Camera raw files, the format layer: every maker but CR3, ARW, RAF, RW2 and ORF (craft-libs#862 and the maker PRs).
 # On the same commit as craft-tiff: its errors and IFDs are shared.
-craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18" }
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "94777dcf7f8962476e96b049d08d22e25b9330c2" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }
@@ -93,13 +103,6 @@ miniz_oxide = "0.9"
 # codecs
 ab_glyph = { version = "0.2", default-features = false, features = ["std"] }  # Apache-2.0, pure Rust glyph rasterizer (export watermarks)
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
-jxl-oxide = { version = "0.12", default-features = false }
-zune-core = { version = "0.5", default-features = false, features = ["std"] }
-zune-jpegxl = { version = "0.5", default-features = false, features = ["std"] } # MIT/Apache-2.0/Zlib lossless JXL encoder (test fixtures only)
-ravif = { version = "0.13", default-features = false, features = ["threading"] } # no "asm": it needs nasm (non-Rust)
-# HDR AVIF (PQ): ravif fixes the sRGB transfer curve, so HDR files drive its rav1e + avif-serialize directly
-rav1e = { version = "0.8.1", default-features = false, features = ["threading"] }
-avif-serialize = "0.8.6"
 
 # gpu (crates/gpu; native backends only, no GL: everything stays pure Rust)
 # SAM 3 inference (lightcraft-segment). 0.9.2: later releases pull `tokenizers` with the
