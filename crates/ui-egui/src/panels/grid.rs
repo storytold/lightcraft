@@ -936,7 +936,7 @@ fn paint_video_badges(
     // the running time first: in a short cell it is the pill that stays. It hangs above the
     // photo's own badge bar (the placeholder's in the square grid), never the cell's margin.
     let duration = photo.duration.and_then(|d| video_duration_badge(ui, p, t, id, d, img_rect, photo_rect));
-    if !(square && app.ui.show_filenames) && !photo.format.is_empty() {
+    if (!square || !app.ui.show_filenames) && !photo.format.is_empty() {
         // a virtual copy's tag holds the top right corner: the container sits just below it
         let below = if photo.copy_name.is_some() { COPY_TAG_HEIGHT + 4.0 } else { 0.0 };
         video_format_badge(ui, p, t, id, &photo.format, img_rect, below, duration);

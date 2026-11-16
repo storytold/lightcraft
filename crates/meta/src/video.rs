@@ -243,12 +243,8 @@ fn parse_trak(body: &[u8], budget: &mut usize, depth: usize, meta: &mut Metadata
                 // mdia contains hdlr and minf, and some recorders keep their udta here
                 for child in read_boxes(b.body, budget) {
                     match &child.kind {
-                        b"hdlr" => {
-                            // handler type at body + 8..12
-                            if child.body.get(8..12) == Some(b"vide") {
-                                is_video = true;
-                            }
-                        }
+                        // handler type at body + 8..12
+                        b"hdlr" if child.body.get(8..12) == Some(b"vide") => is_video = true,
                         b"udta" => parse_udta(child.body, meta, xmp, budget, depth + 1),
                         b"meta" => parse_meta(child.body, meta, xmp, budget, depth + 1),
                         _ => {}
@@ -609,22 +605,18 @@ fn verify_location_boxes(bytes: &[u8], top_level: &mut usize, nested: &mut usize
         let b = read_boxes(one, &mut one_budget).pop().ok_or("can't verify video location: malformed box")?;
         *budget -= 1;
         match &b.kind {
-            b"\xa9xyz" => {
-                // An empty atom names no place: some writers leave the tag behind when the user
-                // clears a clip's location. Anything it does hold refuses the unchanged copy.
-                if !read_udta_text(b.body).unwrap_or_default().trim().is_empty() {
-                    return Err(
-                        "can't remove embedded GPS or embedded location metadata from an original video; export without Remove Location only to share the unchanged clip"
-                            .into(),
-                    );
-                }
+            // An empty atom names no place: some writers leave the tag behind when the user clears
+            // a clip's location. Anything it does hold refuses the unchanged copy.
+            b"\xa9xyz" if !read_udta_text(b.body).unwrap_or_default().trim().is_empty() => {
+                return Err(
+                    "can't remove embedded GPS or embedded location metadata from an original video; export without Remove Location only to share the unchanged clip"
+                        .into(),
+                );
             }
-            b"loci" => {
-                if !loci_is_empty(b.body) {
-                    return Err(
-                        "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
-                    );
-                }
+            b"loci" if !loci_is_empty(b.body) => {
+                return Err(
+                    "can't remove embedded GPS from an original video; export without Remove Location only to share the unchanged clip".into()
+                );
             }
             b"moov" | b"udta" | b"trak" | b"mdia" | b"moof" | b"traf" => verify_location_boxes(b.body, top_level, nested, depth + 1)?,
             b"meta" => {
