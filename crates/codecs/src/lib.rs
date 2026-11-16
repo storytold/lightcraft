@@ -14,6 +14,9 @@
 //!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
 //! - [`video`] encodes AV1 video (native, feature `avif`) and writes it as MP4 or WebM.
 //! - [`yuv`] converts decoded Y′CbCr video pictures to display sRGB or linear Rec.2020.
+//! - `video_stream` decodes the video track of an MP4/MOV clip picture by picture, and `poster` makes
+//!   a clip's poster frame from it (decoding with feature `video-frames`, native targets; the types
+//!   exist in every build).
 //!
 //! No decoder panics on malformed input (property-tested).
 #![forbid(unsafe_code)]
@@ -32,6 +35,7 @@ mod jxl;
 mod jxl_encode;
 mod other;
 mod png_codec;
+pub mod poster;
 pub mod print;
 pub mod proof;
 mod psd;
@@ -39,6 +43,7 @@ mod sniff;
 pub mod space;
 mod tiff_codec;
 pub mod video;
+pub mod video_stream;
 mod webp;
 pub mod yuv;
 

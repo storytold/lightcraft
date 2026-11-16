@@ -30,6 +30,7 @@ craft-jxl = { workspace = true, optional = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-video = { workspace = true, optional = true }
 craft-avif-encode = { workspace = true, optional = true }
+craft-media = { workspace = true, optional = true }
 
 [features]
 default = ["parallel", "jxl", "avif"]
@@ -42,6 +43,10 @@ jxl = ["dep:craft-jxl"]
 heif = ["dep:craft-heif"]
 ## AVIF/AV1 encoding via craft-image-codecs / craft-video (pure Rust). Native targets only; a no-op on wasm32.
 avif = ["dep:craft-video", "dep:craft-avif-encode"]
+## Video poster frames: MP4/MOV demuxing (craft-media) and H.264 / HEVC decoding (craft-video), native
+## targets only. Off by default, like `heif`: H.264 and HEVC patents are a distributor's call until the
+## maintainers decide (issue #3244). `cargo xtask ci` clippies and tests it (`--features video-frames`).
+video-frames = ["dep:craft-video", "dep:craft-media", "craft-video/h264-decode", "craft-video/hevc-decode"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
@@ -54,3 +59,6 @@ craft-heif = { workspace = true, features = ["testdata"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 dhat = { workspace = true }
+# Poster-frame tests encode their clips (H.264, HEVC) and mux them (MP4/MOV) themselves: no committed media.
+craft-video = { workspace = true, features = ["h264-encode", "hevc-encode"] }
+craft-media = { workspace = true, features = ["isobmff"] }
