@@ -121,20 +121,18 @@ pub fn compute_backends() -> Option<Backends> {
 /// The backends for the desktop window's renderer (eframe/egui-wgpu). The window always needs
 /// one: `off` keeps the platform default.
 pub fn window_backends() -> Backends {
-    let os = std::env::consts::OS;
+    window_backends_for(env_choice(), std::env::consts::OS, wgpu::Instance::enabled_backend_features())
+}
+
+/// [`window_backends`] for an explicit environment choice, platform and compiled backend set.
+pub fn window_backends_for(choice: BackendChoice, os: &str, compiled: Backends) -> Backends {
     let default = default_window_backends(os);
-    let compiled = wgpu::Instance::enabled_backend_features();
-    let forced = forced_window_renderer(std::env::var("LIGHTCRAFT_GPU_BACKEND").ok().as_deref(), std::env::var("WGPU_BACKEND").ok().as_deref());
-    // Wire the renderer selection into production (issue #3885): on Linux
-    // without a startup marker, start with glow. remembered/failed/marker
-    // availability/glow are not tracked at this layer; callers that own that
-    // state call initial_window_renderer directly with those values.
-    match initial_window_renderer(forced, None, None, true, os, compiled, false) {
-        Some(WindowRenderer::Wgpu(b)) => b,
-        // Glow is not a wgpu backend; fall back to the platform default so
-        // callers always get a usable backend set.
-        Some(WindowRenderer::Glow) | None => default,
-    }
+    // the window always needs one backend: `off` keeps the platform default
+    let choice = match choice {
+        BackendChoice::Off => BackendChoice::Auto,
+        c => c,
+    };
+    resolve(choice, default, compiled).unwrap_or(default)
 }
 
 /// The DX12 shader compiler: FXC (`d3dcompiler_47.dll`, part of Windows) unless
@@ -612,6 +610,37 @@ pub fn initial_window_renderer(
     order.first().copied()
 }
 
+/// The window renderer selected for a non-probed start from `app` (`LIGHTCRAFT_GPU_BACKEND`) and
+/// `wgpu` (`WGPU_BACKEND`), given `failed` and `marker_available` on `os` with `compiled`
+/// backends and `glow` availability.
+///
+/// On Linux without a startup marker (`--memory` / `LIGHTCRAFT_NO_PREFS`), glow is chosen when
+/// available unless the environment names an explicit backend or backend list
+/// (`BackendChoice::Use`) or a forced renderer. With a marker available, or on other non-Windows
+/// platforms, the existing selection (forced glow, glow after a failed non-glow start, else
+/// `window_backends`) is preserved.
+pub fn choose_non_windows_window_renderer(
+    app: Option<&str>,
+    wgpu: Option<&str>,
+    failed: Option<WindowRenderer>,
+    marker_available: bool,
+    os: &str,
+    compiled: Backends,
+    glow: bool,
+) -> WindowRenderer {
+    let forced = forced_window_renderer(app, wgpu);
+    let choice = choose(app, wgpu);
+    if glow_without_marker(forced, marker_available, os, glow) && !matches!(choice, BackendChoice::Use(_)) {
+        WindowRenderer::Glow
+    } else if glow && (forced == Some(WindowRenderer::Glow) || (forced.is_none() && failed.is_some_and(|f| f != WindowRenderer::Glow))) {
+        WindowRenderer::Glow
+    } else if let Some(WindowRenderer::Wgpu(b)) = forced {
+        WindowRenderer::Wgpu(resolve(BackendChoice::Use(b), default_window_backends(os), compiled).unwrap_or_else(|| default_window_backends(os)))
+    } else {
+        WindowRenderer::Wgpu(window_backends_for(choice, os, compiled))
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -885,8 +914,8 @@ mod tests {
     }
 
     /// FreeBSD keeps the previous PRIMARY|GL window default (not Linux's GL-only), and on
-    /// Linux a remembered or failed Vulkan renderer is not tried automatically, while a
-    /// forced one still is.
+    /// Linux a remembered Vulkan renderer is tried first and a failed one last (Vulkan is
+    /// the fallback after GL there), while a forced one always is.
     #[test]
     fn freebsd_window_backends_keep_vulkan_default() {
         let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
@@ -1011,9 +1040,39 @@ mod tests {
     /// `forced_window_renderer` only parses the environment names.
     #[test]
     fn memory_glow_case_is_in_the_pure_helpers() {
+        let all = Backends::DX12 | Backends::VULKAN | Backends::GL | Backends::METAL;
         assert!(glow_without_marker(None, false, "linux", true));
         assert_eq!(initial_window_renderer(None, None, None, false, "linux", Backends::GL, true), Some(WindowRenderer::Glow));
         assert_eq!(forced_window_renderer(None, None), None);
+        // Linux without a marker starts with glow unless an explicit backend or list is given
+        assert_eq!(choose_non_windows_window_renderer(None, None, None, false, "linux", all, true), WindowRenderer::Glow);
+        assert_eq!(choose_non_windows_window_renderer(Some("auto"), None, None, false, "linux", all, true), WindowRenderer::Glow);
+        assert_eq!(choose_non_windows_window_renderer(Some("off"), None, None, false, "linux", all, true), WindowRenderer::Glow);
+        // Linux with a marker starts with wgpu GL and falls back to glow after a failed start
+        assert_eq!(choose_non_windows_window_renderer(None, None, None, true, "linux", all, true), WindowRenderer::Wgpu(Backends::GL));
+        assert_eq!(
+            choose_non_windows_window_renderer(None, None, Some(WindowRenderer::Wgpu(Backends::GL)), true, "linux", all, true),
+            WindowRenderer::Glow
+        );
+        // Explicit backend lists and forced renderers bypass the no-marker glow override
+        assert_eq!(
+            choose_non_windows_window_renderer(Some("vulkan,gl"), None, None, false, "linux", all, true),
+            WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)
+        );
+        assert_eq!(
+            choose_non_windows_window_renderer(None, Some("vulkan,gl"), None, false, "linux", all, true),
+            WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)
+        );
+        assert_eq!(
+            choose_non_windows_window_renderer(Some("vulkan"), None, None, false, "linux", all, true),
+            WindowRenderer::Wgpu(Backends::VULKAN)
+        );
+        // Non-Linux control keeps its platform wgpu backends with or without a marker
+        assert_eq!(
+            choose_non_windows_window_renderer(None, None, None, false, "freebsd", all, true),
+            WindowRenderer::Wgpu(default_window_backends("freebsd") & all)
+        );
+        assert_eq!(choose_non_windows_window_renderer(None, None, None, false, "macos", all, true), WindowRenderer::Wgpu(Backends::METAL));
     }
 
     #[test]

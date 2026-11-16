@@ -138,5 +138,17 @@ mod tests {
         // The marker-less order should start with glow when no marker is available (regression test for #3885)
         let order = backend::window_renderer_order(None, None, None, "linux", all, true);
         assert_eq!(order.first(), Some(&backend::WindowRenderer::Glow));
+
+        // Non-Windows selector coverage for Linux with/without marker, explicit backend lists, and non-Linux control
+        assert_eq!(backend::choose_non_windows_window_renderer(None, None, None, false, "linux", all, true), backend::WindowRenderer::Glow);
+        assert_eq!(backend::choose_non_windows_window_renderer(None, None, None, true, "linux", all, true), gl);
+        assert_eq!(
+            backend::choose_non_windows_window_renderer(Some("vulkan,gl"), None, None, false, "linux", all, true),
+            backend::WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL)
+        );
+        assert_eq!(
+            backend::choose_non_windows_window_renderer(None, None, None, false, "freebsd", all, true),
+            backend::WindowRenderer::Wgpu(backend::default_window_backends("freebsd") & all)
+        );
     }
 }
