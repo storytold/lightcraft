@@ -398,9 +398,9 @@ not installed"; inside the app it is `ErrorKind::ModelMissing(Sam3)`, which is w
 download on.
 
 Coordinates are normalized to the uncropped, oriented photo, like every mask shape. `seg` passes
-a stored segmentation (as `mask.list` / the develop settings hold it): the mask is made without
-the model. Without the model, the AI kinds fail with an error starting "The SAM 3 model is not
-installed" that says how to get it.
+a stored segmentation (from `masks[].components[].shape.seg` in the `develop.get` result):
+the mask is made without the model. Without the model, the AI kinds fail with an error starting
+"The SAM 3 model is not installed" that says how to get it.
 
 In the desktop app the commands don't wait for the model: `mask.objectPoint` returns
 `{pending: true}` and the selection is applied when it's computed (one undo step per settled

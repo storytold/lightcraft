@@ -99,7 +99,13 @@ fn the_chrome_its_cards_the_dock_the_menu_and_the_module_switch() {
     // ☰ opens on Shortcuts and reaches every menu; Esc closes it and nothing more
     ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu"}));
     assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Shortcuts"));
-    assert!(has(&h, "modern:shortcut:import") && has(&h, "modern:shortcut:export"));
+    assert!(has(&h, "modern:shortcut:import") && has(&h, "modern:shortcut:export") && has(&h, "modern:shortcut:settings"));
+    // Settings opens the settings dialog, like Edit ▸ Settings
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:shortcut:settings"}));
+    assert!(matches!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { .. })), "settings dialog");
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "modern:menu"}));
+    assert_eq!(h.app.ui.modern.menu.as_deref(), Some("Shortcuts"));
     for title in ["File", "Edit", "Photo", "View", "Help"] {
         assert!(has(&h, &format!("modern:menu:{title}")), "{title}");
     }

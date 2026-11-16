@@ -472,6 +472,7 @@ fn placeholder_manifest() -> Manifest {
         stage: None,
         analyze_area: crate::AnalyzeArea::Frame,
         base_tone: crate::BaseTone::Camera,
+        bands: crate::Bands::Rows,
         labels: Vec::new(),
         groups: Vec::new(),
         header: None,

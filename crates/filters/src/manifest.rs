@@ -101,6 +101,12 @@ pub struct Manifest {
     /// v1.1 proposal; hosts without it use their base tone). Unknown values mean the camera's.
     #[serde(default, deserialize_with = "lenient_base_tone", skip_serializing_if = "BaseTone::is_camera")]
     pub base_tone: BaseTone,
+    /// How the host cuts the image into bands (`"bands": "rows" | "tiles"`, an ABI v1.1 proposal):
+    /// full-width rows, or near-square tiles when the filter has an `overlap`, which repeat less of the
+    /// image in the margins and keep a long feature (a hair, a scratch) in one band more often. Hosts
+    /// without it cut rows. Unknown values mean rows.
+    #[serde(default, deserialize_with = "lenient_bands", skip_serializing_if = "Bands::is_rows")]
+    pub bands: Bands,
     /// Display labels of parameters that declare one (`{"type": …, "label": "Dynamic range"}`), by
     /// parameter name. Read by [`Manifest::parse`]; labels that aren't 1-64 printable characters are dropped.
     #[serde(skip)]
@@ -238,6 +244,28 @@ pub enum AnalyzeArea {
     /// The photo as the develop geometry frames it (orientation, crop, straighten, flips, lens and
     /// perspective corrections): what the source stage sees. A new crop needs a new measurement.
     Crop,
+}
+
+/// How the image is cut into bands (see [`Manifest::bands`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Bands {
+    /// Full-width rows (a very wide image is also cut across).
+    #[default]
+    Rows,
+    /// Near-square tiles, when the filter has an `overlap` (rows otherwise: nothing to save).
+    Tiles,
+}
+
+impl Bands {
+    pub fn is_rows(&self) -> bool {
+        *self == Bands::Rows
+    }
+}
+
+fn lenient_bands<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Bands, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(if v.as_str() == Some("tiles") { Bands::Tiles } else { Bands::Rows })
 }
 
 /// The base tone a raw gets after a Source filter (see [`Manifest::base_tone`]).
@@ -604,6 +632,15 @@ mod tests {
                   "mode":{"type":"choice","options":["soft","hard"],"default":"hard"},
                   "mono":{"type":"bool"},"seed":{"type":"int","min":0,"max":9}},
         "overlap":2,"area":"canvas"}"#;
+
+    #[test]
+    fn bands_are_rows_unless_a_filter_asks_for_tiles() {
+        let with = |v: &str| format!(r#"{{"id":"a.b","name":"A","kind":"filter"{v}}}"#);
+        assert_eq!(Manifest::parse(with("").as_bytes()).unwrap().bands, Bands::Rows);
+        assert_eq!(Manifest::parse(with(r#","bands":"tiles""#).as_bytes()).unwrap().bands, Bands::Tiles);
+        assert_eq!(Manifest::parse(with(r#","bands":"hexagons""#).as_bytes()).unwrap().bands, Bands::Rows);
+        assert_eq!(Manifest::parse(with(r#","bands":3"#).as_bytes()).unwrap().bands, Bands::Rows);
+    }
 
     #[test]
     fn analyze_area_is_the_frame_unless_a_filter_asks_for_the_crop() {

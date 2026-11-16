@@ -5,13 +5,14 @@
 
 `<binary> --control 7980` (or `<PREFIX>_CONTROL_PORT=7980`) starts a JSON-lines server on
 `127.0.0.1:7980` (loopback only). One request per line, one reply per line, in order. The first request
-on every connection authenticates (see [Authentication](#authentication)):
+on every connection authenticates (see [Authentication](#authentication)). The example assumes exactly one photo is selected:
 
 ```text
 → {"id": 0, "method": "auth", "params": {"token": "<64 hex digits>"}}
 ← {"id": 0, "ok": true, "result": {"authenticated": true}}
 → {"id": 1, "method": "engine.execute", "params": {"command": "photo.rate", "params": {"rating": 4}}}
-← {"id": 1, "ok": true, "result": null}
+← {"id": 1, "ok": true, "result": {"changed": 1}}
+→ {"id": 2, "method": "engine.execute", "params": {"command": "nope"}}
 ← {"id": 2, "ok": false, "error": "unknown command `nope`"}
 ```
 
@@ -128,7 +129,7 @@ filmstrip is visible.
 | `ui.zoom` | `{factor}` | Pinch zoom at the current pointer (positive scale multiplier; 1 = unchanged). Position it first with `ui.move` or `ui.hoverWidget` |
 | `ui.set` | partial UI state, e.g. `{"view": "detail"}` | Resulting UI state |
 | `ui.dialog.confirm` / `ui.dialog.cancel` | — | Close the open dialog (confirm runs its action; also Read / Save Metadata's overwrite question, which those commands answer with `{confirm: "dialog", affected}`; Synchronize Folder on a folder that is up to date answers `{"upToDate": true}` and starts nothing) |
-| `ui.resize` | `{width, height}` | Resize the window |
+| `ui.resize` | `{width?, height?}` | Resize the window in current egui points. Omitted `width` defaults to 1600 and omitted `height` to 1000; see [size limits below](#headless-rendering-no-window-no-gpu) |
 | `ui.dropFiles` | `{paths: [..], hover?}` | Files dragged from the file manager. `hover: true` makes every following frame report `paths` as hovered over the window (the drop card appears, `ui.widgets` lists `dropOverlay`) until another `ui.dropFiles` replaces them; `{paths: [], hover: true}` ends the hover. Without `hover` the files are dropped: the hover ends and the next frame receives them as dropped files, exactly as an OS drop arrives (photos and folders open the import review, or import at once with Settings ▸ Import ▸ Import dropped files without review). An empty path stands for a file whose path the platform doesn't tell |
 | `ui.zoomFactor` | `{factor}` | Set the interface scale (0.5–3; egui's zoom keys are off, Cmd+= / Cmd+- zoom the photo) |
 | `ui.screenshot` | `{path?, headless?}` | `{path, width, height}` once the frame (with finished renders) is captured. `headless: true` draws the UI on the CPU (no compositor needed); a windowed capture that gets no frame within 2 s falls back to headless automatically. While the loupe still waits for a render, `ui.widgets {filter: "loupe:rendering"}` lists its "Rendering…" pill; `loupe:renderFailed` is the pill saying a render failed behind a stand-in; Compare and Reference panes have their own (`compare:rendering:<pane>`, `compare:renderFailed:<pane>`) |
