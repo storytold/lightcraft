@@ -167,8 +167,9 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         // (one photo's place: not shown while the selected photos' places differ)
         if let Some((la, lo)) = m.gps.filter(|_| !gps_mixed) {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
+            ui.add(egui::Label::new(egui::RichText::new(pretty).size(11.0).color(t.text_dim)).truncate());
+            // the place's buttons, wrapping in a narrow panel
+            ui.horizontal_wrapped(|ui| {
                 // the button keeps its old widget id (`showOnMap`)
                 if text_button(ui, "showOnMap", crate::i18n::tr("Open in Browser"), false)
                     .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
@@ -179,18 +180,19 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                         app.toast(ui.ctx(), e);
                     }
                 }
+                if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
+                    .on_hover_text(format!(
+                        "{}
+{}",
+                        crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
+                        crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
+                    ))
+                    .clicked()
+                    && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
+                {
+                    app.toast_error(ui.ctx(), e);
+                }
             });
-            if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
-                .on_hover_text(format!(
-                    "{}\n{}",
-                    crate::i18n::tr("Fill empty City, State and Country from GPS (offline GeoNames place names)"),
-                    crate::i18n::tr("The place names list towns of 15,000 people or more: in a smaller one, City gets the nearest larger town.")
-                ))
-                .clicked()
-                && let Err(e) = app.run("metadata.reverseGeocode", json!({}))
-            {
-                app.toast_error(ui.ctx(), e);
-            }
         }
         if let Some(a) = p.analysis {
             let mut line = crate::i18n::tr_format!("Focus {:.0}", a.sharpness);
