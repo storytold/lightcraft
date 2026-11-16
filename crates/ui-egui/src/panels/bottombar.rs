@@ -1,4 +1,4 @@
-//! The bottom bar: view modes, sort, rating/flags pill, copy/paste settings, zoom and view toggles.
+//! The bottom bar: second window, view modes, sort, rating/flags pill, copy/paste settings, zoom and view toggles.
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
 use lightcraft_catalog::Flag;
@@ -34,7 +34,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let left_end = left_ui
                 .horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    if left_rect.width() >= 270.0 {
+                    second_window_button(app, ui);
+                    if ui.available_width() >= 270.0 {
                         for &(id, icon, mode, tip) in VIEW_MODES {
                             if icon_button(ui, id, icon, vec2(32.0, 32.0), app.ui.view == mode, true, tip).clicked() {
                                 let _ = app.run(&format!("view.{id}"), json!({}));
@@ -77,6 +78,17 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .right();
             centre(app, ui, full, left_end + 12.0, right_start - 12.0);
         });
+}
+
+fn second_window_button(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let label = crate::i18n::tr("Second Window");
+    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    let tooltip = crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.secondWindow")
+        .map(|sc| format!("{label} ({})", crate::menubar::shortcut_text(sc, mac)))
+        .unwrap_or_else(|| label.to_string());
+    if icon_button(ui, "secondWindow", Icon::SecondWindow, vec2(32.0, 32.0), app.ui.second_window, true, &tooltip).clicked() {
+        let _ = app.run("view.secondWindow", json!({}));
+    }
 }
 
 /// Five 19-point stars, three 22-point flags, seven 3-point gaps, a 6-point group gap
@@ -447,6 +459,7 @@ mod visual_regressions {
                     assert_eq!(ctx.pixels_per_point(), scale);
                     let controls = crate::widgets::take_registry(&ctx);
                     assert!(!controls.is_empty());
+                    assert!(controls.iter().any(|(id, _)| id == "icon:secondWindow"), "second window remains visible in {view:?} at {width}");
                     for (index, (id, rect)) in controls.iter().enumerate() {
                         assert!(rect.left() >= 0.0 && rect.right() <= width, "{view:?} at {width}: {id} outside viewport: {rect:?}");
                         for (other_id, other) in controls.iter().skip(index + 1) {
@@ -515,6 +528,84 @@ mod tests {
     use super::*;
     use crate::Services;
     use crate::headless::HeadlessView;
+
+    #[test]
+    fn second_window_button_tracks_clicks_menu_shortcut_and_native_close() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+
+        let close = Arc::new(AtomicBool::new(false));
+        let requested = close.clone();
+        egui::Context::set_immediate_viewport_renderer(move |ctx, viewport| {
+            let id = viewport.ids.this;
+            let mut input = egui::RawInput { viewport_id: id, ..Default::default() };
+            let info = input.viewports.entry(id).or_default();
+            info.parent = Some(viewport.ids.parent);
+            if requested.swap(false, Ordering::Relaxed) {
+                info.events.push(egui::ViewportEvent::Close);
+            }
+            let mut callback = viewport.viewport_ui_cb;
+            let mut output = ctx.run_ui(input, |ui| callback(ui));
+            output.textures_delta.clear();
+        });
+        let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+        let mut ready = false;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 640.0)).build_ui_state(
+            move |ui, app: &mut LightcraftApp| {
+                if !ready {
+                    crate::theme::install_fonts(ui.ctx());
+                    crate::theme::apply(ui.ctx());
+                    ui.ctx().set_embed_viewports(false);
+                    ready = true;
+                    return;
+                }
+                crate::shortcuts::handle(app, ui.ctx());
+                show(app, ui);
+                super::super::second::show(app, ui.ctx());
+            },
+            app,
+        );
+        h.run_steps(4);
+        let assert_state = |h: &egui_kittest::Harness<'_, LightcraftApp>, open: bool| {
+            assert_eq!(h.state().ui.second_window, open);
+            assert_eq!(
+                h.get_by_label("Second Window").accesskit_node().toggled(),
+                Some(if open { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False })
+            );
+        };
+        assert_state(&h, false);
+        let shortcut = crate::menubar::shortcut_text("Cmd+F11", h.ctx.os() == egui::os::OperatingSystem::Mac);
+        assert_eq!(h.get_by_label("Second Window").accesskit_node().description().as_deref(), Some(shortcut.as_str()));
+        h.get_by_label("Second Window").click();
+        h.run_steps(3);
+        assert_state(&h, true);
+        h.get_by_label("Second Window").click();
+        h.run_steps(3);
+        assert_state(&h, false);
+        crate::menubar::run_item(h.state_mut(), "view.secondWindow", json!({})).unwrap();
+        h.run_steps(3);
+        assert_state(&h, true);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F11);
+        h.run_steps(3);
+        assert_state(&h, false);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::F11);
+        h.run_steps(3);
+        assert_state(&h, true);
+        close.store(true, Ordering::Relaxed);
+        h.run_steps(3);
+        assert_state(&h, false);
+
+        h.ctx.set_os(egui::os::OperatingSystem::Mac);
+        h.run_steps(3);
+        assert_eq!(h.get_by_label("Second Window").accesskit_node().description().as_deref(), Some("⌘F11"));
+        crate::shortcuts::assign(&mut h.state_mut().ui.settings.keymap, "view.secondWindow", Some("Shift+F11")).unwrap();
+        h.run_steps(3);
+        let shortcut = crate::menubar::shortcut_text("Shift+F11", true);
+        assert_eq!(h.get_by_label("Second Window").accesskit_node().description().as_deref(), Some(shortcut.as_str()));
+    }
 
     #[test]
     fn rating_and_flag_buttons_keep_padding_inside_the_pill() {

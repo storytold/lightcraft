@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Second Window from the toolbar
+- The monitor icon marked **2** in the bottom toolbar opens or closes the second window. It shows whether the
+  window is open and stays in sync with Window ▸ Second Window, its shortcut and the window’s close button.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
