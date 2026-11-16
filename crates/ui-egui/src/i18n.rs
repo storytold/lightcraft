@@ -137,13 +137,14 @@ language_table! {
     Fi, "fi", "Suomi", "Latn", include_str!("../locales/fi.json");
     Id, "id", "Bahasa Indonesia", "Latn", include_str!("../locales/id.json");
     Vi, "vi", "Tiếng Việt", "Latn", include_str!("../locales/vi.json");
+    El, "el", "Ελληνικά", "Grek", include_str!("../locales/el.json");
 }
 
 impl Locale {
     /// Every language in the order the Settings row and Edit ▸ Language list them: English first
     /// (the source language), then the rest by their own name with accents folded, so Čeština
-    /// sits under C. Names in other scripts follow the Latin ones in code point order: Cyrillic,
-    /// Georgian, then the CJK languages.
+    /// sits under C. Names in other scripts follow the Latin ones in code point order: Greek,
+    /// Cyrillic, Georgian, then the CJK languages.
     pub fn for_picker() -> Vec<Self> {
         let mut rest: Vec<Self> = Self::ALL.iter().copied().filter(|l| *l != Self::En).collect();
         rest.sort_by_cached_key(|l| name_sort_key(l.name()));

@@ -286,6 +286,11 @@ fn image_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSet
     });
 }
 
+/// "12 photos" above the print settings.
+fn photo_count(photos: usize) -> String {
+    crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)
+}
+
 /// The Page panel: the background, and the Page Options or, on a package, Cut Guides.
 fn page_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSettings) {
     let ctx = ui.ctx().clone();
@@ -317,7 +322,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     let l = &st.layout;
     let unit = st.guides.units;
     ui.spacing_mut().item_spacing.y = 5.0;
-    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
+    ui.label(egui::RichText::new(photo_count(photos)).color(t.text_dim));
 
     templates_section(app, ui, t, pu);
 

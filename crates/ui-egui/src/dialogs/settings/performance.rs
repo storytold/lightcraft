@@ -122,6 +122,12 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
     smart_previews(app, ui, t);
 }
 
+/// "12 smart previews · 3.4 MB" under the smart previews folder.
+#[cfg(not(target_arch = "wasm32"))]
+fn smart_previews_size(count: u64, bytes: u64) -> String {
+    crate::i18n::tr_format!("{count} smart preview{} · {:.1} MB", if count == 1 { "" } else { "s" }, bytes as f64 / 1048576.0, count = count)
+}
+
 /// Settings ▸ Performance ▸ Prepare photos in the background (notes 47 and 48): per mode, what
 /// is made ready before the user gets to it (`prefs.backgroundPrep`), app-wide or for this library.
 fn background_prep(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
@@ -246,16 +252,7 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     let (count, bytes) = (loc["count"].as_u64().unwrap_or(0), loc["bytes"].as_u64().unwrap_or(0));
     if available {
-        hint(
-            ui,
-            t,
-            &crate::i18n::tr_format!(
-                "{count} smart preview{} · {:.1} MB",
-                if count == 1 { "" } else { "s" },
-                bytes as f64 / 1048576.0,
-                count = count
-            ),
-        );
+        hint(ui, t, &smart_previews_size(count, bytes));
     } else {
         hint(
             ui,
