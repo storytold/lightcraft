@@ -1195,7 +1195,7 @@ fn blemish_mattes(s: &mut Session, id: lightcraft_catalog::PhotoId, w: usize, h:
         return Default::default();
     }
     let d = s.develop_of(id).unwrap_or_default();
-    let frame = lightcraft_pipeline::geometry::Frame::new(photo.width as usize, photo.height as usize, &d, false);
+    let frame = lightcraft_pipeline::geometry::Frame::with_lens(photo.width as usize, photo.height as usize, &d, false, info.lens.as_ref());
     lightcraft_pipeline::blemish::Mattes { skin: m.plane(MatteKind::Skin, &frame, w, h), glasses: m.plane(MatteKind::Glasses, &frame, w, h) }
 }
 
