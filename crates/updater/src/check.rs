@@ -444,10 +444,10 @@ mod tests {
     fn a_release_without_our_file_or_platform_is_reported() {
         // a release without our file is reported
         {
-            let mac = Options { target: Some(Target { os: Os::Macos, arch: "universal" }), ..opts() };
+            let mac = Options { target: Some(Target { os: Os::Macos, arch: "arm64" }), ..opts() };
             let err = run(&mac, &feed("1.2.0")).expect_err("no dmg");
             assert!(matches!(err, UpdateError::NoAssetFor { .. }), "{err}");
-            assert!(err.to_string().contains("macos-universal"), "{err}");
+            assert!(err.to_string().contains("macos-arm64"), "{err}");
         }
         // a platform we do not build for says so
         {
@@ -616,7 +616,9 @@ mod tests {
         for (os, arch, file) in [
             (Os::Windows, "x64", format!("{bin}-0.8.1-windows-x64.msi")),
             (Os::Windows, "arm64", format!("{bin}-0.8.1-windows-arm64.msi")),
-            (Os::Macos, "universal", format!("{bin}-0.8.1-macos-universal.dmg")),
+            // a release from before the per-architecture images: both Macs fall back to the universal one
+            (Os::Macos, "arm64", format!("{bin}-0.8.1-macos-universal.dmg")),
+            (Os::Macos, "x64", format!("{bin}-0.8.1-macos-universal.dmg")),
             (Os::Linux, "x86_64", format!("{bin}-0.8.1-linux-x86_64.AppImage")),
             (Os::Linux, "aarch64", format!("{bin}-0.8.1-linux-aarch64.AppImage")),
         ] {
@@ -646,5 +648,59 @@ mod tests {
         assert_eq!(run(&lin, &release_0_8_1()).expect("a check").expect("an update").asset.name, format!("{bin}-0.8.1-linux-x86_64.AppImage"));
         // with no portable zip there is nothing for this copy: the MSI is not offered instead
         assert!(matches!(run(&portable, &feed("1.2.0")), Err(UpdateError::NoAssetFor { .. })));
+    }
+
+    /// A release with the per-architecture macOS images beside the universal one, named for the
+    /// architectures this updater asks for, and sized as they are (the universal image holds both
+    /// builds).
+    fn transition_release() -> String {
+        let bin = lcc_brand::BINARY;
+        let slug = |arch| Target::of("macos", arch).map_or("none", |t| t.arch);
+        let files = [
+            (format!("{bin}-2.0.0-macos-universal.dmg"), 380_000_000),
+            (format!("{bin}-2.0.0-macos-{}.dmg", slug("aarch64")), 180_000_000),
+            (format!("{bin}-2.0.0-macos-{}.dmg", slug("x86_64")), 190_000_000),
+            (format!("{bin}-2.0.0-windows-x64.msi"), 150_000_000),
+        ];
+        let assets: Vec<serde_json::Value> =
+            files.iter().map(|(f, size)| serde_json::json!({"name": f, "browser_download_url": on_release(f), "size": size})).collect();
+        serde_json::json!([{"tag_name": "v2.0.0", "name": "App v2.0.0", "body": "notes", "assets": assets}]).to_string()
+    }
+
+    /// Each Mac takes the image for its own architecture, and the universal one only when the
+    /// release has none (#1228).
+    #[test]
+    fn each_mac_takes_its_own_image_and_falls_back_to_the_universal_one() {
+        let bin = lcc_brand::BINARY;
+        for arch in ["arm64", "x64"] {
+            let o = Options { target: Some(Target { os: Os::Macos, arch }), ..opts() };
+            let u = run(&o, &transition_release()).expect("a check").expect("an update");
+            assert_eq!(u.asset.name, format!("{bin}-2.0.0-macos-{arch}.dmg"), "{arch}");
+        }
+        // without the Apple silicon image, Apple silicon takes the universal one, never the Intel one
+        let no_arm = transition_release().replace(&format!("{bin}-2.0.0-macos-arm64.dmg"), "readme.md");
+        let arm = Options { target: Some(Target { os: Os::Macos, arch: "arm64" }), ..opts() };
+        assert_eq!(run(&arm, &no_arm).expect("a check").expect("an update").asset.name, format!("{bin}-2.0.0-macos-universal.dmg"));
+        // its own image wins on architecture, not on size
+        let small_universal = transition_release().replace("380000000", "1000");
+        assert_eq!(run(&arm, &small_universal).expect("a check").expect("an update").asset.name, format!("{bin}-2.0.0-macos-arm64.dmg"));
+    }
+
+    /// The installed builds from before the per-architecture images took any file named
+    /// `-macos-universal`, `-macos-aarch64` or `-macos-x86_64` and picked the smallest (their
+    /// `Target::matches_name` and `Release::best_asset` before this change). On a release
+    /// with the new images they still have to take the universal one: the arm64 image is smaller,
+    /// and an Intel Mac that took it could not start the app.
+    #[test]
+    fn installs_from_before_the_per_architecture_images_still_take_the_universal_one() {
+        let release = crate::release::newest(&transition_release(), false).expect("a release");
+        let old_pick = release
+            .assets
+            .iter()
+            .filter(|a| a.kind == Kind::Dmg)
+            .filter(|a| ["-macos-universal", "-macos-x86_64", "-macos-aarch64"].iter().any(|s| a.name.to_ascii_lowercase().contains(s)))
+            .min_by_key(|a| a.size)
+            .map(|a| a.name.as_str());
+        assert_eq!(old_pick, Some(format!("{}-2.0.0-macos-universal.dmg", lcc_brand::BINARY).as_str()));
     }
 }

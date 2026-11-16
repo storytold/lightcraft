@@ -148,8 +148,9 @@ jobs:
           echo "publish=true" >>"$GITHUB_OUTPUT"
 
   macos:
-    timeout-minutes: 90
-    name: macOS universal
+    # three images, each notarized twice (the app, then the disk image)
+    timeout-minutes: 150
+    name: macOS
     needs: version
     if: ${{ (!inputs.only || contains(inputs.only, 'macos')) }}
     # uploads its files to the draft release (only when version says publish)
@@ -197,6 +198,9 @@ jobs:
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         run: packaging/macos/import-cert.sh
+      # Three disk images from one build of each architecture: Apple silicon (arm64), Intel (x64), and
+      # the universal one, which installs from before the per-architecture images update through
+      # (issue #1228; dropping it is a separate change). Each is signed, notarized and stapled.
       - name: Build, sign, notarize
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
@@ -204,7 +208,10 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: packaging/macos/package.sh --arch universal
+        run: |
+          packaging/macos/package.sh --arch universal
+          packaging/macos/package.sh --arch arm64 --skip-build
+          packaging/macos/package.sh --arch x64 --skip-build
       # SHA-256 of what this job built: a few bytes the release job turns into SHA256SUMS.txt and latest.json.
       - name: Checksums
         run: |

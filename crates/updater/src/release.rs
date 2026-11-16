@@ -64,12 +64,13 @@ impl Release {
         })
     }
 
-    /// The file to install on `target`: an installer first, then a plain archive; `None` when the
-    /// release has nothing this platform can use. A `portable` copy takes the portable zip, never an
-    /// installer ([`Target::matches_portable`]).
+    /// The file to install on `target`: an installer first, then a plain archive, each for this
+    /// architecture before a fallback ([`Target::is_fallback`]: the universal macOS image); `None`
+    /// when the release has nothing this platform can use. A `portable` copy takes the portable
+    /// zip, never an installer ([`Target::matches_portable`]).
     pub fn best_asset(&self, target: &Target, portable: bool) -> Option<&Asset> {
         let ours = |name: &str| if portable { target.matches_portable(name) } else { target.matches_name(name) };
-        self.assets.iter().filter(|a| a.kind != Kind::Checksums && ours(&a.name)).min_by_key(|a| (a.kind.rank(), a.size))
+        self.assets.iter().filter(|a| a.kind != Kind::Checksums && ours(&a.name)).min_by_key(|a| (a.kind.rank(), target.is_fallback(&a.name), a.size))
     }
 
     /// The release's checksum list, when it publishes one.
