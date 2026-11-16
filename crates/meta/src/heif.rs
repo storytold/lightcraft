@@ -22,10 +22,10 @@ pub(crate) fn embeds_location(bytes: &[u8]) -> Option<bool> {
         };
         let located = match item.kind {
             Kind::Exif => match exif_tiff(&bytes) {
-                Some(tiff) => crate::try_read_exif(tiff).map_or(true, |m| crate::has_location(&m)),
+                Some(tiff) => exif_has_location(tiff),
                 None => !bytes.is_empty(),
             },
-            Kind::Xmp => crate::parse_xmp(&String::from_utf8_lossy(&bytes)).map_or(true, |x| crate::has_location(&x.metadata)),
+            Kind::Xmp => xmp_has_location(&String::from_utf8_lossy(&bytes)),
             _ => true,
         };
         if located {
@@ -33,6 +33,27 @@ pub(crate) fn embeds_location(bytes: &[u8]) -> Option<bool> {
         }
     }
     Some(false)
+}
+
+/// Any GPS tag counts, not only a complete coordinate pair: the projected [`crate::Metadata`] keeps
+/// GPS only when latitude and longitude both read, yet a lone latitude is still a location. A GPS
+/// IFD pointer whose directory can't be read counts too.
+fn exif_has_location(tiff: &[u8]) -> bool {
+    use craft_tiff::{Tiff, tags as t};
+    let Ok(parsed) = Tiff::parse(tiff) else { return true };
+    let gps = parsed.all_ifds().into_iter().any(|ifd| match &ifd.gps {
+        Some(gps) => gps.entries.iter().any(|e| e.tag != t::GPS_VERSION_ID),
+        None => ifd.contains(t::GPS_IFD),
+    });
+    gps || crate::try_read_exif(tiff).map_or(true, |m| crate::has_location(&m))
+}
+
+/// The packet's whole location inventory (IPTC `LocationShown` / `LocationCreated`, GPS
+/// properties), not only the fields projected into [`crate::Metadata`]. A packet whose property
+/// list was cut short can't prove it has none.
+fn xmp_has_location(packet: &str) -> bool {
+    let Ok(xmp) = crate::xmp::parse_xmp_with(packet, &[]) else { return true };
+    xmp.properties_truncated || xmp.has_location_metadata() || crate::parse_xmp(packet).map_or(true, |x| crate::has_location(&x.metadata))
 }
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::arithmetic_side_effects)]
@@ -488,6 +509,61 @@ mod location_tests {
         assert!(crate::embeds_location(&tiff_at(1.0)));
         assert!(!crate::embeds_location(&plain));
     }
+    /// A GPS IFD with a latitude but no longitude reads as no `Gps`, but it is still a location
+    /// (#4315 review).
+    #[test]
+    fn a_lone_gps_latitude_in_a_thumbnail_is_seen() {
+        use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+        let tiff = |gps: Option<IfdBuilder>| {
+            let mut ifd0 = IfdBuilder::new();
+            ifd0.set(t::MODEL, Value::Ascii("Thumbnail".into()));
+            if let Some(gps) = gps {
+                ifd0.set_child(t::GPS_IFD, gps);
+            }
+            TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap_or_default()
+        };
+        let mut latitude = IfdBuilder::new();
+        latitude.set(t::GPS_VERSION_ID, Value::Byte(vec![2, 3, 0, 0]));
+        latitude.set(t::GPS_LATITUDE_REF, Value::Ascii("N".into()));
+        latitude.set(t::GPS_LATITUDE, Value::Rational(vec![(48, 1), (51, 1), (0, 1)]));
+        let mut version_only = IfdBuilder::new();
+        version_only.set(t::GPS_VERSION_ID, Value::Byte(vec![2, 3, 0, 0]));
+        for (gps, located) in [(Some(latitude), true), (Some(version_only), false), (None, false)] {
+            let tiff = tiff(gps);
+            assert_eq!(crate::read_exif(&tiff).gps, None, "no coordinate pair");
+            let f = Heif::new()
+                .item(2, b"hvc1", b"thumbnail".to_vec(), Store::File, 1)
+                .item(3, b"Exif", exif_item(&[], &tiff), Store::File, 1)
+                .cdsc(3, &[2])
+                .build();
+            assert_eq!(crate::embeds_location(&f), located);
+        }
+    }
+
+    /// An IPTC `LocationShown` place is a location even though it isn't projected into
+    /// `Metadata`'s city or country (#4315 review).
+    #[test]
+    fn an_iptc_location_shown_in_a_thumbnail_is_seen() {
+        let packet = |inner: &str| {
+            format!(
+                r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/" xmlns:dc="http://purl.org/dc/elements/1.1/">{inner}</rdf:Description></rdf:RDF></x:xmpmeta>"#
+            )
+        };
+        let shown = packet(
+            r#"<Iptc4xmpExt:LocationShown><rdf:Bag><rdf:li rdf:parseType="Resource"><Iptc4xmpExt:City>Paris</Iptc4xmpExt:City></rdf:li></rdf:Bag></Iptc4xmpExt:LocationShown>"#,
+        );
+        let plain = packet(r#"<dc:format>image/heic</dc:format>"#);
+        for (xmp, located) in [(shown, true), (plain, false)] {
+            assert!(crate::parse_xmp(&xmp).is_ok_and(|x| !crate::has_location(&x.metadata)), "not projected into Metadata");
+            let f = Heif::new()
+                .item(2, b"hvc1", b"thumbnail".to_vec(), Store::File, 1)
+                .xmp(3, ("application/rdf+xml", ""), xmp.into_bytes())
+                .cdsc(3, &[2])
+                .build();
+            assert_eq!(crate::embeds_location(&f), located);
+        }
+    }
+
     /// Original export checks place names in every metadata item, like GPS coordinates.
     #[test]
     fn place_names_in_a_thumbnail_are_seen_for_original_export() {
