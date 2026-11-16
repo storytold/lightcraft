@@ -20,6 +20,9 @@ craft-tiff = { workspace = true }
 craft-gif = { workspace = true }
 craft-psd = { workspace = true }
 craft-heif = { workspace = true, optional = true }
+# reads the XMP packet that says how a depth map's samples are stored (`depth`)
+craft-metadata = { workspace = true }
+log = { workspace = true }
 serde = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
