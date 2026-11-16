@@ -123,6 +123,14 @@ pub struct Metadata {
     pub metering_mode: Option<u16>,
     /// Exif `WhiteBalance` (0 auto, 1 manual).
     pub white_balance: Option<u16>,
+    /// Exif `CustomRendered`: 0 normal processing, 1 custom; Apple's cameras also write 2–8, of which
+    /// [`CUSTOM_RENDERED_PANORAMA`] marks a panorama. Read from the file's Exif only (never written).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_rendered: Option<u16>,
+    /// The file carries recorded depth: an iPhone Portrait HEIC's depth map ([`heif::has_depth`]). Read from the
+    /// file's structure only, never from Exif or XMP, and never written.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_depth: bool,
     pub orientation: Option<Orientation>,
     pub gps: Option<Gps>,
     /// Pixel dimensions as recorded (not oriented).
@@ -218,6 +226,7 @@ impl Metadata {
             exposure_program,
             metering_mode,
             white_balance,
+            custom_rendered,
             orientation,
             gps,
             width,
@@ -313,13 +322,22 @@ impl Metadata {
     }
 }
 
+/// The Exif `CustomRendered` value Apple's cameras write for a panorama (`ExifIFD` tag 0xA401 = 6).
+pub const CUSTOM_RENDERED_PANORAMA: u16 = 6;
+
 /// Read everything we understand from a whole file (JPEG, PNG, WebP, TIFF-based incl. DNG/raw).
 /// Precedence: EXIF, then IPTC fills gaps, then XMP overrides user fields and fills the rest.
 pub fn extract(bytes: &[u8]) -> Metadata {
     let e = embedded(bytes);
     let exif = e.exif.as_deref().map(read_exif).unwrap_or_default();
     let xmp = e.xmp.as_deref().and_then(|xmp| parse_xmp(xmp).ok());
-    extract_embedded(e, exif, xmp)
+    with_structure(bytes, extract_embedded(e, exif, xmp))
+}
+
+/// What the container's structure says, beside its metadata blocks: whether a HEIF carries recorded depth.
+fn with_structure(bytes: &[u8], mut m: Metadata) -> Metadata {
+    m.has_depth = heif::is_heif(bytes) && heif::has_depth(bytes);
+    m
 }
 
 /// Read metadata while reporting malformed PSD/PSB containers, embedded EXIF, or embedded XMP instead of treating
@@ -337,7 +355,7 @@ pub fn try_extract(bytes: &[u8]) -> Result<Metadata, ExtractError> {
         Some(xmp) => parse_xmp(xmp).ok(),
         None => None,
     };
-    Ok(extract_embedded(e, exif, xmp))
+    Ok(with_structure(bytes, extract_embedded(e, exif, xmp)))
 }
 
 fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metadata {
@@ -346,6 +364,7 @@ fn extract_embedded(e: Embedded, mut m: Metadata, xmp: Option<XmpData>) -> Metad
     // and the orientation the Exif states: the photo is displayed by that alone, so an orientation only the XMP
     // states ([`Metadata::fill_missing`] reports it below) can't tell how the photo is stored either
     let exif_orientation = e.exif.as_deref().and_then(exif::ifd0_orientation);
+    m.custom_rendered = m.custom_rendered.or_else(|| e.exif.as_deref().and_then(exif::custom_rendered));
     if let Some(i) = e.iptc.as_deref() {
         m.fill_missing(&parse_iptc(i));
     }
@@ -679,6 +698,34 @@ mod tests {
         let m = extract(&craft_tiff::TiffWriter::default().write(&[ifd0]).unwrap());
         assert_eq!((m.orientation, m.width, m.height), (Some(Orientation::Rotate90), Some(4000), Some(6000)));
         assert!(near(m.regions[0].rect, DRAWN), "TIFF: {:?}", m.regions[0].rect);
+    }
+
+    /// Exif `CustomRendered` (0xA401 in the Exif IFD), which marks an iPhone panorama, is read from a JPEG's
+    /// Exif block and from a TIFF-based file; a file without it, or with a malformed Exif block, has none.
+    #[test]
+    fn custom_rendered_is_read_from_the_exif_ifd() {
+        let exif = |value: u16| {
+            let mut sub = craft_tiff::IfdBuilder::new();
+            sub.set(0xA401, craft_tiff::Value::Short(vec![value]));
+            let mut ifd0 = craft_tiff::IfdBuilder::new();
+            ifd0.set_child(craft_tiff::tags::EXIF_IFD, sub);
+            craft_tiff::TiffWriter::new(craft_tiff::ByteOrder::Little, false).write(&[ifd0]).unwrap()
+        };
+        let jpeg = |exif: &[u8]| {
+            let mut j = vec![0xff, 0xd8, 0xff, 0xe1];
+            j.extend(u16::try_from(exif.len() + 8).unwrap().to_be_bytes());
+            j.extend(b"Exif\0\0");
+            j.extend(exif);
+            j.extend([0xff, 0xd9]);
+            j
+        };
+        assert_eq!(extract(&jpeg(&exif(CUSTOM_RENDERED_PANORAMA))).custom_rendered, Some(CUSTOM_RENDERED_PANORAMA));
+        assert_eq!(extract(&exif(8)).custom_rendered, Some(8), "a TIFF-based file");
+        let mut plain = craft_tiff::IfdBuilder::new();
+        plain.set(craft_tiff::tags::ORIENTATION, craft_tiff::Value::Short(vec![1]));
+        let plain = craft_tiff::TiffWriter::default().write(&[plain]).unwrap();
+        assert_eq!(extract(&plain).custom_rendered, None, "no Exif IFD");
+        assert_eq!(extract(&jpeg(b"II*\0garbage")).custom_rendered, None, "a malformed Exif block");
     }
 
     /// A photo whose Exif has a size but no orientation, and whose XMP says `tiff:Orientation=6`: LightCraft

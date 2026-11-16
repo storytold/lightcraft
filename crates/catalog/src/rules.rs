@@ -76,6 +76,18 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("extension", "File Extension", Kind::Text),
     ("filePath", "File Path", Kind::Text),
     ("kind", "File Type", Kind::Choice(&[("image", "Image"), ("raw", "Raw"), ("video", "Video")])),
+    (
+        "photoType",
+        "Photo Type",
+        Kind::Choice(&[
+            ("selfie", "Selfie"),
+            ("panorama", "Panorama"),
+            ("longExposure", "Long Exposure"),
+            ("screenshot", "Screenshot"),
+            ("drone", "Drone"),
+            ("portrait", "Portrait"),
+        ]),
+    ),
     ("format", "File Format", Kind::Text),
     ("duration", "Video Duration", Kind::Number),
     // Date
@@ -135,7 +147,7 @@ pub const TOP_LEVEL_FIELDS: &[&str] = &["rating", "flag", "label", "text"];
 /// once or in [`TOP_LEVEL_FIELDS`].
 pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Source", &["album", "virtualCopy", "copyName", "stacked"]),
-    ("File", &["fileName", "extension", "filePath", "kind", "format", "duration"]),
+    ("File", &["fileName", "extension", "filePath", "kind", "photoType", "format", "duration"]),
     ("Date", &["captureDate", "importDate", "editDate"]),
     ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
     ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
@@ -1044,6 +1056,7 @@ impl Rule {
                 (l == want || named) == (op == "is")
             }
             "kind" => (kind_name(p.kind) == want) == (op == "is"),
+            "photoType" => crate::PhotoType::parse(&want).is_some_and(|t| p.is_type(t)) == (op == "is"),
             "edited" => yes(p.is_edited()),
             "hasGps" => yes(m.gps.is_some()),
             "virtualCopy" => yes(p.copy_of.is_some()),
@@ -1154,7 +1167,7 @@ impl Rule {
                 "text" | "filePath" | "location" => COST_TEXT,
                 "keywords" | "person" | "personCount" | "stacked" | "copyName" | "fileName" | "extension" | "format" | "title" | "caption"
                 | "altText" | "city" | "state" | "country" | "camera" | "lens" | "creator" | "copyright" | "captureDate" | "importDate"
-                | "editDate" | "shutterSpeed" | "aspect" | "flash" | "cameraSerial" | "exposureBias" => COST_SMALL,
+                | "editDate" | "shutterSpeed" | "aspect" | "flash" | "cameraSerial" | "exposureBias" | "photoType" => COST_SMALL,
                 _ => COST_SCALAR,
             },
         }
