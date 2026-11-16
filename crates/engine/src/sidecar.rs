@@ -1112,7 +1112,7 @@ fn attr_f64(data: &str, start: usize, end: usize, name: &str) -> Option<f64> {
 }
 
 /// The nested mask-component descriptions inside a correction tag, in document order.
-fn mask_component_descriptions(data: &str, corr_start: usize, corr_end: usize) -> Vec<(usize, usize)> {
+fn mask_component_descriptions(data: &str, _corr_start: usize, corr_end: usize) -> Vec<(usize, usize)> {
     let content_start = corr_end + 1;
     let mut close = data.len();
     let mut depth = 0usize;
@@ -1328,8 +1328,13 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
         }
 
         let comp_tags = mask_component_descriptions(data, tag_start, corr_end);
-        let cur_comps = masks[i].get("components").and_then(Value::as_array).cloned().unwrap_or_default();
-        let prev_comps = prev_masks[i].get("components").and_then(Value::as_array).cloned().unwrap_or_default();
+        let cur_comps =
+            serde_json::to_value(&masks[i]).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+        let prev_comps = serde_json::to_value(&prev_masks[i])
+            .ok()
+            .and_then(|v| v.get("components").cloned())
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default();
         let ncomp = cur_comps.len().min(prev_comps.len()).min(comp_tags.len());
         for j in 0..ncomp {
             let cur = &cur_comps[j];
