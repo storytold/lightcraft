@@ -734,13 +734,32 @@ mod tests {
         }
         let raw: Vec<u64> = ids.iter().map(|i| i.0).collect();
         let r = s.execute("preset.apply", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        let r_teeth = r.clone();
         assert_eq!(r["applied"], 4, "the mask is added to every photo all the same: {r}");
-        assert_eq!(r["unknown"], 1, "{r}");
+        assert_eq!((r["unknown"].clone(), r["unknownIds"].clone()), (json!(1), json!([raw[2]])), "issue #4365: which one, too: {r}");
         let nothing: Vec<u64> = r["nothing"].as_array().unwrap().iter().map(|n| n["id"].as_u64().unwrap()).collect();
         assert_eq!(nothing, [raw[1], raw[3]], "{r}");
         assert_eq!(r["nothing"][0]["masks"], json!(["Whiten Teeth"]));
         let r = s.execute("preset.apply", &json!({"id": "lc.adaptive-darken-background", "ids": raw})).unwrap();
         assert_eq!((r["nothing"].as_array().unwrap().len(), r["unknown"].as_u64()), (0, Some(0)), "{r}");
+
+        // issue #4365: the same question later, read-only, from the catalog as it is then. The mattes of the
+        // photo that couldn't be told are recorded meanwhile (as Reload from Disk does): it carries teeth
+        let before = s.commits();
+        let again = s.execute("preset.foundNothing", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        assert_eq!(again, r_teeth, "nothing changed yet: the same answer");
+        let mut meta = s.catalog.photo(ids[2]).unwrap().meta.clone();
+        meta.mattes = Some(vec!["teeth".into()]);
+        s.catalog.apply(Op::SetMeta { id: ids[2], meta: Box::new(meta) }).unwrap();
+        let again = s.execute("preset.foundNothing", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        assert_eq!((again["applied"].clone(), again["unknownIds"].clone()), (json!(4), json!([])), "{again}");
+        assert_eq!(again["nothing"].as_array().unwrap().len(), 2, "{again}");
+        assert_eq!(s.commits(), before, "read-only");
+        // only photos that still carry the preset's mask count: with it undone on all of them, none do
+        s.execute("edit.undo", &json!({})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
+        let none = s.execute("preset.foundNothing", &json!({"id": "lc.adaptive-whiten-teeth", "ids": raw})).unwrap();
+        assert_eq!((none["applied"].clone(), none["nothing"].clone()), (json!(0), json!([])), "{none}");
     }
 
     #[test]

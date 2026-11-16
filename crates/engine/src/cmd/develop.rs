@@ -28,46 +28,74 @@ fn edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut DevelopSettin
 /// unknown, not without.
 const MATTE_FORMATS: [&str; 3] = ["DNG", "HEIC", "HEIF"];
 
-/// For an applied preset: the photos (with the mask names) on which a mask of it selects nothing because the photo
-/// doesn't carry any of the people mattes the mask needs ([`lightcraft_pipeline::masks::needed_mattes`]), and how
-/// many photos can't be told yet. Answered from what the catalog recorded at import (`Meta::mattes`), so no file is
-/// read however many photos the preset went to.
-fn preset_found_nothing(s: &Session, preset: &Preset, ids: &[PhotoId]) -> (Vec<Value>, usize) {
-    // the preset's masks every component of which needs a matte, each with the kinds any one of which serves
-    let needing: Vec<(String, Vec<&'static str>)> = preset
+/// What an adaptive preset found on the photos it went to ([`preset_found_nothing`]).
+struct FoundNothing {
+    /// The photos looked at: all of `ids`, or those that still carry a mask of the preset.
+    applied: usize,
+    /// `{id, masks: [name]}` for each photo on which a mask of the preset selects nothing.
+    nothing: Vec<Value>,
+    /// The photos that can't be told yet: a format that can carry mattes, never looked at.
+    unknown: Vec<u64>,
+}
+
+impl FoundNothing {
+    fn to_json(&self) -> Value {
+        json!({"applied": self.applied, "nothing": self.nothing, "unknown": self.unknown.len(), "unknownIds": self.unknown})
+    }
+}
+
+/// For a preset on `ids`: the photos (with the mask names) on which a mask of it selects nothing because the photo
+/// doesn't carry any of the people mattes the mask needs ([`lightcraft_pipeline::masks::needed_mattes`]), and the
+/// photos that can't be told yet. Answered from what the catalog recorded at import (`Meta::mattes`), so no file is
+/// read however many photos there are. With `carrying`, only the photos that still carry a mask of the preset (same
+/// name and components) are looked at: the question asked again later, after undos and other edits.
+fn preset_found_nothing(s: &Session, preset: &Preset, ids: &[PhotoId], carrying: bool) -> FoundNothing {
+    let masks: Vec<lightcraft_develop::Mask> = preset
         .settings
         .get("masks")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|m| serde_json::from_value::<lightcraft_develop::Mask>(m.clone()).ok())
+        .collect();
+    // the preset's masks every component of which needs a matte, each with the kinds any one of which serves
+    let needing: Vec<(&str, Vec<&'static str>)> = masks
+        .iter()
         .filter_map(|m| {
             let kinds: Option<Vec<Vec<_>>> = m.components.iter().map(|c| lightcraft_pipeline::masks::needed_mattes(&c.shape)).collect();
             let kinds: Vec<&'static str> = kinds.filter(|k| !k.is_empty())?.into_iter().flatten().map(|k| k.id()).collect();
-            Some((m.name, kinds))
+            Some((m.name.as_str(), kinds))
         })
         .collect();
-    let (mut nothing, mut unknown) = (Vec::new(), 0);
-    if needing.is_empty() {
-        return (nothing, unknown);
-    }
+    let mut out = FoundNothing { applied: 0, nothing: Vec::new(), unknown: Vec::new() };
     for id in ids {
         let Some(photo) = s.catalog.photo(*id) else { continue };
+        if carrying {
+            let has =
+                s.develop_of(*id).is_some_and(|d| d.masks.iter().any(|q| masks.iter().any(|m| m.name == q.name && m.components == q.components)));
+            if !has {
+                continue;
+            }
+        }
+        out.applied += 1;
+        if needing.is_empty() {
+            continue;
+        }
         let carried: &[String] = match &photo.meta.mattes {
             Some(kinds) => kinds,
             None if MATTE_FORMATS.iter().any(|f| photo.format.eq_ignore_ascii_case(f)) => {
-                unknown += 1;
+                out.unknown.push(id.0);
                 continue;
             }
             None => &[],
         };
         let empty: Vec<&str> =
-            needing.iter().filter(|(_, kinds)| !kinds.iter().any(|k| carried.iter().any(|c| c == k))).map(|(name, _)| name.as_str()).collect();
+            needing.iter().filter(|(_, kinds)| !kinds.iter().any(|k| carried.iter().any(|c| c == k))).map(|(name, _)| *name).collect();
         if !empty.is_empty() {
-            nothing.push(json!({"id": id.0, "masks": empty}));
+            out.nothing.push(json!({"id": id.0, "masks": empty}));
         }
     }
-    (nothing, unknown)
+    out
 }
 
 fn section_param(p: &Value, c: &str) -> Result<Section> {
@@ -1365,7 +1393,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Preset",
             [],
             None,
-            "{id: presetId, amount?: 0..200 (percent), ids?} → {applied, nothing: [{id, masks: [name]}], unknown}: `nothing` lists the photos on which a mask of the preset selects nothing because the photo doesn't carry the people mattes it needs (an adaptive preset such as Whiten Teeth; the mask is added all the same), `unknown` counts photos whose mattes haven't been looked at yet (imported before they were recorded: Reload from Disk)",
+            "{id: presetId, amount?: 0..200 (percent), ids?} → {applied, nothing: [{id, masks: [name]}], unknown, unknownIds}: `nothing` lists the photos on which a mask of the preset selects nothing because the photo doesn't carry the people mattes it needs (an adaptive preset such as Whiten Teeth; the mask is added all the same), `unknown` counts and `unknownIds` lists the photos whose mattes haven't been looked at yet (imported before they were recorded: Reload from Disk)",
             has_selection,
             |s, p| {
                 let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
@@ -1399,8 +1427,23 @@ pub fn specs() -> Vec<CommandSpec> {
                     .collect::<Vec<_>>();
                 let applied = ops.len();
                 s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
-                let (nothing, unknown) = preset_found_nothing(s, &preset, &ids);
-                Ok(json!({"applied": applied, "nothing": nothing, "unknown": unknown}))
+                let found = preset_found_nothing(s, &preset, &ids, false);
+                Ok(FoundNothing { applied, ..found }.to_json())
+            }
+        ),
+        cmd!(
+            "preset.foundNothing",
+            "Where a Preset Found Nothing",
+            [],
+            None,
+            "{id: presetId, ids?} — read-only: among the photos (`ids`, else the selection) that carry a mask of the preset, those on which it selects nothing and those that can't be told yet, as `preset.apply` replies but from the catalog as it is now → {applied, nothing: [{id, masks: [name]}], unknown, unknownIds}",
+            has_selection,
+            |s, p| {
+                const C: &str = "preset.foundNothing";
+                let pid = str_param(p, "id").ok_or_else(|| bad(C, "missing id"))?;
+                let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad(C, format!("unknown preset `{pid}`")))?;
+                let ids = s.targets(&json!({"ids": p.get("ids")}))?;
+                Ok(preset_found_nothing(s, &preset, &ids, true).to_json())
             }
         ),
         cmd!("preset.create", "Create Preset", ["Photo"], None, "{name, group?, groups?: [settingsGroup]}", has_active, |s, p| {
