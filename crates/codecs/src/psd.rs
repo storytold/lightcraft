@@ -242,114 +242,13 @@ pub(crate) fn encode(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
     if w > MAX_SIDE || h > MAX_SIDE {
         return Err(Error::Encode(format!("{w} × {h} is larger than a PSD can hold ({MAX_SIDE} px a side): use TIFF")));
     }
-    let ch = usize::from(img.channels);
-    let color = if ch <= 2 { 1 } else { 3 };
-    let (depth, bpc) = match img.samples {
-        Samples::U8(_) => (8u16, 1usize),
-        Samples::U16(_) => (16, 2),
+    let samples = match img.samples {
+        Samples::U8(s) => craft_psd::flat::Samples::U8(s),
+        Samples::U16(s) => craft_psd::flat::Samples::U16(s),
         Samples::F32(_) => return Err(Error::Encode("32-bit float PSD is not supported: use TIFF".into())),
     };
-    let (wu, hu) = (w as usize, h as usize);
-    let mut b = Vec::new();
-    b.extend_from_slice(b"8BPS");
-    b.extend_from_slice(&1u16.to_be_bytes());
-    b.extend_from_slice(&[0; 6]);
-    b.extend_from_slice(&(color as u16).to_be_bytes());
-    b.extend_from_slice(&h.to_be_bytes());
-    b.extend_from_slice(&w.to_be_bytes());
-    b.extend_from_slice(&depth.to_be_bytes());
-    b.extend_from_slice(&(if color == 1 { 1u16 } else { 3 }).to_be_bytes());
-    b.extend_from_slice(&0u32.to_be_bytes()); // colour mode data
-    let res = resource_section(meta);
-    b.extend_from_slice(&u32::try_from(res.len()).map_err(|_| Error::Encode("metadata too large for PSD".into()))?.to_be_bytes());
-    b.extend_from_slice(&res);
-    b.extend_from_slice(&0u32.to_be_bytes()); // layer and mask information: none
-    // planar samples, one plane per colour channel (big-endian)
-    let plane = |c: usize| -> Vec<u8> {
-        let mut p = Vec::with_capacity(wu * hu * bpc);
-        match img.samples {
-            Samples::U8(s) => p.extend(s.iter().skip(c).step_by(ch).take(wu * hu)),
-            Samples::U16(s) => s.iter().skip(c).step_by(ch).take(wu * hu).for_each(|v| p.extend_from_slice(&v.to_be_bytes())),
-            Samples::F32(_) => {}
-        }
-        p
-    };
-    if bpc == 1 {
-        b.extend_from_slice(&1u16.to_be_bytes());
-        let mut counts = Vec::with_capacity(color * hu * 2);
-        let mut data = Vec::new();
-        for c in 0..color {
-            for row in plane(c).chunks_exact(wu) {
-                let start = data.len();
-                packbits(row, &mut data);
-                let n = u16::try_from(data.len() - start).map_err(|_| Error::Encode("PSD row too long".into()))?;
-                counts.extend_from_slice(&n.to_be_bytes());
-            }
-        }
-        b.extend_from_slice(&counts);
-        b.extend_from_slice(&data);
-    } else {
-        b.extend_from_slice(&0u16.to_be_bytes());
-        for c in 0..color {
-            b.extend_from_slice(&plane(c));
-        }
-    }
-    Ok(b)
-}
-
-/// The image resources section for `meta`.
-fn resource_section(meta: &EncodeMeta) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut add = |id: u16, data: &[u8]| {
-        out.extend_from_slice(b"8BIM");
-        out.extend_from_slice(&id.to_be_bytes());
-        out.extend_from_slice(&[0, 0]); // empty Pascal name, padded to even
-        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        out.extend_from_slice(data);
-        if data.len() % 2 == 1 {
-            out.push(0);
-        }
-    };
-    if let Some(ppi) = meta.ppi.filter(|p| *p > 0) {
-        // ResolutionInfo: 16.16 fixed pixels per inch, unit 1 (ppi), display unit 1 (inches), twice
-        let fixed = (u32::from(ppi) << 16).to_be_bytes();
-        let one = 1u16.to_be_bytes();
-        add(1005, &[&fixed[..], &one, &one, &fixed, &one, &one].concat());
-    }
-    if let Some(icc) = meta.icc {
-        add(1039, icc);
-    }
-    if let Some(exif) = meta.exif {
-        add(1058, exif);
-    }
-    if let Some(xmp) = meta.xmp {
-        add(1060, xmp.as_bytes());
-    }
-    out
-}
-
-/// PackBits: append one encoded row of `src` to `out` (runs of 2+ equal bytes as repeats, the
-/// rest as literals of at most 128 bytes).
-fn packbits(src: &[u8], out: &mut Vec<u8>) {
-    let mut rest = src;
-    while let Some(&b) = rest.first() {
-        // a run of 2 to 128 equal bytes
-        let run = rest.iter().take(128).take_while(|&&x| x == b).count();
-        if run >= 2 {
-            // 1 - run in 2..=128: -1..=-127, as a signed byte
-            out.push((1 - run as i16) as i8 as u8);
-            out.push(b);
-            rest = rest.get(run..).unwrap_or_default();
-            continue;
-        }
-        // a literal of 1 to 128 bytes: up to the next pair of equal bytes, or the end of the row
-        let unpaired = rest.windows(2).take(128).take_while(|w| w.first() != w.get(1)).count();
-        let len = if unpaired.saturating_add(1) == rest.len() { rest.len() } else { unpaired };
-        let (lit, tail) = rest.split_at_checked(len.clamp(1, 128)).unwrap_or((rest, &[][..]));
-        out.push(lit.len().saturating_sub(1) as u8);
-        out.extend_from_slice(lit);
-        rest = tail;
-    }
+    let metadata = craft_psd::flat::Metadata { icc: meta.icc, exif: meta.exif, xmp: meta.xmp, ppi: meta.ppi };
+    craft_psd::flat::write(w, h, img.channels, samples, metadata).map_err(|error| Error::Encode(error.to_string()))
 }
 
 /// Stored dimensions and EXIF orientation (resource 1058) from the header and image resources,
@@ -555,7 +454,7 @@ mod tests {
         let rows: [&[u8]; 6] = [&[], &[7], &[1, 1], &[1, 2, 3, 3, 3, 4, 5, 5], &[9; 300], &(0..=255u8).cycle().take(700).collect::<Vec<_>>()];
         for row in rows {
             let mut enc = Vec::new();
-            super::packbits(row, &mut enc);
+            craft_psd::compression::packbits::encode(row, &mut enc);
             let mut out = vec![0u8; row.len()];
             unpackbits(&enc, &mut out).unwrap();
             assert_eq!(out, row);
