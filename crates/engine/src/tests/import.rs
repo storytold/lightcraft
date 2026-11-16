@@ -2853,6 +2853,45 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
 }
 
 /// Issue #2284: a photo taken at 13:00 in UTC-5 must be catalogued as 13:00. HEICs carried no Exif
+/// Issue #4354: an iPhone HEIC's own segmentation mattes reach the source as a ProRAW DNG's do, so Select Subject
+/// and the People parts use them: here a person matte and a skin matte, with an all-empty teeth matte left out (the
+/// DNG rule) and the depth map and gain map, which aren't mattes, ignored.
+#[test]
+fn a_heic_brings_its_own_segmentation_mattes() {
+    use craft_heif::testdata::{Aux, Spec, build};
+    use lightcraft_pipeline::masks::MatteKind;
+    let src = temp_dir("heic-mattes");
+    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
+    let person = |x: u32, _: u32| if x < 24 { 255 } else { 0 };
+    let none = |_: u32, _: u32| 0;
+    let aux = |urn: &'static str| Aux { urn, width: 48, height: 32, sample: &person, props: Vec::new(), xmp: None };
+    let spec = Spec {
+        ignored_aux: vec!["urn:com:apple:photo:2020:aux:hdrgainmap", "urn:mpeg:hevc:2015:auxid:2"],
+        aux: vec![
+            aux("urn:com:apple:photo:2018:aux:portraiteffectsmatte"),
+            aux("urn:com:apple:photo:2019:aux:semanticskinmatte"),
+            Aux { sample: &none, ..aux("urn:com:apple:photo:2019:aux:semanticteethmatte") },
+        ],
+        ..Spec::new(96, 64, &photo)
+    };
+    std::fs::write(src.join("IMG_0005.HEIC"), build(&spec)).unwrap();
+    std::fs::write(src.join("IMG_0006.HEIC"), build(&Spec::new(96, 64, &photo))).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    if !lightcraft_codecs::Format::Heif.can_decode() {
+        let _ = std::fs::remove_dir_all(&src);
+        return;
+    }
+    let kinds = |s: &mut Session, name: &str| {
+        let id = s.catalog.photos().find(|p| p.file_name == name).unwrap().id;
+        s.source_now(id, crate::media::SourceLevel::Thumb).unwrap();
+        s.source_info(id).mattes.map(|m| m.iter().map(|(k, _)| k).collect::<Vec<_>>())
+    };
+    assert_eq!(kinds(&mut s, "IMG_0005.HEIC"), Some(vec![MatteKind::Person, MatteKind::Skin]));
+    assert_eq!(kinds(&mut s, "IMG_0006.HEIC"), None, "a HEIC without mattes is unchanged");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// (issue #1233), so every one of them fell back to the file's modification time, which the import
 /// writes as UTC: an iPhone photo landed five hours late and after 19:00 on the wrong day.
 #[test]

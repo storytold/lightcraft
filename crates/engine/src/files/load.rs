@@ -267,11 +267,16 @@ fn load_bytes_now(
             used_reduced,
         ));
     }
-    let d = lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
+    // a HEIF's own segmentation mattes (an iPhone photo's person, skin, hair, teeth and glasses), decoded beside the
+    // picture: AI masks use them as they use a ProRAW DNG's (oriented like the decoded photo, HEIF's container
+    // transforms being applied to both)
+    let heif = lightcraft_codecs::sniff(&bytes) == Some(lightcraft_codecs::Format::Heif);
+    let (d, mattes) = rayon::join(|| lightcraft_codecs::decode(&bytes, fit_box(max_edge)), || if heif { heif_mattes(&bytes) } else { None });
+    let d = d.map_err(|e| e.to_string())?;
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default(), false))
+    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo { mattes, ..SourceInfo::default() }, false))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from
@@ -387,6 +392,22 @@ fn dng_mattes(bytes: &[u8], raw: &lightcraft_raw::RawInfo) -> Option<Arc<lightcr
             continue;
         }
         mattes.push(kind, img.into_oriented(raw.orientation));
+    }
+    (!mattes.is_empty()).then(|| Arc::new(mattes))
+}
+
+/// A HEIF's segmentation mattes that AI masks understand ([`matte_kind`]: Apple's names are the same in a HEIC as in
+/// a ProRAW DNG), with the DNG rule: a person matte without a confidently selected pixel is left out, so the Subject
+/// mask falls back to its heuristic.
+fn heif_mattes(bytes: &[u8]) -> Option<Arc<lightcraft_pipeline::masks::Mattes>> {
+    use lightcraft_pipeline::masks::{MatteKind, Mattes};
+    let mut mattes = Mattes::default();
+    for m in lightcraft_codecs::depth::read_mattes(bytes) {
+        let Some(kind) = matte_kind(&m.urn) else { continue };
+        if kind != MatteKind::Sky && !m.data.iter().any(|&v| v >= 128) {
+            continue;
+        }
+        mattes.push(kind, lightcraft_raster::Image { width: m.width as usize, height: m.height as usize, data: m.data });
     }
     (!mattes.is_empty()).then(|| Arc::new(mattes))
 }

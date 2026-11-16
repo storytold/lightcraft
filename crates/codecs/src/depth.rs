@@ -130,6 +130,46 @@ pub fn read_depth(_bytes: &[u8]) -> Option<Depth> {
     None
 }
 
+/// A segmentation matte an iPhone HEIC carries (portrait, hair, skin, teeth, glasses…), named by its `auxC` type,
+/// as 0..255 coverage at its own size, in the photo's orientation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedMatte {
+    /// The `auxC` type, e.g. `urn:com:apple:photo:2019:aux:semanticskinmatte`.
+    pub urn: String,
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>,
+}
+
+/// The photo's segmentation mattes: every auxiliary image whose type is one of Apple's mattes
+/// (`urn:com:apple:photo:…:aux:…matte`). Best effort as [`read_depth`]: one that fails to decode is left out with a
+/// logged reason; none in a build without the HEIF decoder.
+#[cfg(feature = "heif")]
+pub fn read_mattes(bytes: &[u8]) -> Vec<NamedMatte> {
+    let Ok(aux) = craft_heif::auxiliary_images(bytes) else { return Vec::new() };
+    let options = craft_heif::Options::default();
+    aux.iter()
+        .filter(|a| a.urn.starts_with("urn:com:apple:photo:") && a.urn.ends_with("matte"))
+        .filter_map(|a| match craft_heif::decode_auxiliary(bytes, a.id, &options) {
+            Ok(p) => {
+                let m = matte_from(&p);
+                let data = m.alpha.iter().map(|&v| (v * 255.0).round() as u8).collect();
+                Some(NamedMatte { urn: a.urn.clone(), width: m.width, height: m.height, data })
+            }
+            Err(e) => {
+                log::warn!("the {} matte can't be decoded, so it is left out: {e}", a.urn);
+                None
+            }
+        })
+        .collect()
+}
+
+/// The photo's segmentation mattes: always none in a build without the HEIF decoder.
+#[cfg(not(feature = "heif"))]
+pub fn read_mattes(_bytes: &[u8]) -> Vec<NamedMatte> {
+    Vec::new()
+}
+
 /// A matte's samples as coverage from 0 to 1, by its bit depth.
 #[cfg(feature = "heif")]
 fn matte_from(p: &craft_heif::Plane) -> Matte {
@@ -236,5 +276,39 @@ mod tests {
         // a photo without depth, and garbage
         assert_eq!(read_depth(&build(&Spec::new(64, 32, &grey))), None);
         assert_eq!(read_depth(b"not a heic"), None);
+    }
+
+    /// Issue #4354: the segmentation mattes come back by their type, as 0..255 coverage in the photo's orientation;
+    /// the depth map and the HDR gain map are not mattes and are left out.
+    #[cfg(feature = "heif")]
+    #[test]
+    fn a_heic_gives_its_segmentation_mattes() {
+        use craft_heif::testdata::{Aux, Prop, Spec, build};
+        let grey = |_: u32, _: u32| [128u16, 128, 128];
+        let skin = |x: u32, _: u32| if x < 16 { 255 } else { 0 };
+        let person = |_: u32, _: u32| 255;
+        let depth = |x: u32, _: u32| (x * 8) as u16;
+        let turn = vec![Prop::Irot(2)];
+        let aux = |urn: &'static str| Aux { urn, width: 32, height: 16, sample: &depth, props: turn.clone(), xmp: None };
+        let spec = Spec {
+            props: turn.clone(),
+            ignored_aux: vec!["urn:com:apple:photo:2020:aux:hdrgainmap"],
+            aux: vec![
+                aux("urn:mpeg:hevc:2015:auxid:2"),
+                Aux { sample: &person, ..aux("urn:com:apple:photo:2018:aux:portraiteffectsmatte") },
+                Aux { sample: &skin, ..aux("urn:com:apple:photo:2019:aux:semanticskinmatte") },
+            ],
+            ..Spec::new(128, 64, &grey)
+        };
+        let mattes = read_mattes(&build(&spec));
+        let names: Vec<&str> = mattes.iter().map(|m| m.urn.as_str()).collect();
+        assert_eq!(names, ["urn:com:apple:photo:2018:aux:portraiteffectsmatte", "urn:com:apple:photo:2019:aux:semanticskinmatte"]);
+        let s = &mattes[1];
+        assert_eq!((s.width, s.height, s.data.len()), (32, 16, 32 * 16));
+        // turned half a turn: the coded left (skin) is now the right
+        assert_eq!((s.data[0], s.data[31]), (0, 255));
+        assert!(mattes[0].data.iter().all(|&v| v == 255));
+        assert_eq!(read_mattes(&build(&Spec::new(64, 32, &grey))), Vec::new());
+        assert_eq!(read_mattes(b"not a heic"), Vec::new());
     }
 }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### iPhone photos select their people precisely
+- iPhone HEICs that carry Apple's segmentation mattes (Portrait photos, and photos of people from recent iPhones) now use
+  them for the Select Subject and Background masks and the people parts, as iPhone ProRAW already did: the person, hair,
+  skin, teeth and glasses the iPhone found, instead of our estimate. Subject and Background masks already on such a photo
+  follow the matte too; photos without mattes are unchanged. Needs a build that opens HEIC.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
