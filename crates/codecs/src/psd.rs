@@ -44,6 +44,8 @@ impl<'a> Rd<'a> {
 fn open_merged<'a>(bytes: &'a [u8], opts: &DecodeOptions, spare: &'a mut Vec<u8>) -> Result<craft_psd::merged::Merged<'a>> {
     let error = match open_exact(bytes, opts) {
         Ok(merged) => return Ok(merged),
+        // a pixel-limit refusal reads the header, which the copy keeps: no retry
+        Err(error @ Error::TooLarge(..)) => return Err(error),
         Err(error) => error,
     };
     let Some(stripped) = without_resources(bytes) else { return Err(error) };
@@ -60,7 +62,9 @@ fn without_resources(bytes: &[u8]) -> Option<Vec<u8>> {
     let len_at = |at: usize| -> Option<usize> { usize::try_from(u32::from_be_bytes(bytes.get(at..at.checked_add(4)?)?.try_into().ok()?)).ok() };
     let res_at = 30usize.checked_add(len_at(26)?)?;
     let tail = bytes.get(res_at.checked_add(4)?.checked_add(len_at(res_at)?)?..)?;
-    let mut out = Vec::with_capacity(bytes.len());
+    let mut out = Vec::new();
+    // a failed allocation leaves the original parse error, not an abort
+    out.try_reserve_exact(bytes.len()).ok()?;
     out.extend_from_slice(bytes.get(..res_at)?);
     out.extend_from_slice(&0u32.to_be_bytes());
     out.extend_from_slice(tail);
@@ -336,6 +340,17 @@ mod tests {
         let d = decode(&b, &DecodeOptions::default()).unwrap();
         assert_eq!((d.width, d.height, d.icc.is_none()), (1, 1, true));
         assert_eq!(super::header(&b).unwrap(), (1, 1, 1));
+    }
+
+    #[test]
+    fn a_damaged_resource_section_over_the_pixel_limit_is_too_large() {
+        // the size refusal comes before (and instead of) the copy without the resources
+        let mut b = header(3, 4, 4, 8, 3, 0);
+        b[30..34].copy_from_slice(&4u32.to_be_bytes());
+        b.splice(34..34, *b"JUNK");
+        let opts = DecodeOptions { max_pixels: 15, ..DecodeOptions::default() };
+        let e = decode(&b, &opts).unwrap_err();
+        assert!(matches!(e, Error::TooLarge(4, 4)), "{e:?}");
     }
 
     #[test]
