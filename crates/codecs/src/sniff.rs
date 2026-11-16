@@ -130,11 +130,8 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
     if b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
         return Some(Format::Tiff);
     }
-    if b.len() >= 26 && b.starts_with(b"BM") {
-        let dib = u32::from_le_bytes([b[14], b[15], b[16], b[17]]);
-        if matches!(dib, 12 | 16 | 40 | 52 | 56 | 64 | 108 | 124) {
-            return Some(Format::Bmp);
-        }
+    if craft_bmp_header::bmp_probe::is_supported_header(b) {
+        return Some(Format::Bmp);
     }
     None
 }
@@ -220,6 +217,21 @@ fn tiff_is_raw(b: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bmp_routing_retains_supported_dib_and_truncation_rules() {
+        let mut b = [0_u8; 26];
+        b[..2].copy_from_slice(b"BM");
+        for dib in [12_u32, 16, 40, 52, 56, 64, 108, 124] {
+            b[14..18].copy_from_slice(&dib.to_le_bytes());
+            assert_eq!(sniff(&b), Some(Format::Bmp));
+            assert_eq!(sniff(&b[..25]), None);
+        }
+        for dib in [0_u32, 13, 39, 125, u32::MAX] {
+            b[14..18].copy_from_slice(&dib.to_le_bytes());
+            assert_eq!(sniff(&b), None);
+        }
+    }
 
     #[test]
     fn magic_numbers() {
