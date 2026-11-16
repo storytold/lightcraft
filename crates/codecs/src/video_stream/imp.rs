@@ -288,6 +288,9 @@ struct Window {
     end: i64,
     /// Presentation time of the picture on screen at `start` (at or before it).
     first: i64,
+    /// Samples to feed (decode order): through the last one shown before `end`. Those after it
+    /// are shown only past the end, and no picture shown refers to a later one.
+    feed_end: usize,
 }
 
 impl Window {
@@ -310,7 +313,9 @@ impl Window {
             None => (all_start, all_end),
         };
         let first = t.sample_at_presentation_time(start).and_then(pts).filter(|&p| p <= start).unwrap_or(start);
-        Window { start, end: end.max(start), first }
+        let end = end.max(start);
+        let feed_end = (0..t.samples.len()).rev().find(|&i| pts(i).is_some_and(|p| p < end)).map_or(t.samples.len(), |i| i + 1);
+        Window { start, end, first, feed_end }
     }
 }
 
@@ -511,7 +516,8 @@ impl VideoStream {
             if stop() {
                 return Err(VideoError::Cancelled);
             }
-            let len = self.track()?.samples.len();
+            // (past the last picture shown, the track's remaining samples are not fed)
+            let len = self.track()?.samples.len().min(self.window.feed_end);
             if self.next_sample >= len {
                 if self.flushed {
                     return Ok(None);

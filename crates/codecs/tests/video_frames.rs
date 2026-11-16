@@ -532,6 +532,7 @@ fn an_edit_list_that_cuts_the_start_and_end_hides_those_pictures() {
         last = f;
     }
     assert_eq!(shown, 45, "only the edit's pictures");
+    assert!(s.frames_decoded() <= 85, "nothing past the edit is decoded: {}", s.frames_decoded());
     assert_eq!(which(&last), Some(84));
     for (t, frame) in [(0.5, 55usize), (-3.0, 40), (99.0, 84), (0.0, 40)] {
         s.seek(t, SeekMode::Exact).unwrap();
