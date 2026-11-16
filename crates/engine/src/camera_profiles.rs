@@ -8,8 +8,9 @@
 //!
 //! Profiles are JSON files (`<model>.json`) in [`dir`]: `LIGHTCRAFT_CAMERA_PROFILES`, else
 //! `<config>/camera-profiles`; a local profile replaces the one built in ([`BUNDLED`], from
-//! `assets/camera-profiles/`). They are read once per process; a damaged or hostile file is
-//! ignored with a warning. They hold aggregate colour statistics only, never image content.
+//! `assets/camera-profiles/`). They are read once per process for the folder they are looked up
+//! in; a damaged or hostile file is ignored with a warning. They hold aggregate colour statistics
+//! only, never image content.
 use lightcraft_color::Mat3;
 use lightcraft_raw::profile::HsvTable;
 use serde::{Deserialize, Serialize};
@@ -125,9 +126,12 @@ fn normalize_for_lookup(model: &str) -> String {
     normalized_model(model).replace(['-', ' '], "_")
 }
 
-/// Normalize a model name for local profile matching (case, whitespace, and separator folding).
+/// Normalize a model name for local profile matching: [`ALIASES`] applied as for bundled
+/// profiles, then case, whitespace and separators folded to `_`, so a profile saved under one
+/// spelling ("NIKON Z8", `NIKON_Z8.json`) is found by another ("NIKON Z 8").
 fn normalize_for_local_match(model: &str) -> String {
-    normalize_for_lookup(model)
+    let folded = normalize_for_lookup(model);
+    ALIASES.iter().find(|(spelling, _)| normalize_for_lookup(spelling) == folded).map_or(folded, |(_, canonical)| normalize_for_lookup(canonical))
 }
 
 /// Resolve an EXIF model spelling to the canonical model spelling using
@@ -158,8 +162,12 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn cache() -> &'static Mutex<HashMap<String, Option<Arc<CameraProfile>>>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<CameraProfile>>>>> = OnceLock::new();
+/// Profiles already read, per folder they were read from and model: a lookup pointed at another
+/// folder (a test's temporary directory) must not return the profile read from this one.
+type Cache = HashMap<(Option<PathBuf>, String), Option<Arc<CameraProfile>>>;
+
+fn cache() -> &'static Mutex<Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
@@ -168,7 +176,8 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     get_from(model, dir().as_deref())
 }
 
-/// The profile for camera `model` read from `directory`, else built in; read once per process.
+/// The profile for camera `model` read from `directory`, else built in; read once per process for
+/// that folder.
 ///
 /// `directory` is the profile folder to search for a local profile; [`dir`] resolves it from
 /// [`LIGHTCRAFT_CAMERA_PROFILES`] or the config folder. Separating it lets tests point the lookup
@@ -180,11 +189,13 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     }
     // EXIF spellings that differ by more than case and spacing (for example
     // "NIKON Z8") resolve to the canonical model ("NIKON Z 8") before the
-    // local lookup, so a local profile saved under the canonical spelling is
-    // found instead of falling back to the bundled profile.
+    // local lookup, and the profile's own model is compared through the same
+    // aliases, so a local profile saved under either spelling is found
+    // instead of falling back to the bundled profile.
     let model = canonical_model(model);
+    let key = (directory.map(Path::to_path_buf), model.to_owned());
     let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some(hit) = cache.get(model) {
+    if let Some(hit) = cache.get(&key) {
         return hit.clone();
     }
     let path = directory.as_ref().map(|d| d.join(file_name(model)));
@@ -234,7 +245,7 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
         })
     });
     let profile = profile.or_else(|| bundled(model).map(Arc::new));
-    cache.insert(model.to_owned(), profile.clone());
+    cache.insert(key, profile.clone());
     profile
 }
 
@@ -517,6 +528,24 @@ mod tests {
         let found = get_from("NIKON Z8", Some(&dir));
         assert!(found.is_some(), "NIKON Z8 should find a NIKON Z 8 profile");
         assert_eq!(found.unwrap().files, 1, "the local NIKON Z 8 profile, not the bundled one, must be used");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn local_profile_saved_under_the_exif_spelling_is_found() {
+        // A profile calibrated from files that report "NIKON Z8" is saved as `NIKON_Z8.json`;
+        // asking for the canonical "NIKON Z 8" must find it instead of the bundled profile.
+        let dir = std::env::temp_dir().join(format!("lc-local-z8-exif-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let local = CameraProfile::new("NIKON Z8", 2, 100, Mat3::IDENTITY, None);
+        let path = save(&local, &dir).unwrap();
+        assert_eq!(path.file_name().unwrap(), "NIKON_Z8.json");
+
+        let found = get_from("NIKON Z 8", Some(&dir)).expect("a NIKON Z 8 profile");
+        assert_eq!(found.files, 2, "the local NIKON Z8 profile, not the bundled NIKON Z 8 one, must be used");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
