@@ -34,6 +34,11 @@ fn demo() -> (Headless, Vec<u64>) {
     (h, ids)
 }
 
+/// The photos of the list, in order.
+fn ids_all(h: &mut Headless) -> Vec<u64> {
+    h.app.session.visible_cloned().iter().map(|p| p.0).collect()
+}
+
 fn frames(h: &mut Headless, n: usize) {
     for _ in 0..n {
         h.step();
@@ -268,7 +273,9 @@ fn view_commands_fit_set_and_zoom_and_refuse_hostile_values() {
     let c = canvas(&s);
     let all: Vec<u64> = pins(&s).iter().flat_map(ids_of).collect();
     assert_eq!(all.len(), 6, "Fit to Photos shows every photo with a position: {s}");
-    assert!(pins(&s).iter().all(|p| c.contains(xy(p))), "{s}");
+    // inside the map, clear of the filter bar at the top and the toolbar at the bottom
+    let free = Rect::from_min_max(egui::pos2(c.left(), c.top() + 50.0), egui::pos2(c.right(), c.bottom() - 36.0));
+    assert!(pins(&s).iter().all(|p| free.contains(xy(p))), "{s}");
     let z = s["zoom"].as_f64().unwrap();
     h.app.run("map.zoomIn", json!({})).unwrap();
     assert_eq!(state(&mut h)["zoom"].as_f64(), Some(z.round() + 1.0));
@@ -287,6 +294,25 @@ fn view_commands_fit_set_and_zoom_and_refuse_hostile_values() {
         assert!(h.app.run("map.setView", bad.clone()).is_err(), "{bad}");
     }
     assert_eq!(state(&mut h)["zoom"].as_f64(), Some(4.0), "a refusal changes nothing");
+    // photos spread north to south: Fit keeps them clear of the filter bar and the toolbar
+    let all = ids_all(&mut h);
+    let (north, south) = (all[0], all[1]);
+    h.app.run("photo.removeGps", json!({"ids": all[2..6].to_vec()})).unwrap();
+    h.app.run("photo.setGps", json!({"ids": [north], "lat": 60.0, "lon": 10.0})).unwrap();
+    h.app.run("photo.setGps", json!({"ids": [south], "lat": 40.0, "lon": 10.0})).unwrap();
+    h.app.run("map.fit", json!({})).unwrap();
+    frames(&mut h, 3);
+    let s = state(&mut h);
+    let c = canvas(&s);
+    let free = Rect::from_min_max(egui::pos2(c.left(), c.top() + 50.0), egui::pos2(c.right(), c.bottom() - 36.0));
+    assert_eq!(pins(&s).len(), 2, "{s}");
+    for p in pins(&s) {
+        // the pin's head is drawn up to 20 points above its point
+        assert!(free.contains(xy(&p)) && free.contains(xy(&p) - egui::vec2(0.0, 20.0)), "{p} not in {free:?}");
+    }
+    for (id, (lat, lon)) in all[..6].iter().zip(PLACES) {
+        h.app.run("photo.setGps", json!({"ids": [id], "lat": lat, "lon": lon})).unwrap();
+    }
     // the toolbar's Fit to Photos does the same as map.fit
     let fit = widget(&h, "map:fit").expect("Fit to Photos").center();
     press(&mut h, fit, true);

@@ -230,10 +230,17 @@ fn fit(app: &mut LightcraftApp) {
     let size = app.ui.map.last_canvas.map_or((1000.0, 700.0), |r| (f64::from(r.width()), f64::from(r.height())));
     app.ui.map.fitted = true;
     let Some(b) = Bounds::of(app.map_points.points.iter().map(|p| (p.pos.lat, p.pos.lon))) else { return };
-    let v = fit_bounds(&b, size.0, size.1, 48.0, max_zoom);
+    // fit into the part of the map the filter bar and the toolbar leave free, then move the centre
+    // so that part's middle shows the photos' middle
+    let top = if app.ui.map.show_filter_bar { f64::from(FILTER_BAR_H) } else { 0.0 };
+    let free = (size.1 - top - f64::from(TOOLBAR_H)).max(1.0);
+    let v = fit_bounds(&b, size.0, free, 48.0, max_zoom);
+    let target = top + free / 2.0;
+    let full = Viewport::new(v.center, v.zoom, size.0, size.1);
+    let center = full.to_lat_lon(Point::new(size.0 / 2.0, size.1 - target));
     let m = &mut app.ui.map;
-    m.center_lat = v.center.lat;
-    m.center_lon = v.center.lon;
+    m.center_lat = center.lat;
+    m.center_lon = center.lon;
     m.zoom = v.zoom.max(MIN_ZOOM);
 }
 
