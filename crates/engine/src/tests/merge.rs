@@ -98,7 +98,7 @@ fn legacy_cropped_raw_catalog_probes_uncropped_dimensions_before_planning() {
     }));
     // Planning must not use a decoder or a cached/provided probe that could be stale.
     s.media.file_probe = Some(Arc::new(|_| panic!("planning must probe original bytes")));
-    s.media.file_loader = Some(Arc::new(|_, _| panic!("planning must not decode pixels")));
+    s.media.file_loader = Some(Arc::new(|_, _, _| panic!("planning must not decode pixels")));
     for kind in [
         MergeKind::Hdr { hdr: Default::default() },
         MergeKind::Panorama { pano: Default::default() },
