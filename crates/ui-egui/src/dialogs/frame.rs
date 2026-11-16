@@ -226,6 +226,7 @@ pub(super) fn only_shows(dlg: &Dialog) -> bool {
             | Dialog::Settings { .. }
             | Dialog::SystemInfo { .. }
             | Dialog::AllMetadata { .. }
+            | Dialog::ImportWarnings { .. }
             | Dialog::WhatsNew
             | Dialog::Welcome { .. }
             | Dialog::ManageEffects { .. }

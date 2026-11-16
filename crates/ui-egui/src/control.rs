@@ -479,6 +479,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 app.renderer.forget_imports();
                 app.review_listed = None;
             }
+            // the report's own toast goes with it: the pair is one notification (#3050)
+            if matches!(app.ui.dialog, Some(crate::state::Dialog::ImportWarnings { .. })) {
+                app.ui.toast = None;
+            }
             app.ui.dialog = None;
             ok(Value::Null)
         }
