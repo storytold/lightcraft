@@ -15,7 +15,8 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 | **V4** | V3 plus calibrated global Contrast (per channel) and Blacks (per-channel/luminance mix) on raws with a camera tone curve. Whites behaves exactly as V2, both signs; its calibration is a planned follow-up. Other sources and local adjustments retain V2 operators. See [calibrated Light operators](light-v3.md). |
 | **V5** | V4 plus: a raw's tone curve rolls off into white in stops instead of reaching it within about a stop of the sensor's white, so raising Exposure keeps the highlights the sensor recorded (issue #1632). **Camera curve** (the look fitted to the embedded JPEG, or a DNG's `ProfileToneCurve`; `CameraTone`): past its last knot `CameraTone::apply_rolloff` closes the gap to white by `gap / (1 + c·(2^t − 1))` at `t` stops past the knot, with `c` matching the curve's slope there and the gap halving every stop in the end (`tone::ROLLOFF_STOPS`); `ToneMap::camera_rolloff_hdr` builds the table from it. Under V1 to V4 the curve past its last knot (fitted only to camera JPEG tones below 0.85, so 1 to 3 stops below the sensor's white on most photos) closes on white exponentially in linear light: the sensor's white renders at 8-bit 246 to 254 at Exposure 0 and 254 to 255 from Exposure +1. On the 11 CC0 corpus files with a fitted look (8 Sony, 2 Nikon, 1 Fujifilm) it now renders at 239 to 250 at Exposure 0 and 247 to 253 at +1. A DNG curve that reaches white at the sensor's white renders as before. **Generic curve** (raws without a camera curve, `ToneMap::rolloff_hdr`): from half a stop below its white point (`tone::GENERIC_KNEE_STOPS`) the same shoulder takes over, with the extended Reinhard curve's value and slope at the join, where V1 to V4 clip at the white point (scene 1.18 at default settings, ¼ stop above the sensor's white). The sensor's white renders at about 235, 248 and 252 at Exposure 0, +1 and +2 (V1 to V4: 239, 255, 255; the CC0 Canon R8 file and 6 CC0 DNGs without a camera curve). Content past the old clip point, such as a clipped sky, now renders up to 15 codes below white at Exposure 0 and reaches 255 about 5 stops past the sensor's white. Below the last knot or the join, JPEGs and other display-referred sources, and the camera fit itself are unchanged; CPU and GPU share the tone LUT. |
 | **V6** | V5 plus: colour noise reduction filters the linear colour differences R−Y and B−Y with the joint method (issue #815, `docs/nr-color-joint.md`): edge-aware weights from a denoised guide shared by both differences, anisotropic diffusion over scales, a brake for isolated colour specks; Y is kept exactly. V1 to V5 keep the blurred chromaticity (`local::denoise`). CPU (`local::denoise`) and GPU (`render::denoise`) branch on `local::joint_colour_nr`. Renders with Color 0 are the same as V2's. |
-| **V7** (the latest) | V6 plus: film grain from crystal layers ([grain.md](grain.md), `crates/pipeline/src/crystal.rs`), after Aurélien Pierre's model: resolution independent (a preview is the export's grain box-downscaled), fading out at black and white, calibrated to Lightroom Classic's strength and width at mid grey. V1 to V6 keep their two-octave value noise exactly (`finish::ValueGrain`; on the GPU `F_GRAIN_MODEL` 0); `finish::GrainModel::new` picks the model per process. Renders without grain don't depend on this. |
+| **V7** | V6 plus: film grain from crystal layers ([grain.md](grain.md), `crates/pipeline/src/crystal.rs`), after Aurélien Pierre's model: resolution independent (a preview is the export's grain box-downscaled), fading out at black and white, calibrated to Lightroom Classic's strength and width at mid grey. V1 to V6 keep their two-octave value noise exactly (`finish::ValueGrain`; on the GPU `F_GRAIN_MODEL` 0); `finish::GrainModel::new` picks the model per process. Renders without grain don't depend on this. |
+| **V8** (the latest) | V7 plus: Highlights and Shadows take their edge-aware filter of log luminance without its fine detail (`local::detail_free`: each value clamped between its separable median at the V2 radius and the median of a 3× wider neighbourhood) instead of V2's plain median (`local::base_keeps_gaps`), so the gaps in dark lettering on a bright panel are not lifted into bright blocks (issue #3460). CPU (`local::tone_base`) and GPU (`render::tone_base`) branch on it; the base plane is keyed by process. Renders without Highlights or Shadows (global or local) are the same as V7's. |
 
 ## The rule
 
@@ -46,6 +47,20 @@ a bug fix: the outline is output that isn't in the photo nor in the edit, not a 
 only what was added, and with the mask's Invert it gave the whole photo. Such masks now include the
 first component, on every process. It landed in place as a bug fix: intersecting with nothing is not
 a look anyone chose.
+
+**Lettering under Highlights and Shadows** (V8) no longer grows blocks of the wrong tone. V2's base
+is the edge-aware filter of a separable median alone. Dark lettering on a bright panel (a bus
+number, a sign) has strokes and gaps about as wide as the median's radius, so each row and column
+window was close to half letter and half panel, and the median picked one tone or the other in
+rectangles: it filled the gaps between the letters and their counters with the letters' tone.
+Shadows then lifted those patches of panel by over 1 EV, into bright blocks beside the letters. From V8 each
+value moves toward that median only as far as the median of a 3× wider neighbourhood agrees
+(`local::detail_free`). A twig against a wall has both medians on the wall's side and takes its tone,
+as before (#632); the gap between two strokes sits in a wider neighbourhood that is mostly panel, the
+two medians disagree, and the gap keeps its own tone. The letters themselves count as fine dark detail
+on the panel and keep their contrast, as twigs do. V8 differs from V7 under Highlights or Shadows only in detail
+about as fine as the radius, mostly where it is packed closely (lettering, grilles). V2 to V7
+are released and keep the blocks (`tests_legacy` locks V1 and V2); Update to Current Process moves a photo past them.
 
 ## Adding a process
 
@@ -111,6 +126,7 @@ extra field and retain their existing cached renders. No cache-version bump is n
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | V8: the Highlights/Shadows base keeps the gaps in dark lettering (#3460) |
 | 2026-11-07 | minor | V7: film grain from crystal layers ([grain.md](grain.md)); V1 to V6 keep their value noise |
 | 2026-11-05 | minor | V5: a raw's tone curve rolls off into white in stops, so raising Exposure keeps recorded highlights (#1632) |
 | 2026-10-12 | minor | Calibrated Contrast and Blacks, V2 Whites, resolved-process cache keys and number coordination |
