@@ -8,11 +8,14 @@
 //! pixels already contain the edit.
 //!
 //! Writing `crs:` fields back updates an existing packet in place, adding only fields that
-//! differ from the previous settings (or from the defaults when there are none), so a foreign
-//! application's values are never overwritten or duplicated (issue #934).
+//! differ from the packet's previous settings, so a foreign application's values are never
+//! overwritten or duplicated (issue #934). A sidecar LightCraft creates is compared against the
+//! defaults; an existing packet without `lc:settings` writes nothing, because a default is not
+//! distinguished from a value the other application wrote.
 //!
-//! See `docs/xmp-interop.md` for the full interchange specification: the field mapping, spot
-//! removal, local corrections, preset files, and camera profiles.
+//! See `docs/xmp-interop.md` for the read side of the interchange: the field mapping, spot
+//! removal, local corrections, preset files, and camera profiles. [`crs_settings`] describes what
+//! is written back.
 
 use std::collections::BTreeMap;
 
@@ -538,13 +541,16 @@ pub fn has_saved_upright_transform(props: &Props) -> bool {
     })
 }
 
-/// The `crs:` develop fields LightCraft writes back into another application's sidecar, so an
-/// edit made here (`light.exposure` → `crs:Exposure2012`, and so on) reaches the other
+/// The global `crs:` develop fields LightCraft writes back into another application's sidecar,
+/// so an edit made here (`light.exposure` → `crs:Exposure2012`, and so on) reaches the other
 /// application instead of being shadowed by our `lc:settings`. Only fields that differ from
-/// `previous` are written: a field at its default is not distinguished from an untouched one,
-/// so writing it would overwrite a foreign value or insert a field the packet never had.
-/// Fields not in this list are kept byte for byte, and the existing block is updated in place
-/// rather than duplicated.
+/// `previous` are written: a field at its default is not distinguished from an untouched one, so
+/// writing it would overwrite a foreign value or insert a field the packet never had. A sidecar
+/// LightCraft creates is compared against the defaults; an existing packet without `lc:settings`
+/// has nothing to differ from and is left untouched. Fields not in this list are kept byte for
+/// byte, and the existing block is updated in place rather than duplicated. Local corrections are
+/// written to the `crs:` corrections instead (`crate::sidecar::write_corrections`), so this list
+/// holds global fields only.
 pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSettings>) -> Vec<(&'static str, String)> {
     let light = &settings.light;
     let effects = &settings.effects;
@@ -568,7 +574,7 @@ pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSetting
     let prev_grading = previous.map(|p| &p.grading);
     // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
     const EPS: f64 = 1e-6;
-    let mut all: Vec<(&'static str, f64, Option<f64>)> = vec![
+    let all: Vec<(&'static str, f64, Option<f64>)> = vec![
         // Light (process version 2012+)
         ("Exposure2012", light.exposure, prev_light.map(|l| l.exposure)),
         ("Contrast2012", light.contrast, prev_light.map(|l| l.contrast)),
@@ -646,36 +652,6 @@ pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSetting
         ("BlueHue", calibration.blue_hue, prev_calibration.map(|c| c.blue_hue)),
         ("BlueSaturation", calibration.blue_sat, prev_calibration.map(|c| c.blue_sat)),
     ];
-    // Mask / local-correction fields (first mask). write_corrections writes them to the
-    // existing crs: correction elements; crs_settings reports them so the changed-field
-    // comparison is centralised and callers can see which mask fields differ.
-    let prev_mask = previous.and_then(|p| p.masks.first());
-    if let Some(mask) = settings.masks.first() {
-        let a = &mask.adjust;
-        let b = prev_mask.as_ref().map(|m| &m.adjust);
-        all.extend([
-            ("CorrectionAmount", a.amount / 100.0, b.map(|adjust| adjust.amount / 100.0).or(Some(0.0))),
-            ("LocalExposure2012", a.exposure * 4.0, b.map(|adjust| adjust.exposure * 4.0).or(Some(0.0))),
-            ("LocalContrast2012", a.contrast * 100.0, b.map(|adjust| adjust.contrast * 100.0).or(Some(0.0))),
-            ("LocalHighlights2012", a.highlights * 100.0, b.map(|adjust| adjust.highlights * 100.0).or(Some(0.0))),
-            ("LocalShadows2012", a.shadows * 100.0, b.map(|adjust| adjust.shadows * 100.0).or(Some(0.0))),
-            ("LocalWhites2012", a.whites * 100.0, b.map(|adjust| adjust.whites * 100.0).or(Some(0.0))),
-            ("LocalBlacks2012", a.blacks * 100.0, b.map(|adjust| adjust.blacks * 100.0).or(Some(0.0))),
-            ("LocalTexture", a.texture * 100.0, b.map(|adjust| adjust.texture * 100.0).or(Some(0.0))),
-            ("LocalClarity2012", a.clarity * 100.0, b.map(|adjust| adjust.clarity * 100.0).or(Some(0.0))),
-            ("LocalDehaze", a.dehaze * 100.0, b.map(|adjust| adjust.dehaze * 100.0).or(Some(0.0))),
-            ("LocalTemperature", a.temp * 100.0, b.map(|adjust| adjust.temp * 100.0).or(Some(0.0))),
-            ("LocalTint", a.tint * 100.0, b.map(|adjust| adjust.tint * 100.0).or(Some(0.0))),
-            ("LocalSaturation", a.saturation * 100.0, b.map(|adjust| adjust.saturation * 100.0).or(Some(0.0))),
-            ("LocalHue", a.hue * 100.0, b.map(|adjust| adjust.hue * 100.0).or(Some(0.0))),
-            ("LocalSharpness", a.sharpness * 100.0, b.map(|adjust| adjust.sharpness * 100.0).or(Some(0.0))),
-            ("LocalLuminanceNoise", a.noise * 100.0, b.map(|adjust| adjust.noise * 100.0).or(Some(0.0))),
-            ("LocalMoire", a.moire * 100.0, b.map(|adjust| adjust.moire * 100.0).or(Some(0.0))),
-            ("LocalDefringe", a.defringe * 100.0, b.map(|adjust| adjust.defringe * 100.0).or(Some(0.0))),
-            ("LocalToningSaturation", a.color_sat * 100.0, b.map(|adjust| adjust.color_sat * 100.0).or(Some(0.0))),
-            ("LocalToningHue", a.color_hue, b.map(|adjust| adjust.color_hue).or(Some(0.0))),
-        ]);
-    }
     let result: Vec<(&'static str, String)> = all
         .into_iter()
         // Without a baseline, nothing distinguishes our edit from a foreign value: write nothing.

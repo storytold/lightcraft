@@ -1,8 +1,28 @@
 //! Sidecar handling: XMP packets embedded in files or written as sidecar files.
 //!
-//! This module deals with reading, writing and merging XMP metadata for photos.
-//! It handles both our own `lc:` namespace and the interoperable `crs:` namespace
-//! used by Adobe Camera Raw / Lightroom and other raw developers.
+//! This module deals with reading, writing and merging XMP metadata for photos. It handles both
+//! our own `lc:` namespace and the interoperable `crs:` namespace used by Adobe Camera Raw /
+//! Lightroom and other raw developers.
+//!
+//! A sidecar is named after its original ([`sidecar_path`], [`find_sidecar`]) under the library's
+//! naming. With stem naming `IMG_0001.CR3` and `IMG_0001.JPG` map to the same `IMG_0001.xmp`: it
+//! belongs to one of them (a raw first, else the first by file name, [`StemOwners`]) and the
+//! others read and write `<file>.xmp`; an import ranks the files it is adding the same way
+//! ([`ImportStems`], issue #1905). Reading prefers a sidecar over XMP embedded in the file
+//! ([`read_packet`]), and writing needs the original to be an existing file at an absolute path
+//! ([`Session::save_sidecar`]).
+//!
+//! Writing never replaces a sidecar wholesale: an existing packet is merged into, so every
+//! property LightCraft does not own is kept byte for byte (issue #92). A file that cannot be read
+//! as XMP is copied to `<name>.bak-<stamp>` before it is replaced; one that can be read but not
+//! merged fails the save and is left as it is. The result is written atomically (a temp file,
+//! synced, renamed over the sidecar).
+//!
+//! With [`XmpPrefs::write_crs`] on, a save also writes our edit into the packet's `crs:` fields
+//! (issue #934): global fields as attributes of the `rdf:Description` that declares the CRS
+//! namespace, local corrections as attributes of the matching `crs:` correction, each updated in
+//! place where it exists and only when it differs from the packet's previous `lc:settings`.
+//! Fields LightCraft does not state keep the other application's value.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
@@ -37,6 +57,7 @@ pub struct XmpPrefs {
     pub naming: SidecarNaming,
     /// Write `crs:` develop fields back into the sidecar so other applications see the edits.
     /// Off by default to avoid overwriting another application's values on unrelated saves.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub write_crs: bool,
 }
 
@@ -831,10 +852,38 @@ fn tag_attrs(data: &str, start: usize, end: usize) -> Vec<((usize, usize), Optio
     out
 }
 
-/// The `xmlns` bindings declared directly on the tag at `start..=end` (prefix → URI; the
-/// empty prefix is a default `xmlns="..."` declaration). Only this element's own
-/// declarations are consulted; sidecar writers bind the `crs:` namespace on the block itself.
+/// The `xmlns` bindings in scope at the tag at `start..=end` (prefix → URI; the empty prefix is
+/// a default `xmlns="..."` declaration): what the start tags opened before it declare, then its
+/// own. Sidecars often bind `crs:` once, on the global `rdf:Description`, and leave the nested
+/// descriptions (corrections, components) without a declaration of their own.
 fn ns_bindings(data: &str, start: usize, end: usize) -> Vec<(String, String)> {
+    let mut out = outer_bindings(data, start);
+    out.extend(own_bindings(data, start, end));
+    out
+}
+
+/// The `xmlns` declarations written on the start tags before `at`, in document order: end tags,
+/// comments, CDATA sections and processing instructions are passed over.
+fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < at {
+        let Some(rel) = data.get(i..at).and_then(|s| s.find('<')) else { break };
+        let s = i + rel;
+        let rest = data.get(s..).unwrap_or_default();
+        let Some(end) = tag_end(data, s).filter(|end| *end < at) else { break };
+        i = end + 1;
+        if rest.starts_with("</") || rest.starts_with("<?") || rest.starts_with("<!") {
+            continue;
+        }
+        out.extend(own_bindings(data, s, end));
+    }
+    out
+}
+
+/// The `xmlns` bindings the tag at `start..=end` declares itself (prefix → URI; the empty prefix
+/// is a default `xmlns="..."` declaration).
+fn own_bindings(data: &str, start: usize, end: usize) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for ((ns, ne), value) in tag_attrs(data, start, end) {
         let name = data.get(ns..ne).unwrap_or_default();
@@ -1294,8 +1343,10 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
         return;
     }
     let corrections = correction_descriptions(data);
-    for (i, &(tag_start, tag_end0)) in corrections.iter().enumerate().take(count) {
-        let mut corr_end = tag_end0;
+    // from the last correction back, so lengthening one never moves the offsets of the ones still
+    // to come (a correction is matched to its mask by order, not by position)
+    for i in (0..corrections.len().min(count)).rev() {
+        let (tag_start, mut corr_end) = corrections[i];
         let a = &masks[i].adjust;
         let b = &prev_masks[i].adjust;
         let fields = [
@@ -1400,7 +1451,6 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                     }
                     if cur_comp_invert != prev_comp_invert {
                         put_attr_on_tag(data, cstart, cend, prefix, "MaskInverted", if cur_comp_invert { "true" } else { "false" });
-                        cend = tag_end(data, cstart).unwrap_or(cend);
                     }
                 }
                 "linear" => {
@@ -1449,7 +1499,6 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                     if cur_vals.iter().zip(prev_vals.iter()).any(|(x, y)| (x - y).abs() >= EPS) {
                         let s = cur_vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
                         put_attr_on_tag(data, cstart, cend, prefix, "LumRange", &s);
-                        cend = tag_end(data, cstart).unwrap_or(cend);
                     }
                 }
                 _ => {}
@@ -1896,20 +1945,12 @@ impl Session {
             };
             let crs = crate::crs::crs_settings(&p.develop, baseline);
             if !crs.is_empty() {
-                // Mask / local-correction fields are written to the existing crs: correction
-                // elements by write_corrections below, not as attributes on the global
-                // description. Split them out so update_crs_attributes only writes global
-                // develop fields.
-                let (regular, _mask_fields): (Vec<_>, Vec<_>) =
-                    crs.into_iter().partition(|(name, _)| *name != "CorrectionAmount" && !name.starts_with("Local"));
-                if !regular.is_empty() {
-                    // Write the develop settings other applications understand as `crs:` attributes back
-                    // into the packet, updating them in place so the edit reaches the other application
-                    // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
-                    // each field to a single occurrence; element form would appear twice (opening and
-                    // closing tag). Fields we don't state are left as the other application wrote them.
-                    update_crs_attributes(&mut data, &regular);
-                }
+                // Write the develop settings other applications understand as `crs:` attributes back
+                // into the packet, updating them in place so the edit reaches the other application
+                // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
+                // each field to a single occurrence; element form would appear twice (opening and
+                // closing tag). Fields we don't state are left as the other application wrote them.
+                update_crs_attributes(&mut data, &crs);
             }
             // Write back local-correction (mask) changes to the existing `crs:` corrections in
             // the packet, matched to our masks by order and updated in place
@@ -2075,6 +2116,8 @@ mod tests {
                     w.push(0);
                 }
             }
+            let size = u32::try_from(w.len() - 8).unwrap();
+            w[4..8].copy_from_slice(&size.to_le_bytes());
             w
         };
         let image = |len: usize| (&b"VP8L"[..], vec![0; len]);
@@ -2247,8 +2290,14 @@ mod tests {
                     section.push(0);
                 }
             }
+            // the 26-byte header: one RGB, 8-bit pixel
             let mut p = b"8BPS\0\x01".to_vec();
-            p.resize(26, 0);
+            p.extend_from_slice(&[0; 6]);
+            p.extend_from_slice(&3u16.to_be_bytes());
+            p.extend_from_slice(&1u32.to_be_bytes());
+            p.extend_from_slice(&1u32.to_be_bytes());
+            p.extend_from_slice(&8u16.to_be_bytes());
+            p.extend_from_slice(&3u16.to_be_bytes());
             p.extend_from_slice(&(colour as u32).to_be_bytes());
             p.resize(p.len() + colour, 0);
             p.extend_from_slice(&(section.len() as u32).to_be_bytes());
@@ -2544,6 +2593,67 @@ mod tests {
         assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
     }
 
+    /// A packet that binds the CRS namespace once, on its global `rdf:Description`, leaves its
+    /// nested correction and its element-form field unbound. Both are found through the
+    /// description's binding, and the element is filled in rather than shadowed by a new
+    /// attribute of the same name.
+    #[test]
+    fn crs_write_finds_fields_the_global_description_binds() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+            <crs:MaskGroupBasedCorrections>
+              <rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1"/></rdf:li></rdf:Seq>
+            </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        assert_eq!(correction_descriptions(&data).len(), 1, "a correction is found through the description's binding:\n{data}");
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "the element is updated in place:\n{data}");
+        assert!(!data.contains("crs:Exposure2012=\""), "no second property is added:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// [`write_corrections`] updates each correction on its own tag, matched to its mask by
+    /// order: the corrections are visited from the last back, so the attributes added to the
+    /// first one do not move the second one's offsets.
+    #[test]
+    fn crs_write_updates_every_correction_on_its_own_tag() {
+        use lightcraft_develop::{DevelopSettings, Mask};
+
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:MaskGroupBasedCorrections>
+              <rdf:Seq>
+                <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="0"/></rdf:li>
+                <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="0" crs:LocalContrast2012="0"/></rdf:li>
+              </rdf:Seq>
+            </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        let previous = DevelopSettings { masks: vec![Mask::default(), Mask::default()], ..Default::default() };
+        let mut current = previous.clone();
+        current.masks[0].adjust.exposure = 0.5;
+        current.masks[0].adjust.contrast = 0.5;
+        current.masks[1].adjust.exposure = -0.25;
+
+        let prefix = crs_prefix(&data);
+        write_corrections(&mut data, &current, &previous, &prefix, 1.5);
+
+        let corrections = correction_descriptions(&data);
+        assert_eq!(corrections.len(), 2, "no correction is added or lost:\n{data}");
+        let (first, second) = (corrections[0], corrections[1]);
+        assert_eq!(attr_f64(&data, first.0, first.1, "LocalExposure2012"), Some(2.0), "{data}");
+        assert_eq!(attr_f64(&data, first.0, first.1, "LocalContrast2012"), Some(50.0), "{data}");
+        assert_eq!(attr_f64(&data, second.0, second.1, "LocalExposure2012"), Some(-1.0), "{data}");
+        assert_eq!(attr_f64(&data, second.0, second.1, "LocalContrast2012"), Some(0.0), "the field it did not change is left alone:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
     /// A self-closing `crs:` element that carries its own `xmlns:crs` binding keeps
     /// that attribute when the field is rewritten as a value element. Write-back
     /// reconstructs self-closing elements without their start-tag attributes, which
@@ -2809,20 +2919,24 @@ mod jpeg_header_tests {
         // A reader that returns short reads (one byte at a time) must still
         // respect the span: read_jpeg_xmp reads at most header_span bytes in
         // total and never reads past it, no matter how many read calls it takes.
-        let expected = packet(1);
+        let expected = packet(2);
         let mut bytes = vec![0xff, 0xd8];
         bytes.extend(xmp_segment(&expected));
-        let end = bytes.len();
+        let end = bytes.len() as u64;
 
         let mut reader = CountedReader::new(bytes.clone());
         reader.chunk = 1;
         assert_eq!(read_jpeg_xmp(&mut reader, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS), Some(expected));
-        assert_eq!(reader.cursor.position(), end as u64);
+        assert_eq!(reader.cursor.position(), end);
+        assert_eq!(reader.bytes_read as u64, end, "every byte of the packet is read, one at a time");
 
-        // A span smaller than the data is rejected without reading past it.
-        let mut reader = CountedReader::new(bytes);
-        reader.chunk = 1;
-        assert_eq!(read_jpeg_xmp(&mut reader, 6, JPEG_XMP_HEADER_STEPS), None);
-        assert_eq!((reader.bytes_read, reader.cursor.position()), (6, 6));
+        // A span too small for the packet is rejected without reading past it.
+        for span in [0, 1, 2, end - 1] {
+            let mut reader = CountedReader::new(bytes.clone());
+            reader.chunk = 1;
+            assert_eq!(read_jpeg_xmp(&mut reader, span, JPEG_XMP_HEADER_STEPS), None, "span {span}");
+            assert!(reader.bytes_read as u64 <= span, "span {span}: read {} bytes", reader.bytes_read);
+            assert!(reader.cursor.position() <= span, "span {span}: at {}", reader.cursor.position());
+        }
     }
 }
