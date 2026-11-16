@@ -110,12 +110,17 @@ impl Pace {
     }
 }
 
+/// Semantic search and its background indexing when the user has not chosen: on, except on Android, where no AI
+/// feature runs until the user switches it on (a phone has neither the memory nor the battery for a library-wide
+/// background scan it did not ask for).
+pub(crate) const DEFAULT_ENABLED: bool = !cfg!(target_os = "android");
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct MlSettings {
     embedder: Option<String>,
     device: Option<String>,
-    /// Semantic search (and its background indexing) on or off (`ml.enable`); unset means on.
+    /// Semantic search (and its background indexing) on or off (`ml.enable`); unset means [`DEFAULT_ENABLED`].
     #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
     /// Background indexing paused by the user (`ml.pause`); unset means not paused.
@@ -278,7 +283,7 @@ impl Default for State {
             device_adopted_dir: None,
             settings_cache: None,
             models_cache: None,
-            enabled: true,
+            enabled: DEFAULT_ENABLED,
             enabled_adopted_dir: None,
             paused_by_user: false,
             paused: false,
@@ -890,7 +895,8 @@ impl Session {
         };
         let model_id = self.ml_models_dir.clone().and_then(|d| self.ml.cached_models(&d).1);
         #[cfg(not(target_arch = "wasm32"))]
-        if model_id.is_some() && self.ml.store.is_none() {
+        // (the model is loaded only for semantic search that is on: switched off, an installed model stays on disk)
+        if model_id.is_some() && self.ml.store.is_none() && self.ml_enabled() {
             let _ = self.ensure_ml_encoder(false);
         }
         let indexed = self.ml.store.as_ref().map_or(0, Store::len);

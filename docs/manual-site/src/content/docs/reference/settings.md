@@ -193,7 +193,7 @@ sidebar:
   ([Installing SAM 3](../../ai/models/#installing-sam-3)).
 
 ### Semantic search
-- **Semantic search: search photos by description**. Off: nothing is indexed and the AI search button leaves the
+- **Semantic search: search photos by description** (on by default; off by default on Android). Off: nothing is indexed and the AI search button leaves the
   search box.
 - Indexing status with **Pause** / **Resume**, **Clear…** (deletes the index and leaves indexing paused) and
   **Restart…** (deletes it and indexes every photo again). Both ask first. The activity stack's "Indexing photos" row

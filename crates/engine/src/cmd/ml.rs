@@ -19,7 +19,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Enable Background AI Indexing",
             [],
             None,
-            "{enabled: bool} → {enabled}: turn semantic search and its background photo indexing on or off (saved in the models folder; on unless switched off). Off: nothing is indexed, `search.semantic` and `library.filter {semantic}` are refused, and a description filter on the grid is cleared; the index already made is kept",
+            "{enabled: bool} → {enabled}: turn semantic search and its background photo indexing on or off (saved in the models folder; on unless switched off, except on Android, where it is off until switched on). Off: nothing is indexed, `search.semantic` and `library.filter {semantic}` are refused, and a description filter on the grid is cleared; the index already made is kept",
             super::always,
             |s, p| s.ml_enable(p)
         ),
