@@ -876,7 +876,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     })
                     .collect();
                 let max_per_face = (f64_or(p, "maxPerFace", 6.0) as usize).clamp(1, 20);
-                let mut found = lightcraft_pipeline::blemish::detect(&img, &boxes, f64_or(p, "sensitivity", 50.0) as f32);
+                // the photo's own skin and glasses mattes (iPhone Portrait HEIC, ProRAW DNG), sampled like the render
+                let mattes = blemish_mattes(s, id, img.width, img.height);
+                let mut found = lightcraft_pipeline::blemish::detect_with(&img, &boxes, f64_or(p, "sensitivity", 50.0) as f32, &mattes);
                 let mut per_face = std::collections::BTreeMap::new();
                 found.retain(|b| {
                     let n = per_face.entry(b.face).or_insert(0usize);
@@ -1176,6 +1178,25 @@ pub(super) fn pressure_list(v: Option<&Value>, points: usize) -> Result<Vec<f32>
         .map(|q| q.as_f64().filter(|f| f.is_finite()).map(|f| f.clamp(0.0, 1.0) as f32))
         .collect::<Option<Vec<f32>>>()
         .ok_or_else(|| bad("mask.brushStroke", "pressure must be a list of numbers 0..1"))
+}
+
+/// The active photo's skin and glasses mattes at the size of an uncropped `w × h` render of it, for Find Blemishes;
+/// empty when it carries none.
+fn blemish_mattes(s: &mut Session, id: lightcraft_catalog::PhotoId, w: usize, h: usize) -> lightcraft_pipeline::blemish::Mattes {
+    use lightcraft_pipeline::masks::MatteKind;
+    // the source's facts (its mattes among them) are learned when it is loaded into the session; a render job
+    // alone doesn't do that
+    if s.source_now(id, crate::media::SourceLevel::Thumb).is_err() {
+        return Default::default();
+    }
+    let info = s.source_info(id);
+    let (Some(m), Some(photo)) = (info.mattes.as_deref(), s.catalog.photo(id)) else { return Default::default() };
+    if !(m.has(MatteKind::Skin) || m.has(MatteKind::Glasses)) {
+        return Default::default();
+    }
+    let d = s.develop_of(id).unwrap_or_default();
+    let frame = lightcraft_pipeline::geometry::Frame::new(photo.width as usize, photo.height as usize, &d, false);
+    lightcraft_pipeline::blemish::Mattes { skin: m.plane(MatteKind::Skin, &frame, w, h), glasses: m.plane(MatteKind::Glasses, &frame, w, h) }
 }
 
 #[cfg(test)]
