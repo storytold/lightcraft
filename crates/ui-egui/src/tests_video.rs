@@ -391,3 +391,26 @@ fn a_portrait_poster_keeps_its_running_time_on_the_picture() {
     assert!(badge.right() <= cell.center().x + half + 0.5, "{badge:?} past the picture's right edge in {cell:?}");
     assert!(badge.left() >= cell.center().x - half - 0.5, "{badge:?} past the picture's left edge in {cell:?}");
 }
+
+/// The filmstrip puts a portrait clip's running time on its poster too, not beside it.
+#[test]
+fn a_portrait_poster_keeps_its_running_time_on_the_picture_in_the_filmstrip() {
+    let portrait: lightcraft_engine::media::FileLoader = std::sync::Arc::new(|_path: &str, max_edge: usize, _with| {
+        let (w, h) = (180.min(max_edge), 320.min(max_edge));
+        Ok((lightcraft_raster::Rgb32f { width: w, height: h, data: vec![[0.3, 0.3, 0.3]; w * h] }, Default::default()))
+    });
+    let mut h = video_app_with(ViewMode::Detail, Some(portrait));
+    select(&mut h, PhotoId(1));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "filmstrip": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let rect = |name: &str| h.app.widgets.iter().find(|(w, _)| w == name).map(|(_, r)| *r);
+    let cell = rect("film:1").expect("the filmstrip cell");
+    let badge = rect("badge:filmDuration:1").expect("the running time");
+    // the cell's image area is inset 10 at the sides, 22 at the top and 8 at the bottom; the
+    // 9:16 picture is centred in it, at most its height × 9/16 wide
+    let area_h = cell.height() - 30.0;
+    let centre = cell.center().x;
+    let half = area_h * 9.0 / 32.0;
+    assert!(badge.right() <= centre + half + 0.5 && badge.left() >= centre - half - 0.5, "{badge:?} beside the picture in {cell:?}");
+}

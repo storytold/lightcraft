@@ -129,10 +129,13 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 crate::panels::grid::selection_ring(p, &t, img_area, state);
             }
             let has_thumb = thumb.is_some();
+            // the drawn picture (the cell's image area until a thumbnail arrives)
+            let mut picture = img_area;
             if let Some(tex) = thumb {
                 let [tw, th] = tex.size;
                 let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
                 let fr = Rect::from_center_size(img_area.center(), vec2(tw as f32 * s, th as f32 * s));
+                picture = fr;
                 p.image(tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 crate::panels::grid::selection_ring(p, &t, fr, state);
                 if app.ui.settings.film_badges
@@ -164,8 +167,8 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     }
                 }
             }
-            // A catalogued video has no frame yet: its icon and running time read it at a glance
-            // in the strip too (the grid and the loupe show the same badges and card).
+            // A catalogued video reads as one at a glance in the strip too: its running time (and
+            // its icon while there is no poster frame), as the grid and the loupe show them.
             if let Some(ph) = app.session.catalog.photo(*id).filter(|p| p.is_video()) {
                 if !has_thumb {
                     crate::icons::paint(p, Rect::from_center_size(img_area.center(), vec2(24.0, 24.0)), crate::icons::Icon::Video, t.text_dim);
@@ -175,7 +178,11 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                     if !text.is_empty() {
                         let g = p.layout_no_wrap(text, t.semibold(9.0), Color32::WHITE);
                         let w = g.size().x + 20.0;
-                        let br = Rect::from_min_size(pos2(img_area.right() - w - 2.0, img_area.bottom() - 16.0), vec2(w, 14.0));
+                        // on the picture's corner (a portrait poster is narrower than the cell), or the
+                        // cell's when the picture is too narrow for it
+                        let across = if picture.width() >= w + 4.0 { picture } else { img_area };
+                        let br = Rect::from_min_size(pos2(across.right() - w - 2.0, across.bottom() - 16.0), vec2(w, 14.0));
+                        register(ui, format!("badge:filmDuration:{}", id.0), br);
                         p.rect_filled(br, 3.0, Color32::from_black_alpha(175));
                         crate::icons::paint(
                             p,
