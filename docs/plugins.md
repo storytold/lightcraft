@@ -905,6 +905,14 @@ inside the user's crop, say). The measurement still doesn't move with later crop
 picks up a new one. Hosts without the field measure the frame. `plugin.list` shows it as
 `analyzeArea`.
 
+**Tiles (ABI v1.1 proposal).** A filter with an `overlap` is run in bands, each read with that many
+pixels of margin on every side. By default a band is a strip as wide as the frame; a manifest may set
+`"bands": "tiles"` (default `"rows"`; other values mean rows) to be run on near-square tiles instead,
+which repeat less of the frame in their margins: with a 48 px margin, strips of a 2624 px-wide frame
+read about four times what they keep, tiles under one and a half times. Every pixel still sees the
+same neighbourhood, so the result is the same; only the work changes. A filter without an `overlap`
+runs in strips whatever it asks (there is no margin to save). Hosts without the field cut strips.
+
 **Menu groups (ABI v1.1 proposal).** A choice parameter may carry `"groups"`, one name per option
 (`""` = not in a group): `{"type": "choice", "options": ["Generic", "Portra 400", "Superia 400"],
 "groups": ["", "Kodak", "Fujifilm"]}`. Develop ▸ Plug-in Filters shows each group as a collapsible
