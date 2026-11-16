@@ -772,126 +772,234 @@ fn is_self_closing(data: &str, end: usize) -> bool {
     data.get(..end).is_some_and(|s| s.trim_end().ends_with('/'))
 }
 
-/// Whether `data.get(range)` contains a standalone `token` (not part of a
-/// longer attribute name or value word).
-fn tag_contains(data: &str, start: usize, end: usize, token: &str) -> bool {
-    let Some(tag) = data.get(start..=end) else { return false };
-    let is_word = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b':');
-    let bytes = token.as_bytes();
-    let mut from = 0;
-    while let Some(rel) = tag[from..].find(token) {
-        let at = from + rel;
-        let before_ok = at == 0 || !is_word(tag.as_bytes()[at - 1]);
-        let after = at + token.len();
-        let after_ok = after >= tag.len() || !is_word(tag.as_bytes()[after]);
-        if before_ok && after_ok {
-            return true;
-        }
-        from = after.max(at + bytes.len());
-    }
-    false
-}
+/// The `crs:` namespace URI (Adobe Camera Raw Settings). Fields are matched by this URI,
+/// never by the literal `crs:` prefix: a packet may bind it under any prefix (`acr:` …).
+const CRS_NS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
 
-/// Whether the `rdf:Description` tag at `start..end` declares the `crs`
-/// namespace or already carries a `crs:` attribute.
-fn crs_block(data: &str, start: usize, end: usize) -> bool {
-    // Cheap substring check first; the token check rejects accidents.
-    tag_contains(data, start, end, "xmlns:crs=") || tag_contains(data, start, end, "crs:")
-}
-
-/// Value range of attribute `crs:name` in the `rdf:Description` tag at
-/// `start..end`, handling single or double quotes and whitespace around `=`.
-/// Outer `None`: attribute absent. `Some(None)`: present but malformed, so no
-/// duplicate is inserted alongside it.
-fn attr_value_range(data: &str, start: usize, end: usize, name: &str) -> Option<Option<(usize, usize)>> {
-    let wanted = format!("crs:{name}");
+/// The attributes of the tag starting at `start` (the `<`) and ending at `end` (the `>`):
+/// each entry is the attribute name span and the value span (quotes excluded) when present.
+fn tag_attrs(data: &str, start: usize, end: usize) -> Vec<((usize, usize), Option<(usize, usize)>)> {
+    let mut out = Vec::new();
     let bytes = data.as_bytes();
-    let at = |i: usize| bytes.get(i).copied();
-    let mut i = start + "<rdf:Description".len();
+    let mut i = start + 1; // skip `<`
+    // skip the tag name
+    while i < end && matches!(bytes.get(i), Some(b) if !b.is_ascii_whitespace() && *b != b'=' && *b != b'/') {
+        i += 1;
+    }
     while i < end {
-        // Skip whitespace and the `/` of a self-closing tag.
-        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace() || b == b'/') {
+        while i < end && matches!(bytes.get(i), Some(b) if b.is_ascii_whitespace() || *b == b'/') {
             i += 1;
         }
         if i >= end {
             break;
         }
         let name_start = i;
-        while i < end && matches!(at(i), Some(b) if !b.is_ascii_whitespace() && b != b'=' && b != b'/') {
+        while i < end && matches!(bytes.get(i), Some(b) if !b.is_ascii_whitespace() && *b != b'=' && *b != b'/') {
             i += 1;
         }
-        let is_wanted = data.get(name_start..i).is_some_and(|s| s == wanted);
-        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace()) {
+        let name = (name_start, i);
+        let value = if i < end && bytes.get(i) == Some(&b'=') {
             i += 1;
+            while i < end && matches!(bytes.get(i), Some(b) if b.is_ascii_whitespace()) {
+                i += 1;
+            }
+            let quote = bytes.get(i).copied();
+            match quote {
+                Some(b'"') | Some(b'\'') => {
+                    i += 1; // skip opening quote
+                    let vstart = i;
+                    while i < end && bytes.get(i).copied() != quote {
+                        i += 1;
+                    }
+                    let ve = i; // index of the closing quote (or `end`)
+                    if i < end {
+                        i += 1; // skip closing quote
+                    }
+                    Some((vstart, ve))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        out.push((name, value));
+    }
+    out
+}
+
+/// The `xmlns` bindings declared directly on the tag at `start..=end` (prefix → URI; the
+/// empty prefix is a default `xmlns="..."` declaration). Only this element's own
+/// declarations are consulted; sidecar writers bind the `crs:` namespace on the block itself.
+fn ns_bindings(data: &str, start: usize, end: usize) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for ((ns, ne), value) in tag_attrs(data, start, end) {
+        let name = data.get(ns..ne).unwrap_or_default();
+        let (is_decl, prefix) = if let Some(p) = name.strip_prefix("xmlns:") {
+            (true, p.to_string())
+        } else if name == "xmlns" {
+            (true, String::new())
+        } else {
+            (false, String::new())
+        };
+        if is_decl {
+            if let Some((vs, ve)) = value {
+                out.push((prefix, data.get(vs..ve).unwrap_or_default().to_string()));
+            }
         }
-        if i >= end || at(i) != Some(b'=') {
-            continue;
+    }
+    out
+}
+
+/// Value range of attribute `prefix:name` (any `prefix` bound to the CRS namespace) on the
+/// `rdf:Description` tag at `start..end`, handling single or double quotes and whitespace
+/// around `=`. Outer `None`: attribute absent. `Some(None)`: present but malformed, so no
+/// duplicate is inserted alongside it. The update keeps whatever prefix the packet uses.
+fn attr_value_range(data: &str, start: usize, end: usize, name: &str) -> Option<Option<(usize, usize)>> {
+    let bindings = ns_bindings(data, start, end);
+    let is_crs = |prefix: &str| bindings.iter().any(|(p, uri)| p == prefix && uri == CRS_NS);
+    for ((ns, ne), value) in tag_attrs(data, start, end) {
+        let attr_name = data.get(ns..ne).unwrap_or_default();
+        let (prefix, local) = attr_name.split_once(':').unwrap_or(("", attr_name));
+        if is_crs(prefix) && local == name {
+            return Some(value);
         }
-        i += 1;
-        while i < end && matches!(at(i), Some(b) if b.is_ascii_whitespace()) {
-            i += 1;
-        }
-        if i >= end || !matches!(at(i), Some(b'"') | Some(b'\'')) {
-            return if is_wanted { Some(None) } else { None };
-        }
-        let quote = at(i)?;
-        let value_start = i + 1;
-        let mut j = value_start;
-        while j < end && at(j) != Some(quote) {
-            j += 1;
-        }
-        if j >= end {
-            return if is_wanted { Some(None) } else { None };
-        }
-        if is_wanted {
-            return Some(Some((value_start, j)));
-        }
-        i = j + 1;
     }
     None
 }
 
-/// Update an existing `crs:name` field in place and report whether one was
-/// found: as an attribute of a `rdf:Description` tag, or as an element
-/// `<crs:name>value</crs:name>`. Returns `true` for a malformed occurrence
-/// too, so a duplicate is not inserted alongside it.
-fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
-    let mut from = 0;
-    while let Some(rel) = data[from..].find("<rdf:Description") {
-        let start = from + rel;
-        let Some(end) = tag_end(data, start) else { return true };
-        if let Some(found) = attr_value_range(data, start, end, name) {
-            if let Some((vs, ve)) = found {
-                data.replace_range(vs..ve, &escape_attr(value));
-            }
-            return true;
+/// The start-tag range of the active global `rdf:Description`: the first `rdf:Description`
+/// that is a direct child of `rdf:RDF`, before any other element opens inside it. Nested
+/// structured-property descriptions are skipped, so global-field write-back never touches
+/// them. Falls back to the first `rdf:Description` in the document when there is no
+/// `rdf:RDF`. Returns `(tag_start, tag_end)` where `end` is the index of `>`.
+fn global_description(data: &str) -> Option<(usize, usize)> {
+    let first_desc = || data.find("<rdf:Description").and_then(|s| tag_end(data, s).map(|e| (s, e)));
+    let Some(rdf) = data.find("<rdf:RDF") else { return first_desc() };
+    let Some(rdf_end) = tag_end(data, rdf) else { return first_desc() };
+    let bytes = data.as_bytes();
+    let mut i = rdf_end;
+    while i < data.len() {
+        while i < data.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
         }
-        from = end + 1;
-        if from >= data.len() {
+        if i >= data.len() {
             break;
         }
-    }
-    let open = format!("<crs:{name}");
-    let mut search = 0;
-    let start = loop {
-        let Some(rel) = data.get(search..).and_then(|s| s.find(&open)) else { return false };
-        let s = search + rel;
-        let next = data.get(s + open.len()..).and_then(|t| t.chars().next());
-        if matches!(next, Some(c) if c.is_whitespace() || c == '>' || c == '/') {
-            break s;
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
         }
-        search = s + open.len();
-    };
-    let Some(end) = tag_end(data, start) else { return true };
-    let escaped = escape_attr(value);
-    if is_self_closing(data, end) {
-        data.replace_range(start..end + 1, &format!("<crs:{name}>{escaped}</crs:{name}>"));
+        let rest = data.get(i..).unwrap_or_default();
+        if rest.starts_with("</rdf:RDF>") {
+            break;
+        }
+        if rest.starts_with("<?") || rest.starts_with("<!") {
+            if let Some(rel) = rest[2..].find('>') {
+                i += 2 + rel + 1;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<rdf:Description") {
+            return tag_end(data, i).map(|e| (i, e));
+        }
+        // Any other element opens first: descriptions after it are nested inside it.
+        break;
+    }
+    first_desc()
+}
+
+/// Update an existing `crs:name` field in place and report whether one was found: as an
+/// attribute of the active global `rdf:Description`, or as an element
+/// `<prefix:name>value</prefix:name>` inside it where `prefix` is bound to the CRS
+/// namespace. Returns `true` for a malformed occurrence too, so a duplicate is not inserted
+/// alongside it. Only the active global description is written: a matching attribute or
+/// element on a nested structured-property description is left alone, and a match under a
+/// non-`crs:` prefix is updated in place under that prefix rather than duplicated.
+fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
+    let Some((gstart, gend)) = global_description(data) else { return false };
+    // Attribute form on the active global description.
+    if let Some(found) = attr_value_range(data, gstart, gend, name) {
+        if let Some((vs, ve)) = found {
+            data.replace_range(vs..ve, &escape_attr(value));
+        }
         return true;
     }
-    let close = format!("</crs:{name}>");
-    let Some(rel) = data[end + 1..].find(&close) else { return true };
-    data.replace_range(end + 1..end + 1 + rel, &escaped);
-    true
+    // Element form inside the active global description.
+    let content_start = gend + 1;
+    let search_to = data[content_start..]
+        .find("</rdf:Description>")
+        .map(|rel| content_start + rel)
+        .unwrap_or(data.len());
+    let mut from = content_start;
+    while let Some(rel) = data[from..search_to].find('<') {
+        let s = from + rel;
+        let rest = data.get(s..search_to).unwrap_or_default();
+        if rest.starts_with("</") {
+            from = s + 2;
+            continue;
+        }
+        let Some(b) = rest.as_bytes().get(1) else {
+            from = s + 1;
+            continue;
+        };
+        if !b.is_ascii_alphabetic() {
+            // `<?` or `<!`: not an element.
+            from = s + 1;
+            continue;
+        }
+        let mut k = s + 1;
+        while k < search_to {
+            let b = data.as_bytes()[k];
+            if b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=' {
+                break;
+            }
+            k += 1;
+        }
+        let tag_name = data.get(s + 1..k).unwrap_or_default();
+        let (prefix, local) = tag_name.split_once(':').unwrap_or(("", tag_name));
+        if local == name {
+            let Some(end) = tag_end(data, s) else { return true };
+            let bindings = ns_bindings(data, s, end);
+            if bindings.iter().any(|(p, uri)| p == prefix && uri == CRS_NS) {
+                let escaped = escape_attr(value);
+                if is_self_closing(data, end) {
+                    // Rebuild the empty element as a value element while keeping every
+                    // attribute on the start tag (e.g. a `xmlns:crs` declaration that is
+                    // the only binding of the `crs:` prefix). The self-closing `/` is the
+                    // last non-whitespace byte before `>`, so scanning back from `>` over
+                    // whitespace finds it; a `/` inside a quoted attribute value (such as
+                    // the CRS namespace URI ending in `1.0/`) is not the last byte and is kept.
+                    let mut slash = end;
+                    while slash > s + 1 && data.as_bytes()[slash - 1].is_ascii_whitespace() {
+                        slash -= 1;
+                    }
+                    // The self-closing `/` is not an attribute: step past it so the
+                    // attributes between the tag name and the slash are kept, but the
+                    // slash itself is not copied into the rebuilt start tag.
+                    if slash > s + 1 && data.as_bytes()[slash - 1] == b'/' {
+                        slash -= 1;
+                    }
+                    let attrs = data
+                        .get(s + 1 + tag_name.len()..slash)
+                        .unwrap_or_default()
+                        .trim_end();
+                    data.replace_range(
+                        s..end + 1,
+                        &format!("<{tag_name}{attrs}>{escaped}</{tag_name}>"),
+                    );
+                    return true;
+                }
+                let close = format!("</{tag_name}>");
+                let Some(rel) = data[end + 1..].find(&close) else { return true };
+                data.replace_range(end + 1..end + 1 + rel, &escaped);
+                return true;
+            }
+        }
+        from = s + 1;
+    }
+    false
 }
 
 /// Update the `crs:` attributes carried by the packet's descriptions in place, adding any
@@ -914,43 +1022,211 @@ fn update_crs_attributes(data: &mut String, crs: &[(&'static str, String)]) {
 /// none exists. It never inserts into an unrelated first block, where the
 /// `crs:` prefix may be unbound.
 fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
-    let attr = format!(" crs:{name}=\"{}\"", escape_attr(value));
-    let mut from = 0;
-    while let Some(rel) = data[from..].find("<rdf:Description") {
-        let pos = from + rel;
-        let Some(end) = tag_end(data, pos) else { return };
-        if crs_block(data, pos, end) {
-            // For a self-closing tag the `/` must immediately precede `>`, so the new
-            // attribute goes before the `/`, not before the `>`. Scan back from `>` over
-            // whitespace to find the `/`; a slash inside a quoted attribute value (such as
-            // the `xmlns:crs` URL ending in `1.0/`) must not be mistaken for it.
-            let insert_at = if is_self_closing(data, end) {
-                let mut i = end;
-                while i > pos && data.as_bytes()[i - 1].is_ascii_whitespace() {
-                    i -= 1;
-                }
-                i - 1
-            } else {
-                end
-            };
-            data.insert_str(insert_at, &attr);
-            return;
+    let prefix = crs_prefix(data);
+    let attr = format!(" {prefix}:{name}=\"{}\"", escape_attr(value));
+    let Some((pos, end)) = global_description(data) else { return };
+    // For a self-closing tag the `/` must immediately precede `>`, so the new
+    // attribute goes before the `/`, not before the `>`. Scan back from `>` over
+    // whitespace to find the `/`; a slash inside a quoted attribute value (such as
+    // the `xmlns:crs` URL ending in `1.0/`) must not be mistaken for it.
+    let insert_at = if is_self_closing(data, end) {
+        let mut i = end;
+        while i > pos && data.as_bytes()[i - 1].is_ascii_whitespace() {
+            i -= 1;
         }
-        from = end + 1;
-        if from >= data.len() {
-            break;
+        i - 1
+    } else {
+        end
+    };
+    // Bind the `crs:` prefix on the block when it doesn't already bind it, so the
+    // inserted `crs:` attribute stays valid. The CRS namespace may be bound under
+    // another prefix (e.g. `acr:`); declaring `crs:` as well keeps the attribute valid.
+    if prefix == "crs"
+        && !ns_bindings(data, pos, end).iter().any(|(p, uri)| p == "crs" && uri == CRS_NS)
+    {
+        data.insert_str(insert_at, " xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"");
+    }
+    data.insert_str(insert_at, &attr);
+}
+
+/// The prefix under which the CRS namespace is bound in `data` (the first `xmlns`
+/// declaration binding it), or `crs` when none is declared. Corrections inherit the packet's
+/// binding, so this is the prefix to write mask fields under.
+fn crs_prefix(data: &str) -> String {
+    if let Some(s) = data.find("<rdf:Description") {
+        if let Some(end) = tag_end(data, s) {
+            for (p, uri) in ns_bindings(data, s, end) {
+                if uri == CRS_NS {
+                    return p;
+                }
+            }
         }
     }
-    let block = format!("<rdf:Description rdf:about=\"\" xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"{attr}/>");
-    if let Some(pos) = data.find("<rdf:RDF") {
-        let Some(end) = tag_end(data, pos) else { return };
-        if is_self_closing(data, end) {
-            return;
+    "crs".to_string()
+}
+
+/// Whether the tag at `start..end` is a `crs:` correction: it carries `What="Correction"`
+/// (or, as a fallback, a `CorrectionAmount` attribute) under the CRS namespace prefix. The
+/// prefix is resolved from the tag's `xmlns:` declarations, so corrections bound under another
+/// prefix are recognised too.
+fn is_correction(data: &str, start: usize, end: usize) -> bool {
+    let bindings = ns_bindings(data, start, end);
+    let is_crs = |attr_prefix: &str| bindings.iter().any(|(p, uri)| p == attr_prefix && uri == CRS_NS);
+    for ((ns, ne), value) in tag_attrs(data, start, end) {
+        let attr_name = data.get(ns..ne).unwrap_or_default();
+        let (attr_prefix, local) = attr_name.split_once(':').unwrap_or(("", attr_name));
+        if !is_crs(attr_prefix) || (local != "What" && local != "CorrectionAmount") {
+            continue;
         }
-        data.insert_str(end + 1, &block);
-    } else if let Some(pos) = data.find("<x:xmpmeta") {
-        let Some(end) = tag_end(data, pos) else { return };
-        data.insert_str(end + 1, &block);
+        let Some((vs, ve)) = value else { continue };
+        let val = data.get(vs..ve).unwrap_or_default();
+        if (local == "What" && val == "Correction") || (local == "CorrectionAmount" && !val.is_empty()) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The start-tag ranges of the `crs:` corrections in `data`, in document order. Only
+/// corrections that are direct children of `rdf:RDF` are returned, so nested structured
+/// property descriptions are never mistaken for corrections. Corrections are matched to the
+/// photo's masks by order, so their identity, count and order are preserved.
+fn correction_descriptions(data: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let Some(rdf) = data.find("<rdf:RDF") else { return out };
+    let Some(rdf_end) = tag_end(data, rdf) else { return out };
+    let bytes = data.as_bytes();
+    let mut i = rdf_end;
+    let mut depth: usize = 0;
+    while i < data.len() {
+        while i < data.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= data.len() {
+            break;
+        }
+        if data.get(i..).is_some_and(|r| r.starts_with("</rdf:RDF>")) {
+            break;
+        }
+        if data.get(i..).is_some_and(|r| r.starts_with("<?") || r.starts_with("<!")) {
+            if let Some(rel) = data[i + 2..].find('>') {
+                i += 2 + rel + 1;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = data.get(i..).unwrap_or_default();
+        if rest.starts_with("</") {
+            if depth > 0 {
+                depth -= 1;
+            }
+            if let Some(rel) = rest[2..].find('>') {
+                i += 2 + rel + 1;
+            } else {
+                break;
+            }
+            continue;
+        }
+        let Some(b) = rest.as_bytes().get(1) else {
+            i += 1;
+            continue;
+        };
+        if !b.is_ascii_alphabetic() {
+            i += 1;
+            continue;
+        }
+        let Some(end) = tag_end(data, i) else { break };
+        if depth == 0 && rest.starts_with("<rdf:Description") && is_correction(data, i, end) {
+            out.push((i, end));
+        }
+        if !is_self_closing(data, end) {
+            depth += 1;
+        }
+        i = end + 1;
+    }
+    out
+}
+
+/// Update `prefix:name` on the tag at `start..end`, inserting it when absent. The packet's
+/// own prefix is kept; nothing is inserted when the attribute is already malformed. Existing
+/// fields are matched by namespace URI, so a `crs:` field bound under another prefix (such as
+/// `acr:`) is updated in place under that prefix rather than duplicated.
+fn put_attr_on_tag(data: &mut String, start: usize, end: usize, prefix: &str, name: &str, value: &str) -> bool {
+    let bindings = ns_bindings(data, start, end);
+    let is_crs = |attr_prefix: &str| bindings.iter().any(|(p, uri)| p == attr_prefix && uri == CRS_NS);
+    for ((ns, ne), value_range) in tag_attrs(data, start, end) {
+        let attr_name = data.get(ns..ne).unwrap_or_default();
+        let (attr_prefix, local) = attr_name.split_once(':').unwrap_or(("", attr_name));
+        if is_crs(attr_prefix) && local == name {
+            if let Some((vs, ve)) = value_range {
+                data.replace_range(vs..ve, &escape_attr(value));
+            }
+            return true;
+        }
+    }
+    let insert_at = if is_self_closing(data, end) {
+        let mut i = end;
+        while i > start && data.as_bytes()[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        i - 1
+    } else {
+        end
+    };
+    data.insert_str(insert_at, &format!(" {prefix}:{name}=\"{}\"", escape_attr(value)));
+    true
+}
+
+/// Write back local-correction changes to the existing `crs:` corrections in `data`.
+/// Corrections are matched to the photo's masks by order and updated in place
+/// (`CorrectionAmount` and the `crs:Local*` sliders); their identity, count and order are
+/// preserved: no correction is added, removed or reordered. Only fields that differ from
+/// `previous` are written, so a foreign correction we did not edit is left alone.
+fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &DevelopSettings, prefix: &str) {
+    // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
+    const EPS: f64 = 1e-6;
+    let masks = &settings.masks;
+    let prev_masks = &previous.masks;
+    let count = masks.len().min(prev_masks.len());
+    if count == 0 {
+        return;
+    }
+    let corrections = correction_descriptions(data);
+    for (i, &(tag_start, tag_end)) in corrections.iter().enumerate().take(count) {
+        let a = &masks[i].adjust;
+        let b = &prev_masks[i].adjust;
+        let fields = [
+            ("CorrectionAmount", a.amount / 100.0, b.amount / 100.0),
+            ("LocalExposure2012", a.exposure * 4.0, b.exposure * 4.0),
+            ("LocalContrast2012", a.contrast * 100.0, b.contrast * 100.0),
+            ("LocalHighlights2012", a.highlights * 100.0, b.highlights * 100.0),
+            ("LocalShadows2012", a.shadows * 100.0, b.shadows * 100.0),
+            ("LocalWhites2012", a.whites * 100.0, b.whites * 100.0),
+            ("LocalBlacks2012", a.blacks * 100.0, b.blacks * 100.0),
+            ("LocalTexture", a.texture * 100.0, b.texture * 100.0),
+            ("LocalClarity2012", a.clarity * 100.0, b.clarity * 100.0),
+            ("LocalDehaze", a.dehaze * 100.0, b.dehaze * 100.0),
+            ("LocalTemperature", a.temp * 100.0, b.temp * 100.0),
+            ("LocalTint", a.tint * 100.0, b.tint * 100.0),
+            ("LocalSaturation", a.saturation * 100.0, b.saturation * 100.0),
+            ("LocalHue", a.hue * 100.0, b.hue * 100.0),
+            ("LocalSharpness", a.sharpness * 100.0, b.sharpness * 100.0),
+            ("LocalLuminanceNoise", a.noise * 100.0, b.noise * 100.0),
+            ("LocalMoire", a.moire * 100.0, b.moire * 100.0),
+            ("LocalDefringe", a.defringe * 100.0, b.defringe * 100.0),
+            ("LocalToningSaturation", a.color_sat * 100.0, b.color_sat * 100.0),
+            ("LocalToningHue", a.color_hue, b.color_hue),
+        ];
+        for (name, current, previous_value) in fields {
+            if (current - previous_value).abs() >= EPS {
+                put_attr_on_tag(data, tag_start, tag_end, prefix, name, &current.to_string());
+            }
+        }
     }
 }
 
@@ -1392,13 +1668,30 @@ impl Session {
             };
             let crs = crate::crs::crs_settings(&*p.develop, baseline);
             if !crs.is_empty() {
-                // Write the develop settings other applications understand as `crs:` attributes back
-                // into the packet, updating them in place so the edit reaches the other application
-                // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
-                // each field to a single occurrence; element form would appear twice (opening and
-                // closing tag). Fields we don't state are left as the other application wrote them.
-                update_crs_attributes(&mut data, &crs);
+                // Mask / local-correction fields are written to the existing crs: correction
+                // elements by write_corrections below, not as attributes on the global
+                // description. Split them out so update_crs_attributes only writes global
+                // develop fields.
+                let (regular, _mask_fields): (Vec<_>, Vec<_>) = crs.into_iter().partition(|(name, _)| {
+                    *name != "CorrectionAmount" && !name.starts_with("Local")
+                });
+                if !regular.is_empty() {
+                    // Write the develop settings other applications understand as `crs:` attributes back
+                    // into the packet, updating them in place so the edit reaches the other application
+                    // instead of being shadowed by our `lc:settings` (issue #934). Attribute form keeps
+                    // each field to a single occurrence; element form would appear twice (opening and
+                    // closing tag). Fields we don't state are left as the other application wrote them.
+                    update_crs_attributes(&mut data, &regular);
+                }
             }
+            // Write back local-correction (mask) changes to the existing `crs:` corrections in
+            // the packet, matched to our masks by order and updated in place
+            // (`CorrectionAmount` and the `crs:Local*` sliders). Corrections keep their identity,
+            // count and order; only fields that differ from the previous settings are written,
+            // so a foreign correction we did not edit is left alone.
+            let previous = previous_develop.as_ref().unwrap_or(&default);
+            let prefix = crs_prefix(&data);
+            write_corrections(&mut data, &*p.develop, previous, &prefix);
         }
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
@@ -1867,7 +2160,7 @@ mod tests {
         let path = dir.join("a.xmp");
         std::fs::write(&path, "not xml at all").unwrap();
         let fresh = lightcraft_meta::write_xmp_lc(&lightcraft_meta::Metadata { rating: Some(3), ..Default::default() }, &[("settings", "{}")]);
-        let (data, merged, backup) = super::sidecar_contents(&path, fresh.clone(), "t").unwrap();
+        let (data, merged, backup, _) = super::sidecar_contents(&path, fresh.clone(), "t").unwrap();
         assert!(!merged && data == fresh);
         assert!(backup.is_some_and(|b| std::fs::read_to_string(b).unwrap() == "not xml at all"));
         std::fs::remove_dir_all(dir).unwrap();
@@ -2021,6 +2314,54 @@ mod tests {
             &mut v,
         );
         assert_eq!(v, vec![PhotoId(1), PhotoId(3)]);
+    }
+
+    /// A self-closing `crs:` element that carries its own `xmlns:crs` binding keeps
+    /// that attribute when the field is rewritten as a value element. Write-back
+    /// reconstructs self-closing elements without their start-tag attributes, which
+    /// can leave the `crs:` prefix unbound when the `rdf:Description` does not
+    /// declare it.
+    #[test]
+    fn crs_write_preserves_self_closing_element_attributes() {
+        // A foreign sidecar whose `crs:Exposure2012` is a self-closing element carrying
+        // the `xmlns:crs` declaration on the element itself; the `rdf:Description` does
+        // not declare the prefix, so the element's attribute is the only binding.
+        const FOREIGN: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmlns:lc="http://ns.lightcraft.app/lc/1.0/"
+            xmp:CreatorTool="Other App" lc:settings="{}">
+            <crs:Exposure2012 xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"/>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#;
+
+        let dir = std::env::temp_dir().join(format!("lightcraft-crs-self-closing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let original = dir.join("IMG_1.jpg");
+        std::fs::write(&original, b"original").unwrap();
+        let sidecar = dir.join("IMG_1.xmp");
+        std::fs::write(&sidecar, FOREIGN).unwrap();
+
+        let mut develop = DevelopSettings::default();
+        develop.light.exposure = 0.9;
+        let mut photo = Photo::new(
+            PhotoId(1),
+            Source::File { path: original.to_string_lossy().into_owned() },
+            "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00",
+        );
+        photo.develop = std::sync::Arc::new(develop);
+        let mut s = Session::new();
+        s.xmp.write_crs = true;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(photo) }).unwrap();
+        s.save_sidecar(PhotoId(1)).unwrap();
+
+        let text = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(
+            text.contains(r#"<crs:Exposure2012 xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">0.9</crs:Exposure2012>"#),
+            "self-closing crs: element keeps its xmlns attribute when rewritten:\n{text}"
+        );
+        assert_eq!(text.matches("<crs:Exposure2012").count(), 1, "updated in place, not duplicated:\n{text}");
+        assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
