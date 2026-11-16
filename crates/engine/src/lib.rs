@@ -88,6 +88,7 @@ pub mod sync;
 mod sync_same;
 pub mod text;
 pub mod video_play;
+pub mod video_source;
 mod view;
 pub mod walk;
 

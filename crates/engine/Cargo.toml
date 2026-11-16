@@ -25,6 +25,8 @@ lightcraft-catalog = { workspace = true }
 web-time = { workspace = true }
 lightcraft-preview = { workspace = true }
 lightcraft-codecs = { workspace = true }
+# video playback: views the RGBA frame buffers as pixels for the codecs' converter
+bytemuck = { workspace = true }
 lightcraft-raw = { workspace = true }
 lightcraft-denoise-core = { workspace = true }
 lightcraft-denoise = { workspace = true, optional = true }
@@ -76,3 +78,8 @@ craft-video = { workspace = true, features = ["h264-encode"] }
 craft-media = { workspace = true, features = ["isobmff"] }
 libc = { workspace = true }
 craft-tiff = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Playback tests encode their clips (H.264, HEVC) and mux them (MP4) themselves: no committed media.
+craft-video = { workspace = true, features = ["h264-encode", "hevc-encode"] }
+craft-media = { workspace = true, features = ["isobmff"] }

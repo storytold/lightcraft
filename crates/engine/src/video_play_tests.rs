@@ -39,7 +39,7 @@ fn synthetic(frames: usize, gop: usize) -> (Synthetic, Arc<AtomicU64>) {
             width: 4,
             height: 2,
             frame_duration: 0.04,
-            rotation: 0,
+            orientation: lightcraft_geom::Orientation::Normal,
             codec: "Test".into(),
             audio: None,
         },
@@ -62,19 +62,24 @@ impl FrameSource for Synthetic {
         self.next = (i.min(self.frames.saturating_sub(1)) / self.gop) * self.gop;
         Ok(())
     }
-    fn next_frame(&mut self) -> Result<Option<VideoFrame>, String> {
+    fn next_frame(&mut self, stop: &mut dyn FnMut() -> bool, mut buffer: Vec<u8>) -> Result<Next, String> {
+        if stop() {
+            return Ok(Next::Stopped);
+        }
         if self.fail_at == Some(self.next) {
             return Err("damaged frame".into());
         }
         if self.next >= self.frames {
-            return Ok(None);
+            return Ok(Next::End);
         }
         let i = self.next;
         self.next += 1;
         self.decoded.fetch_add(1, Ordering::SeqCst);
-        let mut rgba = vec![0u8; 4 * 2 * 4];
-        rgba[0] = i as u8;
-        Ok(Some(VideoFrame { pts: i as f64 * 0.04, width: 4, height: 2, rgba, draft: self.draft && i % 2 == 1 }))
+        let (w, h) = (self.info.width as usize, self.info.height as usize);
+        buffer.clear();
+        buffer.resize(w * h * 4, 0);
+        buffer[0] = i as u8;
+        Ok(Next::Frame(VideoFrame { pts: i as f64 * 0.04, width: w as u32, height: h as u32, rgba: buffer, draft: self.draft && i % 2 == 1 }))
     }
     fn set_draft(&mut self, on: bool) {
         self.draft = on;

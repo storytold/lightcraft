@@ -4058,6 +4058,7 @@ name = "lightcraft-engine"
 version = "0.21.1"
 dependencies = [
  "ab_glyph",
+ "bytemuck",
  "chrono",
  "craft-docpath",
  "craft-heif",

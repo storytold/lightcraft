@@ -46,8 +46,8 @@ pub struct SourceInfo {
     pub height: u32,
     /// Nominal time between frames in seconds (frame step, the tolerance of "due").
     pub frame_duration: f64,
-    /// Clockwise rotation to apply when drawing (0, 90, 180, 270), from the track's display matrix.
-    pub rotation: u16,
+    /// How the stored pictures turn upright (the track's display matrix), applied when drawing.
+    pub orientation: lightcraft_geom::Orientation,
     /// Codec name for people ("H.264", "HEVC").
     pub codec: String,
     /// The clip's audio track, described for people ("AAC, 48 kHz, stereo"); `None` when it has none.
@@ -73,15 +73,26 @@ impl VideoFrame {
     }
 }
 
+/// What [`FrameSource::next_frame`] got.
+#[derive(Debug)]
+pub enum Next {
+    Frame(VideoFrame),
+    /// The end of the clip.
+    End,
+    /// `stop` said to give up (a newer seek arrived) before a frame was ready.
+    Stopped,
+}
+
 /// A clip's decoder, driven by the decode thread. Errors are sentences for people.
 pub trait FrameSource: Send {
     fn info(&self) -> &SourceInfo;
-    /// Position before the frame shown at `seconds`: the next [`FrameSource::next_frame`] calls
+    /// Position at the frame shown at `seconds`: the next [`FrameSource::next_frame`] calls
     /// return frames from there on, in presentation order (frames before it may come first; the
     /// player skips them).
     fn seek(&mut self, seconds: f64) -> Result<(), String>;
-    /// The next frame in presentation order, `None` at the end of the clip.
-    fn next_frame(&mut self) -> Result<Option<VideoFrame>, String>;
+    /// The next frame in presentation order. `buffer` is a recycled RGBA buffer to fill (any size,
+    /// possibly empty); `stop` is polled while decoding and ends the call with [`Next::Stopped`].
+    fn next_frame(&mut self, stop: &mut dyn FnMut() -> bool, buffer: Vec<u8>) -> Result<Next, String>;
     /// Allow approximate (draft) decoding of pictures nothing predicts from.
     fn set_draft(&mut self, on: bool);
 }
@@ -131,6 +142,31 @@ struct Shared {
     /// Frames the queue may hold (set from the frame size).
     capacity: usize,
     decoded: u64,
+    /// RGBA buffers of frames that left the screen, for the decoder to fill again (no 33 MB
+    /// allocation per 4K frame).
+    pool: Vec<Vec<u8>>,
+}
+
+impl Shared {
+    fn recycle(&mut self, f: Arc<VideoFrame>) {
+        if let Ok(f) = Arc::try_unwrap(f)
+            && self.pool.len() < QUEUE_MAX + 2
+        {
+            self.pool.push(f.rgba);
+        }
+    }
+
+    fn pop(&mut self) -> Option<(u64, Arc<VideoFrame>)> {
+        let f = self.queue.pop_front()?;
+        self.queued_bytes = self.queued_bytes.saturating_sub(f.1.bytes());
+        Some(f)
+    }
+
+    fn clear_queue(&mut self) {
+        while let Some((_, f)) = self.pop() {
+            self.recycle(f);
+        }
+    }
 }
 
 struct Channel {
@@ -253,8 +289,7 @@ impl VideoPlayer {
         let mut s = self.channel.lock();
         s.request = Some(Seek { generation: self.generation, target, draft: self.playing });
         s.draft = self.playing;
-        s.queue.clear();
-        s.queued_bytes = 0;
+        s.clear_queue();
         s.end = false;
         drop(s);
         self.channel.wake.notify_all();
@@ -318,15 +353,11 @@ impl VideoPlayer {
                 let mut s = self.channel.lock();
                 let cur = self.generation;
                 while s.queue.front().is_some_and(|(g, f)| *g != cur || f.pts <= from) {
-                    if let Some((_, f)) = s.queue.pop_front() {
-                        s.queued_bytes = s.queued_bytes.saturating_sub(f.bytes());
+                    if let Some((_, f)) = s.pop() {
+                        s.recycle(f);
                     }
                 }
-                let next = if frames == 1 { s.queue.pop_front().map(|(_, f)| f) } else { None };
-                if let Some(f) = &next {
-                    s.queued_bytes = s.queued_bytes.saturating_sub(f.bytes());
-                }
-                next
+                if frames == 1 { s.pop().map(|(_, f)| f) } else { None }
             };
             self.channel.wake.notify_all();
             if let Some(f) = next {
@@ -342,7 +373,9 @@ impl VideoPlayer {
     }
 
     fn show(&mut self, f: Arc<VideoFrame>) {
-        self.current = Some(f);
+        if let Some(old) = self.current.replace(f) {
+            self.channel.lock().recycle(old);
+        }
         self.serial = self.serial.wrapping_add(1);
         self.stats.shown += 1;
     }
@@ -359,24 +392,21 @@ impl VideoPlayer {
             let mut s = self.channel.lock();
             // drop what an older seek left behind
             while s.queue.front().is_some_and(|(g, _)| *g != cur) {
-                if let Some((_, f)) = s.queue.pop_front() {
-                    s.queued_bytes = s.queued_bytes.saturating_sub(f.bytes());
+                if let Some((_, f)) = s.pop() {
+                    s.recycle(f);
                 }
             }
             if self.awaiting {
                 // the first frame of a seek is the frame at its target: show it whatever its time
-                if let Some((_, f)) = s.queue.pop_front() {
-                    s.queued_bytes = s.queued_bytes.saturating_sub(f.bytes());
-                    due = Some(f);
-                }
+                due = s.pop().map(|(_, f)| f);
             } else if self.playing {
                 let pos = self.position();
                 while s.queue.front().is_some_and(|(_, f)| f.pts <= pos + tolerance) {
-                    if let Some((_, f)) = s.queue.pop_front() {
-                        s.queued_bytes = s.queued_bytes.saturating_sub(f.bytes());
-                        if due.replace(f).is_some() {
-                            skipped += 1;
-                        }
+                    if let Some((_, f)) = s.pop()
+                        && let Some(late) = due.replace(f)
+                    {
+                        skipped += 1;
+                        s.recycle(late);
                     }
                 }
             }
@@ -439,7 +469,7 @@ impl VideoPlayer {
             "frameRate": if self.info.frame_duration > 0.0 { 1.0 / self.info.frame_duration } else { 0.0 },
             "width": self.info.width,
             "height": self.info.height,
-            "rotation": self.info.rotation,
+            "orientation": self.info.orientation.to_exif(),
             "codec": self.info.codec,
             "frame": self.current.as_ref().map(|f| json!({"pts": f.pts, "draft": f.draft})),
             "shown": self.stats.shown,
@@ -484,8 +514,9 @@ fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
                 draft = s.draft;
                 source.set_draft(draft);
             }
-            s.request.take()
+            (s.request.take(), s.pool.pop().unwrap_or_default())
         };
+        let (seek, buffer) = seek;
         let result = match seek {
             Some(req) => {
                 generation = req.generation;
@@ -498,9 +529,14 @@ fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
                     s.generation = generation;
                     s.error = None;
                 }
-                seek_to(source.as_mut(), ch, req)
+                seek_to(source.as_mut(), ch, req, buffer)
             }
-            None => source.next_frame().map(|f| f.map(|f| vec![f])),
+            None => match source.next_frame(&mut || superseded(ch), buffer) {
+                Ok(Next::Frame(f)) => Ok(Some(vec![f])),
+                Ok(Next::End) => Ok(None),
+                Ok(Next::Stopped) => continue,
+                Err(e) => Err(e),
+            },
         };
         let mut s = ch.lock();
         if s.generation != generation || s.request.is_some_and(|r| r.generation != generation) {
@@ -520,23 +556,31 @@ fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
     }
 }
 
-/// Seek and decode forward to the frame shown at `req.target` (the last one at or before it).
-/// Returns that frame, or `Ok(None)` for a target past the last frame... in which case the last
-/// frame decoded is returned when there is one. Stops early when a newer seek arrives.
-fn seek_to(source: &mut dyn FrameSource, ch: &Channel, req: Seek) -> Result<Option<Vec<VideoFrame>>, String> {
+/// Whether the decode thread should drop what it is doing: stopping, or a newer seek waiting.
+fn superseded(ch: &Channel) -> bool {
+    ch.stop.load(Ordering::Relaxed) || ch.lock().request.is_some()
+}
+
+/// Seek and decode forward to the frame shown at `req.target` (the last one at or before it), and
+/// the frame after it when there is one. Past the last frame it returns the last frame. `Ok(None)`
+/// when nothing could be decoded or a newer seek arrived (the caller drops this generation).
+fn seek_to(source: &mut dyn FrameSource, ch: &Channel, req: Seek, buffer: Vec<u8>) -> Result<Option<Vec<VideoFrame>>, String> {
     source.seek(req.target)?;
     // only timestamp rounding (timescale ticks to seconds), far below any frame interval
     let tolerance = 1e-4;
     let mut best: Option<VideoFrame> = None;
+    let mut buffer = Some(buffer);
     for _ in 0..MAX_SEEK_FRAMES {
-        if ch.stop.load(Ordering::Relaxed) || ch.lock().request.is_some() {
-            // superseded (scrubbing): the caller drops this generation
-            return Ok(None);
-        }
-        match source.next_frame()? {
-            None => return Ok(best.map(|f| vec![f])),
-            Some(f) if f.pts <= req.target + tolerance => best = Some(f),
-            Some(f) => {
+        let buf = buffer.take().unwrap_or_else(|| ch.lock().pool.pop().unwrap_or_default());
+        match source.next_frame(&mut || superseded(ch), buf)? {
+            Next::Stopped => return Ok(None),
+            Next::End => return Ok(best.map(|f| vec![f])),
+            Next::Frame(f) if f.pts <= req.target + tolerance => {
+                if let Some(old) = best.replace(f) {
+                    buffer = Some(old.rgba);
+                }
+            }
+            Next::Frame(f) => {
                 // the first frame after the target: the target frame, then this one queued behind it
                 return Ok(Some(match best {
                     Some(b) => vec![b, f],
