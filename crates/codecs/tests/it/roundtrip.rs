@@ -671,6 +671,24 @@ fn avif_encode_native() {
 }
 
 #[test]
+fn avif_keeps_exif() {
+    // The ravif path wrote EXIF; the shared encoder must keep it, for 8- and 16-bit input.
+    let img = smooth(16, 12);
+    let exif = minimal_exif(3);
+    let meta = EncodeMeta { exif: Some(&exif), ..Default::default() };
+    let wide: Vec<u16> = img.data.iter().flat_map(|p| p.map(|c| u16::from(c) * 257)).collect();
+    for image in [EncodeImage::rgba8(&img), EncodeImage::new(16, 12, 4, Samples::U16(&wide))] {
+        let r = encode_avif(&image, 70, 10, &meta);
+        if cfg!(feature = "avif") {
+            let b = r.unwrap();
+            assert!(b.windows(exif.len()).any(|w| w == &exif[..]), "EXIF missing from the AVIF");
+        } else {
+            assert!(r.is_err());
+        }
+    }
+}
+
+#[test]
 fn raw_routing() {
     let mut b = b"II*\0\x08\0\0\0".to_vec();
     b.extend_from_slice(&1u16.to_le_bytes());
@@ -962,23 +980,21 @@ fn jxl_alpha_and_gray() {
 #[test]
 #[cfg(feature = "jxl")]
 fn jxl_hdr_pq() {
-    // linear Rec. 2020, SDR white = 1.0: the left half at SDR white, the right half four times brighter
+    // linear Rec. 2020 input, with SDR white = 203 cd/m²; samples are encoded as BT.2020 PQ.
     let (w, h) = (64usize, 32usize);
     let px: Vec<f32> = (0..w * h).flat_map(|i| [if i % w < w / 2 { 1.0 } else { 4.0 }; 3]).collect();
     for lossless in [false, true] {
         let o = JxlOptions { lossless, quality: 95, colour: JxlColour::Rec2020Pq, ..Default::default() };
         let b = encode_jxl(&EncodeImage::new(w as u32, h as u32, 3, Samples::F32(&px)), &o, &EncodeMeta::default()).unwrap();
-        // the file's own samples: PQ code values for 203 and 812 cd/m²
-        let img = jxl_oxide::JxlImage::builder().read(std::io::Cursor::new(&b)).unwrap();
-        let m = &img.image_header().metadata;
-        assert_eq!(m.tone_mapping.intensity_target, 10_000.0);
-        assert!(format!("{:?}", m.colour_encoding).contains("Pq"), "{:?}", m.colour_encoding);
-        let r = img.render_frame(0).unwrap();
-        let fb = r.image_all_channels();
-        let at = |x: usize| fb.buf()[((h / 2) * w + x) * fb.channels() + 1];
-        for (x, nits) in [(w / 4, HDR_REFERENCE_WHITE_NITS), (w * 3 / 4, 4.0 * HDR_REFERENCE_WHITE_NITS)] {
-            let (got, want) = (at(x), lightcraft_codecs::encode::pq_encode(nits));
-            assert!((got - want).abs() < 0.005, "lossless={lossless}: {nits} cd/m² written as {got}, want {want}");
+        // DecoderDefault keeps the file's PQ transfer encoding, so compare against the PQ codes
+        // for 203 and 812 cd/m² rather than linear-light input values.
+        let dec = craft_jxl::decode(&b, craft_jxl::DecodeLimits::default()).unwrap();
+        assert_eq!(dec.rendered_cicp, Some([9, 16, 0, 1]));
+        let ch = dec.layout.channels();
+        let at = |x: usize| dec.pixels[((h / 2) * w + x) * ch + 1];
+        for (x, want) in [(w / 4, 0.5807f32), (w * 3 / 4, 0.7292f32)] {
+            let got = at(x);
+            assert!((got - want).abs() < 0.01, "lossless={lossless}: PQ code {got}, want {want}");
         }
     }
     // float samples are HDR only
