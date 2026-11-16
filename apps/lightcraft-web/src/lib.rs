@@ -30,6 +30,10 @@ pub mod bench;
 mod drop_gate;
 pub mod files;
 pub mod host;
+// Start-up's concurrent storage reads, also compiled natively so the join has tests (unused in a
+// native, non-test library build, like `drop_gate`).
+#[cfg(any(test, target_arch = "wasm32"))]
+mod join;
 pub mod store;
 pub mod wire;
 

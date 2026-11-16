@@ -25,7 +25,18 @@ fn err(e: JsValue) -> String {
 /// Did an OPFS call fail because the entry doesn't exist (`NotFoundError`)? Any other failure
 /// (security, type mismatch, an unreadable or evicted store) is an error, never "absent" (#1507).
 fn not_found(e: &JsValue) -> bool {
-    crate::files::is_not_found(Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string()).as_deref())
+    crate::files::is_not_found(dom_exception_name(e).as_deref())
+}
+
+/// Did opening an OPFS entry as a directory fail because there is no folder there: nothing at the
+/// path, or a regular file of that name (`TypeMismatchError`)? See [`crate::files::means_no_folder`].
+fn no_folder(e: &JsValue) -> bool {
+    crate::files::means_no_folder(dom_exception_name(e).as_deref())
+}
+
+/// The `name` of a `DOMException` (`NotFoundError`, `TypeMismatchError`…), if `e` has one.
+fn dom_exception_name(e: &JsValue) -> Option<String> {
+    Reflect::get(e, &"name".into()).ok().and_then(|n| n.as_string())
 }
 
 /// `navigator.storage` in a window or a worker.
@@ -261,6 +272,40 @@ impl Backend {
                 let (tx, store) = Self::idb_store(db, true)?;
                 store.delete(&path.into()).map_err(err)?;
                 idb_done(&tx).await
+            }
+        }
+    }
+
+    /// Is there a folder at `path`? A regular file of the same name is not a folder:
+    /// OPFS says so with a type mismatch when the entry is opened as a directory, and
+    /// IndexedDB holds folders only as keys under `path/`, so a lone `path` key is a
+    /// file. A missing entry is not a folder either; any other failure is an error,
+    /// never "absent" (#1507).
+    pub async fn is_folder(&self, path: &str) -> Result<bool, String> {
+        match self {
+            Backend::Opfs(root) => {
+                let mut dir = root.clone();
+                for p in path.split('/').filter(|p| !p.is_empty()) {
+                    let opts = FileSystemGetDirectoryOptions::new();
+                    opts.set_create(false);
+                    match JsFuture::from(dir.get_directory_handle_with_options(p, &opts)).await {
+                        Ok(d) => dir = d.unchecked_into(),
+                        Err(e) if no_folder(&e) => return Ok(false),
+                        Err(e) => return Err(err(e)),
+                    }
+                }
+                Ok(true)
+            }
+            Backend::Idb(db) => {
+                let (_tx, store) = Self::idb_store(db, false)?;
+                let prefix = format!("{path}/");
+                // every key under `prefix`, and no other key (see `key_range_end` and its test)
+                let upper = crate::files::key_range_end(&prefix);
+                let range = web_sys::IdbKeyRange::bound_with_lower_open_and_upper_open(&prefix.as_str().into(), &upper.as_str().into(), false, true)
+                    .map_err(err)?;
+                let keys = idb_req(&store.get_all_keys_with_key_and_limit(&range, 1).map_err(err)?).await?;
+                let arr: js_sys::Array = keys.unchecked_into();
+                Ok(arr.length() > 0)
             }
         }
     }
