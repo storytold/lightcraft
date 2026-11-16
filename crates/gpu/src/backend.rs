@@ -475,11 +475,7 @@ impl WindowRenderer {
         match parse_backends(&s)? {
             BackendChoice::Use(b) => {
                 let valid = Backends::DX12 | Backends::VULKAN | Backends::METAL | Backends::GL;
-                if !b.is_empty() && (b & valid) == b {
-                    Some(WindowRenderer::Wgpu(b))
-                } else {
-                    None
-                }
+                if !b.is_empty() && (b & valid) == b { Some(WindowRenderer::Wgpu(b)) } else { None }
             }
             _ => None,
         }
@@ -529,10 +525,8 @@ pub fn window_renderer_order(
         .into_iter()
         .flat_map(|r| {
             if let WindowRenderer::Wgpu(b) = r {
-                let requested: Vec<Backends> = [Backends::DX12, Backends::VULKAN, Backends::METAL, Backends::GL]
-                    .into_iter()
-                    .filter(|backend| b.contains(*backend))
-                    .collect();
+                let requested: Vec<Backends> =
+                    [Backends::DX12, Backends::VULKAN, Backends::METAL, Backends::GL].into_iter().filter(|backend| b.contains(*backend)).collect();
                 if requested.len() > 1 {
                     let platform_order = match os {
                         "windows" => vec![Backends::DX12, Backends::GL],
@@ -547,13 +541,13 @@ pub fn window_renderer_order(
                     // Vulkan on Windows after the platform preferences (DX12, GL), while still
                     // trying the user's combined choice first.
                     let mut expanded: Vec<WindowRenderer> = vec![r];
-                    for backend in platform_order {
-                        if b.contains(backend) {
-                            expanded.push(WindowRenderer::Wgpu(backend));
+                    for backend in &platform_order {
+                        if b.contains(*backend) {
+                            expanded.push(WindowRenderer::Wgpu(*backend));
                         }
                     }
                     for backend in requested {
-                        if !platform_order.contains(&backend) && !expanded.iter().any(|r| matches!(r, WindowRenderer::Wgpu(eb) if eb.contains(backend))) {
+                        if !platform_order.contains(&backend) && !expanded.contains(&WindowRenderer::Wgpu(backend)) {
                             expanded.push(WindowRenderer::Wgpu(backend));
                         }
                     }
@@ -950,25 +944,21 @@ mod tests {
         let forced_vk_gl = WindowRenderer::Wgpu(Backends::VULKAN | Backends::GL);
         let order = window_renderer_order(Some(forced_vk_gl), None, None, "windows", all, true);
         // The forced renderer should appear first in the order.
-        assert_eq!(
-            order.first(),
-            Some(&forced_vk_gl),
-            "Forced multi-backend should be tried first, got: {order:?}"
-        );
+        assert_eq!(order.first(), Some(&forced_vk_gl), "Forced multi-backend should be tried first, got: {order:?}");
         // The forced expansion should contain both requested backends (GL and Vulkan).
-        let forced_expansion: Vec<_> = order.iter()
+        let forced_expansion: Vec<_> = order
+            .iter()
             .take_while(|r| matches!(r, WindowRenderer::Wgpu(b) if b.contains(Backends::VULKAN) || b.contains(Backends::GL)))
             .cloned()
             .collect();
-        assert!(
-            forced_expansion.len() >= 2,
-            "Forced expansion should include both requested backends, got: {forced_expansion:?}"
-        );
+        assert!(forced_expansion.len() >= 2, "Forced expansion should include both requested backends, got: {forced_expansion:?}");
         // GL (platform-preferred) should appear before Vulkan (not in platform order) in the expansion.
         let gl_pos = forced_expansion.iter().position(|r| matches!(r, WindowRenderer::Wgpu(b) if b == Backends::GL));
         let vk_pos = forced_expansion.iter().position(|r| matches!(r, WindowRenderer::Wgpu(b) if b == Backends::VULKAN));
-        assert!(gl_pos.is_some() && vk_pos.is_some() && gl_pos.unwrap() < vk_pos.unwrap(),
-            "GL should appear before Vulkan in expansion, got: {forced_expansion:?}");
+        assert!(
+            gl_pos.is_some() && vk_pos.is_some() && gl_pos.unwrap() < vk_pos.unwrap(),
+            "GL should appear before Vulkan in expansion, got: {forced_expansion:?}"
+        );
 
         // Issue 1: window_backends() treats Off as Auto (already correct in backend.rs).
         // The bug is in window_gpu.rs Linux branch which only checks for Auto.
