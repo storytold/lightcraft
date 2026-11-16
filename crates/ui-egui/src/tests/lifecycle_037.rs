@@ -1896,6 +1896,19 @@ fn a_timeout_cancels_only_its_own_gesture_and_preserves_a_later_queue() {
     assert!(rx2.try_recv().is_err(), "the later gesture is still waiting");
     assert_eq!(app.pending_gestures.len(), 1);
     assert_eq!(app.pending_gestures[0].target.as_ref().map(|target| target.id.as_str()), Some("second:test"));
+
+    // logic() above starts process-wide GPU warm-up. Even when every gesture assertion passes,
+    // nextest must not exit while a driver is still initializing (guard against the #4282 race).
+    // Keep the GPU enabled and all original assertions; fail explicitly if bounded cleanup stalls.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::enabled() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(lightcraft_engine::gpu::ready() || !lightcraft_engine::gpu::enabled(), "GPU warm-up did not finish");
+        assert!(lightcraft_engine::gpu::wait_idle(Duration::from_secs(30)), "GPU work did not finish");
+    }
 }
 
 #[test]
