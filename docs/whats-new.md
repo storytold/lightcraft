@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Video tiles show a frame of the clip
+- In builds with video decoding (the `video-frames` feature, off by default like HEIC), H.264 and HEVC clips in MP4
+  and MOV show a frame from about a second in on their grid cell, in the filmstrip and in the loupe instead of a
+  placeholder, the right way up and with HDR (HLG, PQ) toned down for the screen. Clips whose codec can't be decoded yet
+  (ProRes, AV1, 10-bit H.264, …) keep the placeholder, and the loupe and Info say why. Reading frames shows one row in
+  the activity stack, which can stop it.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

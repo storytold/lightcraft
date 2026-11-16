@@ -30,7 +30,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | HDR gain map JPEG (ISO 21496-1) | ✅ | ✅ | ✅ (gain map read) | ✅ | `crates/codecs/src/gainmap.rs` (JPEG layout), `craft-gainmap` (metadata, compute, apply) |
 | PQ / HLG HDR | ✅ | ✅ AVIF, JXL, TIFF | — | 🟡 PQ AVIF, PQ JPEG XL, float TIFF; no HLG | |
 | Contact sheet / print PDF | — | ✅ (Print module: PDF / JPEG / printer) | — | 🟡 paginated contact-sheet PDF (A4 / Letter, 150 dpi, sRGB) | `crates/engine/src/contact_sheet.rs` |
-| Video (MP4, MOV, AVCHD…) | ✅ playback, trim, edit | ✅ export | 🟡 imported and catalogued (kind, duration, size, dimensions, capture date, camera/GPS); no playback, trim or edits | ⬜ | `crates/meta/src/video.rs`, `crates/engine/src/import.rs` |
+| Video (MP4, MOV, AVCHD…) | ✅ playback, trim, edit | ✅ export | 🟡 imported and catalogued (kind, duration, size, dimensions, capture date, camera/GPS); with the non-default `video-frames` feature, H.264 (8-bit 4:2:0) and HEVC (Main, Main 10, 4:2:2) clips in MP4/MOV show a decoded poster frame (other codecs say why they show none); no playback, trim or edits | ⬜ | `crates/meta/src/video.rs`, `crates/engine/src/import.rs`, `crates/codecs/src/video_stream.rs`, `crates/codecs/src/poster.rs` |
 
 ## Colour spaces and profiles
 
@@ -75,6 +75,7 @@ Remaining: **26–47 h** (AVIF decode 8–15 h if a permissive decoder is writte
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | Video: H.264 / HEVC clips in MP4/MOV show a decoded poster frame in the grid, filmstrip and loupe, behind the non-default `video-frames` feature (patents, issue #3244); playback, trim, edits and export remain |
 | 2026-10-23 | minor | Video containers: MP4/MOV/M4V sniffed, imported and catalogued (kind, duration, dimensions, capture date, camera/GPS); the grid and loupe present clips, but playback, trim, edits and export remain |
 | 2026-10-12 | minor | LR-PROF-IMPORT: the user's own DNG camera profiles (`.dcp`) import as camera profiles; none ship |
 | 2026-10-10 | major | Created from the code and the installed Lightroom's document types |
