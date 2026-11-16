@@ -152,6 +152,15 @@ fn apply(b: usize) {
 /// Each card's GPU buffer pool may hold up to 1/n of the card's memory while it works.
 const GPU_POOL_VRAM_SHARE: u64 = 3;
 
+/// A memory budget under this is small (a phone's): the background build renders one photo at a time and waits
+/// while the user edits ([`constrained`]).
+pub const CONSTRAINED_BELOW: usize = 4 << 30;
+
+/// Whether the memory budget is small ([`CONSTRAINED_BELOW`]): background work makes way for the photo being edited.
+pub fn constrained() -> bool {
+    budget() < CONSTRAINED_BELOW
+}
+
 /// Bytes a full-size decode of an 8-bit file holds per pixel at its peak: the decoder's RGB bytes, the linear picture
 /// (`[f32; 3]`) and the working-space copy made from it, all alive at once.
 const DECODE_PEAK_BYTES_PER_PX: u64 = 3 + 12 + 12;

@@ -469,6 +469,14 @@ pub fn wait_for_foreground_steady(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::Relaxed)
 }
 
+/// Whether the whole-view build runs in `mode`: switched on and not limited to the photo on screen, and, under a small
+/// memory budget (`constrained`: a phone), only while browsing. Editing, a build running beside the photo being edited
+/// took the memory it needed and the system closed the app; entering Develop stops the build, which stays owed and is
+/// taken up again back in the Library.
+fn previews_wanted(on: bool, scope: Scope, mode: Mode, constrained: bool) -> bool {
+    on && scope != Scope::OnScreen && !(constrained && mode == Mode::Develop)
+}
+
 /// Photos the background build renders side by side: each render spreads over the cores already,
 /// so two keep the machine busy while leaving room for the photo on screen; one under a small memory budget (a phone),
 /// where two photos decoding at once took memory the photo on screen needed.
@@ -477,12 +485,9 @@ pub fn background_lanes() -> usize {
     lanes_for(cores, crate::memory::budget())
 }
 
-/// The memory budget under which the background build renders one photo at a time.
-const TWO_LANE_BUDGET: usize = 4 << 30;
-
 /// [`background_lanes`] on a machine with `cores` threads and a memory budget of `budget` bytes.
 fn lanes_for(cores: usize, budget: usize) -> usize {
-    if cores >= 8 && budget >= TWO_LANE_BUDGET { 2 } else { 1 }
+    if cores >= 8 && budget >= crate::memory::CONSTRAINED_BELOW { 2 } else { 1 }
 }
 
 /// How many photos the background preparation renders on pools of its own at once
@@ -589,7 +594,7 @@ impl Session {
         self.note_changes(at);
         let settings = self.prep.settings();
         let want = settings.mode(mode);
-        let wanted = want.previews && settings.scope(mode) != Scope::OnScreen;
+        let wanted = previews_wanted(want.previews, settings.scope(mode), mode, crate::memory::constrained());
         // a folder being culled is prepared from the photo the user is on, in the grid too
         let at = if mode == Mode::Culling { at.or_else(|| self.active()) } else { at };
         if self.prep_follow_build(mode, wanted, at, backward) || !wanted {
@@ -979,7 +984,19 @@ mod tests {
 
 #[cfg(test)]
 mod lane_tests {
-    use super::lanes_for;
+    use super::{Mode, Scope, lanes_for, previews_wanted};
+
+    /// On a phone previews are built while browsing and wait while the user edits; elsewhere editing builds them too.
+    #[test]
+    fn a_small_memory_budget_builds_previews_only_while_browsing() {
+        for mode in [Mode::Culling, Mode::Library] {
+            assert!(previews_wanted(true, Scope::All, mode, true), "{mode:?}");
+        }
+        assert!(!previews_wanted(true, Scope::All, Mode::Develop, true), "editing on a phone");
+        assert!(previews_wanted(true, Scope::All, Mode::Develop, false), "editing on a computer");
+        assert!(!previews_wanted(false, Scope::All, Mode::Library, false), "switched off");
+        assert!(!previews_wanted(true, Scope::OnScreen, Mode::Library, false), "the photo on screen only");
+    }
 
     /// Two photos side by side only where the cores and the memory are there for them.
     #[test]

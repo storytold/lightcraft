@@ -838,6 +838,14 @@ impl MediaCache {
         self.profile_facts.clear();
     }
 
+    /// Forget every decoded source but `keep`'s (entering Develop under a small memory budget: the photos browsed
+    /// before are decoded again if they are shown again; their rendered previews stay on disk).
+    pub fn keep_sources_of(&mut self, keep: Option<PhotoId>) {
+        self.thumbs = Lru::new(THUMB_SOURCE_BYTES.min(self.budget));
+        self.previews.retain(|e| Some(e.0) == keep);
+        self.full.retain(|e| Some(e.0) == keep);
+    }
+
     /// How many full-resolution originals to keep at once (at least one). Compare and Reference
     /// views zoomed to 1:1 cut windows from two photos' originals: with room for one, every window
     /// render of one side would evict the other side's original and decode its own again. Lowering
@@ -3206,6 +3214,24 @@ impl crate::Session {
     pub(crate) fn source_edge_for(&self, id: PhotoId, out_long: usize) -> Option<usize> {
         let p = self.rendered_photo_of(id)?;
         Some(source_edge_needed(&p, &p.develop, true, out_long).max(1))
+    }
+
+    /// Make room for editing under a small memory budget ([`crate::memory::constrained`]; elsewhere nothing): the
+    /// background preview build is stopped (it is owed, and taken up again once browsing resumes), every decoded source
+    /// but the photo being edited is dropped, the GPU's recycled buffers are freed, and the allocator hands freed pages
+    /// back to the system. `true` when it did.
+    pub fn make_room_for_editing(&mut self) -> bool {
+        if !crate::memory::constrained() {
+            return false;
+        }
+        if let Some(b) = self.preview_build.as_ref().filter(|b| b.running() && b.background) {
+            b.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let active = self.active();
+        self.media.keep_sources_of(active);
+        crate::gpu::trim_pool(0);
+        crate::memory::release();
+        true
     }
 
     /// Whether the original of `id` is too big to decode whole within the memory budget, so the window decodes it

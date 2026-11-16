@@ -2700,7 +2700,12 @@ pub(crate) fn ahead_only(ids: &[PhotoId], i: usize, n: usize, backward: bool) ->
 /// What the user is doing, for the background preparation: editing (a tool panel open), else
 /// culling a folder or browsing the library.
 pub fn prep_mode(app: &LccApp) -> lcc_engine::prep::Mode {
-    if app.ui.right.is_edit_tool() { lcc_engine::prep::Mode::Develop } else { lcc_engine::prep::Mode::of(&app.session) }
+    // (the touch layout's Develop is editing too, though it has no tool panel open on the right)
+    if app.ui.right.is_edit_tool() || (crate::modern::on(app) && app.ui.module == crate::module::ModuleId::Develop) {
+        lcc_engine::prep::Mode::Develop
+    } else {
+        lcc_engine::prep::Mode::of(&app.session)
+    }
 }
 
 /// How long (s) the whole photo is shown before its full-resolution source is decoded in the

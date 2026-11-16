@@ -943,6 +943,8 @@ pub struct LccApp {
     /// the one now on screen: the background preparation goes their way ([`lcc_engine::prep`]).
     pub prep_at: Option<(lcc_catalog::PhotoId, usize)>,
     pub prep_backward: bool,
+    /// The module the last frame showed: entering Develop makes room for editing ([`Self::background_prep`]).
+    pub prep_module: module::ModuleId,
     /// The loupe's video frames (playback worker, paused still).
     pub video_view: video_view::VideoView,
     /// The zoomed view the loupe asked tiles for last (see [`region`]): the frame, the part its
@@ -1138,6 +1140,12 @@ impl LccApp {
         if self.session.interaction.is_some() {
             lcc_engine::prep::foreground();
         }
+        // entering Develop under a small memory budget (a phone): the background build stops and what browsing held is
+        // let go, so the photo being edited has the memory (the grid's pictures come back from the disk cache)
+        if self.ui.module == module::ModuleId::Develop && self.prep_module != module::ModuleId::Develop && self.session.make_room_for_editing() {
+            self.renderer.evict_thumbs(&std::collections::HashSet::new(), 0);
+        }
+        self.prep_module = self.ui.module;
         let mode = panels::detail::prep_mode(self);
         let loupe = self.ui.fullscreen || self.ui.view == state::ViewMode::Detail;
         let at = if loupe { self.session.active() } else { None };
@@ -1306,6 +1314,7 @@ impl LccApp {
             pictures_missing_pass: None,
             prep_at: None,
             prep_backward: false,
+            prep_module: module::ModuleId::Library,
             video_view: Default::default(),
             region_view: None,
             region_before_view: None,
