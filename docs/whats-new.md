@@ -21,6 +21,21 @@
   (and Reset) get it, photos you already edited keep their grain until you choose Photo ▸ Update to Current Process.
   See [film grain](grain.md).
 
+### Share to Flickr
+- Connect to Flickr once in Settings ▸ Accounts, step by step: open Flickr's API key page, paste the free key it gives
+  you and click Continue; Flickr's approval page opens in your browser, and pasting the code it shows finishes the
+  sign-in (official builds can carry their own key and skip that step). LightCraft never sees your password; the
+  sign-in is kept on this computer (not in the library) until you sign out.
+- File ▸ Share ▸ Flickr… uploads the selected photos with their edits as JPEGs: choose the size (1024, 2048,
+  4096 px or full size), quality and who can see them (public, friends, family, friends & family, only you). Type the
+  title and description right in the dialog, so there's nothing to fix on flickr.com: for one photo they start as
+  its title (else its file name) and caption; for several, left empty, each keeps its own. Keywords become tags;
+  location is left out unless you ask for it. Put them in one of your Flickr albums, or make a new one around them (none by default). The
+  upload runs in the background in the activity stack, with ✕.
+- Right-click a photo (in Develop, the grid or the filmstrip) ▸ Share ▸ Share to Flickr… opens the same dialog,
+  without going through File ▸ Share.
+- Agents and the CLI use `flickr.signIn`, `flickr.completeSignIn` and `flickr.upload` (see docs/flickr.md).
+
 ### Colour noise reduction (process V6)
 - Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
   colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences

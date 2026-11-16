@@ -32,6 +32,9 @@ impl Default for Headless {
         // the lens database the desktop app downloaded, when it is there (a headless session never fetches it)
         let session =
             Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_face_models().with_default_lens_database();
+        // the Flickr account the desktop app signed in (no Flickr in the web build)
+        #[cfg(not(target_arch = "wasm32"))]
+        let session = session.with_default_flickr();
         Self::new(session.with_default_sam3_model().with_default_slide_templates())
     }
 }

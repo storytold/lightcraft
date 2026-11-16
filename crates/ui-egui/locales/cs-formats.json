@@ -325,5 +325,12 @@
   "View › Detail View ({keys}).": "Zobrazení › Zobrazení detailu ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Soubor › Exportovat… · Soubor › Tisk… ({keys}).",
   "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}",
+  "Signed in as {name}": "Přihlášeno jako {name}",
+  "Signed in to Flickr as {name}": "Přihlášeno k Flickru jako {name}",
+  "Upload {n} photo{} to Flickr as {name}": "Nahrát na Flickr jako {name} – fotografií: {n}{:.0}",
+  "Uploaded {ok} of {total} photo{} to Flickr": "Nahráno na Flickr fotografií: {ok} z {total}{:.0}",
+  " · {} not added to the album": " · nepřidáno do alba: {}",
+  " · the album couldn't be made: {}": " · album se nepodařilo vytvořit: {}",
+  " · new album “{}”": " · nové album „{}“"
 }

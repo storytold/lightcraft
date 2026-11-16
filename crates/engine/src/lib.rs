@@ -42,6 +42,8 @@ mod faces_index;
 mod faces_worker;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod flickr;
+#[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
 pub mod guard;
@@ -303,6 +305,9 @@ pub struct Session {
     /// The loaded recognition model and the face embeddings made with it.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) faces: faces_index::FacesState,
+    /// The Flickr account and a sign-in in progress ([`flickr`]).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub flickr: flickr::State,
     /// Reading focus points for photos imported before they were read (`photo.readFocusPoints`, `focus.pump`).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) focus_scan: focus_scan::FocusScan,
@@ -504,6 +509,8 @@ impl Session {
             face_catalog: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             faces: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            flickr: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
             clipboard: None,

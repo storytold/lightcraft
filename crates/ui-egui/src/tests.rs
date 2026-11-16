@@ -47,6 +47,7 @@ mod error_kinds;
 mod filmstrip;
 mod filmstrip_drag;
 mod find_similar;
+mod flickr;
 mod focus_point;
 mod folder_drop;
 mod grading;

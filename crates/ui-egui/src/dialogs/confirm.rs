@@ -206,6 +206,10 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }),
         ),
         Dialog::ContactSheet { options } => app.run("app.contactSheet", json!(options)),
+        Dialog::FlickrUpload { opts } => {
+            app.flickr.last_dialog = Some(opts.clone());
+            app.run("flickr.upload", opts.params())
+        }
         Dialog::SlideshowExport { settings } => app.run("app.slideshowExport", json!(settings)),
         Dialog::Print => app.run("app.print", json!({})),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
