@@ -222,6 +222,7 @@
   "{label} {index} of {n}": "{label} {index} / {n}",
   "{label}, {n} photos": "{label}, kuvia: {n}",
   "{name} found nothing to select on {n} of {total} photos": "{name} ei löytänyt valittavaa {n} kuvasta {total}:sta",
+  "Found nothing to select on {n} of {total} photos": "Ei valittavaa {n} kuvassa {total}:sta",
   "{matching} of {t} photos": "Kuvia: {matching} / {t}",
   "{matching} photos": "Kuvia: {matching}",
   "{missing} originals are missing. Their catalog records are available; use Find Missing Photos to relink them.": "Puuttuvia alkuperäisiä: {missing}. Niiden katalogitietueet ovat käytettävissä; yhdistä ne uudelleen komennolla Etsi puuttuvat kuvat.",

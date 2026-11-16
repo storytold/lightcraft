@@ -10,7 +10,8 @@
   Masking like any other.
 - Applying one of them to several photos now says how many it found nothing to select on ("Whiten Teeth found nothing
   to select on 12 of 200 photos"). LightCraft notes which mattes a ProRAW carries when it is imported; for photos
-  imported earlier, Photo ▸ Reload from Disk notes them.
+  imported earlier, Photo ▸ Reload from Disk notes them. The count stays under the preset's Amount slider with a
+  **Show** button, which leaves only those photos in the view (clear it like any filter).
 
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.

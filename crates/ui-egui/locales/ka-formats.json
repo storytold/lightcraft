@@ -186,6 +186,7 @@
   "{label} {index} of {n}": "{label} {index} / {n}",
   "{label}, {n} photos": "{label}, ფოტო: {n}",
   "{name} found nothing to select on {n} of {total} photos": "{name}: {total} ფოტოდან {n}-ზე ასარჩევი ვერაფერი მოიძებნა",
+  "Found nothing to select on {n} of {total} photos": "{total} ფოტოდან {n}-ზე ასარჩევი ვერაფერი მოიძებნა",
   "{matching} of {t} photos": "ფოტო: {matching} / {t}",
   "{matching} photos": "ფოტო: {matching}",
   "{mode} spot {} of {}": "{mode}: ლაქა {} / {}",
