@@ -42,6 +42,12 @@ exports. Existing AI masks become 1–2 px tighter at a subject's edges, on ever
 inside, their outside and edges without contrast in the photo are unchanged. It landed in place as
 a bug fix: the outline is output that isn't in the photo nor in the edit, not a look anyone chose.
 
+**A People part without its matte** (teeth, skin, hair or glasses, on a photo that doesn't carry that matte) selects
+nothing, on every process (issue #4356). It used to fall back to the whole-subject estimate, so a mask meant to
+whiten teeth changed the middle of the photo. The whole person and parts no matte covers (lips, clothes) keep the
+estimate. It landed in place as a bug fix: an estimate of the subject is not a person's teeth, and no command or
+panel made such masks before the Adaptive presets.
+
 **A mask whose first component is Intersect** starts from that component, on the CPU and the GPU
 (issue #1889). It used to start from nothing, so alone it selected nothing, with a later Add it gave
 only what was added, and with the mask's Invert it gave the whole photo. Such masks now include the
