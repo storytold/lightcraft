@@ -417,11 +417,37 @@ pub(crate) fn xmp_warning_text(warning: &ImportWarning) -> String {
             }
         },
         ImportWarningCode::UnmappedXmp => {
-            crate::i18n::tr_format!("XMP adjustments were not imported for {path}: {fields}.", path = path, fields = field_list(&warning.fields),)
+            crate::i18n::tr_format!(
+                "XMP adjustments were not imported for {path}: {fields}.",
+                path = path,
+                fields = field_list(&warning.fields, MAX_WARNING_FIELDS),
+            )
         }
         ImportWarningCode::SkippedXmpMetadata => {
-            crate::i18n::tr_format!("Non-rendering XMP metadata was skipped for {path}: {fields}.", path = path, fields = field_list(&warning.fields),)
+            crate::i18n::tr_format!(
+                "Non-rendering XMP metadata was skipped for {path}: {fields}.",
+                path = path,
+                fields = field_list(&warning.fields, MAX_WARNING_FIELDS),
+            )
         }
+    }
+}
+
+/// The per-photo message with every field listed: the expanded report shows what the toast's
+/// cap holds back (#3050).
+pub(crate) fn xmp_warning_detail_text(warning: &ImportWarning) -> String {
+    match warning.code {
+        ImportWarningCode::UnmappedXmp => crate::i18n::tr_format!(
+            "XMP adjustments were not imported for {path}: {fields}.",
+            path = warning.path,
+            fields = field_list(&warning.fields, usize::MAX),
+        ),
+        ImportWarningCode::SkippedXmpMetadata => crate::i18n::tr_format!(
+            "Non-rendering XMP metadata was skipped for {path}: {fields}.",
+            path = warning.path,
+            fields = field_list(&warning.fields, usize::MAX),
+        ),
+        _ => xmp_warning_text(warning),
     }
 }
 
@@ -479,15 +505,15 @@ fn grouped_warnings(warnings: &[ImportWarning]) -> Vec<(&ImportWarning, usize)> 
         .collect()
 }
 
-/// The field names one grouped line lists: in the grouping key's canonical order, capped with
+/// The field names one line lists: in the grouping key's canonical order, capped at `cap` with
 /// "+N more" (#3050).
-fn field_list(fields: &[String]) -> String {
+fn field_list(fields: &[String], cap: usize) -> String {
     let mut fields = fields.to_vec();
     fields.sort_unstable();
-    let mut list = fields.iter().take(MAX_WARNING_FIELDS).map(String::as_str).collect::<Vec<_>>().join(", ");
-    if fields.len() > MAX_WARNING_FIELDS {
+    let mut list = fields.iter().take(cap).map(String::as_str).collect::<Vec<_>>().join(", ");
+    if fields.len() > cap {
         list.push_str(", ");
-        list.push_str(&crate::i18n::tr_format!("+{n} more", n = fields.len() - MAX_WARNING_FIELDS));
+        list.push_str(&crate::i18n::tr_format!("+{n} more", n = fields.len() - cap));
     }
     list
 }
@@ -505,27 +531,37 @@ pub(crate) fn warning_line(w: &ImportWarning, n: usize) -> String {
             n = n,
             profile = w.profile.as_deref().unwrap_or_default(),
         ),
-        ImportWarningCode::UprightGeometry => {
-            let recalculated = |mode: &str| {
-                crate::i18n::tr_format!("Lightroom geometry was not preserved for {n} photo{s}; {mode} will be recalculated.", n = n, mode = mode,)
-            };
-            match w.mode.unwrap_or(ImportUprightMode::Unknown) {
-                ImportUprightMode::Auto => recalculated(crate::i18n::tr("Auto")),
-                ImportUprightMode::Level => recalculated(crate::i18n::tr("Level")),
-                ImportUprightMode::Vertical => recalculated(crate::i18n::tr("Vertical")),
-                ImportUprightMode::Full => recalculated(crate::i18n::tr("Full")),
-                _ => crate::i18n::tr_format!(
-                    "Lightroom geometry for {n} photo{s} was not preserved; the saved transform is unsupported or ignored.",
-                    n = n,
-                ),
-            }
-        }
+        ImportWarningCode::UprightGeometry => upright_line(w, n),
         ImportWarningCode::UnmappedXmp => {
-            crate::i18n::tr_format!("XMP adjustments were not imported for {n} photo{s}: {fields}.", n = n, fields = field_list(&w.fields),)
+            crate::i18n::tr_format!(
+                "XMP adjustments were not imported for {n} photo{s}: {fields}.",
+                n = n,
+                fields = field_list(&w.fields, MAX_WARNING_FIELDS),
+            )
         }
         ImportWarningCode::SkippedXmpMetadata => {
-            crate::i18n::tr_format!("Non-rendering XMP metadata was skipped for {n} photo{s}: {fields}.", n = n, fields = field_list(&w.fields),)
+            crate::i18n::tr_format!(
+                "Non-rendering XMP metadata was skipped for {n} photo{s}: {fields}.",
+                n = n,
+                fields = field_list(&w.fields, MAX_WARNING_FIELDS),
+            )
         }
+    }
+}
+
+/// The counted line for a group of photos carrying the same Upright mode: the mode names what
+/// happens to the geometry instead (#3050).
+fn upright_line(w: &ImportWarning, n: usize) -> String {
+    let s = crate::i18n::plural_s(n);
+    let recalculated = |mode: &str| {
+        crate::i18n::tr_format!("Lightroom geometry was not preserved for {n} photo{s}; {mode} will be recalculated.", n = n, mode = mode,)
+    };
+    match w.mode.unwrap_or(ImportUprightMode::Unknown) {
+        ImportUprightMode::Auto => recalculated(crate::i18n::tr("Auto")),
+        ImportUprightMode::Level => recalculated(crate::i18n::tr("Level")),
+        ImportUprightMode::Vertical => recalculated(crate::i18n::tr("Vertical")),
+        ImportUprightMode::Full => recalculated(crate::i18n::tr("Full")),
+        _ => crate::i18n::tr_format!("Lightroom geometry for {n} photo{s} was not preserved; the saved transform is unsupported or ignored.", n = n,),
     }
 }
 

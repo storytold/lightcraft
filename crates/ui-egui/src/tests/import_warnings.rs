@@ -247,3 +247,22 @@ fn a_single_photo_warning_is_capped_too() {
     assert!(!text.contains("G09") && !text.contains("G10"), "the overflow is not listed: {text}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The expanded report lists every field the toast's cap holds back (#3050).
+#[test]
+fn the_report_lists_every_field_the_cap_holds_back() {
+    let attrs = (1..=10).map(|i| format!("crs:G{i:02}=\"{i}\"")).collect::<Vec<_>>().join(" ");
+    let (mut h, dir, text) = import_with("report-full", std::slice::from_ref(&attrs));
+    assert!(text.contains("+2 more"), "the toast stays capped: {text}");
+    let widgets = h.request("ui.widgets", json!({}), T);
+    let all = widgets["result"].as_array().expect("widgets");
+    let w = all.iter().find(|w| w["id"] == "toast").expect("the toast is registered by its rectangle");
+    let rect: Vec<f64> = [0usize, 1, 2, 3].map(|i| w["rect"][i].as_f64().expect("rect")).to_vec();
+    let r = h.request("ui.click", json!({"x": rect[0] + rect[2] / 2.0, "y": rect[1] + rect[3] / 2.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::ImportWarnings { .. })), "the report opened");
+    let painted = h.painted_text().join("\n");
+    assert!(painted.contains("G09") && painted.contains("G10"), "every field is listed: {painted}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

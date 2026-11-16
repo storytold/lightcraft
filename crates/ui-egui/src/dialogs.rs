@@ -1026,7 +1026,7 @@ fn import_warnings_body(ui: &mut egui::Ui, t: &Tokens, warnings: &[lightcraft_en
             let header = crate::import::task::warning_line(members[0], members.len());
             egui::CollapsingHeader::new(header).id_salt(key).default_open(true).show(ui, |ui| {
                 for w in members {
-                    ui.add(egui::Label::new(crate::import::task::xmp_warning_text(w)).wrap());
+                    ui.add(egui::Label::new(crate::import::task::xmp_warning_detail_text(w)).wrap());
                 }
             });
         }
