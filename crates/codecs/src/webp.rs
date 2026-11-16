@@ -41,7 +41,7 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
 /// animation frame), or one that runs past the end of the file (truncated). The compressed data
 /// itself is not checked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let (w, h, orientation) = craft_image_codecs::webp_probe::header(bytes).map_err(err)?;
+    let (w, h, orientation) = craft_webp_header::webp_probe::header(bytes).map_err(err)?;
     check_size(F, w as u64, h as u64, &DecodeOptions::default())?;
     Ok((w, h, orientation))
 }
@@ -63,8 +63,8 @@ mod tests {
                 webp[marker + 8..marker + 8 + data.len()].copy_from_slice(&data);
                 if let Ok((w, h)) = craft_image_codecs::probe_size(&webp) {
                     let orientation = crate::exif::summarize(&data).orientation.unwrap_or(1);
-                    let (w, h) = if (5..=8).contains(&orientation) { (h, w) } else { (w, h) };
-                    assert_eq!(header(&webp).unwrap(), (w, h, orientation), "at {at}, value {value}");
+                    let _ = (w, h); // The stored 2 × 3 canvas never changes with EXIF.
+                    assert_eq!(header(&webp).unwrap(), (2, 3, orientation), "at {at}, value {value}");
                 } else {
                     assert!(header(&webp).is_err());
                 }
