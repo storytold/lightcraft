@@ -109,34 +109,44 @@ const TOAST_REPAINT_MS: u64 = 30;
 /// always has (#3050).
 pub fn toast(app: &mut LightcraftApp, ctx: &egui::Context) {
     let now = app.tick_now();
-    let Some((text, until, label, details)) = app.ui.toast.clone() else { return };
-    if now > until {
+    let Some(toast) = app.ui.toast.as_ref() else { return };
+    if now > toast.1 {
         app.ui.toast = None;
         return;
     }
     let Some(canvas) = app.canvas_rect else { return };
-    // a slideshow's playback controls sit at the bottom: the toast goes to the top there, clear of them
-    let y = if app.ui.slideshow.is_some() { canvas.top() + TOAST_EDGE_OFFSET } else { canvas.bottom() - TOAST_EDGE_OFFSET };
-    let fade = ((until - now) / TOAST_FADE_SECONDS).clamp(0.0, 1.0) as f32;
+    let y = toast_y(canvas, app.ui.slideshow.is_some());
+    let fade = ((toast.1 - now) / TOAST_FADE_SECONDS).clamp(0.0, 1.0) as f32;
+    // the text clones only a few dozen bytes; the warning details stay borrowed and are taken
+    // on the press that opens the report, never on a repaint (#3050)
+    let (text, label) = (toast.0.clone(), toast.2);
     let (galley, rect, background, foreground) = toast_layout(ctx, text, label, fade, canvas, y);
     toast_paint(ctx, &galley, rect, background, foreground);
     crate::widgets::register_geometry(ctx, "toast", rect);
-    // A press inside the rectangle dismisses the toast. The event is not consumed: the press
-    // still reaches what is under it (a dialog control may share the rectangle), so nothing the
-    // input does changes — only the toast disappears (#3050).
+    handle_toast_press(app, ctx, rect);
+    ctx.request_repaint_after(std::time::Duration::from_millis(TOAST_REPAINT_MS));
+}
+
+/// Where the toast sits: over the canvas' bottom edge, or over its top in a slideshow, where the
+/// playback controls take the bottom (#3050).
+fn toast_y(canvas: Rect, slideshow: bool) -> f32 {
+    if slideshow { canvas.top() + TOAST_EDGE_OFFSET } else { canvas.bottom() - TOAST_EDGE_OFFSET }
+}
+
+/// What a press on the toast does: a warning toast opens its full report instead of only
+/// clearing it; any other toast clears itself, and so does the toast when the report closes.
+/// The event is not consumed — the press still reaches what is under the rectangle (#3050).
+fn handle_toast_press(app: &mut LightcraftApp, ctx: &egui::Context, rect: Rect) {
     let pressed_on_toast =
         ctx.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) && i.pointer.latest_pos().is_some_and(|p| rect.contains(p)));
-    if pressed_on_toast {
-        // A warning toast opens its full report instead of only clearing it; closing the dialog
-        // clears the toast too (#3050). A dialog already on screen keeps its own input.
-        match details {
-            Some(warnings) if app.ui.dialog.is_none() => app.ui.dialog = Some(crate::state::Dialog::ImportWarnings { warnings }),
-            Some(_) => {}
-            None => app.ui.toast = None,
-        }
+    if !pressed_on_toast {
         return;
     }
-    ctx.request_repaint_after(std::time::Duration::from_millis(TOAST_REPAINT_MS));
+    match app.ui.toast.as_ref().and_then(|t| t.3.clone()) {
+        Some(warnings) if app.ui.dialog.is_none() => app.ui.dialog = Some(crate::state::Dialog::ImportWarnings { warnings }),
+        Some(_) => {}
+        None => app.ui.toast = None,
+    }
 }
 
 /// The toast's text wrapped and faded for this frame, and the rectangle it fills on `canvas`,
