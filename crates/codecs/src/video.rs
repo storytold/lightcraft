@@ -852,9 +852,9 @@ impl Av1Encoder {
         {
             use craft_video::av1::{EncoderConfig, RateControl};
             let mut ec = EncoderConfig::new(w as u32, h as u32, c.fps, 1);
-            ec.rate = RateControl::ConstantQ(quantizer(c.quality).clamp(1, 255) as u8);
+            ec.rate = RateControl::ConstantQ(quantizer(c.quality) as u8);
             ec.keyint = 120;
-            let enc = craft_video::av1::LargeEncoder::with_speed(&ec, c.speed).map_err(|e| bad(format!("AV1: {e}")))?;
+            let enc = craft_video::av1::LargeEncoder::with_exact_quantizer(&ec, c.speed).map_err(|e| bad(format!("AV1: {e}")))?;
             Ok(Av1Encoder { enc, durations: Vec::new(), returned: 0, failed: false, width: w, height: h })
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
@@ -1165,6 +1165,33 @@ mod tests {
         assert_eq!(samples[0].duration, 7);
         assert!(samples[0].key);
         assert!(encoder.config_record().is_some());
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_quality_100_preserves_the_exact_zero_quantizer() {
+        assert_eq!(quantizer(100), 0);
+        let image: Vec<[u8; 4]> = (0..64 * 48).map(|i| [(i * 13) as u8, (i * 41) as u8, (i * 73) as u8, 255]).collect();
+        let cfg = VideoConfig { width: 64, height: 48, fps: 24, quality: 100, speed: 10 };
+        let mut actual = Av1Encoder::new(&cfg).unwrap();
+        let mut samples = actual.push(&image, 7, true).unwrap();
+        samples.extend(actual.finish().unwrap());
+
+        let (y, u, v) = yuv420(&image, 64, 48).unwrap();
+        let y: Vec<u16> = y.into_iter().map(u16::from).collect();
+        let u: Vec<u16> = u.into_iter().map(u16::from).collect();
+        let v: Vec<u16> = v.into_iter().map(u16::from).collect();
+        let frame = craft_video::av1::Frame { y: &y, u: &u, v: &v, y_stride: 64, uv_stride: 32 };
+        let mut ec = craft_video::av1::EncoderConfig::new(64, 48, 24, 1);
+        ec.rate = craft_video::av1::RateControl::ConstantQ(0);
+        ec.keyint = 120;
+        let mut exact = craft_video::av1::LargeEncoder::with_exact_quantizer(&ec, 10).unwrap();
+        let mut expected = exact.push(&frame, true).unwrap();
+        expected.extend(exact.finish().unwrap());
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].data, expected[0].packet.data);
+        assert_eq!(samples[0].duration, 7);
+        assert!(samples[0].key);
     }
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
