@@ -32,7 +32,7 @@ from Immich… ([immich.md](../immich.md)), File → More Imports → Import fro
 tethered capture ([tethering.md](tethering.md)). File → Import Profiles & Presets… reads presets (including
 Lightroom `.xmp` presets); Import Keywords… reads keyword lists.
 
-Supported files: JPEG, PNG, TIFF, WebP, AVIF/HEIF (also on Android), PSD, DNG and the common raw formats (Sony ARW, Nikon NEF, Canon
+Supported files: JPEG, PNG, TIFF, WebP, AVIF/HEIF (also on Android), PSD, DNG and the common raw formats (Sony ARW, Nikon NEF and NEFX, Canon
 CR2/CR3, Fujifilm RAF, Panasonic RW2, Olympus ORF, Pentax PEF, Samsung SRW and more). Per-model status is in the
 [parity tracker](../parity-checklist.md) (`LR-IMP-CAMERA-COVERAGE`).
 
