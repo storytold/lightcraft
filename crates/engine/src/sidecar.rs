@@ -841,10 +841,10 @@ fn ns_bindings(data: &str, start: usize, end: usize) -> Vec<(String, String)> {
         } else {
             (false, String::new())
         };
-        if is_decl {
-            if let Some((vs, ve)) = value {
-                out.push((prefix, data.get(vs..ve).unwrap_or_default().to_string()));
-            }
+        if is_decl
+            && let Some((vs, ve)) = value
+        {
+            out.push((prefix, data.get(vs..ve).unwrap_or_default().to_string()));
         }
     }
     out
@@ -928,10 +928,7 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
     }
     // Element form inside the active global description.
     let content_start = gend + 1;
-    let search_to = data[content_start..]
-        .find("</rdf:Description>")
-        .map(|rel| content_start + rel)
-        .unwrap_or(data.len());
+    let search_to = data[content_start..].find("</rdf:Description>").map(|rel| content_start + rel).unwrap_or(data.len());
     let mut from = content_start;
     while let Some(rel) = data[from..search_to].find('<') {
         let s = from + rel;
@@ -981,14 +978,8 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
                     if slash > s + 1 && data.as_bytes()[slash - 1] == b'/' {
                         slash -= 1;
                     }
-                    let attrs = data
-                        .get(s + 1 + tag_name.len()..slash)
-                        .unwrap_or_default()
-                        .trim_end();
-                    data.replace_range(
-                        s..end + 1,
-                        &format!("<{tag_name}{attrs}>{escaped}</{tag_name}>"),
-                    );
+                    let attrs = data.get(s + 1 + tag_name.len()..slash).unwrap_or_default().trim_end();
+                    data.replace_range(s..end + 1, &format!("<{tag_name}{attrs}>{escaped}</{tag_name}>"));
                     return true;
                 }
                 let close = format!("</{tag_name}>");
@@ -1041,9 +1032,7 @@ fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
     // Bind the `crs:` prefix on the block when it doesn't already bind it, so the
     // inserted `crs:` attribute stays valid. The CRS namespace may be bound under
     // another prefix (e.g. `acr:`); declaring `crs:` as well keeps the attribute valid.
-    if prefix == "crs"
-        && !ns_bindings(data, pos, end).iter().any(|(p, uri)| p == "crs" && uri == CRS_NS)
-    {
+    if prefix == "crs" && !ns_bindings(data, pos, end).iter().any(|(p, uri)| p == "crs" && uri == CRS_NS) {
         data.insert_str(insert_at, " xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"");
     }
     data.insert_str(insert_at, &attr);
@@ -1053,12 +1042,12 @@ fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
 /// declaration binding it), or `crs` when none is declared. Corrections inherit the packet's
 /// binding, so this is the prefix to write mask fields under.
 fn crs_prefix(data: &str) -> String {
-    if let Some(s) = data.find("<rdf:Description") {
-        if let Some(end) = tag_end(data, s) {
-            for (p, uri) in ns_bindings(data, s, end) {
-                if uri == CRS_NS {
-                    return p;
-                }
+    if let Some(s) = data.find("<rdf:Description")
+        && let Some(end) = tag_end(data, s)
+    {
+        for (p, uri) in ns_bindings(data, s, end) {
+            if uri == CRS_NS {
+                return p;
             }
         }
     }
@@ -1121,11 +1110,9 @@ fn correction_descriptions(data: &str) -> Vec<(usize, usize)> {
             continue;
         }
         let rest = data.get(i..).unwrap_or_default();
-        if rest.starts_with("</") {
-            if depth > 0 {
-                depth -= 1;
-            }
-            if let Some(rel) = rest[2..].find('>') {
+        if let Some(closing) = rest.strip_prefix("</") {
+            depth = depth.saturating_sub(1);
+            if let Some(rel) = closing.find('>') {
                 i += 2 + rel + 1;
             } else {
                 break;
@@ -1666,15 +1653,14 @@ impl Session {
                 (true, Some(p)) => Some(p),
                 (true, None) => None,
             };
-            let crs = crate::crs::crs_settings(&*p.develop, baseline);
+            let crs = crate::crs::crs_settings(&p.develop, baseline);
             if !crs.is_empty() {
                 // Mask / local-correction fields are written to the existing crs: correction
                 // elements by write_corrections below, not as attributes on the global
                 // description. Split them out so update_crs_attributes only writes global
                 // develop fields.
-                let (regular, _mask_fields): (Vec<_>, Vec<_>) = crs.into_iter().partition(|(name, _)| {
-                    *name != "CorrectionAmount" && !name.starts_with("Local")
-                });
+                let (regular, _mask_fields): (Vec<_>, Vec<_>) =
+                    crs.into_iter().partition(|(name, _)| *name != "CorrectionAmount" && !name.starts_with("Local"));
                 if !regular.is_empty() {
                     // Write the develop settings other applications understand as `crs:` attributes back
                     // into the packet, updating them in place so the edit reaches the other application
@@ -1691,7 +1677,7 @@ impl Session {
             // so a foreign correction we did not edit is left alone.
             let previous = previous_develop.as_ref().unwrap_or(&default);
             let prefix = crs_prefix(&data);
-            write_corrections(&mut data, &*p.develop, previous, &prefix);
+            write_corrections(&mut data, &p.develop, previous, &prefix);
         }
         write_atomic(&path, data.as_bytes()).map_err(err)?;
         self.note_sidecar_write(&path, data.as_bytes());
@@ -2343,11 +2329,8 @@ mod tests {
 
         let mut develop = DevelopSettings::default();
         develop.light.exposure = 0.9;
-        let mut photo = Photo::new(
-            PhotoId(1),
-            Source::File { path: original.to_string_lossy().into_owned() },
-            "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00",
-        );
+        let mut photo =
+            Photo::new(PhotoId(1), Source::File { path: original.to_string_lossy().into_owned() }, "IMG_1.jpg", "JPEG", 4, 3, "2026-01-01T00:00:00");
         photo.develop = std::sync::Arc::new(develop);
         let mut s = Session::new();
         s.xmp.write_crs = true;

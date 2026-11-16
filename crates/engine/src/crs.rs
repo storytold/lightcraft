@@ -676,7 +676,7 @@ pub fn crs_settings(settings: &DevelopSettings, previous: Option<&DevelopSetting
             ("LocalToningHue", a.color_hue, b.map(|adjust| adjust.color_hue).or(Some(0.0))),
         ]);
     }
-    let mut result: Vec<(&'static str, String)> = all
+    let result: Vec<(&'static str, String)> = all
         .into_iter()
         // Without a baseline, nothing distinguishes our edit from a foreign value: write nothing.
         .filter_map(|(name, current, previous)| {
@@ -759,8 +759,8 @@ mod crs_write_tests {
     fn crs_write_writes_explicit_zero_reset() {
         use lightcraft_catalog::{Op, Photo, PhotoId, Source};
 
-        /// A sidecar with prior `lc:settings` (exposure 0.5) and a stale `crs:Exposure2012="0.5"`
-        /// from another application.
+        // A sidecar with prior `lc:settings` (exposure 0.5) and a stale `crs:Exposure2012="0.5"`
+        // from another application.
         let mut prior = DevelopSettings::default();
         prior.light.exposure = 0.5;
         let settings = prior.to_json().to_string();
