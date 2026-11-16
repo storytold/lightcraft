@@ -2567,5 +2567,16 @@
   "Zoom In on Map": "Zooma in kartan",
   "Zoom Out on Map": "Zooma ut kartan",
   "Open in Browser": "Öppna i webbläsaren",
-  "Show in the Map view": "Visa i kartvyn"
+  "Show in the Map view": "Visa i kartvyn",
+  "GPS Area": "GPS-område",
+  "is inside": "är inuti",
+  "is outside": "är utanför",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "behöver syd, väst, nord och öst i grader (latitud −90…90, longitud −180…180)",
+  "has its south edge north of its north edge": "har sin sydkant norr om nordkanten",
+  "South": "Syd",
+  "West": "Väst",
+  "North": "Nord",
+  "East": "Öst",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Utan plats: filmremsan visar fotona utan plats. Dra dem till kartan för att placera dem.",
+  "Location Filter": "Platsfilter"
 }

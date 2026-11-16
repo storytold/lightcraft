@@ -2505,5 +2505,16 @@
   "Zoom In on Map": "放大地图",
   "Zoom Out on Map": "缩小地图",
   "Open in Browser": "在浏览器中打开",
-  "Show in the Map view": "在地图视图中显示"
+  "Show in the Map view": "在地图视图中显示",
+  "GPS Area": "GPS 区域",
+  "is inside": "在内部",
+  "is outside": "在外部",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "需要以度表示的南、西、北、东（纬度 −90…90，经度 −180…180）",
+  "has its south edge north of its north edge": "南边界位于北边界以北",
+  "South": "南",
+  "West": "西",
+  "North": "北",
+  "East": "东",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "未标记：胶片显示没有位置的照片。将它们拖到地图上即可放置。",
+  "Location Filter": "位置筛选"
 }

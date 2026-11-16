@@ -2,7 +2,7 @@
 
 The Map view (View ▸ Map, ⌘⌥3 / Ctrl+Alt+3) shows the photos that have a GPS position on a slippy map.
 This page describes the view, geotagging, where the map's tiles come from, what is sent over the network,
-and the commands behind it. Later sections (the location filter, saved locations,
+and the commands behind it. Later sections (saved locations,
 track logs, keys and menus) are filled in as those parts land.
 
 ## Map view
@@ -84,6 +84,43 @@ grey with the pin and "Map tiles are off".
 
 `map.state` reports it as `miniMap`: `{photo, lat, lon, zoom, rect, pin, tiles: {drawn, fromParent, missing,
 offline}}` (null when it wasn't drawn in the last frame). Widgets: `info:miniMap`, `info:miniMapAttribution`.
+
+## Location filter
+
+The bar over the map (show or hide it with `\` in the Map view, or Window ▸ Map ▸ Location Filter Bar) narrows
+the photos in view, as Lightroom Classic's Location Filter does. Each choice shows its count:
+
+- **Visible on Map**: the photos whose position is inside the part of the world the map shows. The count
+  follows the view at once; the filmstrip follows once the view has rested for a quarter of a second, so
+  panning doesn't refilter it every frame. A view set by a command (`map.setView`, `map.fit`, zoom) applies at
+  once. When the map is wider than the world, every longitude counts; a view across ±180° wraps.
+- **Tagged**: the photos with a valid position. **Untagged**: those without; the map then shows no pins and
+  says the photos can be dragged onto it from the filmstrip.
+- **None**: no narrowing.
+
+It sits on top of the library's own filter (source, Filter Bar, search), which it never changes: the
+filmstrip, the selection and the keys follow it while the Map view is shown, and leaving the Map view brings
+back exactly the grid's list. The choice is kept for the session. Pins always come from the photos before the
+location filter, so a pin's photos are the ones it would narrow to.
+
+It is made of two smart-rule fields that `library.filter`, smart albums and the rule editor also take
+(Location group):
+
+- **Has GPS** (`hasGps`, yes / no) counts only a valid position: finite, latitude −90…90, longitude
+  −180…180.
+- **GPS Area** (`gpsArea`, is inside / is outside) takes `{south, west, north, east}` in degrees. East < west
+  means the box crosses the antimeridian and wraps. Edges count as inside, and a photo without a position is
+  neither inside nor outside. Missing edges, text, out-of-range values or south north of north are refused by
+  `library.filter`, `album.createSmart` and `album.setRules`; the rule editor shows four numbers.
+  `album.ruleFields` reports its kind as `area`.
+
+`map.locationFilter {mode?: visible | tagged | untagged | none}` sets it (without `mode`, reports) and returns
+`{mode, visible, tagged, untagged, all, area, countMs, shown}` (`area`: the box Visible on Map narrows to;
+`shown`: the photos in the filmstrip now). `map.state` reports the same as `locationFilter`. Widgets:
+`map:filterBar`, `map:filter:<mode>`, `map:untaggedNote`.
+
+**Performance.** Narrowing 50,000 photos to an area took 9 ms, and counting 20,000 positions in one 0.1 ms, in a
+release build (`narrowing_and_counting_many_photos`).
 
 ## Tile sources and cache
 
@@ -228,6 +265,7 @@ GeoNames). Choose Offline to fetch nothing.
 | `map.setView` | `{lat?, lon?, zoom?}`: centre and zoom; lat −90…90 (shown within ±85.05°), lon wrapped, zoom 1 to the source's max; anything else is refused (app only) |
 | `map.zoomIn` / `map.zoomOut` | One zoom level in / out (app only) |
 | `map.lockMarkers` | `{on?}`: Lock Markers on / off, toggles without `on` (app only) |
+| `map.locationFilter` | `{mode?}`: the location filter (visible, tagged, untagged, none) and its counts (app only) |
 | `photo.setGps` | `{ids?, lat, lon}`: sets the position of the photos (default: the selection), one undo step; lat −90…90, lon wrapped into −180…180; unknown ids are refused |
 | `photo.removeGps` | `{ids?}`: removes the position of the photos (default: the selection), one undo step; unknown ids are refused; `photo.clearGps` is its older name |
 

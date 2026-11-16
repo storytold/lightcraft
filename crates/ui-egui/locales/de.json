@@ -3587,5 +3587,16 @@
   "Zoom In on Map": "Karte vergrößern",
   "Zoom Out on Map": "Karte verkleinern",
   "Open in Browser": "Im Browser öffnen",
-  "Show in the Map view": "In der Kartenansicht zeigen"
+  "Show in the Map view": "In der Kartenansicht zeigen",
+  "GPS Area": "GPS-Bereich",
+  "is inside": "liegt innerhalb",
+  "is outside": "liegt außerhalb",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "braucht Süden, Westen, Norden und Osten in Grad (Breite −90…90, Länge −180…180)",
+  "has its south edge north of its north edge": "hat seinen Südrand nördlich des Nordrands",
+  "South": "Süden",
+  "West": "Westen",
+  "North": "Norden",
+  "East": "Osten",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Ohne Ort: Der Filmstreifen zeigt die Fotos ohne Ort. Ziehen Sie sie auf die Karte, um sie zu platzieren.",
+  "Location Filter": "Ortsfilter"
 }

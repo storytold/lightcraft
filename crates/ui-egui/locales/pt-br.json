@@ -2350,5 +2350,16 @@
   "Zoom In on Map": "Aproximar o mapa",
   "Zoom Out on Map": "Afastar o mapa",
   "Open in Browser": "Abrir no navegador",
-  "Show in the Map view": "Mostrar na visualização Mapa"
+  "Show in the Map view": "Mostrar na visualização Mapa",
+  "GPS Area": "Área GPS",
+  "is inside": "está dentro",
+  "is outside": "está fora",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "precisa de sul, oeste, norte e leste em graus (latitude −90…90, longitude −180…180)",
+  "has its south edge north of its north edge": "tem a borda sul ao norte da borda norte",
+  "South": "Sul",
+  "West": "Oeste",
+  "North": "Norte",
+  "East": "Leste",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Sem marcação: a tira mostra as fotos sem local. Arraste-as para o mapa para posicioná-las.",
+  "Location Filter": "Filtro de local"
 }

@@ -2477,5 +2477,16 @@
   "Zoom In on Map": "Perbesar Peta",
   "Zoom Out on Map": "Perkecil Peta",
   "Open in Browser": "Buka di Peramban",
-  "Show in the Map view": "Tampilkan di tampilan Peta"
+  "Show in the Map view": "Tampilkan di tampilan Peta",
+  "GPS Area": "Area GPS",
+  "is inside": "ada di dalam",
+  "is outside": "ada di luar",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "memerlukan selatan, barat, utara, dan timur dalam derajat (lintang −90…90, bujur −180…180)",
+  "has its south edge north of its north edge": "tepi selatannya berada di utara tepi utaranya",
+  "South": "Selatan",
+  "West": "Barat",
+  "North": "Utara",
+  "East": "Timur",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Tanpa tag: strip film menampilkan foto tanpa lokasi. Seret ke peta untuk menempatkannya.",
+  "Location Filter": "Filter Lokasi"
 }

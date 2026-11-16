@@ -2791,5 +2791,16 @@
   "Zoom In on Map": "Phóng to bản đồ",
   "Zoom Out on Map": "Thu nhỏ bản đồ",
   "Open in Browser": "Mở trong trình duyệt",
-  "Show in the Map view": "Hiện trong chế độ xem Bản đồ"
+  "Show in the Map view": "Hiện trong chế độ xem Bản đồ",
+  "GPS Area": "Vùng GPS",
+  "is inside": "nằm trong",
+  "is outside": "nằm ngoài",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "cần nam, tây, bắc và đông theo độ (vĩ độ −90…90, kinh độ −180…180)",
+  "has its south edge north of its north edge": "có cạnh nam ở phía bắc cạnh bắc",
+  "South": "Nam",
+  "West": "Tây",
+  "North": "Bắc",
+  "East": "Đông",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Chưa gắn vị trí: dải phim hiển thị các ảnh không có vị trí. Kéo chúng lên bản đồ để đặt vị trí.",
+  "Location Filter": "Bộ lọc vị trí"
 }

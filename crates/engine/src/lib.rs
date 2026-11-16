@@ -268,6 +268,15 @@ pub struct Session {
     /// Identifies the current `visible` list: a new value (unique in the process) every time it
     /// is recomputed, so frontends can key their per-view caches on it instead of hashing the ids.
     visible_gen: u64,
+    /// A view's own narrowing over the library's filter (the Map view's location filter: Tagged,
+    /// Untagged, Visible on Map): [`Session::visible`] keeps only the photos these rules match.
+    /// It is not part of `filter` (never saved, not shown as filter chips, not in smart albums made
+    /// from the view); the view that sets it clears it when it is left. Ported from PR #819.
+    pub narrow: Option<lightcraft_catalog::RuleSet>,
+    /// The narrowed list, its generation, and what it was narrowed from (base generation, rules).
+    narrowed: Arc<[PhotoId]>,
+    narrowed_gen: u64,
+    narrow_key: Option<(u64, String)>,
     /// Photos in the current source with no filter on (cached like `visible`).
     total: Option<((u64, String), usize, Option<String>)>,
     pub undo: Vec<UndoEntry>,
@@ -497,6 +506,10 @@ impl Session {
             #[cfg(test)]
             never_follow: false,
             visible_gen: 0,
+            narrow: None,
+            narrowed: Vec::new().into(),
+            narrowed_gen: 0,
+            narrow_key: None,
             total: None,
             undo: Vec::new(),
             commits: 0,
@@ -1191,8 +1204,32 @@ impl Session {
         self.shelved_filter.is_some()
     }
 
-    /// Photos shown in the grid/filmstrip for the current source, filter and sort.
+    /// Photos shown in the grid/filmstrip for the current source, filter and sort, narrowed by
+    /// [`Session::narrow`] when a view sets it.
     pub fn visible(&mut self) -> &[PhotoId] {
+        self.visible_unnarrowed();
+        let Some(rules) = &self.narrow else { return &self.visible };
+        let key = (self.visible_gen, format!("{rules:?}"));
+        if self.narrow_key.as_ref() != Some(&key) {
+            lightcraft_catalog::rules::set_now(Some((self.clock)()));
+            let cat = &self.catalog;
+            self.narrowed =
+                self.visible.iter().copied().filter(|id| cat.photo(*id).is_some_and(|p| rules.matches(p, cat))).collect::<Vec<_>>().into();
+            self.narrowed_gen = VISIBLE_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.narrow_key = Some(key);
+        }
+        &self.narrowed
+    }
+
+    /// The photos for the current source, filter and sort before [`Session::narrow`], with their
+    /// generation (as [`Session::visible_shared`]): what the Map view pins and counts.
+    pub fn visible_base_shared(&mut self) -> (u64, Arc<[PhotoId]>) {
+        self.visible_unnarrowed();
+        (self.visible_gen, self.visible.clone())
+    }
+
+    /// The current source, filter and sort's photos, without [`Session::narrow`].
+    fn visible_unnarrowed(&mut self) -> &[PhotoId] {
         let mut key =
             (self.catalog.revision, format!("{:?}|{:?}|{:?}|{:?}|{:?}", self.source, self.filter, self.sort, self.browse, self.library_folder));
         // What a held view is told apart by: what is shown and how, and for a smart album its rules (rules that were
@@ -1276,7 +1313,7 @@ impl Session {
                 // an empty grid under the name of a folder that is gone from the sidebar
                 self.source = LibrarySource::All;
                 self.library_folder = None;
-                return self.visible();
+                return self.visible_unnarrowed();
             }
             if matches!(self.source, LibrarySource::Album(_))
                 && self.sort.key == lightcraft_catalog::SortKey::CaptureDate
@@ -1444,7 +1481,7 @@ impl Session {
     /// whatever it derives from the list under that number.
     pub fn visible_shared(&mut self) -> (u64, Arc<[PhotoId]>) {
         self.visible();
-        (self.visible_gen, self.visible.clone())
+        if self.narrow.is_some() { (self.narrowed_gen, self.narrowed.clone()) } else { (self.visible_gen, self.visible.clone()) }
     }
 
     /// Targets of photo commands: the explicit `ids` (photo ids) or `id` (a photo id) param, else [`Self::selected`].

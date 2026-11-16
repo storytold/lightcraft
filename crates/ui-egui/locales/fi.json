@@ -2463,5 +2463,16 @@
   "Zoom In on Map": "Lähennä karttaa",
   "Zoom Out on Map": "Loitonna karttaa",
   "Open in Browser": "Avaa selaimessa",
-  "Show in the Map view": "Näytä Kartta-näkymässä"
+  "Show in the Map view": "Näytä Kartta-näkymässä",
+  "GPS Area": "GPS-alue",
+  "is inside": "on sisällä",
+  "is outside": "on ulkopuolella",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "tarvitsee etelän, lännen, pohjoisen ja idän asteina (leveys −90…90, pituus −180…180)",
+  "has its south edge north of its north edge": "sen eteläreuna on pohjoisreunan pohjoispuolella",
+  "South": "Etelä",
+  "West": "Länsi",
+  "North": "Pohjoinen",
+  "East": "Itä",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Sijainnittomat: filminauha näyttää kuvat, joilla ei ole sijaintia. Vedä ne kartalle sijoittaaksesi ne.",
+  "Location Filter": "Sijaintisuodatin"
 }

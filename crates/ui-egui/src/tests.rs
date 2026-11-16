@@ -61,6 +61,7 @@ mod lightroom_destination;
 mod lights_out;
 mod map_esri;
 mod map_filmstrip;
+mod map_filter;
 mod map_geotag;
 mod map_info;
 mod mask_effects;

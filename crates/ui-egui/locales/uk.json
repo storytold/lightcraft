@@ -2502,5 +2502,16 @@
   "Zoom In on Map": "Наблизити карту",
   "Zoom Out on Map": "Віддалити карту",
   "Open in Browser": "Відкрити в браузері",
-  "Show in the Map view": "Показати в режимі «Карта»"
+  "Show in the Map view": "Показати в режимі «Карта»",
+  "GPS Area": "GPS-область",
+  "is inside": "всередині",
+  "is outside": "зовні",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "потрібні південь, захід, північ і схід у градусах (широта −90…90, довгота −180…180)",
+  "has its south edge north of its north edge": "південна межа північніше за північну",
+  "South": "Південь",
+  "West": "Захід",
+  "North": "Північ",
+  "East": "Схід",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Без координат: стрічка показує фото без місця. Перетягніть їх на карту, щоб розмістити.",
+  "Location Filter": "Фільтр місця"
 }

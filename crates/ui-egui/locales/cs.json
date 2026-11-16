@@ -2552,5 +2552,16 @@
   "Zoom In on Map": "Přiblížit mapu",
   "Zoom Out on Map": "Oddálit mapu",
   "Open in Browser": "Otevřít v prohlížeči",
-  "Show in the Map view": "Zobrazit v pohledu Mapa"
+  "Show in the Map view": "Zobrazit v pohledu Mapa",
+  "GPS Area": "Oblast GPS",
+  "is inside": "je uvnitř",
+  "is outside": "je mimo",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "potřebuje jih, západ, sever a východ ve stupních (šířka −90…90, délka −180…180)",
+  "has its south edge north of its north edge": "má jižní okraj severněji než severní",
+  "South": "Jih",
+  "West": "Západ",
+  "North": "Sever",
+  "East": "Východ",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Bez polohy: filmový pás ukazuje fotky bez polohy. Přetáhněte je na mapu, abyste je umístili.",
+  "Location Filter": "Filtr polohy"
 }

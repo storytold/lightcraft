@@ -2712,5 +2712,16 @@
   "Zoom In on Map": "Приблизить карту",
   "Zoom Out on Map": "Отдалить карту",
   "Open in Browser": "Открыть в браузере",
-  "Show in the Map view": "Показать в режиме «Карта»"
+  "Show in the Map view": "Показать в режиме «Карта»",
+  "GPS Area": "GPS-область",
+  "is inside": "внутри",
+  "is outside": "снаружи",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "нужны юг, запад, север и восток в градусах (широта −90…90, долгота −180…180)",
+  "has its south edge north of its north edge": "южная граница севернее северной",
+  "South": "Юг",
+  "West": "Запад",
+  "North": "Север",
+  "East": "Восток",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "Без координат: лента показывает фото без местоположения. Перетащите их на карту, чтобы разместить.",
+  "Location Filter": "Фильтр местоположения"
 }

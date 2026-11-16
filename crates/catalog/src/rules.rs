@@ -53,6 +53,9 @@ pub enum Kind {
     /// One of a fixed set: (id, label). Rules store the id; people see the label.
     Choice(&'static [(&'static str, &'static str)]),
     Bool,
+    /// A place on Earth, `{south, west, north, east}` in degrees ([`GpsArea`]): the photo's GPS
+    /// position is inside it or outside it.
+    Area,
 }
 
 /// The fields rules can test: (id, label, kind), in field-menu order ([`TOP_LEVEL_FIELDS`], then
@@ -114,6 +117,7 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     ("state", "State / Province", Kind::Text),
     ("country", "Country", Kind::Text),
     ("hasGps", "Has GPS", Kind::Bool),
+    ("gpsArea", "GPS Area", Kind::Area),
     // Size
     ("longEdge", "Long Edge", Kind::Number),
     ("shortEdge", "Short Edge", Kind::Number),
@@ -140,7 +144,7 @@ pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Keywords & People", &["keywords", "keywordCount", "person", "personCount"]),
     ("Description", &["title", "caption", "altText", "creator", "copyright", "copyrightStatus"]),
     ("Camera Info", &["camera", "lens", "focalLength", "aperture", "shutterSpeed", "iso", "flash", "exposureBias", "cameraSerial"]),
-    ("Location", &["location", "city", "state", "country", "hasGps"]),
+    ("Location", &["location", "city", "state", "country", "hasGps", "gpsArea"]),
     ("Size", &["longEdge", "shortEdge", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment"]),
     ("Assisted Culling", &["sharpness", "bestOfGroup"]),
@@ -199,10 +203,14 @@ pub enum Issue {
     AlbumLoop,
     FolderAlbum,
     EmptyGroup,
+    /// GPS Area: not four numbers in range.
+    NeedsArea,
+    /// GPS Area: its south edge is north of its north edge.
+    AreaReversed,
 }
 
 impl Issue {
-    pub const ALL: [Issue; 22] = [
+    pub const ALL: [Issue; 24] = [
         Issue::UnknownField,
         Issue::NoSuchOperator,
         Issue::NotYesNo,
@@ -225,6 +233,8 @@ impl Issue {
         Issue::AlbumLoop,
         Issue::FolderAlbum,
         Issue::EmptyGroup,
+        Issue::NeedsArea,
+        Issue::AreaReversed,
     ];
 
     /// The issue in a few words, to follow the field's name; a message for translation catalogs.
@@ -252,6 +262,8 @@ impl Issue {
             Issue::AlbumLoop => "would make this album include itself through other smart albums",
             Issue::FolderAlbum => "can't test a folder; choose an album in it",
             Issue::EmptyGroup => "This group is empty: add a rule or remove it.",
+            Issue::NeedsArea => "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)",
+            Issue::AreaReversed => "has its south edge north of its north edge",
         }
     }
 }
@@ -271,6 +283,13 @@ fn field_problem(field: &str, op: &str, value: &Value, cat: &Catalog, owner: Opt
     match kind {
         Kind::Bool => bool_value(value).is_none().then(|| (Issue::NotYesNo, format!("`{field}` is yes or no, not {value}"))),
         Kind::Album => album_problem(value, cat, owner),
+        Kind::Area => GpsArea::parse(value).err().map(|issue| {
+            let message = match issue {
+                Issue::AreaReversed => format!("`{field}`: the south edge is north of the north edge in {value}"),
+                _ => format!("`{field}` needs {{south, west, north, east}} in degrees (latitude −90…90, longitude −180…180), not {value}"),
+            };
+            (issue, message)
+        }),
         Kind::Number => {
             let each = match value {
                 Value::Array(a) if op == "between" && a.len() == 2 => a.iter().find_map(|v| number_problem(field, v)),
@@ -597,6 +616,67 @@ pub fn bool_label(b: bool) -> &'static str {
     if b { "Yes" } else { "No" }
 }
 
+/// A photo's GPS position (`(latitude, longitude)`, as `Meta.gps` stores it) when it is one: both
+/// finite, latitude −90…90, longitude −180…180. Rules (Has GPS, GPS Area) and the map read
+/// positions this way, so a corrupt one is never "on the map".
+pub fn valid_gps(gps: Option<(f64, f64)>) -> Option<(f64, f64)> {
+    gps.filter(|(lat, lon)| lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(lat) && (-180.0..=180.0).contains(lon))
+}
+
+/// The value of a GPS Area rule: a latitude / longitude box in degrees, `{south, west, north,
+/// east}`. `east < west` means the box crosses the antimeridian (±180°) and wraps: `{west: 170,
+/// east: -170}` is the 20° around it. `west: -180, east: 180` is every longitude.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GpsArea {
+    pub south: f64,
+    pub west: f64,
+    pub north: f64,
+    pub east: f64,
+}
+
+impl GpsArea {
+    /// The whole world.
+    pub const WORLD: GpsArea = GpsArea { south: -90.0, west: -180.0, north: 90.0, east: 180.0 };
+
+    /// A rule's value as an area: an object with the four edges as finite numbers, latitudes
+    /// −90…90 (south not north of north), longitudes −180…180. Anything else (NaN, a missing
+    /// edge, text, out of range) is [`Issue::NeedsArea`] or [`Issue::AreaReversed`], and matches
+    /// nothing.
+    pub fn parse(value: &Value) -> Result<GpsArea, Issue> {
+        let edge = |k: &str| value.get(k).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or(Issue::NeedsArea);
+        let a = GpsArea { south: edge("south")?, west: edge("west")?, north: edge("north")?, east: edge("east")? };
+        let lat = |v: f64| (-90.0..=90.0).contains(&v);
+        let lon = |v: f64| (-180.0..=180.0).contains(&v);
+        if !(lat(a.south) && lat(a.north) && lon(a.west) && lon(a.east)) {
+            return Err(Issue::NeedsArea);
+        }
+        if a.south > a.north {
+            return Err(Issue::AreaReversed);
+        }
+        Ok(a)
+    }
+
+    /// The rule value: `{south, west, north, east}`.
+    pub fn to_value(self) -> Value {
+        serde_json::json!({"south": self.south, "west": self.west, "north": self.north, "east": self.east})
+    }
+
+    /// Whether the position `lat`, `lon` (degrees) is inside, edges included. Longitude ±180 is
+    /// one meridian: a box reaching either side of it holds both.
+    pub fn contains(&self, lat: f64, lon: f64) -> bool {
+        if !(lat >= self.south && lat <= self.north) || !lon.is_finite() {
+            return false;
+        }
+        let within = |lon: f64| if self.west <= self.east { lon >= self.west && lon <= self.east } else { lon >= self.west || lon <= self.east };
+        within(lon) || (lon.abs() == 180.0 && within(-lon))
+    }
+
+    /// `12.5, -4 – 13, 2.25` (south, west – north, east), as rule summaries show it.
+    pub fn describe(&self) -> String {
+        format!("{}, {} – {}, {}", self.south, self.west, self.north, self.east)
+    }
+}
+
 /// The display label of choice `id` of `field` ("Public Domain" for `publicDomain`); `None` when
 /// `field` isn't a choice field or has no such choice.
 pub fn choice_label(field: &str, id: &str) -> Option<&'static str> {
@@ -644,6 +724,7 @@ pub fn ops_for(kind: Kind) -> &'static [(&'static str, &'static str)] {
         ],
         Kind::Choice(_) | Kind::Album => &[("is", "is"), ("isNot", "isn't")],
         Kind::Bool => &[("is", "is")],
+        Kind::Area => &[("inside", "is inside"), ("outside", "is outside")],
     }
 }
 
@@ -1028,6 +1109,20 @@ impl Rule {
             return file_path_matches(op, &p.source, value);
         }
         let m = &p.meta;
+        // the GPS fields first: they don't need the value as text (a GPS Area's would be its JSON,
+        // written out for every photo of a Visible on Map filter)
+        match field {
+            // a position the map can place (NaN or out of range counts as none, as on the map)
+            "hasGps" => return bool_value(value).is_some_and(|b| valid_gps(m.gps).is_some() == b),
+            // a photo without a position is in no area, and outside none
+            "gpsArea" => {
+                return match (valid_gps(m.gps), GpsArea::parse(value)) {
+                    (Some((lat, lon)), Ok(area)) => area.contains(lat, lon) == (op == "inside"),
+                    _ => false,
+                };
+            }
+            _ => {}
+        }
         let want = lower(value);
         let text = |have: &str| text_op(op, have, &want);
         let yes = |have: bool| bool_value(value).is_some_and(|b| have == b);
@@ -1045,7 +1140,6 @@ impl Rule {
             }
             "kind" => (kind_name(p.kind) == want) == (op == "is"),
             "edited" => yes(p.is_edited()),
-            "hasGps" => yes(m.gps.is_some()),
             "virtualCopy" => yes(p.copy_of.is_some()),
             "copyName" => text(p.copy_name.as_deref().unwrap_or("")),
             "stacked" => yes(cat.stack_of(p.id).is_some()),
@@ -1296,6 +1390,7 @@ impl RuleSet {
                     let op = field_kind(field).and_then(|k| ops_for(k).iter().find(|o| o.0 == op)).map_or(op.as_str(), |o| o.1);
                     let v = match value {
                         _ if field == "album" && cat.is_some() => album_name(value, cat),
+                        _ if field_kind(field) == Some(Kind::Area) => GpsArea::parse(value).map_or_else(|_| value.to_string(), |a| a.describe()),
                         _ if field_kind(field) == Some(Kind::Bool) => {
                             bool_value(value).map_or_else(|| value.to_string(), |b| bool_label(b).to_lowercase())
                         }

@@ -8,6 +8,13 @@
 //!   regroups them and zooming in only splits them. A click selects a pin's photos (⌘ adds), a
 //!   double-click opens a single photo in Detail or zooms in on a cluster, hovering shows the first
 //!   photo's thumbnail; "N photos without GPS" counts the rest.
+//! - **Location filter** (the bar over the map, as Lightroom Classic's): Visible on Map, Tagged,
+//!   Untagged or None, each with its count (`map.locationFilter`). It narrows the photos in view
+//!   through [`lightcraft_engine::Session::narrow`] (the Has GPS / GPS Area rules `library.filter`
+//!   and smart albums take), so the filmstrip, selection and keys follow it while the library's own
+//!   filter stays as it is; leaving the Map view drops it ([`sync_location_filter`]). Visible on
+//!   Map follows the view once it rests for [`AREA_SETTLE_S`] (commands apply at once). Pins come
+//!   from the photos before it (none for Untagged). Ported from PR #819 (Jason Baldwin).
 //! - **Moving**: drag to pan, wheel to zoom around the pointer, double-click to zoom in; Fit to
 //!   Photos (also the first time the map is shown). Commands: `view.map`, `map.fit`, `map.setView`,
 //!   `map.zoomIn`, `map.zoomOut`, `map.state`.
@@ -24,6 +31,7 @@ use std::collections::HashSet;
 
 use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::PhotoId;
+use lightcraft_catalog::rules::GpsArea;
 use lightcraft_engine::map::{Bounds, CLUSTER_CELL, Cluster, LocationFilter, MapPoint, Viewport, fit_bounds};
 use lightcraft_geom::{LatLon, Point};
 use serde_json::{Value, json};
@@ -50,21 +58,24 @@ const FIT_MAX_ZOOM: f64 = 16.0;
 /// The lowest zoom the map shows.
 const MIN_ZOOM: f64 = 1.0;
 
-/// The photos of the current list that have a valid position, projected once per change of the
-/// list (its generation from [`lightcraft_engine::Session::visible_shared`]).
+/// How long the view must rest before Visible on Map narrows the filmstrip to it (seconds).
+pub const AREA_SETTLE_S: f64 = 0.25;
+
+/// The photos of the current list (before the location filter) that have a valid position,
+/// projected once per change of the list (its generation from
+/// [`lightcraft_engine::Session::visible_base_shared`]).
 #[derive(Default)]
 pub struct Points {
-    generation: Option<(u64, LocationFilter)>,
+    generation: Option<u64>,
     pub points: Vec<MapPoint>,
     /// Photos of the list without a valid position.
     pub without: usize,
 }
 
-/// The current list's points (recomputed only when the list or the location filter changed).
+/// The current list's points (recomputed only when the list changed).
 fn refresh_points(app: &mut LightcraftApp) {
-    let filter = app.ui.map.filter;
-    let (generation, list) = app.session.visible_shared();
-    if app.map_points.generation == Some((generation, filter)) {
+    let (generation, list) = app.session.visible_base_shared();
+    if app.map_points.generation == Some(generation) {
         return;
     }
     let mut points = Vec::new();
@@ -75,11 +86,77 @@ fn refresh_points(app: &mut LightcraftApp) {
             None => without += 1,
         }
     }
-    // Untagged shows the photos without a position: no pins
-    if filter == LocationFilter::Untagged {
-        points.clear();
+    app.map_points = Points { generation: Some(generation), points, without };
+}
+
+/// The area the map shows now (`None` before it was first drawn): the whole world's width when the
+/// view is wider than the world; west > east when it crosses ±180°.
+fn view_area(m: &crate::state::MapUi) -> Option<GpsArea> {
+    let r = m.last_canvas?;
+    let center = LatLon::new(m.center_lat.clamp(-90.0, 90.0), lightcraft_engine::map::mercator::wrap_lon(m.center_lon))?;
+    let (w, h) = (f64::from(r.width()), f64::from(r.height()));
+    let vp = Viewport::new(center, m.zoom, w, h);
+    let north = vp.to_lat_lon(Point::new(w / 2.0, 0.0)).lat;
+    let south = vp.to_lat_lon(Point::new(w / 2.0, h)).lat;
+    let (west, east) = if lightcraft_engine::map::mercator::world_size(vp.zoom) <= w {
+        (-180.0, 180.0)
+    } else {
+        (vp.to_lat_lon(Point::new(0.0, h / 2.0)).lon, vp.to_lat_lon(Point::new(w, h / 2.0)).lon)
+    };
+    Some(GpsArea { south: south.min(north), west, north: north.max(south), east })
+}
+
+/// The rules the location filter narrows the photos in view with (`None`: no filter). Visible on
+/// Map takes the area it was last applied to (none yet: no narrowing).
+fn location_rules(m: &crate::state::MapUi) -> Option<lightcraft_catalog::RuleSet> {
+    let rule = |field: &str, op: &str, value: Value| lightcraft_catalog::RuleSet {
+        mode: lightcraft_catalog::Match::All,
+        rules: vec![lightcraft_catalog::Rule::Field { field: field.into(), op: op.into(), value }],
+    };
+    match m.filter {
+        LocationFilter::None => None,
+        LocationFilter::Tagged => Some(rule("hasGps", "is", json!(true))),
+        LocationFilter::Untagged => Some(rule("hasGps", "is", json!(false))),
+        LocationFilter::VisibleOnMap => m.applied_area.map(|a| rule("gpsArea", "inside", a.to_value())),
     }
-    app.map_points = Points { generation: Some((generation, filter)), points, without };
+}
+
+/// Narrow the photos in view by the location filter while the Map view is shown, and drop it once
+/// it isn't: the library's own filter is never touched, so leaving the view brings back exactly
+/// what the grid showed. Called every frame and after the map's commands.
+pub fn sync_location_filter(app: &mut LightcraftApp) {
+    let want = if app.ui.view == ViewMode::Map { location_rules(&app.ui.map) } else { None };
+    if app.session.narrow != want {
+        app.session.narrow = want;
+    }
+}
+
+/// The filter bar's counts: `{mode, visible, tagged, untagged, all, area, countMs}` (`area`: what
+/// Visible on Map narrows to, null for the other modes; `visible`: photos with a position inside
+/// the view now).
+fn location_state(app: &LightcraftApp) -> Value {
+    let m = &app.ui.map;
+    let started = web_time::Instant::now();
+    let visible = view_area(m).map_or(0, |a| app.map_points.points.iter().filter(|p| a.contains(p.pos.lat, p.pos.lon)).count());
+    let count_ms = started.elapsed().as_secs_f64() * 1e3;
+    let (tagged, untagged) = (app.map_points.points.len(), app.map_points.without);
+    let area = m.applied_area.filter(|_| m.filter == LocationFilter::VisibleOnMap);
+    json!({
+        "mode": m.filter.id(),
+        "visible": visible,
+        "tagged": tagged,
+        "untagged": untagged,
+        "all": tagged + untagged,
+        "area": area.map(GpsArea::to_value),
+        "countMs": count_ms,
+    })
+}
+
+/// Choose the location filter `mode` on `m`: Visible on Map starts from the view as it is now.
+fn choose_location(m: &mut crate::state::MapUi, mode: LocationFilter) {
+    m.filter = mode;
+    m.applied_area = if mode == LocationFilter::VisibleOnMap { view_area(m) } else { None };
+    m.seen_area = None;
 }
 
 /// A single photo's pin being dragged to a new place.
@@ -155,6 +232,7 @@ pub fn state(app: &LightcraftApp) -> Value {
         "movingPin": d.moving.map(|(id, at)| json!({"id": id, "x": at.x, "y": at.y})),
         "hovered": d.hovered,
         "drop": d.drop.map(|(n, at, to)| json!({"count": n, "x": at.x, "y": at.y, "lat": to.lat, "lon": to.lon})),
+        "locationFilter": location_state(app),
         // the Info panel's map, when it was drawn in the last frame
         "miniMap": app.mini_map.as_ref().map(|m| json!({
             "photo": m.photo,
@@ -175,15 +253,35 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
     let r = match id {
         "map.fit" => {
             fit(app);
+            apply_view_area(app);
             Ok(state(app))
         }
-        "map.setView" => set_view(app, p, max_zoom).map(|()| state(app)),
+        "map.setView" => set_view(app, p, max_zoom).map(|()| {
+            apply_view_area(app);
+            state(app)
+        }),
         "map.zoomIn" | "map.zoomOut" => {
             let step = if id == "map.zoomIn" { 1.0 } else { -1.0 };
             let m = &mut app.ui.map;
             m.zoom = (m.zoom.round() + step).clamp(MIN_ZOOM, max_zoom);
             m.fitted = true;
+            apply_view_area(app);
             Ok(state(app))
+        }
+        // {mode?: visible|tagged|untagged|none}: without it, reports
+        "map.locationFilter" => {
+            match p.get("mode") {
+                None | Some(Value::Null) => {}
+                Some(v) => match v.as_str().and_then(LocationFilter::parse) {
+                    Some(mode) => choose_location(&mut app.ui.map, mode),
+                    None => return Some(Err("map.locationFilter: mode is visible, tagged, untagged or none".into())),
+                },
+            }
+            refresh_points(app);
+            sync_location_filter(app);
+            let mut s = location_state(app);
+            s["shown"] = json!(app.session.visible().len());
+            Ok(s)
         }
         // {on?}: without it, toggles (Cmd/Ctrl+K in the Map view, the toolbar's Lock Markers)
         "map.lockMarkers" | "map.toggleLock" | "map.lock" => {
@@ -200,6 +298,17 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
         _ => return None,
     };
     Some(r)
+}
+
+/// Visible on Map follows a view a command set at once (no wait for it to rest).
+fn apply_view_area(app: &mut LightcraftApp) {
+    if app.ui.map.filter == LocationFilter::VisibleOnMap
+        && let Some(a) = view_area(&app.ui.map)
+    {
+        app.ui.map.applied_area = Some(a);
+        app.ui.map.seen_area = None;
+        sync_location_filter(app);
+    }
 }
 
 /// `map.setView {lat?, lon?, zoom?}`: what is given must be a finite number (lat −90…90, shown
@@ -302,6 +411,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let pointer = ui.input(|i| i.pointer.latest_pos());
     let carrying = app.ui.dragging_photos.is_some();
 
+    follow_view_area(app, ui, &mut map_ui, center, zoom);
+
     // Tiles (the service is asked for the view plus one ring)
     tiles::draw(&mut app.session, &painter, canvas_rect, center, zoom, 1);
     app.map_drawn.canvas = Some(canvas_rect);
@@ -313,7 +424,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     // 2. Cluster the pins of the view (world-anchored cells: panning never regroups them)
     let started = web_time::Instant::now();
-    let clusters = lightcraft_engine::map::cluster::cluster(&app.map_points.points, &vp, CLUSTER_CELL);
+    // Untagged: the filmstrip holds the photos without a position, so no pins
+    let shown: &[MapPoint] = if map_ui.filter == LocationFilter::Untagged { &[] } else { &app.map_points.points };
+    let clusters = lightcraft_engine::map::cluster::cluster(shown, &vp, CLUSTER_CELL);
     app.map_drawn.cluster_ms = started.elapsed().as_secs_f64() * 1e3;
     app.map_drawn.with_gps = app.map_points.points.len();
     app.map_drawn.without_gps = app.map_points.without;
@@ -376,17 +489,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     app.map_drawn.drop = drop;
 
-    // "N photos without GPS", bottom left over the map
-    if app.map_points.without > 0 {
-        let n = app.map_points.without;
-        let text = if n == 1 { crate::i18n::tr("1 photo without GPS").to_string() } else { crate::i18n::tr_format!("{n} photos without GPS", n = n) };
-        let at = pos2(canvas_rect.left() + 12.0, canvas_rect.bottom() - TOOLBAR_H - 10.0);
-        let galley = ui.painter().layout_no_wrap(text, FontId::proportional(11.5), Color32::WHITE);
-        let r = Rect::from_min_size(pos2(at.x, at.y - galley.size().y - 8.0), galley.size() + vec2(14.0, 8.0));
-        ui.painter().rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(20, 24, 28, 210));
-        ui.painter().galley(r.min + vec2(7.0, 4.0), galley, Color32::WHITE);
-        crate::widgets::register(ui, "map:withoutGps", r);
-    }
+    map_notes(app, ui, canvas_rect, &map_ui);
 
     // 5. Top Location Filter Bar & Breadcrumb
     if map_ui.show_filter_bar {
@@ -413,7 +516,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.ui.map = map_ui;
     if fit_now {
         fit(app);
+        apply_view_area(app);
     }
+    sync_location_filter(app);
 }
 
 /// The pointer on the map canvas: a drag that starts on a single photo's pin moves it (unless
@@ -566,6 +671,60 @@ pub(crate) fn keep_on_map(pin: Pos2, rect: Rect) -> Pos2 {
     let lo = (rect.min + vec2(8.0, 8.0)).min(rect.center());
     let hi = (rect.max - vec2(8.0, 8.0)).max(rect.center());
     pin.clamp(lo, hi)
+}
+
+/// Visible on Map follows the view once it rests (a pan or zoom doesn't refilter the filmstrip
+/// every frame); before any area was applied, the view's applies at once.
+fn follow_view_area(app: &LightcraftApp, ui: &egui::Ui, map_ui: &mut crate::state::MapUi, center: LatLon, zoom: f64) {
+    if map_ui.filter != LocationFilter::VisibleOnMap {
+        return;
+    }
+    let probe = crate::state::MapUi { center_lat: center.lat, center_lon: center.lon, zoom, ..map_ui.clone() };
+    let Some(area) = view_area(&probe) else { return };
+    let now = app.tick_now();
+    let since = match map_ui.seen_area {
+        Some((a, at)) if a == area => at,
+        _ => {
+            map_ui.seen_area = Some((area, now));
+            now
+        }
+    };
+    if map_ui.applied_area != Some(area) {
+        let wait = AREA_SETTLE_S - (now - since);
+        if map_ui.applied_area.is_none() || wait <= 0.0 {
+            map_ui.applied_area = Some(area);
+            ui.ctx().request_repaint();
+        } else {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait.clamp(0.001, AREA_SETTLE_S)));
+        }
+    }
+}
+
+/// The notes over the map: what Untagged shows (and what to do with it), and "N photos without GPS"
+/// at the bottom left.
+fn map_notes(app: &LightcraftApp, ui: &egui::Ui, canvas_rect: Rect, map_ui: &crate::state::MapUi) {
+    // Untagged: what the filmstrip holds, and what to do with it
+    if map_ui.filter == LocationFilter::Untagged && app.map_points.without > 0 {
+        let text = crate::i18n::tr("Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.");
+        let g = ui.painter().layout(text.to_string(), FontId::proportional(12.0), Color32::WHITE, (canvas_rect.width() - 80.0).max(120.0));
+        let top = canvas_rect.top() + if map_ui.show_filter_bar { FILTER_BAR_H + 12.0 } else { 12.0 };
+        let r = Rect::from_center_size(pos2(canvas_rect.center().x, top + g.size().y / 2.0 + 6.0), g.size() + vec2(20.0, 12.0));
+        ui.painter().rect_filled(r, 6.0, Color32::from_rgba_unmultiplied(20, 24, 28, 225));
+        ui.painter().galley(r.min + vec2(10.0, 6.0), g, Color32::WHITE);
+        crate::widgets::register(ui, "map:untaggedNote", r);
+    }
+
+    // "N photos without GPS", bottom left over the map
+    if app.map_points.without > 0 {
+        let n = app.map_points.without;
+        let text = if n == 1 { crate::i18n::tr("1 photo without GPS").to_string() } else { crate::i18n::tr_format!("{n} photos without GPS", n = n) };
+        let at = pos2(canvas_rect.left() + 12.0, canvas_rect.bottom() - TOOLBAR_H - 10.0);
+        let galley = ui.painter().layout_no_wrap(text, FontId::proportional(11.5), Color32::WHITE);
+        let r = Rect::from_min_size(pos2(at.x, at.y - galley.size().y - 8.0), galley.size() + vec2(14.0, 8.0));
+        ui.painter().rect_filled(r, 4.0, Color32::from_rgba_unmultiplied(20, 24, 28, 210));
+        ui.painter().galley(r.min + vec2(7.0, 4.0), galley, Color32::WHITE);
+        crate::widgets::register(ui, "map:withoutGps", r);
+    }
 }
 
 /// Where photos or a pin may be dropped: the map, less its filter bar and bottom toolbar.
@@ -800,14 +959,24 @@ fn drop_indicator(p: &Painter, t: &Tokens, at: Pos2, n: usize) {
     }
 }
 
-fn render_top_filter_bar(_app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, map_ui: &mut crate::state::MapUi, center: LatLon) {
+fn render_top_filter_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, map_ui: &mut crate::state::MapUi, center: LatLon) {
     let t = Tokens::get(ui.ctx());
     let bar_rect = Rect::from_min_size(pos2(canvas.left() + 16.0, canvas.top() + 14.0), vec2(canvas.width() - 32.0, 36.0));
+    crate::widgets::register(ui, "map:filterBar", bar_rect);
 
     let bar_bg = Color32::from_rgba_unmultiplied(20, 24, 28, 220);
     ui.painter().rect_filled(bar_rect, 6.0, bar_bg);
     ui.painter().rect_stroke(bar_rect, 6.0, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
 
+    // counted from the photos before the location filter, for the view as drawn this frame
+    let counts = {
+        let saved = std::mem::replace(&mut app.ui.map, map_ui.clone());
+        let s = location_state(app);
+        app.ui.map = saved;
+        s
+    };
+    let count = |k: &str| counts[k].as_u64().unwrap_or(0);
+    let mut chosen = None;
     let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar_rect));
     bar_ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
@@ -815,17 +984,18 @@ fn render_top_filter_bar(_app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
         ui.add_space(8.0);
 
         let filters = [
-            (LocationFilter::VisibleOnMap, "Visible On Map"),
-            (LocationFilter::Tagged, "Tagged"),
-            (LocationFilter::Untagged, "Untagged"),
-            (LocationFilter::None, "None"),
+            (LocationFilter::VisibleOnMap, "Visible On Map", count("visible")),
+            (LocationFilter::Tagged, "Tagged", count("tagged")),
+            (LocationFilter::Untagged, "Untagged", count("untagged")),
+            (LocationFilter::None, "None", count("all")),
         ];
 
-        for (f, name) in filters {
+        for (f, name, n) in filters {
             let active = map_ui.filter == f;
-            let btn = ui.selectable_label(active, crate::i18n::tr(name));
-            if btn.clicked() {
-                map_ui.filter = f;
+            let btn = ui.selectable_label(active, format!("{} ({n})", crate::i18n::tr(name)));
+            crate::widgets::register(ui, format!("map:filter:{}", f.id()), btn.rect);
+            if btn.clicked() && !active {
+                chosen = Some(f);
             }
         }
 
@@ -834,9 +1004,15 @@ fn render_top_filter_bar(_app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Re
             ui.label(egui::RichText::new(format!("{:.4}°, {:.4}°", center.lat, center.lon)).small().color(Color32::LIGHT_GRAY));
         });
     });
+    if let Some(f) = chosen {
+        let mut probe = crate::state::MapUi { center_lat: center.lat, center_lon: center.lon, ..map_ui.clone() };
+        choose_location(&mut probe, f);
+        map_ui.filter = probe.filter;
+        map_ui.applied_area = probe.applied_area;
+        map_ui.seen_area = None;
+    }
 }
 
-/// The bottom toolbar; returns whether Fit to Photos was clicked.
 fn render_bottom_toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, map_ui: &mut crate::state::MapUi, zoom: &mut f64) -> bool {
     let mut fit_clicked = false;
     let t = Tokens::get(ui.ctx());

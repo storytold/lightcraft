@@ -81,6 +81,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("map.lock", "Lock Map Markers", None, "Window>Map"),
     ("map.state", "Map State", None, ""),
     ("map.fit", "Fit Map to Photos", None, ""),
+    ("map.locationFilter", "Location Filter", None, ""),
     ("map.setView", "Set Map View", None, ""),
     ("map.zoomIn", "Zoom In on Map", None, ""),
     ("map.zoomOut", "Zoom Out on Map", None, ""),

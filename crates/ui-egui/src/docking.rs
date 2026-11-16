@@ -395,6 +395,8 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     let mut canvas = None;
     // the Info panel's map is this frame's only (`map.state` reports none once it is gone)
     app.mini_map = None;
+    // the Map view's location filter narrows the photos only while it is shown
+    crate::panels::map::sync_location_filter(app);
     let output = DockArea::new(egui::Id::unique("lightcraft-docking")).locked(workspace.locked).show_with_limits(
         ui,
         &workspace.layout,

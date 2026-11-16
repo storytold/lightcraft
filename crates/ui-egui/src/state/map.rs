@@ -30,6 +30,12 @@ pub struct MapUi {
     /// The photos of the pin whose right-click menu is open. Not saved.
     #[serde(skip)]
     pub menu_for: Vec<u64>,
+    /// The area Visible on Map narrows the photos to (the view's, once it rested). Not saved.
+    #[serde(skip)]
+    pub applied_area: Option<lightcraft_catalog::rules::GpsArea>,
+    /// The view's area last seen, and when it was first seen (to wait for the view to rest).
+    #[serde(skip)]
+    pub seen_area: Option<(lightcraft_catalog::rules::GpsArea, f64)>,
 }
 
 impl Default for MapUi {
@@ -51,6 +57,8 @@ impl Default for MapUi {
             last_canvas: None,
             pin_drag: None,
             menu_for: Vec::new(),
+            applied_area: None,
+            seen_area: None,
         }
     }
 }

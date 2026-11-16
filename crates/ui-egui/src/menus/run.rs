@@ -377,7 +377,7 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(json!({"show": app.ui.map.show_filter_bar}))
         }
         // Lock Markers (map.toggleLock / map.lock: older names); {on?}, without it toggles
-        "map.lockMarkers" | "map.toggleLock" | "map.lock" | "map.fit" | "map.setView" | "map.zoomIn" | "map.zoomOut" => {
+        "map.lockMarkers" | "map.toggleLock" | "map.lock" | "map.locationFilter" | "map.fit" | "map.setView" | "map.zoomIn" | "map.zoomOut" => {
             crate::panels::map::command(app, id, p).unwrap_or_else(|| Err(format!("unknown map command {id}")))
         }
         "map.navigator" => {

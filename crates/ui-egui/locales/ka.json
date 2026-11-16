@@ -3772,5 +3772,16 @@
   "Zoom In on Map": "რუკის მიახლოება",
   "Zoom Out on Map": "რუკის დაშორება",
   "Open in Browser": "ბრაუზერში გახსნა",
-  "Show in the Map view": "რუკის ხედში ჩვენება"
+  "Show in the Map view": "რუკის ხედში ჩვენება",
+  "GPS Area": "GPS არეალი",
+  "is inside": "არის შიგნით",
+  "is outside": "არის გარეთ",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "საჭიროა სამხრეთი, დასავლეთი, ჩრდილოეთი და აღმოსავლეთი გრადუსებში (განედი −90…90, გრძედი −180…180)",
+  "has its south edge north of its north edge": "მისი სამხრეთი კიდე ჩრდილოეთ კიდეზე ჩრდილოეთითაა",
+  "South": "სამხრეთი",
+  "West": "დასავლეთი",
+  "North": "ჩრდილოეთი",
+  "East": "აღმოსავლეთი",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "მონიშვნის გარეშე: ფირის ზოლი აჩვენებს ფოტოებს მდებარეობის გარეშე. გადაათრიეთ ისინი რუკაზე მათ განსათავსებლად.",
+  "Location Filter": "მდებარეობის ფილტრი"
 }

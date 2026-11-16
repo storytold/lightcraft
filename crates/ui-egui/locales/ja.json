@@ -2504,5 +2504,16 @@
   "Zoom In on Map": "マップを拡大",
   "Zoom Out on Map": "マップを縮小",
   "Open in Browser": "ブラウザーで開く",
-  "Show in the Map view": "マップ表示で見る"
+  "Show in the Map view": "マップ表示で見る",
+  "GPS Area": "GPS 範囲",
+  "is inside": "内側にある",
+  "is outside": "外側にある",
+  "needs south, west, north and east in degrees (latitude −90…90, longitude −180…180)": "南・西・北・東を度で指定してください（緯度 −90…90、経度 −180…180）",
+  "has its south edge north of its north edge": "南端が北端より北にあります",
+  "South": "南",
+  "West": "西",
+  "North": "北",
+  "East": "東",
+  "Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.": "未設定：フィルムストリップには位置情報のない写真が表示されます。マップにドラッグして配置します。",
+  "Location Filter": "位置フィルター"
 }
