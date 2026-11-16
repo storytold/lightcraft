@@ -295,6 +295,17 @@ pub(crate) fn jobs_for(s: &mut Session, id: lcc_catalog::PhotoId, edge: Option<u
     let e = edge.unwrap_or(full).min(full.max(1)).max(1);
     let thumb = THUMB_SIZES[THUMB_SIZES.len() - 1];
     let (mut view, grid) = (s.loupe_job(id, e, e, true), s.thumb_job(id, thumb));
+    // a standard preview reads the original only as large as it needs (a JPEG then decodes straight at a half, a
+    // quarter or an eighth of its size): not whole, which for a 50 MP photo is over a gigabyte a lane. The decode is
+    // the build's own (it is not kept as the photo's full-size source), and shared only with decodes of the same size.
+    if edge.is_some()
+        && let Some(j) = view.as_mut()
+        && j.level == crate::media::SourceLevel::Full
+        && let Some(needed) = s.source_edge_for(id, e)
+        && let crate::media::SourceRef::File { max_edge, .. } = &mut j.source
+    {
+        *max_edge = needed.min(*max_edge);
+    }
     // a 1:1 preview is kept under its own key, to be discarded on its own
     if edge.is_none()
         && let Some(j) = view.as_mut()

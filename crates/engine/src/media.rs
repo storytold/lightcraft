@@ -3201,6 +3201,13 @@ impl crate::Session {
         Ok(())
     }
 
+    /// Pixels along `id`'s original long edge that a render `out_long` pixels long of the photo as edited (its crop
+    /// applied) needs: what a decode for it may be fitted to.
+    pub(crate) fn source_edge_for(&self, id: PhotoId, out_long: usize) -> Option<usize> {
+        let p = self.rendered_photo_of(id)?;
+        Some(source_edge_needed(&p, &p.develop, true, out_long).max(1))
+    }
+
     /// Whether the original of `id` is too big to decode whole within the memory budget, so the window decodes it
     /// smaller ([`crate::memory::interactive_edge_cap`]): the loupe does not decode such a one ahead of a zoom.
     pub fn full_source_capped(&self, id: PhotoId) -> bool {

@@ -470,10 +470,19 @@ pub fn wait_for_foreground_steady(cancel: &AtomicBool) -> bool {
 }
 
 /// Photos the background build renders side by side: each render spreads over the cores already,
-/// so two keep the machine busy while leaving room for the photo on screen.
+/// so two keep the machine busy while leaving room for the photo on screen; one under a small memory budget (a phone),
+/// where two photos decoding at once took memory the photo on screen needed.
 pub fn background_lanes() -> usize {
     let cores = std::thread::available_parallelism().map_or(2, |n| n.get());
-    if cores >= 8 { 2 } else { 1 }
+    lanes_for(cores, crate::memory::budget())
+}
+
+/// The memory budget under which the background build renders one photo at a time.
+const TWO_LANE_BUDGET: usize = 4 << 30;
+
+/// [`background_lanes`] on a machine with `cores` threads and a memory budget of `budget` bytes.
+fn lanes_for(cores: usize, budget: usize) -> usize {
+    if cores >= 8 && budget >= TWO_LANE_BUDGET { 2 } else { 1 }
 }
 
 /// How many photos the background preparation renders on pools of its own at once
@@ -965,5 +974,19 @@ mod tests {
         assert!(t.elapsed().as_millis() < 140, "bounded by the caller");
         pictures_missing();
         assert!(wait_for_pictures(&|| true, std::time::Duration::from_secs(5)), "a stop ends the wait");
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use super::lanes_for;
+
+    /// Two photos side by side only where the cores and the memory are there for them.
+    #[test]
+    fn a_small_memory_budget_builds_one_photo_at_a_time() {
+        let gb = 1usize << 30;
+        assert_eq!(lanes_for(32, 16 * gb), 2);
+        assert_eq!(lanes_for(8, 3 * gb / 2), 1, "a phone: eight cores, a 1.5 GiB budget");
+        assert_eq!(lanes_for(4, 16 * gb), 1);
     }
 }
