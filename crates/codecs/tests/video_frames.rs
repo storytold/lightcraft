@@ -40,18 +40,22 @@ struct Clip {
     brand: Brand,
     colour: Option<ColorInfo>,
     audio: bool,
+    /// An explicit edit list (segment durations in the writer's movie timescale, 1000 per second).
+    edits: Vec<isobmff::Edit>,
 }
 
 impl Clip {
     fn new(w: usize, h: usize, frames: usize) -> Clip {
-        Clip { w, h, frames, bframes: 0, keyint: 250, brand: Brand::Mp4, colour: None, audio: false }
+        Clip { w, h, frames, bframes: 0, keyint: 250, brand: Brand::Mp4, colour: None, audio: false, edits: Vec::new() }
     }
 }
 
-fn mux(entry: SampleEntry, samples: &[(Vec<u8>, i64, i64, bool)], brand: Brand, media_start: Option<i64>, audio: bool) -> Vec<u8> {
+fn mux(entry: SampleEntry, samples: &[(Vec<u8>, i64, i64, bool)], c: &Clip, media_start: Option<i64>) -> Vec<u8> {
+    let (brand, audio) = (c.brand, c.audio);
     let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(brand)).unwrap();
     let mut cfg = TrackConfig::new(entry, FPS * TICK);
     cfg.media_start = media_start;
+    cfg.edits.clone_from(&c.edits);
     let v = w.add_track(cfg).unwrap();
     for (data, pts, dts, key) in samples {
         let off = i32::try_from((pts - dts) * i64::from(TICK)).unwrap();
@@ -89,7 +93,7 @@ fn h264_clip(c: &Clip) -> Vec<u8> {
     let samples: Vec<_> = packets.into_iter().map(|p| (p.data, p.pts, p.dts, p.keyframe)).collect();
     // B-frames delay the first picture shown: an edit list starts the track there, as muxers do
     let start = samples.iter().enumerate().map(|(k, s)| k as i64 + s.1 - s.2).min().filter(|&d| d != 0).map(|d| d * i64::from(TICK));
-    mux(entry, &samples, c.brand, start, c.audio)
+    mux(entry, &samples, c, start)
 }
 
 fn hevc_clip(c: &Clip, ten_bit: bool) -> Vec<u8> {
@@ -114,7 +118,7 @@ fn hevc_clip(c: &Clip, ten_bit: bool) -> Vec<u8> {
     if let Some(v) = entry.video.as_mut() {
         v.color = c.colour.clone();
     }
-    mux(entry, &samples, c.brand, None, c.audio)
+    mux(entry, &samples, c, None)
 }
 
 fn opts() -> PosterOptions {
@@ -289,7 +293,7 @@ fn hdr_vui_is_tone_mapped() {
     let (y, c) = (vec![900u16; 64 * 48], vec![512u16; 32 * 24]);
     let pkt = enc.encode(&Frame { y: &y, u: &c, v: &c, y_stride: 64, uv_stride: 32 }).unwrap();
     let entry = SampleEntry::hevc(HevcConfig::parse(&enc.hvcc()).unwrap(), 64, 48);
-    let bytes = mux(entry, &[(pkt.data, 0, 0, true)], Brand::Mov, None, false);
+    let bytes = mux(entry, &[(pkt.data, 0, 0, true)], &Clip { brand: Brand::Mov, ..Clip::new(0, 0, 0) }, None);
     let p = poster(&bytes, &opts()).unwrap();
     assert!(p.hdr);
     assert_eq!(p.colour.transfer, 18);
@@ -307,7 +311,7 @@ fn ten_bit_h264_is_unsupported_with_a_reason() {
     pk.extend(enc.flush());
     let entry = SampleEntry::avc(AvcConfig::parse(&enc.avcc()).unwrap(), 64, 48);
     let samples: Vec<_> = pk.into_iter().map(|p| (p.data, p.pts, p.dts, p.keyframe)).collect();
-    let bytes = mux(entry, &samples, Brand::Mp4, None, false);
+    let bytes = mux(entry, &samples, &Clip::new(0, 0, 0), None);
     match poster(&bytes, &opts()) {
         Err(VideoError::Unsupported(m)) => assert!(m.contains("H.264"), "{m}"),
         // a future decoder that handles it is fine too
@@ -319,7 +323,7 @@ fn ten_bit_h264_is_unsupported_with_a_reason() {
 #[test]
 fn an_unsupported_codec_says_which() {
     let entry = SampleEntry::prores(FourCc(*b"apcn"), 64, 48);
-    let bytes = mux(entry, &[(vec![0u8; 100], 0, 0, true)], Brand::Mov, None, false);
+    let bytes = mux(entry, &[(vec![0u8; 100], 0, 0, true)], &Clip { brand: Brand::Mov, ..Clip::new(0, 0, 0) }, None);
     match poster(&bytes, &opts()) {
         Err(VideoError::Unsupported(m)) => assert_eq!(m, "Apple ProRes video can't be decoded yet"),
         r => panic!("{r:?}"),
@@ -330,7 +334,7 @@ fn an_unsupported_codec_says_which() {
 fn empty_and_zero_length_clips_are_errors() {
     assert!(matches!(poster(&[], &opts()), Err(VideoError::Malformed(_))));
     let entry = SampleEntry::avc(AvcConfig::new(vec![vec![0x67, 0x64, 0, 0x1e]], vec![vec![0x68, 0xce]], 4), 64, 48);
-    let bytes = mux(entry, &[], Brand::Mp4, None, false);
+    let bytes = mux(entry, &[], &Clip::new(0, 0, 0), None);
     match poster(&bytes, &opts()) {
         Err(VideoError::Malformed(m)) => assert!(m.contains("no pictures"), "{m}"),
         r => panic!("{r:?}"),
@@ -494,4 +498,63 @@ fn streams_go_to_a_decode_thread() {
     let p = poster_frame(src, &opts(), &AtomicBool::new(false)).unwrap();
     assert_eq!(p.seconds, 0.0);
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// An edit list that cuts the clip's first pictures (and its end) hides them: the stream starts
+/// and ends where the edit does, seeks stay inside it, and the poster comes from what is shown.
+/// The cut pictures still decode as references for the first ones shown (YouTube's MP4s start
+/// their edit seconds into the media).
+#[test]
+fn an_edit_list_that_cuts_the_start_and_end_hides_those_pictures() {
+    let mut c = Clip::new(64, 48, 120);
+    c.keyint = 30;
+    // shown: pictures 40..85 (1.5 s); 40 needs its sync picture 30, which is cut
+    c.edits = vec![isobmff::Edit { segment_duration: 1500, media_time: 40 * i64::from(TICK), media_rate: 0x0001_0000 }];
+    let bytes = h264_clip(&c);
+    let mut s = VideoStream::open(bytes.clone(), &StreamOptions::default()).unwrap();
+    let info = s.info().clone();
+    assert!(info.start_seconds.abs() < 1e-9, "start {}", info.start_seconds);
+    assert!((info.duration_seconds - 1.5).abs() < 1e-9, "duration {}", info.duration_seconds);
+    // which picture a frame is: its centre luma sample, nearest on the `luma_of` ramp
+    let which = |f: &lightcraft_codecs::video_stream::Frame| match &f.planes {
+        lightcraft_codecs::video_stream::FramePlanes::U8(p) => p[0]
+            .get(f.height / 2 * f.y_stride + f.width / 2)
+            .map(|&v| (0..120).min_by_key(|&i| (i32::from(luma_of(i)) - i32::from(v)).abs()).unwrap_or(0)),
+        lightcraft_codecs::video_stream::FramePlanes::U16(_) => None,
+    };
+    let first = s.next_frame().unwrap().unwrap();
+    assert!(first.seconds.abs() < 1e-9, "the first picture shown is at {}", first.seconds);
+    assert_eq!(which(&first), Some(40), "picture 40 comes first");
+    let mut shown = 1;
+    let mut last = first;
+    while let Some(f) = s.next_frame().unwrap() {
+        shown += 1;
+        last = f;
+    }
+    assert_eq!(shown, 45, "only the edit's pictures");
+    assert_eq!(which(&last), Some(84));
+    for (t, frame) in [(0.5, 55usize), (-3.0, 40), (99.0, 84), (0.0, 40)] {
+        s.seek(t, SeekMode::Exact).unwrap();
+        let f = s.next_frame().unwrap().unwrap();
+        assert_eq!(which(&f), Some(frame), "exact seek to {t}");
+        assert!((f.seconds - (frame as f64 - 40.0) / 30.0).abs() < 1e-9, "seek {t}: {}", f.seconds);
+    }
+    // the sync picture before 0.5 s is cut: a keyframe seek lands on the first picture shown
+    s.seek(0.5, SeekMode::Keyframe).unwrap();
+    assert_eq!(which(&s.next_frame().unwrap().unwrap()), Some(40));
+    // under two seconds shown: the poster is the first picture shown, not the cut picture 0
+    let p = poster(&bytes, &opts()).unwrap();
+    assert!(p.seconds.abs() < 1e-9, "{}", p.seconds);
+    assert_shows_frame(&p.image, 40);
+
+    // an edit that runs to the end (as muxers write it): the poster is one second into what is shown
+    let mut c = Clip::new(64, 48, 120);
+    c.keyint = 30;
+    c.edits = vec![isobmff::Edit { segment_duration: 3000, media_time: 30 * i64::from(TICK), media_rate: 0x0001_0000 }];
+    let bytes = h264_clip(&c);
+    let s = VideoStream::open(bytes.clone(), &StreamOptions::default()).unwrap();
+    assert!((s.info().duration_seconds - 3.0).abs() < 1e-9, "{}", s.info().duration_seconds);
+    let p = poster(&bytes, &opts()).unwrap();
+    assert!((p.seconds - 1.0).abs() < 1e-9, "{}", p.seconds);
+    assert_shows_frame(&p.image, 60);
 }

@@ -277,6 +277,43 @@ fn pick_track(file: &Mp4File) -> Result<usize, VideoError> {
     }
 }
 
+/// The part of the track a clip shows, in presentation ticks: its edit list's first non-empty
+/// edit (`media_time` to `media_time` + the segment's duration), else every picture. Pictures the
+/// edit cuts still decode (the first ones shown may refer to them) but are never shown: a YouTube
+/// MP4 starts its edit five seconds into the media, and those five seconds are not the clip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Window {
+    /// When the clip starts and ends.
+    start: i64,
+    end: i64,
+    /// Presentation time of the picture on screen at `start` (at or before it).
+    first: i64,
+}
+
+impl Window {
+    fn of(t: &isobmff::Track, movie_timescale: u32) -> Window {
+        let pts = |i: usize| t.presentation_pts(i);
+        let all_start = (0..t.samples.len()).filter_map(pts).min().unwrap_or(0);
+        let all_end =
+            (0..t.samples.len()).filter_map(|i| Some(pts(i)?.saturating_add(i64::from(t.samples.get(i)?.duration)))).max().unwrap_or(all_start);
+        // craft-media's `edit_offset` places the first non-empty edit's `media_time` after the
+        // leading empty edits: that is where the clip starts
+        let (start, end) = match t.edits.iter().find(|e| e.media_time >= 0) {
+            Some(e) => {
+                let start = e.media_time.saturating_add(t.edit_offset).clamp(all_start, all_end);
+                // (a zero-length segment, or no movie timescale, says nothing about the end)
+                let length = (e.segment_duration > 0 && movie_timescale > 0)
+                    .then(|| i128::from(e.segment_duration) * i128::from(t.timescale) / i128::from(movie_timescale))
+                    .map(|l| i64::try_from(l).unwrap_or(i64::MAX));
+                (start, length.map_or(all_end, |l| start.saturating_add(l).min(all_end)))
+            }
+            None => (all_start, all_end),
+        };
+        let first = t.sample_at_presentation_time(start).and_then(pts).filter(|&p| p <= start).unwrap_or(start);
+        Window { start, end: end.max(start), first }
+    }
+}
+
 /// A clip's video track, decoded picture by picture.
 pub struct VideoStream {
     src: Src,
@@ -294,6 +331,9 @@ pub struct VideoStream {
     min_pts: i64,
     /// Pictures shown before this time are no stand-ins either (open-GOP leading pictures).
     keep_from: i64,
+    /// What the clip shows ([`Window`]): pictures outside it decode (as references) but are
+    /// never returned.
+    window: Window,
     /// The latest picture a seek skipped (shown at or after its sync picture): what a caller can
     /// show when the target itself never decodes ([`Self::take_skipped`]).
     skipped: Option<Frame>,
@@ -316,11 +356,8 @@ impl VideoStream {
         let (codec, config, container_colour) = entry_codec(t, description)?;
         let decoder = Decoder::new(codec, &config, opts)?;
         let (w, h) = t.video().map_or((t.width, t.height), |v| (u32::from(v.width), u32::from(v.height)));
-        let start = (0..t.samples.len()).filter_map(|i| t.presentation_pts(i)).min().unwrap_or(0);
-        let end = (0..t.samples.len())
-            .filter_map(|i| Some(t.presentation_pts(i)?.saturating_add(i64::from(t.samples.get(i)?.duration))))
-            .max()
-            .unwrap_or(start);
+        let window = Window::of(t, file.timescale);
+        let (start, end) = (window.start, window.end);
         let frame = median_duration(t).map(|d| seconds(i64::from(d), t.timescale)).filter(|d| *d > 0.0);
         let info = StreamInfo {
             frame_duration_seconds: frame,
@@ -349,8 +386,9 @@ impl VideoStream {
             description,
             container_colour,
             next_sample: 0,
-            min_pts: i64::MIN,
-            keep_from: i64::MIN,
+            min_pts: window.first,
+            keep_from: window.first,
+            window,
             skipped: None,
             ready: VecDeque::new(),
             decoded: Vec::new(),
@@ -389,7 +427,9 @@ impl VideoStream {
     fn seek_points(&self, seconds: f64) -> Result<(usize, usize), VideoError> {
         let t = self.track()?;
         let ticks = if seconds.is_finite() { (seconds * f64::from(t.timescale)).round() } else { 0.0 };
-        let ticks = ticks.clamp(i64::MIN as f64, i64::MAX as f64) as i64;
+        // (inside what the clip shows: before it the first picture shown, past it the last)
+        let w = &self.window;
+        let ticks = (ticks.clamp(i64::MIN as f64, i64::MAX as f64) as i64).clamp(w.start, w.end.saturating_sub(1).max(w.start));
         let target = t.sample_at_presentation_time(ticks).ok_or_else(|| VideoError::Malformed("the video track holds no pictures".into()))?;
         let sync = t.sync_sample_before(target);
         // a picture shown before its sync picture is an open-GOP leading picture: it needs the
@@ -418,8 +458,10 @@ impl VideoStream {
         let (sync, target) = self.seek_points(seconds)?;
         let shown = if mode == SeekMode::Exact { target } else { sync };
         let t = self.track()?;
-        let min_pts = t.presentation_pts(shown).unwrap_or(i64::MIN);
-        let keep_from = t.presentation_pts(sync).unwrap_or(i64::MIN);
+        // (a sync picture the edit list cuts is decoded, not shown: the first picture shown is)
+        let first = self.window.first;
+        let min_pts = t.presentation_pts(shown).unwrap_or(i64::MIN).max(first);
+        let keep_from = t.presentation_pts(sync).unwrap_or(i64::MIN).max(first);
         let description = t.samples.get(sync).map_or(1, |s| s.description_index);
         self.restart(description)?;
         self.next_sample = sync;
@@ -525,6 +567,10 @@ impl VideoStream {
     fn take_decoded(&mut self) -> Result<(), VideoError> {
         for d in std::mem::take(&mut self.decoded) {
             let pts = d.pts();
+            if pts >= self.window.end {
+                // past what the clip shows (an edit list that ends before the media)
+                continue;
+            }
             if pts < self.min_pts {
                 if pts >= self.keep_from && self.skipped.as_ref().is_none_or(|s| s.pts < pts) {
                     self.skipped = Some(d.into_frame(self.container_colour, self.info.timescale)?);
