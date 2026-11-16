@@ -68,6 +68,7 @@
   "Go Back to Version {version}": "Вернуться к версии {version}",
   "Goes into the group “{group}” that exists already.": "Попадёт в уже существующую группу «{group}».",
   "Healed {n} blemishes": "Исправлено дефектов кожи: {n}",
+  "Healed {n} mark{} from the infrared pass": "Исправлено следов по инфракрасному проходу: {n}{:.0}",
   "Import {n} Selected": "Импортировать выбранные ({n})",
   "Import {n} into {library}": "Импортировать {n} в {library}",
   "Imported {n} export preset{}": "Импортировано наборов экспорта: {n}{:.0}",

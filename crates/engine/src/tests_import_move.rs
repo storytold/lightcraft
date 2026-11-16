@@ -370,6 +370,23 @@ fn the_original_stays_when_the_copys_folder_cannot_be_synced() {
     let _ = std::fs::remove_dir_all(&base);
 }
 
+/// On an SMB share mounted by macOS a folder's full flush fails with ENOTSUP, as a file's does (issue #1407), so a
+/// move into a folder on the share kept every original: the folder is synced with a plain `fsync` instead. (Windows
+/// journals folder entries itself and syncs nothing.)
+#[cfg(unix)]
+#[test]
+fn a_folder_on_a_share_without_a_full_flush_is_synced_with_fsync() {
+    use lcc_catalog::safe_file::{full_sync_unsupported, plain_fsyncs_on_this_thread};
+    let base = temp_dir("no-full-flush");
+    let before = plain_fsyncs_on_this_thread();
+    {
+        let _smb = full_sync_unsupported();
+        crate::import_move::sync_dir(&base).unwrap();
+    }
+    assert_eq!(plain_fsyncs_on_this_thread() - before, 1, "the folder falls back to fsync");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Duplicates, unreadable files and files that fail (here: a different sidecar already at the
 /// destination) keep their sources; the rest of the batch still moves.
 #[test]

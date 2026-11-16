@@ -482,6 +482,7 @@ mod tests {
                     snapshots: Vec::new(),
                     original: lightroom_catalog::Original::Local,
                     as_shot_white: None,
+                    capture_one: None,
                 }],
                 collections: Vec::new(),
                 members: Vec::new(),
@@ -632,6 +633,7 @@ mod tests {
                         snapshots: Vec::new(),
                         original: lightroom_catalog::Original::Local,
                         as_shot_white: None,
+                        capture_one: None,
                     }
                 })
                 .collect();
@@ -685,6 +687,7 @@ mod tests {
                 snapshots: Vec::new(),
                 original: lightroom_catalog::Original::NotHere,
                 as_shot_white: None,
+                capture_one: None,
             })
             .collect();
         let mut session = crate::Session::new();

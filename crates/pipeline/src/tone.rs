@@ -544,6 +544,14 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 mod tests {
     use super::*;
 
+    /// Independently computed LUTs can differ by rounding in `powf` on the same platform (upstream #4221).
+    fn assert_same_lut(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (&a, &b)) in actual.iter().zip(expected).enumerate() {
+            assert!(a.is_finite() && b.is_finite() && (a - b).abs() <= 1e-6, "LUT[{i}]: {a} vs {b}");
+        }
+    }
+
     /// A camera curve: 32 knots of `1 − e^(−2x)` from 0.004, each 1.18 times the last.
     fn knots() -> [[f32; 2]; 32] {
         std::array::from_fn(|i| {
@@ -717,7 +725,7 @@ mod tests {
     #[test]
     fn hdr_is_sdr_at_peak_one_and_reaches_peak() {
         for (c, w, b) in [(0.0, 0.0, 0.0), (100.0, 100.0, -100.0), (-100.0, -100.0, 100.0), (50.0, -30.0, -40.0)] {
-            assert_eq!(ToneMap::hdr(c, w, b, 1.0).lut(), ToneMap::new(c, w, b).lut());
+            assert_same_lut(ToneMap::hdr(c, w, b, 1.0).lut(), ToneMap::new(c, w, b).lut());
             for peak in [2.0f32, 8.0, 32.0] {
                 let sdr = ToneMap::new(c, w, b);
                 let t = ToneMap::hdr(c, w, b, peak);
@@ -739,12 +747,12 @@ mod tests {
             }
         }
         // a broken peak falls back to SDR
-        assert_eq!(ToneMap::hdr(0.0, 0.0, 0.0, f32::NAN).lut(), ToneMap::new(0.0, 0.0, 0.0).lut());
+        assert_same_lut(ToneMap::hdr(0.0, 0.0, 0.0, f32::NAN).lut(), ToneMap::new(0.0, 0.0, 0.0).lut());
     }
 
     #[test]
     fn display_hdr_passes_hdr_sources_and_keeps_sdr() {
-        assert_eq!(ToneMap::display_hdr(20.0, 10.0, -5.0, 1.0).lut(), ToneMap::display(20.0, 10.0, -5.0).lut());
+        assert_same_lut(ToneMap::display_hdr(20.0, 10.0, -5.0, 1.0).lut(), ToneMap::display(20.0, 10.0, -5.0).lut());
         let t = ToneMap::display_hdr(0.0, 0.0, 0.0, 8.0);
         for i in 1..=90 {
             let y = i as f32 / 100.0;

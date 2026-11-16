@@ -113,9 +113,12 @@ fn filter_by_label(app: &LccApp) -> Vec<MenuNode> {
             Choice::new(crate::i18n::color_label(&app.session.catalog, *l), json!({"label": null, "labels": names(&next)}), on)
         }),
     );
+    // photos without a label (issue #1192): a row of its own, checked while it is on
+    let none_on = app.session.filter.labels_none;
+    v.extend(choices("library.filter", [Choice::new("No Label", json!({"labelsNone": !none_on}), none_on)]));
     v.push(MenuNode::Separator);
-    let any = app.session.filter.labels_shown().is_some();
-    v.extend(choices("library.filter", [Choice::new("None", json!({"label": null, "labels": []}), false).enabled(any)]));
+    let any = app.session.filter.labels_shown().is_some() || app.session.filter.labels_none;
+    v.extend(choices("library.filter", [Choice::new("None", json!({"label": null, "labels": [], "labelsNone": false}), false).enabled(any)]));
     v
 }
 
@@ -284,6 +287,7 @@ fn mask_with(app: &LccApp, op: &str) -> Vec<MenuNode> {
                 "radial" => "Radial Gradient",
                 "luminanceRange" => "Luminance Range",
                 "colorRange" => "Color Range",
+                "depthRange" => "Depth Range",
                 "people" => "People…",
                 "concept" => "Remembered…",
                 _ => label,

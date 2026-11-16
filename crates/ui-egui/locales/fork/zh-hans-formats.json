@@ -68,6 +68,7 @@
   "Go Back to Version {version}": "返回版本 {version}",
   "Goes into the group “{group}” that exists already.": "将放入已存在的分组“{group}”。",
   "Healed {n} blemishes": "已修复 {n} 处瑕疵",
+  "Healed {n} mark{} from the infrared pass": "已根据红外通道修复痕迹：{n}{:.0}",
   "Import {n} Selected": "导入 {n} 张选定照片",
   "Import {n} into {library}": "将 {n} 张导入 {library}",
   "Imported {n} export preset{}": "已导入 {n} 个导出预设{:.0}",

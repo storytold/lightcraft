@@ -43,7 +43,9 @@ pub(super) fn row(app: &mut LccApp, ui: &mut egui::Ui) {
         let room = width - crate::widgets::PAD_L - crate::widgets::PAD_R + 8.0;
         (DENSE_ROW_H + 6.0, ((room - gap * (count as f32 - 1.0)) / count as f32).clamp(16.0, BUTTON_W), gap)
     } else {
-        (ROW_H, BUTTON_W, 4.0)
+        // full-size buttons, narrower when the panel is too narrow for all of them (never wider than the panel)
+        let gap = 4.0;
+        (ROW_H, ((width - gap * (count as f32 - 1.0)) / count as f32).floor().clamp(16.0, BUTTON_W), gap)
     };
     ui.allocate_ui_with_layout(vec2(width, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = gap;

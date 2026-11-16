@@ -35,11 +35,14 @@ embedding cache store.
   catalogue includes `clip-vit-b32-laion2b` (`laion/CLIP-ViT-B-32-laion2B-s34B-b79K`, MIT, `Commercial::Yes`), pinned
   to a revision and verified by SHA-256 before installation.
 - **CLIP ViT + Text encoder** (`encoder.rs`, `tokenizer.rs`, `weights.rs`, `clip.rs`): a clean-room MIT CLIP vision +
-  text transformer implementation on `candle-core` (the CPU reference). On the GPU the towers' transformer blocks run
-  on `lcc-gpu`'s wgpu kernels (`crates/gpu/src/clip.rs`, `wgsl/clip.wgsl`: Vulkan, DX12 or Metal, the same on every
-  OS), plugged in by the engine through `accel::Accelerator`; each tower is checked against the CPU on a test input
-  (`accel::agree`) before use, and any error falls back to the CPU via `JobError::Device`, paired with a positional `.safetensors` reader that validates tensor shapes, bounds, and
-  finiteness (rejecting `NaN`/`Inf` weights) and a byte-level BPE tokenizer (`vocab.json` + `merges.txt`).
+  text transformer implementation on `candle-core` (the CPU reference). On the GPU the full vision and text towers
+  (patch/token + position embeddings, layer norms, transformer blocks, CLS/EOT pooling, and final projections) run in
+  a single submission on `lcc-gpu`'s wgpu kernels (`crates/gpu/src/clip.rs`, `wgsl/clip.wgsl`: Vulkan, DX12 or Metal,
+  the same on every OS), reading back only `[batch, embed_dim]` floats; plugged in by the engine through
+  `accel::Accelerator`; each tower is checked against the CPU on a test input (`accel::agree`) before use, and any
+  error falls back to the CPU via `JobError::Device`, paired with a positional `.safetensors` reader that validates
+  tensor shapes, bounds, and finiteness (rejecting `NaN`/`Inf` weights) and a byte-level BPE tokenizer (`vocab.json` +
+  `merges.txt`).
 - **Binary embedding store** (`store.rs`): per-model cache file `ml-embeddings-<id>.bin` stored beside the library
   (rebuildable, never inside `catalog.json`). Stores L2-normalized `f32` embeddings keyed by `(photo_id, fingerprint)`,
   tolerates torn tails on crash recovery, resets cleanly when the model's `tag` (`<id>@<sha256-prefix>`) or dimension
@@ -96,8 +99,6 @@ In the order of the plan on issue #491:
 1. **Downstream AI features (#488–#490)** on the cached embeddings: aesthetic scoring
    head (#488), culling suggestions (#489), and orientation suggestions (#490). Suggestions are proposals the user
    accepts, never silent writes.
-2. **More of CLIP on the GPU:** the patch embedding, final layer norm and projections still run on the CPU; moving
-   them would save the per-batch upload of the embedded sequence.
 
 ## Testing
 

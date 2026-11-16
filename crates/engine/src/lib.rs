@@ -26,6 +26,7 @@ pub mod bounded_read;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod capture_one_catalog;
+pub mod capture_one_develop;
 pub mod change_report;
 pub mod chart_profiling;
 pub mod cmd;
@@ -2943,6 +2944,8 @@ pub(crate) fn orientation_change(from: lcc_geom::Orientation, to: lcc_geom::Orie
     })
 }
 
+#[cfg(test)]
+mod tests_view_filter;
 #[cfg(test)]
 mod tests_view_follow;
 #[cfg(test)]

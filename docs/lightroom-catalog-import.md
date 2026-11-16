@@ -285,7 +285,41 @@ Capture One 16.9.0 on Windows (catalog format 160906).
 - **IPTC fields** become an XMP packet merged like a sidecar.
 - **Albums** keep their projects and groups (a group is a `VirtualFolderCollection`, as are Recent Imports and
   Recent Captures; the folders the catalog itself names are system folders and stay out, with the albums under
-  them). Smart albums are not imported yet (a warning names each one); develop settings are not read yet.
+  them). Smart albums are not imported yet (a warning names each one).
+- **Develop settings** (`crates/engine/src/capture_one_develop.rs`): a variant's layers in `ZVARIANTLAYER`, told
+  apart by `Z_ENT` (`ZENTITIES` names them): the *adjustment* layer holds what the user set (NULL where untouched),
+  *style* layers what applied styles set, the *default* layer the camera's defaults. A setting is the variant's when
+  the adjustment layer (else a style) sets it to something other than the default. Imported so far, on top of the
+  photo's camera defaults:
+  - **Exposure** (`ZEXPOSURE`, EV).
+  - **Orientation and straighten** (`ZROTATION`): the whole turn in degrees, clockwise as shown, including the
+    camera's own orientation (the default layer's value, which the file's orientation already shows). The quarter
+    turns beyond the camera's become the photo's orientation, the rest (±45°) the straighten angle.
+  - **Crop** (`ZCROP` `cx;cy;w;h`): the centre in pixels of the stored image, the size in pixels of the turned frame;
+    its aspect (`ZCROPASPECTRATIONAME`, `16x9`, `1x1 (Square)`; Original and Unconstrained stay free) turned to the
+    crop's shape. **Flips** (`ZFLIP` 1 horizontal, 2 vertical).
+  - **White balance** (`ZWHITEBALANCE`, gains on the raw channels): read as the app reads a raw's own gains (through
+    the camera's matrices when it has them, else as a raw without colour tags), and applied as Capture One's change
+    from as shot on the app's own as-shot white, so a white left as shot stays exactly as shot. A raw edited on the
+    relative scale (no matrices for its camera) gets the same change through that scale, which on those cameras
+    only approximates Capture One's (the result window says so, with the photo count); a rendered file's white
+    balance is not imported.
+  - The ICC profile choice is left out on purpose: photos get the app's camera colour.
+
+  Every other setting a photo uses is named in the result window, by Capture One tool (Brightness, Levels, High
+  Dynamic Range, LCC, Local adjustment layers, …, with how many photos use it), and per photo in the report's
+  `unmapped`. A photo is dated at Capture One's last settings change (`ZSETTINGSMODIFICATIONDATE`).
+
+  Checked against Capture One's own exports of the same raws (`<cli> compare`, aligned, 1000 px renders; 12 photos
+  for geometry, 8 for white balance): straightened and turned photos (−18.9° to +2.4°, camera portraits at +2° and
+  +13.9°, user quarter and half turns) aligned at 0.968–1.003 scale, 10 of 12 with no shift and 2 within 6 px of
+  512. White balance is an approximation. With the app's standard colour (no camera profile installed) it lowered
+  ΔE00 to the export from 14.2 to 7.3 on a raw with a Kelvin scale (a camera with measured matrices), and on raws
+  edited on the relative scale from 6.9–10.6 to 5.1–7.6 (a camera without an entry yet, 4 photos) and from
+  16.3–21.6 to 11.2–20.1 (another, 3 photos). With a camera profile fitted to Capture One's colours, the same 4
+  photos went from 5.6–10.4 to 1.9–5.0. The rest of the difference includes settings not imported yet and the
+  camera colour. A camera that gets an entry in the camera database moves to the Kelvin scale; the import reads
+  the same database, so it follows.
 - The import's activity row, messages, result window, destination window and undo step say Capture One.
 
 ## Historical local validation

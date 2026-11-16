@@ -523,7 +523,10 @@ A module may also carry its manifest in a custom section named `photo-plugin.man
 bytes `lcc_manifest` returns, written by the SDK's stamp tool so a tool can read what a plug-in is
 and asks for without running it (Stamping your plug-in, below). The section is optional and only a
 copy: `lcc_manifest` stays the authority, a module without the section (absent means it wasn't
-stamped) works as before, and the ABI version doesn't change.
+stamped) works as before, and the ABI version doesn't change. When a module has the section, the
+app checks it against `lcc_manifest` every time it loads the plug-in (install, update, start-up)
+and refuses a module whose section differs, naming the fields that do; so an installed plug-in's
+section is always true, and only then.
 
 ## Writing one in Rust
 
@@ -721,22 +724,42 @@ cargo install --locked --git <this repository's URL> --rev <the SDK's rev> plugi
    section and it equals what `lcc_manifest` returns, and 1 when the section is missing, stale
    (naming the fields that differ) or duplicated. It writes nothing. Run it after the stamp, so a
    release can't go out unstamped.
-5. **Install** it as before. Today the app ignores the section; a coming release checks it against
-   `lcc_manifest` when it loads the plug-in and refuses a stale stamp, naming the fields that
-   differ.
+5. **Install** it as before. The app checks the section against `lcc_manifest` when it loads the
+   plug-in (install, update, every start) and refuses a stale stamp, naming the fields that differ:
+   at start-up the plug-in is listed as failed with that reason. `plugin.inspectFile` reads a
+   stamped file from the section without running it (Engine commands, below).
 
 Plug-in updates from a feed (not done yet) will be offered only for stamped plug-ins, which is the
 reason to add step 2 to your release build now.
 
 ## Engine commands
 
-`plugin.list`, `plugin.inspectFile {path}`, `plugin.install {path, grant?, allowDowngrade?}`,
+`plugin.list`, `plugin.inspectFile {path, verify?}`, `plugin.install {path, grant?, allowDowngrade?}`,
 `plugin.uninstall {id | file, keepData?}`, `plugin.rollback {id}`, `plugin.enable {id, enabled}`, `plugin.grant {id, grant}` (revokes only), `plugin.revoke {id, group, value?}`,
 `plugin.log {id}`, `plugin.commands`, `plugin.prepare {plugin, command, ids?, source?}`,
 `plugin.run {plugin, command, args?, ids?, source?, wait?}` (a job: `{job}` at once, or its result with `wait`), `plugin.settings {id}`, `plugin.setSettings {id, values}`,
 `plugin.suggestMetadata {ids?}`, `plugin.postExport {files}`, `plugin.publishServices`,
 `plugin.exportDestinations`, `plugin.exportTo {plugin, destination, files, args?}`,
 `plugin.metadataFields {id?}`, `plugin.setField {plugin, field, value, id?}`.
+
+`plugin.inspectFile {path, verify?}` says what a `.wasm` is and what installing it would do,
+without installing it. Its result says where the manifest came from:
+
+- `source: "section"`, `verified: false`: the file is stamped, and the manifest was read from its
+  `photo-plugin.manifest` section without running the module (it is validated, its imports and
+  ABI exports checked by name and type, but never instantiated; so the ABI version
+  `lcc_abi_version` returns is checked only at install or with `verify: true`). That makes it safe on any file an agent or script
+  was handed, but the section is only **the file's claim**: nothing has compared it with
+  `lcc_manifest` yet. Installing does, and refuses the file if they differ.
+- `source: "export"`, `verified: true`: the module was loaded in the sandbox and the manifest is
+  `lcc_manifest`'s answer, as at install. That's how a file without the section is read, and any
+  file with `verify: true`; a stamped file whose section differs is then an error naming the
+  fields. The install dialog inspects with `verify: true`, so the permissions it lists are
+  `lcc_manifest`'s.
+
+Every other field (`installed`, `missing`, `versionError`, `downgrade`, `conflict`,
+`unknownFields`, `dropped`) is the same either way. A pixel filter's result has neither field: its
+manifest is always read from `pc_manifest`.
 
 `plugin.list` gives `{dir, host, plugins, failed, skipped}`: `dir` is the plug-ins folder (`null`
 when plug-ins are kept in memory), each plug-in has its module's `moduleHash` (sha256), a

@@ -18,9 +18,9 @@
 use std::collections::VecDeque;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 use std::time::Duration;
 
 use lcc_develop::SegMask;
@@ -200,6 +200,9 @@ pub struct Shared {
     /// whether it is background work: what a batch waiting behind it says (OneSlips 9bb601286).
     pub running: std::sync::atomic::AtomicU64,
     pub running_low: AtomicBool,
+    /// Makes decrementing the busy counter and sending the reply indivisible to the session poll
+    /// (adapted from upstream #4221).
+    pub(super) delivery: Mutex<()>,
 }
 
 /// [`Shared::running`] for a request that isn't part of a Recompute AI Masks batch.
@@ -282,6 +285,17 @@ impl Worker {
 
     pub fn pending(&self) -> usize {
         if self.dead() { 0 } else { self.shared.pending.load(Ordering::SeqCst) }
+    }
+
+    /// Observe idleness and collect replies without racing a reply being delivered or blocking the UI:
+    /// `None` while the worker is delivering one (the next poll takes it).
+    pub(super) fn completed(&self, replies: &mpsc::Receiver<Outcome>) -> Option<(bool, Vec<Outcome>)> {
+        let _delivery = match self.shared.delivery.try_lock() {
+            Ok(guard) => guard,
+            Err(TryLockError::WouldBlock) => return None,
+            Err(TryLockError::Poisoned(error)) => error.into_inner(),
+        };
+        Some((self.pending() == 0, replies.try_iter().collect()))
     }
 
     pub fn detail(&self) -> usize {
@@ -408,6 +422,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
         let cancelled = job.cancel.as_ref().is_some_and(|c| c.load(Ordering::SeqCst));
         if cancelled || queue.iter().any(|later| supersedes(later, &job)) {
+            let _delivery = shared.delivery.lock().unwrap_or_else(PoisonError::into_inner);
             drop(done);
             let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true, notice: None, extra: None });
             continue;
@@ -449,6 +464,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             state.owl_cache = None;
         }
         shared.loaded.store(state.model.is_some() || state.sam2.is_some() || state.owl.is_some() || state.remote.is_some(), Ordering::SeqCst);
+        let _delivery = shared.delivery.lock().unwrap_or_else(PoisonError::into_inner);
         drop(done);
         drop(running);
         let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false, notice, extra });

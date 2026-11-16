@@ -73,6 +73,7 @@
   "Go Back to Version {version}": "Zpět na verzi {version}",
   "Goes into the group “{group}” that exists already.": "Půjde do existující skupiny „{group}“.",
   "Healed {n} blemishes": "Vyretušované nedokonalosti: {n}",
+  "Healed {n} mark{} from the infrared pass": "Vyretušované stopy z infračerveného průchodu: {n}{:.0}",
   "Import {n} Selected": "Importovat vybrané ({n})",
   "Import {n} into {library}": "Importovat {n} do {library}",
   "Imported {n} export preset{}": "Importované předvolby exportu: {n}{:.0}",

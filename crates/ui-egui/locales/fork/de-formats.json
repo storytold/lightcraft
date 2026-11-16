@@ -68,6 +68,7 @@
   "Go Back to Version {version}": "Zurück zu Version {version}",
   "Goes into the group “{group}” that exists already.": "Kommt in die bereits vorhandene Gruppe „{group}“.",
   "Healed {n} blemishes": "{n} Hautunreinheiten behoben",
+  "Healed {n} mark{} from the infrared pass": "Reparierte Stellen aus dem Infrarotdurchgang: {n}{:.0}",
   "Import {n} Selected": "{n} ausgewählte importieren",
   "Import {n} into {library}": "{n} in {library} importieren",
   "Imported {n} export preset{}": "Importierte Exportvorgaben: {n}{:.0}",

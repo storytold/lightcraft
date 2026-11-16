@@ -89,14 +89,15 @@ impl std::fmt::Debug for Filter {
 /// shared by parallel bands.
 #[derive(Clone)]
 pub(crate) struct Deadline<'a> {
-    cancel: Option<&'a AtomicBool>,
+    /// Any of these set stops the run.
+    cancel: &'a [&'a AtomicBool],
     #[cfg(not(target_arch = "wasm32"))]
     at: std::time::Instant,
     abort: Arc<Mutex<Option<Error>>>,
 }
 
 impl<'a> Deadline<'a> {
-    pub(crate) fn new(limits: &Limits, cancel: Option<&'a AtomicBool>) -> Self {
+    pub(crate) fn new(limits: &Limits, cancel: &'a [&'a AtomicBool]) -> Self {
         #[cfg(target_arch = "wasm32")]
         let _ = limits;
         Self {
@@ -112,7 +113,7 @@ impl<'a> Deadline<'a> {
         self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert(error);
     }
     pub(crate) fn check(&self) -> Result<()> {
-        if self.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        if self.cancel.iter().any(|c| c.load(Ordering::Relaxed)) {
             self.abort(Error::Cancelled);
             return Err(Error::Cancelled);
         }
@@ -151,6 +152,9 @@ impl Filter {
         }
         let mut config = Config::default();
         config.consume_fuel(true).enforced_limits(EnforcedLimits::strict()).set_max_recursion_depth(limits.max_recursion_depth.max(16));
+        // Translate every function now. Lazy translation is charged to the call that first runs a
+        // function, and running out of fuel there can't be resumed, so it failed calls at a slice's end.
+        config.compilation_mode(wasmi::CompilationMode::Eager);
         let engine = Engine::new(&config);
         let module = Module::new(&engine, bytes).map_err(|e| Error::Module(e.to_string()))?;
         if let Some(imp) = module.imports().next() {
@@ -173,7 +177,7 @@ impl Filter {
             merge: false,
             manifest_json: String::new(),
         };
-        let deadline = Deadline::new(&p.limits, None);
+        let deadline = Deadline::new(&p.limits, &[]);
         let mut live = p.instantiate(&deadline)?;
         let version: TypedFunc<(), i32> = live.func("pc_abi_version")?;
         let v = p.call(&mut live, &version, (), p.limits.fuel_base, &deadline)?;

@@ -441,17 +441,42 @@ fn make_gpu_probe(device_choice: Arc<Mutex<Option<String>>>) -> Probe {
     })
 }
 
-/// CLIP's transformer blocks on the GPU through `lcc-gpu`'s wgpu kernels (`lcc_ml` checks them against the CPU first).
+/// CLIP's full towers on the GPU through `lcc-gpu`'s wgpu kernels (`lcc_ml` checks them against the CPU first).
 #[cfg(test)]
 pub(crate) fn clip_accelerator() -> lcc_ml::AccelFactory {
     clip_accelerator_for(Arc::new(Mutex::new(None)))
 }
 
-/// CLIP's transformer blocks on the GPU through `lcc-gpu`'s wgpu kernels, bound to the session's `device_choice`.
+#[cfg(not(target_arch = "wasm32"))]
+fn clip_block_refs(blocks: &[lcc_ml::BlockWeights]) -> Vec<lcc_gpu::clip::BlockRef<'_>> {
+    blocks
+        .iter()
+        .map(|b| lcc_gpu::clip::BlockRef {
+            ln1_w: &b.ln1_w,
+            ln1_b: &b.ln1_b,
+            q_w: &b.q_w,
+            q_b: &b.q_b,
+            k_w: &b.k_w,
+            k_b: &b.k_b,
+            v_w: &b.v_w,
+            v_b: &b.v_b,
+            o_w: &b.o_w,
+            o_b: &b.o_b,
+            ln2_w: &b.ln2_w,
+            ln2_b: &b.ln2_b,
+            fc1_w: &b.fc1_w,
+            fc1_b: &b.fc1_b,
+            fc2_w: &b.fc2_w,
+            fc2_b: &b.fc2_b,
+        })
+        .collect()
+}
+
+/// CLIP's full towers on the GPU through `lcc-gpu`'s wgpu kernels, bound to the session's `device_choice`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn clip_accelerator_for(device_choice: Arc<Mutex<Option<String>>>) -> lcc_ml::AccelFactory {
-    struct Tower(lcc_gpu::clip::ClipTower);
-    impl lcc_ml::Accelerator for Tower {
+    struct BlockRunner(lcc_gpu::clip::ClipTower);
+    impl lcc_ml::Accelerator for BlockRunner {
         fn device(&self) -> String {
             self.0.device()
         }
@@ -459,33 +484,79 @@ pub(crate) fn clip_accelerator_for(device_choice: Arc<Mutex<Option<String>>>) ->
             self.0.run(x, batch, seq)
         }
     }
+    struct VisionRunner(lcc_gpu::clip::ClipVisionTower);
+    impl lcc_ml::Accelerator for VisionRunner {
+        fn device(&self) -> String {
+            self.0.device()
+        }
+        fn run_vision(&self, images: &[f32], batch: usize, h: usize, w: usize) -> Result<Vec<f32>, String> {
+            self.0.run(images, batch, h, w)
+        }
+    }
+    struct TextRunner(lcc_gpu::clip::ClipTextTower);
+    impl lcc_ml::Accelerator for TextRunner {
+        fn device(&self) -> String {
+            self.0.device()
+        }
+        fn run_text(&self, token_ids: &[u32], eot_indices: &[u32], batch: usize, seq: usize) -> Result<Vec<f32>, String> {
+            self.0.run(token_ids, eot_indices, batch, seq)
+        }
+    }
     Arc::new(move |w: &lcc_ml::TowerWeights| {
-        let spec = lcc_gpu::clip::TowerSpec { hidden: w.hidden, intermediate: w.intermediate, heads: w.heads, causal: w.causal, eps: w.eps };
-        let blocks: Vec<lcc_gpu::clip::BlockRef<'_>> = w
-            .blocks
-            .iter()
-            .map(|b| lcc_gpu::clip::BlockRef {
-                ln1_w: &b.ln1_w,
-                ln1_b: &b.ln1_b,
-                q_w: &b.q_w,
-                q_b: &b.q_b,
-                k_w: &b.k_w,
-                k_b: &b.k_b,
-                v_w: &b.v_w,
-                v_b: &b.v_b,
-                o_w: &b.o_w,
-                o_b: &b.o_b,
-                ln2_w: &b.ln2_w,
-                ln2_b: &b.ln2_b,
-                fc1_w: &b.fc1_w,
-                fc1_b: &b.fc1_b,
-                fc2_w: &b.fc2_w,
-                fc2_b: &b.fc2_b,
-            })
-            .collect();
         let target = device_choice.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let tower = lcc_gpu::clip::tower_for(target.as_deref(), spec, &blocks)?;
-        Ok(Arc::new(Tower(tower)) as Arc<dyn lcc_ml::Accelerator>)
+        match w {
+            lcc_ml::TowerWeights::Vision(vw) => {
+                let blocks = clip_block_refs(&vw.blocks);
+                let spec = lcc_gpu::clip::VisionTowerSpec {
+                    hidden: vw.hidden,
+                    intermediate: vw.intermediate,
+                    heads: vw.heads,
+                    eps: vw.eps,
+                    embed_dim: vw.embed_dim,
+                    patch_size: vw.patch_size,
+                    num_positions: vw.num_positions,
+                    img_w: vw.img_w,
+                    img_h: vw.img_h,
+                    patch_weight: &vw.patch_weight,
+                    class_embedding: &vw.class_embedding,
+                    position_embedding: &vw.position_embedding,
+                    pre_ln_w: &vw.pre_ln_w,
+                    pre_ln_b: &vw.pre_ln_b,
+                    blocks: &blocks,
+                    post_ln_w: &vw.post_ln_w,
+                    post_ln_b: &vw.post_ln_b,
+                    projection: &vw.projection,
+                };
+                let tower = lcc_gpu::clip::vision_tower_for(target.as_deref(), &spec)?;
+                Ok(Arc::new(VisionRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+            lcc_ml::TowerWeights::Text(tw) => {
+                let blocks = clip_block_refs(&tw.blocks);
+                let spec = lcc_gpu::clip::TextTowerSpec {
+                    hidden: tw.hidden,
+                    intermediate: tw.intermediate,
+                    heads: tw.heads,
+                    eps: tw.eps,
+                    embed_dim: tw.embed_dim,
+                    vocab_size: tw.vocab_size,
+                    context_len: tw.context_len,
+                    token_embedding: &tw.token_embedding,
+                    position_embedding: &tw.position_embedding,
+                    blocks: &blocks,
+                    final_ln_w: &tw.final_ln_w,
+                    final_ln_b: &tw.final_ln_b,
+                    projection: &tw.projection,
+                };
+                let tower = lcc_gpu::clip::text_tower_for(target.as_deref(), &spec)?;
+                Ok(Arc::new(TextRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+            lcc_ml::TowerWeights::Blocks { hidden, intermediate, heads, causal, eps, blocks } => {
+                let spec = lcc_gpu::clip::TowerSpec { hidden: *hidden, intermediate: *intermediate, heads: *heads, causal: *causal, eps: *eps };
+                let block_refs = clip_block_refs(blocks);
+                let tower = lcc_gpu::clip::tower_for(target.as_deref(), spec, &block_refs)?;
+                Ok(Arc::new(BlockRunner(tower)) as Arc<dyn lcc_ml::Accelerator>)
+            }
+        }
     })
 }
 

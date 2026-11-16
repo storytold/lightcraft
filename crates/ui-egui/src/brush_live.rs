@@ -201,6 +201,17 @@ impl LiveStroke {
         }
         self.texture.as_ref()
     }
+
+    /// Paint the uploaded stroke texture at its exact canvas rectangle.
+    pub fn draw(&mut self, ctx: &egui::Context, painter: &egui::Painter) {
+        let clip = self.params.clip;
+        // the buffer's pixels may overhang the canvas by a fraction of a pixel: map them exactly
+        let (w, h, scale) = (self.w as f32, self.h as f32, self.params.scale);
+        let rect = Rect::from_min_size(clip.min, egui::vec2(w / scale, h / scale));
+        if let Some(t) = self.upload(ctx) {
+            painter.image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+    }
 }
 
 /// Pixels per screen point of a buffer covering `clip`: `want`, lowered so no edge exceeds
@@ -235,13 +246,7 @@ pub fn paint(slot: &mut Option<LiveStroke>, ctx: &egui::Context, painter: &egui:
     }
     let Some(s) = slot else { return };
     s.stamp(points, pressure);
-    let clip = s.params.clip;
-    // the buffer's pixels may overhang the canvas by a fraction of a pixel: map them exactly
-    let (w, h, scale) = (s.w as f32, s.h as f32, s.params.scale);
-    let rect = Rect::from_min_size(clip.min, egui::vec2(w / scale, h / scale));
-    if let Some(t) = s.upload(ctx) {
-        painter.image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-    }
+    s.draw(ctx, painter);
 }
 
 #[cfg(test)]

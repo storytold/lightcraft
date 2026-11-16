@@ -497,3 +497,81 @@ fn plugin_and_filter_about_checks_agree() {
         assert_eq!(lcc_plugins::about::link_host(url), lcc_filters::about::link_host(url), "{url}");
     }
 }
+
+/// A plug-in whose `lcc_manifest` returns `manifest` (or traps, when `None`), stamped with `section`,
+/// written to `<name>.wasm` in a Temp folder of its own.
+fn stamped_file(name: &str, manifest: Option<&Value>, section: &Value) -> lcc_testkit::TempFile {
+    let esc = |s: &str| s.replace('"', "\\\"");
+    let (data, body) = match manifest {
+        Some(m) => {
+            let m = m.to_string();
+            (esc(&m), format!("(i64.or (i64.shl (i64.const {}) (i64.const 32)) (i64.const 16))", m.len()))
+        }
+        None => (String::new(), "(unreachable)".to_string()),
+    };
+    let src = format!(
+        r#"(module (memory (export "memory") 2)
+  (data (i32.const 16) "{data}") (data (i32.const 8192) "{{}}")
+  (func (export "lcc_abi_version") (result i32) (i32.const 1))
+  (func (export "lcc_manifest") (result i64) {body})
+  (func (export "lcc_alloc") (param i32) (result i32) (i32.const 65536))
+  (func (export "lcc_handle") (param i32 i32) (result i64) (i64.or (i64.shl (i64.const 2) (i64.const 32)) (i64.const 8192)))
+  (@custom "{name_}" "{section}"))"#,
+        name_ = lcc_plugins::MANIFEST_SECTION,
+        section = esc(&section.to_string()),
+    );
+    let file = lcc_testkit::TempFile::new(&format!("lcc-engine-installs-stamped-{name}"), &format!("{name}.wasm"));
+    std::fs::write(&file, wat::parse_str(&src).unwrap()).unwrap();
+    file
+}
+
+/// A stamped file inspects from its section without running (its `lcc_manifest` traps), with every
+/// field an unstamped one has; `verify` reads `lcc_manifest`, and so does an unstamped file.
+#[test]
+fn a_stamped_file_inspects_from_its_section_without_running() {
+    let _turn = turn();
+    let mut s = Session::with_demo();
+    let manifest = json!({"id": "test.installs.stamped", "name": "Stamped", "version": "1.0.0", "permissions": {"catalog": true}});
+    let traps = stamped_file("traps", None, &manifest);
+    let info = s.execute("plugin.inspectFile", &json!({"path": traps.path()})).unwrap();
+    assert_eq!((&info["source"], &info["verified"]), (&json!("section"), &json!(false)), "{info}");
+    assert_eq!(info["manifest"]["id"], "test.installs.stamped");
+    assert_eq!(info["manifest"]["permissions"]["catalog"], true);
+    for field in ["installed", "missing", "versionError", "downgrade", "conflict", "unknownFields", "dropped"] {
+        assert!(info.get(field).is_some(), "{field}: {info}");
+    }
+    let e = s.execute("plugin.inspectFile", &json!({"path": traps.path(), "verify": true})).unwrap_err().to_string();
+    assert!(e.contains("trapped"), "verify runs lcc_manifest: {e}");
+    assert!(s.execute("plugin.install", &json!({"path": traps.path()})).is_err(), "and installing does");
+    assert!(listed(&mut s, "test.installs.stamped").is_none());
+
+    let honest = stamped_file("honest", Some(&manifest), &manifest);
+    let verified = s.execute("plugin.inspectFile", &json!({"path": honest.path(), "verify": true})).unwrap();
+    assert_eq!((&verified["source"], &verified["verified"]), (&json!("export"), &json!(true)), "{verified}");
+    let unverified = s.execute("plugin.inspectFile", &json!({"path": honest.path()})).unwrap();
+    assert_eq!(unverified["manifest"], verified["manifest"], "a true section reads as lcc_manifest does");
+
+    let plain = module_file("installs-unstamped", &json!({"id": "test.installs.unstamped", "name": "Plain", "version": "1.0.0"}));
+    let info = s.execute("plugin.inspectFile", &json!({"path": plain.path()})).unwrap();
+    assert_eq!((&info["source"], &info["verified"]), (&json!("export"), &json!(true)), "{info}");
+    assert_eq!(s.execute("plugin.inspectFile", &json!({"path": plain.path(), "verify": true})).unwrap(), info, "verify changes nothing for it");
+}
+
+/// A section that hides a permission: inspected unverified it reads as it claims; verified, and
+/// installed, it's refused naming the fields, and nothing is installed.
+#[test]
+fn a_section_that_differs_from_lcc_manifest_is_refused() {
+    let _turn = turn();
+    let mut s = Session::with_demo();
+    let asks = json!({"id": "test.installs.lying", "name": "Lying", "version": "1.0.0", "permissions": {"catalog": true}});
+    let claims = json!({"id": "test.installs.lying", "name": "Lying", "version": "1.0.0"});
+    let lying = stamped_file("lying", Some(&asks), &claims);
+    let info = s.execute("plugin.inspectFile", &json!({"path": lying.path()})).unwrap();
+    assert_eq!(info["verified"], false);
+    assert!(info["manifest"]["permissions"]["catalog"] != true, "unverified, the claim: {info}");
+    let verified = s.execute("plugin.inspectFile", &json!({"path": lying.path(), "verify": true})).unwrap_err().to_string();
+    let installed = s.execute("plugin.install", &json!({"path": lying.path(), "grant": {"catalog": true}})).unwrap_err().to_string();
+    assert!(verified.contains("`permissions`"), "{verified}");
+    assert!(installed.contains("`permissions`"), "{installed}");
+    assert!(listed(&mut s, "test.installs.lying").is_none(), "nothing installed");
+}

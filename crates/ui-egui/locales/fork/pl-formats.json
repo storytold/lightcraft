@@ -73,6 +73,7 @@
   "Go Back to Version {version}": "Wróć do wersji {version}",
   "Goes into the group “{group}” that exists already.": "Trafi do istniejącej grupy „{group}”.",
   "Healed {n} blemishes": "Usunięte niedoskonałości: {n}",
+  "Healed {n} mark{} from the infrared pass": "Naprawione ślady z przebiegu w podczerwieni: {n}{:.0}",
   "Import {n} Selected": "Importuj zaznaczone ({n})",
   "Import {n} into {library}": "Importuj {n} do {library}",
   "Imported {n} export preset{}": "Zaimportowane ustawienia eksportu: {n}{:.0}",

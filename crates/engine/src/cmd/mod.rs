@@ -36,6 +36,7 @@ pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
 pub(crate) mod facets;
+pub mod film_dust;
 pub mod filters;
 mod focus;
 pub mod folder_metadata;
@@ -311,6 +312,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(filters::specs());
         v.extend(denoise::specs());
         v.extend(sensor::specs());
+        v.extend(film_dust::specs());
         v.extend(face_models::specs());
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());

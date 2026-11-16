@@ -869,7 +869,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, semantic?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, copy?: true (virtual copies only) | false (master photos only) | null, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, vignettingReference?: reference|none (Vignetting Calibration references in use; a withdrawn one counts as none), edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, lens?, keywords?/people?/cameras?/lenses?: [any of these values], keywordOp?/personOp?/lensOp?: any|all (how each list combines: any = OR, all = AND), labels?: [any of these labels], faces?: count|min+|range}",
+            "partial Filter: {text?, semantic?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, label?, kind?, copy?: true (virtual copies only) | false (master photos only) | null, merged?: hdr|panorama|hdrPanorama|focusStack|any, immich?: linked|notLinked|probable, vignettingReference?: reference|none (Vignetting Calibration references in use; a withdrawn one counts as none), edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?, lens?, keywords?/people?/cameras?/lenses?: [any of these values], keywordOp?/personOp?/lensOp?: any|all (how each list combines: any = OR, all = AND), labels?: [any of these labels], labelsNone?: true (photos with no colour label), faces?: count|min+|range}",
             always,
             |s, p| {
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
@@ -3268,6 +3268,10 @@ mod next_unrated_tests;
 #[cfg(test)]
 #[path = "library/tests_clear_label.rs"]
 mod clear_label_tests;
+
+#[cfg(test)]
+#[path = "library/tests_label_none.rs"]
+mod label_none_tests;
 
 #[cfg(test)]
 #[path = "library/tests_enable_filters.rs"]
