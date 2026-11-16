@@ -13,6 +13,7 @@
 //!   JPEG XL ([`encode_jxl`], feature `jxl`), embedding
 //!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
 //! - [`video`] encodes AV1 video (native, feature `avif`) and writes it as MP4 or WebM.
+//! - [`yuv`] converts decoded Y′CbCr video pictures to display sRGB or linear Rec.2020.
 //!
 //! No decoder panics on malformed input (property-tested).
 #![forbid(unsafe_code)]
@@ -39,6 +40,7 @@ pub mod space;
 mod tiff_codec;
 pub mod video;
 mod webp;
+pub mod yuv;
 
 pub use encode::{
     ChromaSubsampling, EncodeImage, EncodeMeta, HDR_REFERENCE_WHITE_NITS, HLG_REFERENCE_PEAK_NITS, HdrTransfer, Samples, TiffCompression,
