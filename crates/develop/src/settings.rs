@@ -1299,9 +1299,11 @@ pub struct LensBlur {
     pub enabled: bool,
     /// Blur of what is out of focus, 0..100 (100: a disc of 3.5 % of the long edge).
     pub amount: f64,
-    /// Reserved for a depth map (not rendered yet).
+    /// With [`LensBlur::depth`]: where the focal plane sits on the photo's recorded depth, 0..100 (0 the farthest
+    /// the file records, 100 the nearest).
     pub focal_distance: f64,
-    /// Reserved for a depth map (not rendered yet).
+    /// With [`LensBlur::depth`]: how much of the recorded depth around the focal plane stays sharp, 0..100 (the
+    /// share of the whole depth range).
     pub focal_range: f64,
     /// How much brighter the out-of-focus highlights turn into bokeh discs, 0..100. Omitted while
     /// 0, so settings without it keep their JSON (and hash).
@@ -1332,6 +1334,11 @@ pub struct LensBlur {
     /// the shape's preset, in the middle of the crop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub area: Option<FocusArea>,
+    /// In focus by the photo's recorded depth (an iPhone Portrait photo's depth map): what lies within the focal
+    /// range around the focal distance stays sharp, and the blur grows with the depth beyond it. A photo without
+    /// recorded depth keeps the subject (or the focus mask, or the shape) in focus as before. Omitted while off.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub depth: bool,
 }
 
 /// A fixed focus shape on the photo: an upright ellipse.
@@ -1417,6 +1424,30 @@ impl FocusShape {
 impl LensBlur {
     /// [`LensBlur::transition`]'s default.
     pub const DEFAULT_TRANSITION: f64 = 50.0;
+    /// The widest aperture Lens Blur offers: the full blur (Amount 100).
+    pub const WIDEST_APERTURE: f64 = 1.4;
+    /// The narrowest aperture Lens Blur offers.
+    pub const NARROWEST_APERTURE: f64 = 16.0;
+    /// The aperture a photo with recorded depth starts at when its file doesn't say which the phone used.
+    pub const DEFAULT_APERTURE: f64 = 2.8;
+    /// [`LensBlur::focal_range`] when focusing by depth is first switched on: a little of the depth around the
+    /// focal plane stays sharp, as a subject's own depth does.
+    pub const DEFAULT_FOCAL_RANGE: f64 = 10.0;
+
+    /// The Amount an aperture (f-number) gives: [`Self::WIDEST_APERTURE`] the full blur, half as much for every
+    /// doubling of the f-number, as a lens's background blur shrinks; clamped to [`Self::WIDEST_APERTURE`]
+    /// ..[`Self::NARROWEST_APERTURE`]. Lens Blur keeps one strength, the Amount; the aperture is another way to
+    /// read and set it.
+    pub fn amount_for_aperture(f: f64) -> f64 {
+        let f = if f.is_finite() { f.clamp(Self::WIDEST_APERTURE, Self::NARROWEST_APERTURE) } else { Self::DEFAULT_APERTURE };
+        100.0 * Self::WIDEST_APERTURE / f
+    }
+
+    /// The aperture an Amount stands for ([`Self::amount_for_aperture`]'s inverse), clamped to the apertures
+    /// offered; `None` for no blur.
+    pub fn aperture_for_amount(amount: f64) -> Option<f64> {
+        (amount.is_finite() && amount > 0.0).then(|| (100.0 * Self::WIDEST_APERTURE / amount).clamp(Self::WIDEST_APERTURE, Self::NARROWEST_APERTURE))
+    }
 
     /// Whether `v` is [`Self::DEFAULT_TRANSITION`], for skipping it in the JSON.
     fn is_default_transition(v: &f64) -> bool {
@@ -1439,6 +1470,7 @@ impl Default for LensBlur {
             transition: Self::DEFAULT_TRANSITION,
             shape: FocusShape::Auto,
             area: None,
+            depth: false,
         }
     }
 }

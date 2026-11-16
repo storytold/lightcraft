@@ -23,6 +23,12 @@ pub enum MatteKind {
     Hair,
     Teeth,
     Glasses,
+    /// Recorded depth as disparity: 0 the farthest the file records, 255 the nearest (an iPhone Portrait photo's
+    /// depth map, linear in disparity). Only Lens Blur reads it; no mask shape does.
+    Depth,
+    /// The subject matte that came with recorded depth (an iPhone Portrait photo's portrait matte): Lens Blur takes
+    /// the subject's edges from it, sharper than the depth map's. No mask shape reads it.
+    DepthSubject,
 }
 
 impl MatteKind {
@@ -35,6 +41,8 @@ impl MatteKind {
             MatteKind::Hair => 3,
             MatteKind::Teeth => 4,
             MatteKind::Glasses => 5,
+            MatteKind::Depth => 6,
+            MatteKind::DepthSubject => 7,
         }
     }
 
@@ -47,6 +55,8 @@ impl MatteKind {
             3 => Some(MatteKind::Hair),
             4 => Some(MatteKind::Teeth),
             5 => Some(MatteKind::Glasses),
+            6 => Some(MatteKind::Depth),
+            7 => Some(MatteKind::DepthSubject),
             _ => None,
         }
     }
@@ -95,6 +105,18 @@ impl Mattes {
 
     /// Whether a mask of the photo's Subject comes from these mattes (a person, or a person's
     /// parts) rather than from the saliency heuristic.
+    /// Whether there is a matte of `kind`.
+    pub fn has(&self, kind: MatteKind) -> bool {
+        self.mattes.iter().any(|(k, _)| *k == kind)
+    }
+
+    /// The mattes of `kind` (combined with max) at the output resolution of `frame`, sampled like the image; `None`
+    /// when there is none.
+    pub fn plane(&self, kind: MatteKind, frame: &Frame, w: usize, h: usize) -> Option<Plane> {
+        let of = self.of(&[kind]);
+        (!of.is_empty()).then(|| matte_alpha(&of, frame, w, h))
+    }
+
     pub fn selects_subject(&self) -> bool {
         !self.for_shape(&MaskShape::Subject).is_empty()
     }

@@ -53,6 +53,9 @@ pub(crate) fn from_craft(m: craft_metadata::Metadata) -> Metadata {
         exposure_program: m.exposure_program,
         metering_mode: m.metering_mode,
         white_balance: m.white_balance,
+        // read from the container's structure by `heif::has_depth`, not from metadata blocks
+        has_depth: false,
+        portrait_aperture: None,
         orientation: m.orientation.map(orientation_from_craft),
         gps: m.gps,
         width: m.width,

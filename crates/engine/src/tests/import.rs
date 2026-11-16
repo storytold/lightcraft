@@ -2853,6 +2853,65 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
 }
 
 /// Issue #2284: a photo taken at 13:00 in UTC-5 must be catalogued as 13:00. HEICs carried no Exif
+/// Issue #4328: an iPhone Portrait HEIC (here a synthetic one: a depth map growing nearer to the right, whose XMP
+/// says how to read it and that the phone used f/4.5) focuses by its recorded depth. Focus by Depth starts at the
+/// phone's aperture, one undo step; Focus Here sets the focal distance from the depth at the point. A photo without
+/// recorded depth refuses both.
+#[test]
+fn a_portrait_heic_focuses_by_its_recorded_depth() {
+    use craft_heif::testdata::{Aux, Spec, build};
+    let src = temp_dir("heic-portrait");
+    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
+    let depth = |x: u32, _: u32| (x * 5) as u16;
+    let xmp = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:apdi="http://ns.apple.com/pixeldatainfo/1.0/" xmlns:depthBlurEffect="http://ns.apple.com/depthBlurEffect/1.0/"><apdi:AuxiliaryImageType>disparity</apdi:AuxiliaryImageType><apdi:IntMinValue>0</apdi:IntMinValue><apdi:IntMaxValue>255</apdi:IntMaxValue><apdi:FloatMinValue>0.1</apdi:FloatMinValue><apdi:FloatMaxValue>0.6</apdi:FloatMaxValue><depthBlurEffect:SimulatedAperture>4.500000</depthBlurEffect:SimulatedAperture></rdf:Description></rdf:RDF></x:xmpmeta>"#;
+    let aux = Aux { urn: "urn:mpeg:hevc:2015:auxid:2", width: 48, height: 32, sample: &depth, props: Vec::new(), xmp: Some(xmp.into()) };
+    std::fs::write(src.join("IMG_0003.HEIC"), build(&Spec { aux: vec![aux], ..Spec::new(96, 64, &photo) })).unwrap();
+    std::fs::write(src.join("IMG_0004.HEIC"), build(&Spec::new(96, 64, &photo))).unwrap();
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id_of = |s: &Session, name: &str| s.catalog.photos().find(|p| p.file_name == name).map(|p| p.id);
+    let Some(portrait) = id_of(&s, "IMG_0003.HEIC").filter(|_| lightcraft_codecs::Format::Heif.can_decode()) else {
+        // a build without the decoder can't show the photo, so it has no depth to focus by
+        let _ = std::fs::remove_dir_all(&src);
+        return;
+    };
+    let meta = &s.catalog.photo(portrait).unwrap().meta;
+    assert!(meta.has_depth);
+    assert_eq!(meta.portrait_aperture, Some(4.5));
+    s.execute("library.select", &json!({"ids": [portrait.0], "active": portrait.0})).unwrap();
+    let undo_before = s.undo.len();
+    let r = s.execute("lensBlur.useDepth", &json!({})).unwrap();
+    let b = s.develop_of(portrait).unwrap().lens_blur.clone();
+    assert!(b.depth && b.enabled, "{b:?}");
+    assert!((b.amount - lightcraft_develop::LensBlur::amount_for_aperture(4.5)).abs() < 1e-9, "the phone's f/4.5: {}", b.amount);
+    assert!((r["aperture"].as_f64().unwrap() - 4.5).abs() < 1e-6, "{r}");
+    assert_eq!(b.focal_range, lightcraft_develop::LensBlur::DEFAULT_FOCAL_RANGE);
+    assert_eq!(s.undo.len(), undo_before + 1, "one undo step");
+    // near the right edge, the depth is near the nearest
+    let r = s.execute("lensBlur.focusAt", &json!({"x": 0.95, "y": 0.5})).unwrap();
+    let focal = r["focalDistance"].as_f64().unwrap();
+    assert!((88.0..=100.0).contains(&focal), "{r}");
+    assert_eq!(s.develop_of(portrait).unwrap().lens_blur.focal_distance, focal);
+    let far = s.execute("lensBlur.focusAt", &json!({"x": 0.05, "y": 0.5})).unwrap()["focalDistance"].as_f64().unwrap();
+    assert!(far < 12.0, "{far}");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.develop_of(portrait).unwrap().lens_blur.focal_distance, focal, "each click one undo step");
+    // it renders
+    let out = crate::export::export_photo(&mut s, portrait, &crate::export::ExportOptions::from_json(&json!({"format": "png"})), 1).unwrap();
+    assert_eq!((out.width, out.height), (96, 64));
+    // off again: the subject is in focus as before
+    s.execute("lensBlur.useDepth", &json!({"on": false})).unwrap();
+    assert!(!s.develop_of(portrait).unwrap().lens_blur.depth);
+    // a photo without recorded depth refuses both
+    let plain = id_of(&s, "IMG_0004.HEIC").unwrap();
+    s.execute("library.select", &json!({"ids": [plain.0], "active": plain.0})).unwrap();
+    for (c, p) in [("lensBlur.useDepth", json!({})), ("lensBlur.focusAt", json!({"x": 0.5, "y": 0.5}))] {
+        let e = s.execute(c, &p).unwrap_err().to_string();
+        assert!(e.contains("no recorded depth"), "{c}: {e}");
+    }
+    let _ = std::fs::remove_dir_all(&src);
+}
+
 /// (issue #1233), so every one of them fell back to the file's modification time, which the import
 /// writes as UTC: an iPhone photo landed five hours late and after 19:00 on the wrong day.
 #[test]

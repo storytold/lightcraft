@@ -24,6 +24,16 @@ fn edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut DevelopSettin
     ok()
 }
 
+/// The active photo's source (a small one: depth is read at a point) and its info, when it has recorded depth.
+fn depth_source(s: &mut Session, id: PhotoId, c: &str) -> Result<(std::sync::Arc<lightcraft_raster::Rgb32f>, lightcraft_pipeline::SourceInfo)> {
+    let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(c, e))?;
+    let info = s.source_info(id);
+    if !info.mattes.as_ref().is_some_and(|m| m.has(lightcraft_pipeline::masks::MatteKind::Depth)) {
+        return Err(bad(c, "this photo has no recorded depth (an iPhone Portrait photo has)"));
+    }
+    Ok((src, info))
+}
+
 fn section_param(p: &Value, c: &str) -> Result<Section> {
     let v = p.get("section").cloned().ok_or_else(|| bad(c, "missing `section`"))?;
     serde_json::from_value(v).map_err(|e| bad(c, e.to_string()))
@@ -601,6 +611,97 @@ pub fn specs() -> Vec<CommandSpec> {
                     o.insert("from".into(), json!(from));
                 }
                 Ok(out)
+            }
+        ),
+        cmd!(
+            "lensBlur.useDepth",
+            "Focus by Depth",
+            [],
+            None,
+            "{on?: bool (default true)} — Lens Blur keeps in focus what lies at the focal distance on the photo's recorded depth (an iPhone Portrait photo's depth map) instead of the subject, a mask or a shape. Switching it on turns Lens Blur on, starts at the aperture the phone recorded (else f/2.8) and, the first time, focuses on the subject's depth with a little focal range; one undo step. An error for a photo without recorded depth → {focalDistance, aperture}",
+            has_active,
+            |s, p| {
+                const C: &str = "lensBlur.useDepth";
+                let on = bool_or(p, "on", true);
+                let id = active(s, C)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                if !on {
+                    edit(s, C, "Lens Blur Focus", |d| {
+                        d.lens_blur.depth = false;
+                        Ok(())
+                    })?;
+                    return Ok(json!({"focalDistance": d.lens_blur.focal_distance, "aperture": Value::Null}));
+                }
+                let (src, info) = depth_source(s, id, C)?;
+                let b = &d.lens_blur;
+                // the first time: the subject's depth (people mattes, else the saliency estimate), else the middle
+                let focal = if b.focal_distance > 0.0 || b.depth {
+                    b.focal_distance
+                } else {
+                    let at = lightcraft_pipeline::lens_blur::subject_point(&src, &d, info.mattes.as_deref()).unwrap_or(Point::new(0.5, 0.5));
+                    lightcraft_pipeline::lens_blur::depth_at(src.width, src.height, &d, info.mattes.as_deref(), at).map_or(50.0, |v| v * 100.0)
+                };
+                // the phone's aperture when switching it on, else the default
+                let phone = s.catalog.photo(id).and_then(|p| p.meta.portrait_aperture).map(f64::from);
+                let aperture = phone.unwrap_or(lightcraft_develop::LensBlur::DEFAULT_APERTURE);
+                let switching_on = !(b.depth && b.enabled);
+                edit(s, C, "Lens Blur Focus", |d| {
+                    let b = &mut d.lens_blur;
+                    if switching_on {
+                        b.amount = lightcraft_develop::LensBlur::amount_for_aperture(aperture);
+                    }
+                    if b.focal_range <= 0.0 {
+                        b.focal_range = lightcraft_develop::LensBlur::DEFAULT_FOCAL_RANGE;
+                    }
+                    b.focal_distance = focal.clamp(0.0, 100.0);
+                    b.depth = true;
+                    b.enabled = true;
+                    d.set_section_enabled("lensBlur", true);
+                    Ok(())
+                })?;
+                let now = s.develop_of(id).unwrap_or_default();
+                Ok(json!({
+                    "focalDistance": now.lens_blur.focal_distance,
+                    "aperture": lightcraft_develop::LensBlur::aperture_for_amount(now.lens_blur.amount),
+                }))
+            }
+        ),
+        cmd!(
+            "lensBlur.focusAt",
+            "Focus Here",
+            [],
+            None,
+            "{x, y} (normalized coordinates on the photo, as masks are placed) — sets Lens Blur's focal distance to the photo's recorded depth at that point and focuses by depth (Lens Blur on); one undo step. An error for a photo without recorded depth → {focalDistance}",
+            has_active,
+            |s, p| {
+                const C: &str = "lensBlur.focusAt";
+                let (x, y) = (f64_req(p, "x", C)?, f64_req(p, "y", C)?);
+                if !(x.is_finite() && y.is_finite()) {
+                    return Err(bad(C, "`x` and `y` must be numbers"));
+                }
+                let id = active(s, C)?;
+                // not focusing by depth yet: switched on as `lensBlur.useDepth` does (the phone's aperture), then
+                // focused here, together one undo step
+                let switched = !s.develop_of(id).unwrap_or_default().lens_blur.depth;
+                if switched {
+                    s.execute("lensBlur.useDepth", &json!({}))?;
+                }
+                let d = s.develop_of(id).unwrap_or_default();
+                let (src, info) = depth_source(s, id, C)?;
+                let at = Point::new(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+                let v = lightcraft_pipeline::lens_blur::depth_at(src.width, src.height, &d, info.mattes.as_deref(), at)
+                    .ok_or_else(|| bad(C, "the photo has no recorded depth at that point"))?;
+                edit(s, C, "Lens Blur Focus", |d| {
+                    d.lens_blur.focal_distance = (v * 100.0).clamp(0.0, 100.0);
+                    d.lens_blur.depth = true;
+                    d.lens_blur.enabled = true;
+                    d.set_section_enabled("lensBlur", true);
+                    Ok(())
+                })?;
+                if switched {
+                    s.merge_undo(2, "Lens Blur Focus");
+                }
+                Ok(json!({"focalDistance": (v * 100.0).clamp(0.0, 100.0)}))
             }
         ),
         cmd!(

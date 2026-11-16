@@ -268,10 +268,13 @@ fn load_bytes_now(
         ));
     }
     let d = lightcraft_codecs::decode(&bytes, fit_box(max_edge)).map_err(|e| e.to_string())?;
+    // an iPhone Portrait photo's recorded depth, for Lens Blur (oriented like the decoded photo: HEIF's
+    // container transforms are applied to both)
+    let mattes = (lightcraft_codecs::sniff(&bytes) == Some(lightcraft_codecs::Format::Heif)).then(|| depth_mattes(&bytes)).flatten();
     drop(bytes);
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
-    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default(), false))
+    Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo { mattes, ..SourceInfo::default() }, false))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from
@@ -368,6 +371,27 @@ fn local_tone(raw: &lightcraft_raw::RawImage) -> Option<Arc<lightcraft_pipeline:
     let rect = [c.x as f64 / aw, c.y as f64 / ah, c.width as f64 / aw, c.height as f64 / ah];
     let placement = lightcraft_raw::gaintable::SourcePlacement { rect, orientation: raw.orientation };
     Some(Arc::new(lightcraft_pipeline::local_tone::LocalTone { map, placement }))
+}
+
+/// A HEIF's recorded depth as mattes for Lens Blur: the disparity map spread over 0..255 (0 the farthest it records,
+/// 255 the nearest; linear in disparity) and the subject matte that came with it. `None` without a depth map, or
+/// one that records a single depth (nothing to focus between).
+fn depth_mattes(bytes: &[u8]) -> Option<Arc<lightcraft_pipeline::masks::Mattes>> {
+    use lightcraft_pipeline::masks::{MatteKind, Mattes};
+    let depth = lightcraft_codecs::depth::read_depth(bytes)?;
+    let (lo, hi) = depth.disparity.iter().fold((f32::MAX, f32::MIN), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    if hi.partial_cmp(&lo) != Some(std::cmp::Ordering::Greater) {
+        return None;
+    }
+    let mut mattes = Mattes::default();
+    let to_byte = |v: f32| (((v - lo) / (hi - lo)).clamp(0.0, 1.0) * 255.0).round() as u8;
+    let data = depth.disparity.iter().map(|&v| to_byte(v)).collect();
+    mattes.push(MatteKind::Depth, lightcraft_raster::Image { width: depth.width as usize, height: depth.height as usize, data });
+    if let Some(m) = depth.matte {
+        let data = m.alpha.iter().map(|&a| (a.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+        mattes.push(MatteKind::DepthSubject, lightcraft_raster::Image { width: m.width as usize, height: m.height as usize, data });
+    }
+    Some(Arc::new(mattes))
 }
 
 /// The semantic masks of a DNG that AI masks understand, over the developed image (default crop,
