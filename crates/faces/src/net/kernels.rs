@@ -1,5 +1,5 @@
 //! Safe CPU kernels shared by detection and recognition. No inner thread pool.
-use super::*;
+use super::{ConvJob, Graph, MAX_TENSOR, NetError, Node, Result, Tensor, chw, conv_direct, pads, pair, program, shape, shape_err};
 use ndarray::{ArrayView2, ArrayViewMut2, linalg::general_mat_mul};
 const BLOCK: usize = 256;
 #[derive(Default)]
@@ -30,7 +30,16 @@ fn multiply(w: &[f32], x: &[f32], y: &mut [f32], m: usize, k: usize, n: usize) -
 }
 /// For equal-width, unit-stride maps a shifted plane is one contiguous copy. Only horizontal
 /// border stripes need masking; clipping the flat source range also removes vertical padding.
-fn shifted_plane(plane: &[f32], width: usize, ky: usize, kx: usize, pt: usize, pl: usize, start: usize, row: &mut [f32]) -> Result<()> {
+#[derive(Clone, Copy)]
+struct PlaneShift {
+    width: usize,
+    kernel: (usize, usize),
+    padding: (usize, usize),
+    start: usize,
+}
+
+fn shifted_plane(plane: &[f32], row: &mut [f32], shift: PlaneShift) -> Result<()> {
+    let PlaneShift { width, kernel: (ky, kx), padding: (pt, pl), start } = shift;
     let end = start + row.len();
     let delta = (ky as i128 - pt as i128) * width as i128 + kx as i128 - pl as i128;
     let lo = (-delta).clamp(start as i128, end as i128);
@@ -145,13 +154,8 @@ pub(super) fn conv(n: &Node, x: &Tensor, g: &Graph, scratch: &mut Scratch) -> Re
                         if sh == 1 && sw == 1 && ow == w {
                             shifted_plane(
                                 plane,
-                                w,
-                                ky,
-                                kx,
-                                pt,
-                                pl,
-                                start,
                                 row.get_mut(..len).ok_or_else(|| NetError::Shape("short lower panel".into()))?,
+                                PlaneShift { width: w, kernel: (ky, kx), padding: (pt, pl), start },
                             )?;
                             continue;
                         }

@@ -3,7 +3,7 @@
 //! Built with `CRAFT_FONTS_DIR=<craft-fonts checkout>`, [`CRAFT_FONTS`] holds every font in its
 //! manifest (today: the Japanese and Simplified-Chinese UI and document fonts); otherwise it is
 //! empty and LightCraft uses only its own bundled fonts (Inter). Both the egui UI and the export
-//! watermark renderer read it from here. See craftrules `standards/fonts.md`.
+//! watermark renderer read it from here.
 
 /// A font from the optional craft-fonts build input (empty unless built with `CRAFT_FONTS_DIR`).
 pub struct CraftFont {
@@ -105,7 +105,7 @@ mod tests {
         assert!(japanese(CRAFT_FONTS).next().is_some(), "craft-fonts carries Japanese faces");
         // Every script face that ships is a UI fallback, and has the glyphs of its script (#736).
         use ab_glyph::Font;
-        for (script, text) in [("Thai", "ภาพถ่ายสวัสดี๑๒๓"), ("Arab", "صورة")] {
+        for (script, text) in [("Thai", "ภาพถ่ายสวัสดี๑๒๓"), ("Arab", "صورة"), ("Geor", "ფოტო")] {
             let Some(face) = ui_fallback(CRAFT_FONTS, "Latn", "Regular").into_iter().find(|f| f.covers(script)) else { continue };
             let font = ab_glyph::FontRef::try_from_slice(face.bytes).expect("parses");
             assert!(text.chars().all(|c| font.glyph_id(c).0 != 0), "{} draws {script}", face.family);

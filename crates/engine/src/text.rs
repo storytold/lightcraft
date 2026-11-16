@@ -1,11 +1,12 @@
 //! Text drawing in pure Rust, shared by the export watermark and the slideshow overlays: Inter
-//! SemiBold (bundled) first, then the craft-fonts CJK faces as fallbacks ([`faces`]); glyph outlines
+//! SemiBold (bundled) first, then the craft-fonts CJK and Thai faces as fallbacks ([`faces`]); glyph outlines
 //! from `ab_glyph`, vertical CJK cells shaped with `harfrust`. [`TextLayout`] lays a string out
 //! once (lines split at `\n`, kerning within a face) and reports its size, so callers can anchor
 //! it before drawing; drawing hands out per-pixel coverage, and the caller blends.
 //!
-//! RTL scripts are laid out in logical order without bidi reordering, and scripts no face covers
-//! draw as Inter's missing-glyph box: wrong-looking, never a crash.
+//! Horizontal text has no contextual shaping or bidi reordering; Thai combining marks use
+//! per-character metrics rather than shaped positioning. Arabic faces are not offered. Characters
+//! no face covers draw as Inter's missing-glyph box.
 
 use ab_glyph::{Font, FontRef, Glyph, PxScale, ScaleFont, point};
 
@@ -16,13 +17,16 @@ pub static TEXT_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBo
 pub const MAX_CHARS: usize = 4000;
 
 /// The text faces: Inter first, then the craft-fonts CJK faces (Mincho first, the watermark's
-/// serif look; then any other CJK face — drawn text has no UI language, so every CJK script is
-/// offered). Without craft-fonts that is Inter alone, and CJK characters draw as Inter's
-/// missing-glyph box.
+/// serif look; then any other CJK face), then Thai faces, preferring Regular. Drawn text has no
+/// UI language, so every CJK script is offered. Other script faces stay out until their layout is
+/// supported. Without craft-fonts that is Inter alone, with missing-glyph boxes for unsupported text.
 pub fn faces(craft: &'static [crate::fonts::CraftFont]) -> Vec<FontRef<'static>> {
     let mut cjk: Vec<_> = crate::fonts::cjk(craft).collect();
     cjk.sort_by_key(|f| !f.is_mincho());
-    std::iter::once(TEXT_FONT).chain(cjk.into_iter().map(|f| f.bytes)).filter_map(|bytes| FontRef::try_from_slice(bytes).ok()).collect()
+    let thai = crate::fonts::ui_fallback(craft, "Latn", "Regular")
+        .into_iter()
+        .filter(|f| f.covers("Thai") && !f.scripts.iter().any(|s| crate::fonts::is_cjk_script(s)));
+    std::iter::once(TEXT_FONT).chain(cjk.into_iter().chain(thai).map(|f| f.bytes)).filter_map(|bytes| FontRef::try_from_slice(bytes).ok()).collect()
 }
 
 /// Shape a whole grapheme in one cell. CJK uses vertical origins and forms; Latin stays upright.
@@ -53,6 +57,19 @@ pub fn cell_glyphs(font: &FontRef<'_>, data: &harfrust::ShaperData, text: &str, 
     Some(glyphs)
 }
 
+/// NFC, except CJK compatibility ideographs, which NFC would swap for their unified forms.
+fn compose(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let compatibility = |c: char| matches!(c, '\u{F900}'..='\u{FAFF}' | '\u{2F800}'..='\u{2FA1F}');
+    let mut out = String::with_capacity(text.len());
+    for part in text.split_inclusive(compatibility) {
+        let kept = part.chars().next_back().filter(|&c| compatibility(c));
+        out.extend(kept.and_then(|c| part.strip_suffix(c)).unwrap_or(part).nfc());
+        out.extend(kept);
+    }
+    out
+}
+
 /// A string laid out at one size: its glyphs relative to the box's top-left corner and the box's
 /// size in pixels (lines are `px` apart; vertical text: columns `px` wide, right to left).
 pub struct TextLayout {
@@ -75,6 +92,9 @@ impl TextLayout {
             Some((i, _)) => text.get(..i).unwrap_or(text),
             None => text,
         };
+        // macOS file names are often decomposed (NFD); the layout below draws one glyph per char
+        let composed = compose(text);
+        let text = composed.as_str();
         let fonts = faces(craft);
         let latin = fonts.first()?.clone();
         let vertical_data: Vec<_> = if vertical {
@@ -219,6 +239,136 @@ impl TextLayout {
                     };
                     f((ox + sx) as i32, (oy + sy) as i32, cov);
                 });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fonts::{CRAFT_FONTS, CraftFont};
+
+    fn assert_script_glyphs(script: &str, text: &str) {
+        if !CRAFT_FONTS.iter().any(|font| font.covers(script)) {
+            lightcraft_testkit::skip!(Fonts, "built without the {script} face from craft-fonts");
+            return;
+        }
+        let layout = TextLayout::new(text, 40.0, false, CRAFT_FONTS).unwrap();
+        assert_eq!(layout.glyphs.len(), text.chars().count());
+        for (ch, (face, glyph, _)) in text.chars().zip(&layout.glyphs) {
+            assert_ne!(glyph.id.0, 0, "missing {script} glyph for {ch}");
+            let font = &layout.fonts[*face];
+            assert!(CRAFT_FONTS.iter().any(|entry| entry.covers(script) && entry.bytes == font.font_data()));
+        }
+        let mut covered = 0;
+        layout.draw(0.0, 0.0, |_, _, coverage| covered += usize::from(coverage > 0.0));
+        assert!(covered > 0, "{script} outlines are rasterized");
+    }
+
+    #[test]
+    fn bundled_arabic_stays_out_of_export_fallback() {
+        if !CRAFT_FONTS.iter().any(|font| font.covers("Arab")) {
+            lightcraft_testkit::skip!(Fonts, "built without the Arabic face from craft-fonts");
+            return;
+        }
+        // UI names still use their existing Arabic face. Export needs joining and bidi first.
+        assert!(crate::fonts::ui_fallback(CRAFT_FONTS, "Latn", "Regular").iter().any(|font| font.covers("Arab")));
+        for vertical in [false, true] {
+            let layout = TextLayout::new("مرحبا", 40.0, vertical, CRAFT_FONTS).unwrap();
+            assert!(layout.glyphs.iter().all(|(face, glyph, _)| *face == 0 && glyph.id.0 == 0));
+        }
+    }
+
+    fn assert_draws_composed(text: &str, craft: &'static [CraftFont]) {
+        use unicode_normalization::UnicodeNormalization;
+        let nfc: String = text.nfc().collect();
+        let nfd: String = text.nfd().collect();
+        assert_ne!(nfc, nfd);
+        let (a, b) = (TextLayout::new(&nfc, 40.0, false, craft).unwrap(), TextLayout::new(&nfd, 40.0, false, craft).unwrap());
+        let ids = |l: &TextLayout| l.glyphs.iter().map(|(face, g, _)| (*face, g.id.0)).collect::<Vec<_>>();
+        assert_eq!(ids(&b), ids(&a));
+        assert_eq!(b.width, a.width);
+        assert!(a.glyphs.iter().all(|(_, g, _)| g.id.0 != 0));
+    }
+
+    #[test]
+    fn decomposed_vietnamese_draws_its_composed_letters() {
+        assert_draws_composed("HỌC ĐỂ ỨNG DỤNG", &[]);
+    }
+
+    #[test]
+    fn decomposed_hangul_draws_whole_syllables() {
+        if !CRAFT_FONTS.iter().any(|font| font.covers("Hang")) {
+            lightcraft_testkit::skip!(Fonts, "built without a Hangul face from craft-fonts");
+            return;
+        }
+        assert_draws_composed("제주도 바다 여행.jpg", CRAFT_FONTS);
+    }
+
+    #[test]
+    fn compatibility_ideographs_keep_their_code_points() {
+        use unicode_normalization::UnicodeNormalization;
+        let nfd = |s: &str| s.nfd().collect::<String>();
+        let text = format!("\u{FA10}{} \u{2F800}{}\u{F900}", nfd("본 제주"), nfd("Ọ"));
+        assert_eq!(compose(&text), "\u{FA10}본 제주 \u{2F800}Ọ\u{F900}");
+    }
+
+    #[test]
+    fn already_composed_text_stays_as_it_is() {
+        for text in ["", "plain.jpg", "제주도 바다 여행.jpg", "HỌC ĐỂ ỨNG DỤNG"] {
+            assert!(unicode_normalization::is_nfc(text), "{text}");
+            assert_eq!(compose(text), text);
+        }
+    }
+
+    #[test]
+    fn bundled_thai_uses_its_glyphs() {
+        assert_script_glyphs("Thai", "สวัสดีครับ");
+    }
+
+    #[test]
+    fn absent_fonts_keep_inter_and_missing_glyph_boxes() {
+        assert_eq!(faces(&[]).len(), 1);
+        let layout = TextLayout::new("Aกم", 40.0, false, &[]).unwrap();
+        assert_ne!(layout.glyphs[0].1.id.0, 0);
+        assert!(layout.glyphs[1..].iter().all(|(face, glyph, _)| *face == 0 && glyph.id.0 == 0));
+        let mut covered = 0;
+        layout.draw(0.0, 0.0, |_, _, coverage| covered += usize::from(coverage > 0.0));
+        assert!(covered > 0);
+    }
+
+    #[test]
+    fn latin_and_cjk_rendering_keeps_the_existing_preference() {
+        let mut cjk: Vec<_> = crate::fonts::cjk(CRAFT_FONTS).collect();
+        if cjk.is_empty() {
+            lightcraft_testkit::skip!(Fonts, "built without CJK faces from craft-fonts");
+            return;
+        }
+        cjk.sort_by_key(|font| !font.is_mincho());
+        let previous: &'static [CraftFont] = Box::leak(
+            cjk.into_iter()
+                .map(|font| CraftFont { family: font.family, style: font.style, scripts: font.scripts, bytes: font.bytes })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        );
+        let actual = faces(CRAFT_FONTS);
+        assert!(actual.len() > previous.len());
+        assert!(actual[0].font_data() == TEXT_FONT, "Inter stays first");
+        for (font, expected) in actual.iter().skip(1).zip(previous) {
+            assert!(font.font_data() == expected.bytes, "existing CJK face order: {} {}", expected.family, expected.style);
+        }
+        for vertical in [false, true] {
+            for text in ["LightCraft AV 123", "日本語、。你好世界한국어"] {
+                let before = TextLayout::new(text, 40.0, vertical, previous).unwrap();
+                let after = TextLayout::new(text, 40.0, vertical, CRAFT_FONTS).unwrap();
+                assert_eq!((before.width, before.height), (after.width, after.height));
+                let pixels = |layout: &TextLayout| {
+                    let mut pixels = Vec::new();
+                    layout.draw(0.0, 0.0, |x, y, coverage| pixels.push((x, y, coverage)));
+                    pixels
+                };
+                assert!(pixels(&before) == pixels(&after), "{text}, vertical={vertical}");
             }
         }
     }

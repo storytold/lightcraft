@@ -52,6 +52,18 @@ pub fn valid_hash(h: &str) -> bool {
     !h.is_empty() && h.len() <= 128 && h.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
+/// Why a backup can't start yet, given [`lightcraft_engine::Session::unsaved`]: changes applied in
+/// the app but not yet written to browser storage (a save failed). The zip copies the stored
+/// library files, so it would report success while missing them; `None` when everything is saved.
+pub fn unsaved_refusal(unsaved: Option<(usize, &str)>) -> Option<String> {
+    let (ops, why) = unsaved?;
+    let changes = if ops == 1 { "1 change".to_string() } else { format!("{ops} changes") };
+    Some(format!(
+        "Backup not started: {changes} could not be saved to browser storage yet ({why}), so the backup would miss them. \
+         Free up storage space; LightCraft retries the save with every change. Back up once nothing is left unsaved."
+    ))
+}
+
 /// Zip entry name for an original.
 pub fn original_entry(hash: &str, file_name: &str) -> String {
     let name: String = file_name.chars().map(|c| if c == '/' || c == '\\' || c.is_control() { '_' } else { c }).collect();
@@ -221,6 +233,25 @@ pub fn parse_central(cd: &[u8]) -> Result<Vec<ZipEntry>, String> {
     Ok(out)
 }
 
+/// What a restore writes, each storage key once, checked against the whole directory before any
+/// payload is read: a backup names a file once, so a directory naming the same destination again
+/// is damaged or altered, and its entries' bytes can't add up to more than the file holds (a
+/// directory can point many entries at one stored range and have each read, checked and written).
+pub fn restore_plan<'a>(entries: &'a [ZipEntry], dir: &str, file_len: u64) -> Result<Vec<(String, &'a ZipEntry)>, String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut plan = Vec::new();
+    let mut bytes = 0u64;
+    for e in entries {
+        let Some(key) = restore_key(&e.name, dir) else { continue };
+        if !seen.insert(key.clone()) {
+            return Err(format!("{}: listed twice (damaged or altered backup)", e.name));
+        }
+        bytes = bytes.checked_add(e.size).filter(|&b| b <= file_len).ok_or_else(|| format!("{}: entries larger than the backup itself", e.name))?;
+        plan.push((key, e));
+    }
+    Ok(plan)
+}
+
 /// Offset of an entry's data from its local header's first 30 bytes.
 pub fn data_offset(entry: &ZipEntry, local: &[u8]) -> Result<u64, String> {
     if rd32(local, 0) != Some(LOCAL_SIG) {
@@ -328,6 +359,23 @@ mod tests {
         assert_eq!(original_entry("abc", ".."), "originals/abc/original");
         assert!(valid_library_dir("library") && valid_library_dir("library-restored-17"));
         assert!(!valid_library_dir("library-../x") && !valid_library_dir("originals") && !valid_library_dir("library-"));
+    }
+
+    #[test]
+    fn restore_plan_refuses_repeated_and_oversized_entries() {
+        let entry = |name: &str, size: u64| ZipEntry { name: name.into(), crc: 0, size, header: 0, method: 0 };
+        let ok = [entry("README.txt", 10), entry("library/catalog.log", 10), entry("originals/abc123/a.jpg", 100)];
+        let plan = restore_plan(&ok, "d", 200).unwrap();
+        assert_eq!(plan.iter().map(|(k, _)| k.as_str()).collect::<Vec<_>>(), ["d/catalog.log", "originals/abc123"]);
+        // one stored range named 3 times would be read, checked and written 3 times
+        let twice = [entry("originals/abc123/a.jpg", 100), entry("originals/abc123/b.jpg", 100)];
+        assert!(restore_plan(&twice, "d", 1000).unwrap_err().contains("twice"));
+        let twice = [entry("library/catalog.log", 10), entry("library/catalog.log", 10)];
+        assert!(restore_plan(&twice, "d", 1000).is_err());
+        // entries claiming more bytes than the file has
+        let big = [entry("library/catalog.log", 150), entry("originals/abc123/a.jpg", 100)];
+        assert!(restore_plan(&big, "d", 200).is_err());
+        assert!(restore_plan(&[entry("library/catalog.log", u64::MAX), entry("library/presets.json", 1)], "d", u64::MAX).is_err());
     }
 
     #[test]

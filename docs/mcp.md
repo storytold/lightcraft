@@ -22,7 +22,9 @@ it open, `--library` on the same folder fails with "This library is already open
 `--demo` starts the headless session with the procedurally generated demo library;
 `--compact` lists only the helper tools (see below). In connect mode the server starts even when
 the app is not running yet and connects on the first call (and reconnects if the app restarts).
-A request is sent again only when it never reached the app. If the connection drops after a request
+A request is sent again (once) only when it never reached the app: it could not be sent, or the app's
+idle-close notice came back in its place (the app closed the idle connection without reading it; see
+[control-protocol.md](control-protocol.md)). If the connection drops after a request
 was sent but before its reply, the tool fails with "the outcome is unknown" and nothing is resent, so a
 command such as undo can't run twice: check the app's state before retrying. Replies must be
 newline-terminated, at most 64 MiB before the newline (including encoded previews/screenshots),
@@ -96,13 +98,13 @@ The release packages ship `lightcraft-cli` alongside the desktop app, so no buil
 
 | Install | CLI |
 |---|---|
-| Windows (MSI) | `C:\Program Files\LightCraft\lightcraft-cli.exe` by default (wherever you installed it otherwise), not on `PATH` |
+| Windows (MSI) | `%LOCALAPPDATA%\Programs\ArtCraft\LightCraft\lightcraft-cli.exe` by default (`C:\Program Files\ArtCraft\LightCraft\lightcraft-cli.exe` for an all-users install, under `Program Files (x86)` instead for the 32-bit build, or wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/lightcraft-cli` |
 | macOS | the separate `lightcraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
 
 ```sh
-# Windows, default install folder
-claude mcp add lightcraft -- "C:\Program Files\LightCraft\lightcraft-cli.exe" mcp
+# Windows (PowerShell), default install folder
+claude mcp add lightcraft -- "$env:LOCALAPPDATA\Programs\ArtCraft\LightCraft\lightcraft-cli.exe" mcp
 # Linux, or macOS with the CLI unzipped onto PATH
 claude mcp add lightcraft -- lightcraft-cli mcp
 ```
@@ -146,8 +148,11 @@ Each edit in a batch has its own undo step. Connect mode also lists `ui_inspect`
 Ports and connect mode are unchanged.
 
 Every listed tool has a title and all four MCP hints. Generated command tools are conservatively
-marked as edits. Helpers with optional output paths are marked as writers; `export` is not
-idempotent because the default conflict policy chooses a new filename on repeated calls.
+marked as edits. `export`, `render_photo` and `screenshot` have `readOnlyHint: false` and
+`destructiveHint: true`: their caller-supplied output paths can replace existing files, even
+when a path is optional. The image-only `render_preview` and `ui_screenshot` remain read-only
+and non-destructive. These annotations are client hints, not a file-access sandbox.
+`export` is not idempotent because the default conflict policy chooses a new filename on repeated calls.
 Unknown helper argument keys return JSON-RPC `-32602` naming the key and accepted arguments.
 Generated `cmd_*` tools and nested command params remain free-form: the registry has prose
 parameter docs, not machine-readable schemas. Existing command validation (including strict
@@ -167,16 +172,16 @@ per-request `_meta` receive `resultType: complete` and list/read cache hints; re
 |---|---|
 | `list_commands {filter?}` | Every command: id, label, menu, shortcut, parameter doc, enabled now |
 | `run_command {command, params?}` | Run any command by id |
-| `import {paths, album?, mode?, destination?, organize?, rename?}` | Import files/folders (folders are scanned recursively); the first new photo becomes active. `mode: "copy"` copies into `destination` (default: the library's Originals/), `mode: "move"` moves there (each original and its XMP sidecars are removed from the source only after the copy is verified and catalogued; duplicates and failures keep their sources; the result's `moved` / `kept` list what moved and what stayed, and why; undo leaves the moved files at the destination), filed by `organize`: `date` (YYYY/YYYY-MM-DD), `month`, `flat` or a folder template such as `{date:%Y}/{date:%Y%m%d}` (→ `2026/20260114`; capture date, else the import date; always inside the destination), and named by the `rename` template (`run_command photo.renameTokens` lists the tags) |
+| `import {paths, album?, mode?, destination?, organize?, rename?}` | Import files/folders (folders are scanned recursively); the first new photo becomes active. `mode: "copy"` copies into `destination` (default: the library's Originals/), `mode: "move"` moves there (each original and its XMP sidecars are removed from the source only after the copy is verified and catalogued; duplicates and failures keep their sources; the result's `moved` / `kept` list what moved and what stayed, and why; undo leaves the moved files at the destination), filed by `organize`: `date` (YYYY/YYYY-MM-DD), `month`, `flat` or a folder template such as `{date:%Y}/{date:%Y%m%d}` (→ `2026/20260114`) or `{date:%Y}/{date:%B}` (→ `2026/January`; capture date, else the import date; always inside the destination), and named by the `rename` template (`run_command photo.renameTokens` lists the tags) |
 | `query_photos {filter?, sort?, offset?, limit?}` | Photos in the current view (or matching a catalog `Filter`) |
 | `select_photos {ids, active?, mode?}` | Set the selection / active photo. Every id (and `active`) must be in the library: an unknown id is a tool error (`no such photo 9999`) and the selection and active photo are left as they were |
 | `list_controls {section?}` | Every develop slider: id (`light.exposure`…), range, default, current value |
 | `get_develop {id?}` | Full develop-settings JSON, with `process`: the rendering process the photo is on ([process-versions.md](process-versions.md)) |
-| `set_develop {id?, values?, settings?, label?}` | `values`: `{controlId: number}`; `settings`: partial develop JSON deep-merged. Undoable. A `crop.angle` value turns the crop as `crop.straighten` does: kept if it still fits, else shrunk to the largest crop of its aspect inside the photo (`settings` is merged as given, unfitted). White balance: `values` with `wb.temp` / `wb.tint` is Kelvin on raws with colour matrices (DNG, and cameras LightCraft has matrices for) and relative (6500 = as shot) elsewhere; a `settings.wb` with `temp` / `tint` and no `"scale": "kelvin"` is read on the relative scale on every raw (see [control-protocol.md](control-protocol.md)) |
+| `set_develop {id?, values?, settings?, label?}` | `values`: `{controlId: number}`; `settings`: partial develop JSON deep-merged. Undoable. A `crop.angle` value turns the crop as `crop.straighten` does: kept if it still fits, else shrunk to the largest crop of its aspect inside the photo (`settings` is merged as given, unfitted). White balance: `values` with `wb.temp` / `wb.tint` is Kelvin on raws with colour matrices (DNG, and cameras LightCraft has matrices for) and relative (6500 = as shot) elsewhere; a `settings.wb` with `temp` / `tint` and no `"scale": "kelvin"` is read on the relative scale on every raw, and one that names only `temp` or only `tint` resolves the field it leaves out against the photo, so that field keeps its look; on a photo still on As Shot (or on a named white balance preset, on a raw with matrices) the white it really renders is written out as Custom values first, so the number named takes effect instead of being stored unread (#2910, and its review); `apply_preset` resolves a preset that names one number the same way (see [control-protocol.md](control-protocol.md)) |
 | `apply_preset {preset, amount?, ids?}` | Apply a preset (ids from `cmd_presets_list`) |
 | `crop {id?, rect?, angle?, reset?}` | Normalized crop rect `[x0,y0,x1,y1]` and straighten angle; at least one of `rect`, `angle`, `reset: true`. The crop always ends inside the photo: an `angle` alone keeps the crop if it still fits, else shrinks it to the largest of its aspect that does |
 | `render_photo {id?, size?, format?, path?}` | Render with current settings → **image content** (PNG, or JPEG with `format: "jpeg"`), long edge `size` (default 1024) |
-| `export {path \| dir, id? \| ids?, format?, longEdge? \| shortEdge? \| width?/height? \| megapixels? \| percent?, dontEnlarge?, ppi?, quality?, colorSpace?, bitDepth?, …}` | Full-quality render to `.png` / `.jpg` / `.tif` / `.webp` / `.avif` / `.jxl` (`jxlLossless`, `jxlEffort`, `jxlProgressive`); `format: "original"` copies the file + an XMP sidecar with the edits, `format: "dng"` writes raw photos as DNG with the edits embedded. No size param = 3000 px long edge; `longEdge: 0` = full size (cropped, native resolution); `width` + `height` fit either orientation; `dontEnlarge` defaults to true |
+| `export {path \| dir, id? \| ids?, format?, longEdge? \| shortEdge? \| width?/height? \| megapixels? \| percent?, dontEnlarge?, ppi?, quality?, colorSpace?, bitDepth?, …}` | Full-quality render to `.png` / `.jpg` / `.tif` / `.webp` / `.avif` / `.jxl` (`jxlLossless`, `jxlEffort`, `jxlProgressive`); `format: "original"` copies the file + an XMP sidecar with the edits, `format: "dng"` writes raw photos as DNG with the edits embedded. No size param = 3000 px long edge; `longEdge: 0` = full size (cropped, native resolution); `width` + `height` fit either orientation (Lightroom's Dimensions); with `fit: "widthHeight"` they limit the width and the height as the photo stands (Width & Height); `dontEnlarge` defaults to true |
 
 `get_develop {id}` and `render_photo {id}` use that photo without changing the selection.
 `set_develop`, `crop` and `export` with a supplied photo `id` end the current edit interaction,
@@ -313,10 +318,10 @@ lightcraft-cli calibrate --max 300 ~/Pictures/2026   # camera colour profiles (d
 
 ## Tests
 
-- `crates/mcp/tests/e2e.rs` — M0.9 acceptance: over the stdio framing, set exposure and render;
+- `crates/mcp/tests/it/e2e.rs` — M0.9 acceptance: over the stdio framing, set exposure and render;
   checks the decoded PNG gets brighter/darker. Runs headless and through the TCP transport
   (`Remote`) against a stand-in control server; also import → render → JPEG export of a real file.
-- `apps/lightcraft-cli/tests/cli.rs` — spawns `lightcraft-cli mcp` with real pipes; `render`;
+- `apps/lightcraft-cli/tests/it/cli.rs` — spawns `lightcraft-cli mcp` with real pipes; `render`;
   `commands`.
 
 ## Add to Apple Photos (macOS)

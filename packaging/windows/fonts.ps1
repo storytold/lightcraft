@@ -6,7 +6,7 @@ function Initialize-CraftFonts([string] $WorkspaceRoot) {
 
   if (-not $env:CRAFT_FONTS_DIR -and -not (Test-Path -LiteralPath $fontDir)) {
     # Same revision as release.yml and packaging/fonts.sh. Existing checkouts stay untouched.
-    $revision = '3d9ab3a132ed0eff457e424226a435a901da30d3'
+    $revision = 'b076417b5880bd4154bd22f00695b1d28c6bea83'
     Write-Output "==> downloading craft-fonts ($revision) to $fontDir"
     & git clone --no-checkout https://github.com/storytold/craft-fonts $fontDir
     if ($LASTEXITCODE -ne 0) { throw 'Could not download craft-fonts; provide a complete checkout with CRAFT_FONTS_DIR' }

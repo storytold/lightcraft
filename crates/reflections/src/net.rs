@@ -40,7 +40,8 @@ impl Net {
             middle: if small { 4 } else { 12 },
         })
     }
-    fn conv(&self, x: &Tensor, p: &str, cin: usize, cout: usize, k: usize, stride: usize, pad: usize, bias: bool) -> R<Tensor> {
+    /// `io` = (input, output channels), `sp` = (stride, padding).
+    fn conv(&self, x: &Tensor, p: &str, (cin, cout): (usize, usize), k: usize, (stride, pad): (usize, usize), bias: bool) -> R<Tensor> {
         let vb = self.vb.pp(p);
         let w = vb.get((cout, cin, k, k), "weight")?;
         let mut y = conv2d(x, &w, pad, stride)?;
@@ -79,27 +80,27 @@ impl Net {
     }
     fn first(&self, x: &Tensor, p: &str, c: usize) -> R<Tensor> {
         let x = self.norm(x, &format!("{p}.block1.0.seq.0"), c)?;
-        let x = self.conv(&x, &format!("{p}.block1.0.seq.1"), c, c * 2, 1, 1, 0, true)?;
+        let x = self.conv(&x, &format!("{p}.block1.0.seq.1"), (c, c * 2), 1, (1, 0), true)?;
         self.depthwise(&x, &format!("{p}.block1.0.seq.2"), c * 2)
     }
     fn ca(&self, x: &Tensor, p: &str, c: usize) -> R<Tensor> {
         let avg = x.mean_keepdim((2, 3))?;
-        x.broadcast_mul(&self.conv(&avg, &format!("{p}.block1.2.seq.0.ca.1"), c, c, 1, 1, 0, true)?)
+        x.broadcast_mul(&self.conv(&avg, &format!("{p}.block1.2.seq.0.ca.1"), (c, c), 1, (1, 0), true)?)
     }
     fn second(&self, x: &Tensor, p: &str, c: usize) -> R<Tensor> {
         let x = self.norm(x, &format!("{p}.block2.0.seq.0"), c)?;
-        self.conv(&x, &format!("{p}.block2.0.seq.1"), c, c * 2, 1, 1, 0, true)
+        self.conv(&x, &format!("{p}.block2.0.seq.1"), (c, c * 2), 1, (1, 0), true)
     }
     fn mugi(&self, a: &Tensor, b: &Tensor, p: &str, c: usize) -> R<(Tensor, Tensor)> {
         let (x, y) = self.gate(&self.first(a, p, c)?, &self.first(b, p, c)?, c)?;
-        let x = self.conv(&self.ca(&x, p, c)?, &format!("{p}.block1.3.seq.0"), c, c, 1, 1, 0, true)?;
-        let y = self.conv(&self.ca(&y, p, c)?, &format!("{p}.block1.3.seq.0"), c, c, 1, 1, 0, true)?;
+        let x = self.conv(&self.ca(&x, p, c)?, &format!("{p}.block1.3.seq.0"), (c, c), 1, (1, 0), true)?;
+        let y = self.conv(&self.ca(&y, p, c)?, &format!("{p}.block1.3.seq.0"), (c, c), 1, (1, 0), true)?;
         let vb = self.vb.pp(p);
         let a = (a + x.broadcast_mul(&vb.get((1, c, 1, 1), "a_l")?)?)?;
         let b = (b + y.broadcast_mul(&vb.get((1, c, 1, 1), "a_r")?)?)?;
         let (x, y) = self.gate(&self.second(&a, p, c)?, &self.second(&b, p, c)?, c)?;
-        let x = self.conv(&x, &format!("{p}.block2.2.seq.0"), c, c, 1, 1, 0, true)?;
-        let y = self.conv(&y, &format!("{p}.block2.2.seq.0"), c, c, 1, 1, 0, true)?;
+        let x = self.conv(&x, &format!("{p}.block2.2.seq.0"), (c, c), 1, (1, 0), true)?;
+        let y = self.conv(&y, &format!("{p}.block2.2.seq.0"), (c, c), 1, (1, 0), true)?;
         Ok((
             (a + x.broadcast_mul(&vb.get((1, c, 1, 1), if self.shared { "b" } else { "b_l" })?)?)?,
             (b + y.broadcast_mul(&vb.get((1, c, 1, 1), if self.shared { "b" } else { "b_r" })?)?)?,
@@ -128,7 +129,7 @@ impl Net {
                 } else {
                     512
                 };
-                f = self.conv(&f, &format!("vgg.{i}"), cin, cout, 3, 1, 1, true)?;
+                f = self.conv(&f, &format!("vgg.{i}"), (cin, cout), 3, (1, 1), true)?;
                 cin = cout;
             } else {
                 f = f.relu()?;
@@ -143,23 +144,23 @@ impl Net {
         let (mut x, mut y) = (x.upsample_bilinear2d(h * 2, w * 2, true)?, y.upsample_bilinear2d(h * 2, w * 2, true)?);
         for (level, index, c) in [(4, 20, 512), (3, 11, 256), (2, 6, 128)] {
             let (a, b) = self.mugi(get(index)?, get(index)?, &format!("intro.block{level}.0"), c)?;
-            x = self.conv(&Tensor::cat(&[&x, &a], 1)?, &format!("intro.ch_map{level}.0.seq.0"), c * 2, c * 2, 1, 1, 0, true)?;
-            y = self.conv(&Tensor::cat(&[&y, &b], 1)?, &format!("intro.ch_map{level}.0.seq.0"), c * 2, c * 2, 1, 1, 0, true)?;
+            x = self.conv(&Tensor::cat(&[&x, &a], 1)?, &format!("intro.ch_map{level}.0.seq.0"), (c * 2, c * 2), 1, (1, 0), true)?;
+            y = self.conv(&Tensor::cat(&[&y, &b], 1)?, &format!("intro.ch_map{level}.0.seq.0"), (c * 2, c * 2), 1, (1, 0), true)?;
             (x, y) =
                 self.mugi(&candle_nn::ops::pixel_shuffle(&x, 2)?, &candle_nn::ops::pixel_shuffle(&y, 2)?, &format!("intro.ch_map{level}.1"), c / 2)?;
         }
         let (a, b) = self.mugi(get(1)?, get(1)?, "intro.block1.0", 64)?;
-        x = self.conv(&Tensor::cat(&[&x, &a], 1)?, "intro.ch_map1.0.seq.0", 128, 128, 1, 1, 0, true)?;
-        y = self.conv(&Tensor::cat(&[&y, &b], 1)?, "intro.ch_map1.0.seq.0", 128, 128, 1, 1, 0, true)?;
+        x = self.conv(&Tensor::cat(&[&x, &a], 1)?, "intro.ch_map1.0.seq.0", (128, 128), 1, (1, 0), true)?;
+        y = self.conv(&Tensor::cat(&[&y, &b], 1)?, "intro.ch_map1.0.seq.0", (128, 128), 1, (1, 0), true)?;
         (x, y) = self.mugi(&x, &y, "intro.ch_map1.1", 128)?;
-        x = self.conv(&x, "intro.ch_map1.2.seq.0", 128, 32, 1, 1, 0, true)?;
-        y = self.conv(&y, "intro.ch_map1.2.seq.0", 128, 32, 1, 1, 0, true)?;
+        x = self.conv(&x, "intro.ch_map1.2.seq.0", (128, 32), 1, (1, 0), true)?;
+        y = self.conv(&y, "intro.ch_map1.2.seq.0", (128, 32), 1, (1, 0), true)?;
         (x, y) = self.mugi(&x, &y, "intro.ch_map1.3", 32)?;
-        let a = self.conv(input, "intro.block_intro.0.seq.0", 3, 32, 3, 1, 1, true)?;
+        let a = self.conv(input, "intro.block_intro.0.seq.0", (3, 32), 3, (1, 1), true)?;
         let (a, b) = self.mugi(&a, &a, "intro.block_intro.1", 32)?;
         Ok((
-            self.conv(&Tensor::cat(&[&x, &a], 1)?, "intro.ch_map0.seq.0", 64, self.width, 1, 1, 0, true)?,
-            self.conv(&Tensor::cat(&[&y, &b], 1)?, "intro.ch_map0.seq.0", 64, self.width, 1, 1, 0, true)?,
+            self.conv(&Tensor::cat(&[&x, &a], 1)?, "intro.ch_map0.seq.0", (64, self.width), 1, (1, 0), true)?,
+            self.conv(&Tensor::cat(&[&y, &b], 1)?, "intro.ch_map0.seq.0", (64, self.width), 1, (1, 0), true)?,
         ))
     }
     pub fn infer(&self, rgb: &[u8], w: usize, h: usize) -> Result<Vec<[f32; 3]>, String> {
@@ -187,19 +188,19 @@ impl Net {
         for (i, n) in self.enc.iter().enumerate() {
             (x, y) = self.blocks(x, y, &format!("encoders.{i}"), c, *n)?;
             skips.push((x.clone(), y.clone()));
-            x = self.conv(&x, &format!("downs.{i}.seq.0"), c, c * 2, 2, 2, 0, true)?;
-            y = self.conv(&y, &format!("downs.{i}.seq.0"), c, c * 2, 2, 2, 0, true)?;
+            x = self.conv(&x, &format!("downs.{i}.seq.0"), (c, c * 2), 2, (2, 0), true)?;
+            y = self.conv(&y, &format!("downs.{i}.seq.0"), (c, c * 2), 2, (2, 0), true)?;
             c *= 2;
         }
         (x, y) = self.blocks(x, y, "middle_blks", c, self.middle)?;
         for (i, (a, b)) in skips.into_iter().rev().enumerate() {
-            x = candle_nn::ops::pixel_shuffle(&self.conv(&x, &format!("ups.{i}.seq.0"), c, c * 2, 1, 1, 0, false)?, 2)?;
-            y = candle_nn::ops::pixel_shuffle(&self.conv(&y, &format!("ups.{i}.seq.0"), c, c * 2, 1, 1, 0, false)?, 2)?;
+            x = candle_nn::ops::pixel_shuffle(&self.conv(&x, &format!("ups.{i}.seq.0"), (c, c * 2), 1, (1, 0), false)?, 2)?;
+            y = candle_nn::ops::pixel_shuffle(&self.conv(&y, &format!("ups.{i}.seq.0"), (c, c * 2), 1, (1, 0), false)?, 2)?;
             c /= 2;
             (x, y) = self.blocks((x + a)?, (y + b)?, &format!("decoders.{i}"), c, 2)?;
         }
         let out = self
-            .conv(&x, "ending.seq.0", self.width, 3, 3, 1, 1, true)?
+            .conv(&x, "ending.seq.0", (self.width, 3), 3, (1, 1), true)?
             .narrow(2, 0, h)?
             .narrow(3, 0, w)?
             .permute((0, 2, 3, 1))?

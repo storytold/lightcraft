@@ -13,13 +13,13 @@
 use lightcraft_color::{D50, D65, PROPHOTO, REC2020, bradford};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgb32f;
-use lightcraft_raw::gaintable::{GainTableMap, SourcePlacement};
+use lightcraft_raw::gaintable::{GainTableMap, GainTableMapApply, SourcePlacement};
 
 use crate::{Plan, SourceInfo};
 use lightcraft_develop::DevelopSettings;
 
 /// A raw's gain table map and where its developed source sits in the active area.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LocalTone {
     pub map: GainTableMap,
     pub placement: SourcePlacement,

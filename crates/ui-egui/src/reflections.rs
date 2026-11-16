@@ -221,8 +221,8 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.spacing_mut().item_spacing.y = 8.0;
         let mut on = d.reflection.enabled;
         let r = ui.add_enabled(!busy && (available || on), egui::Checkbox::new(&mut on, tr("Apply")));
-        register(ui.ctx(), "reflection:enabled", r.rect);
-        register(ui.ctx(), "reflection:apply", r.rect);
+        register(ui, "reflection:enabled", r.rect);
+        register(ui, "reflection:apply", r.rect);
         if r.changed()
             && let Err(e) = app.run("reflection.toggle", json!({"enabled":on,"quality":app.reflection_quality,"model":app.reflection_model}))
         {
@@ -231,13 +231,14 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.add_sized([58.0, 22.0], egui::Label::new(tr("Model")));
             let label = MODELS.iter().find(|(id, _)| *id == app.reflection_model).map(|(_, name)| *name).unwrap_or("DSRNet-S");
-            let r = egui::ComboBox::from_id_salt("reflection-model").selected_text(label).show_ui(ui, |ui| {
+            let r = crate::widgets::combo_box("reflection-model").selected_text(label).show_ui(ui, |ui| {
                 for (id, name) in MODELS {
                     let r = ui.selectable_value(&mut app.reflection_model, id.into(), name);
-                    register(ui.ctx(), format!("reflection:model:{id}"), r.rect);
+                    register(ui, format!("reflection:model:{id}"), r.rect);
                 }
             });
-            register(ui.ctx(), "reflection:model", r.response.rect);
+            crate::widgets::name_combo(&r.response, tr("Model"));
+            register(ui, "reflection:model", r.response.rect);
         });
         ui.horizontal(|ui| {
             ui.add_sized([58.0, 22.0], egui::Label::new(tr("Quality")));
@@ -246,23 +247,24 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 1024 => "High",
                 _ => "Standard",
             };
-            let r = egui::ComboBox::from_id_salt("reflection-quality").selected_text(tr(name)).show_ui(ui, |ui| {
+            let r = crate::widgets::combo_box("reflection-quality").selected_text(tr(name)).show_ui(ui, |ui| {
                 for (q, name) in [(384, "Preview"), (768, "Standard"), (1024, "High")] {
                     let r = ui.selectable_value(&mut app.reflection_quality, q, tr(name));
-                    register(ui.ctx(), format!("reflection:quality:{q}"), r.rect);
+                    register(ui, format!("reflection:quality:{q}"), r.rect);
                 }
             });
-            register(ui.ctx(), "reflection:quality", r.response.rect);
+            crate::widgets::name_combo(&r.response, tr("Quality"));
+            register(ui, "reflection:quality", r.response.rect);
         });
         if !available {
             ui.add(egui::Label::new(tr("Install a reflection model first")).wrap());
             let r = ui.add_enabled(!busy, egui::Button::new(tr("Install Reflection Model…")));
-            register(ui.ctx(), "reflection:install", r.rect);
+            register(ui, "reflection:install", r.rect);
             if r.clicked() {
                 let _ = app.run("reflection.install", json!({}));
             }
             let r = ui.link(tr("Model download instructions"));
-            register(ui.ctx(), "reflection:instructions", r.rect);
+            register(ui, "reflection:instructions", r.rect);
             if r.clicked()
                 && let Err(e) = app.run("reflection.instructions", json!({}))
             {
@@ -271,7 +273,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         if ready {
             let r = ui.add_enabled(!busy && available, egui::Button::new(tr("Recalculate")));
-            register(ui.ctx(), "reflection:recompute", r.rect);
+            register(ui, "reflection:recompute", r.rect);
             if r.clicked()
                 && let Err(e) = app.run("reflection.apply", json!({"quality":app.reflection_quality,"model":app.reflection_model}))
             {
@@ -289,7 +291,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
         let mut sky = d.reflection.protect_sky;
         let r = ui.add_enabled(ready && !busy, egui::Checkbox::new(&mut sky, tr("Protect sky (estimate)")));
-        register(ui.ctx(), "reflection:protectSky", r.rect);
+        register(ui, "reflection:protectSky", r.rect);
         if r.on_hover_text(tr("Uses an embedded sky matte or an estimate. Limit the area for exact protection.")).changed() {
             let _ = app.run("develop.merge", json!({"settings":{"reflection":{"protect_sky":sky}},"label":"Reflection Sky Protection"}));
         }
@@ -298,7 +300,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
         let mut limited = d.reflection.limit_region;
         let r = ui.add_enabled(ready && !busy, egui::Checkbox::new(&mut limited, tr("Limit to area")));
-        register(ui.ctx(), "reflection:limitRegion", r.rect);
+        register(ui, "reflection:limitRegion", r.rect);
         if r.changed() {
             let _ = app.run("develop.merge", json!({"settings":{"reflection":{"limit_region":limited}},"label":"Reflection Area"}));
         }
@@ -313,7 +315,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     }
     egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
         let r = ui.add_enabled(ready && !busy, egui::Button::new(tr("Reset")));
-        register(ui.ctx(), "reflection:reset", r.rect);
+        register(ui, "reflection:reset", r.rect);
         if r.clicked() {
             let _ = app.run("reflection.reset", json!({}));
         }

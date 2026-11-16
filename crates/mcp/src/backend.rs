@@ -136,39 +136,58 @@ fn peer_closed(stream: &TcpStream) -> bool {
     stream.set_nonblocking(false).is_err() || !open
 }
 
+/// The app's idle-close notice (`apps/lightcraft/src/control_server.rs`), matched when a reply lacks
+/// the `closed` marker (an app from before it). Keep the two in step.
+const IDLE_CLOSE_ERROR: &str = "control connection idle read timed out; closing the connection";
+
+/// True for the app's idle-close notice: an id-less error the app writes when it closes a connection
+/// on which it read nothing for its idle timeout. Read in reply to a request, it means the app closed
+/// the connection without reading the request (the request crossed the notice), so nothing ran.
+fn is_idle_close(reply: &Value) -> bool {
+    reply.get("id").is_none()
+        && reply.get("ok").and_then(Value::as_bool) == Some(false)
+        && (reply.get("closed").and_then(Value::as_str) == Some("idle") || reply.get("error").and_then(Value::as_str) == Some(IDLE_CLOSE_ERROR))
+}
+
 impl Backend for Remote {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
         let line = json!({"id": id, "method": method, "params": params}).to_string();
-        // Retry once with a fresh connection (the app may have restarted), but only when the request
-        // never reached the app. After a full write the command may have run, so resending it could
-        // apply a mutation twice (toggle, undo, ...): report the unknown outcome instead.
-        let reply = match self.roundtrip(&line) {
-            Ok(r) => r,
-            Err((_, false)) => {
-                self.conn = None;
-                self.roundtrip(&line).map_err(|(e, sent)| {
+        // Send again once, on a fresh connection, but only when the request never reached the app: it
+        // could not be written (the app restarted), or the app's idle-close notice crossed it (the app
+        // stopped reading before it arrived). After a full write anything else may mean the command
+        // ran, so resending it could apply a mutation twice (toggle, undo, ...): report the unknown
+        // outcome instead. One resend at most, whatever the reason, so this can't loop.
+        let mut resent = false;
+        let v = loop {
+            let reply = match self.roundtrip(&line) {
+                Ok(r) => r,
+                Err((e, sent)) => {
                     self.conn = None;
                     if sent {
-                        self.unknown_outcome(method, &e)
-                    } else {
-                        format!("LightCraft app at {} is not reachable: {e} (start it with `lightcraft --control PORT`)", self.addr)
+                        return Err(self.unknown_outcome(method, &e));
                     }
-                })?
-            }
-            Err((e, true)) => {
+                    if resent {
+                        return Err(format!("LightCraft app at {} is not reachable: {e} (start it with `lightcraft --control PORT`)", self.addr));
+                    }
+                    resent = true;
+                    continue;
+                }
+            };
+            let v = parse_reply(&reply, id).map_err(|e| {
                 self.conn = None;
-                return Err(self.unknown_outcome(method, &e));
+                self.unknown_outcome(method, &e)
+            })?;
+            if v.get("id").is_none() {
+                self.conn = None;
+                if !resent && is_idle_close(&v) {
+                    resent = true;
+                    continue;
+                }
             }
+            break v;
         };
-        let v = parse_reply(&reply, id).map_err(|e| {
-            self.conn = None;
-            self.unknown_outcome(method, &e)
-        })?;
-        if v.get("id").is_none() {
-            self.conn = None;
-        }
         if v.get("ok").and_then(Value::as_bool) == Some(true) {
             Ok(v.get("result").cloned().unwrap_or(Value::Null))
         } else {
@@ -193,6 +212,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn with_reply(reply: &[u8], check: impl FnOnce(&mut Remote, Result<Value, String>)) {
+        let _serial = crate::serial_sockets_and_children();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let reply = reply.to_vec();
@@ -274,6 +294,11 @@ mod tests {
             ("{\"id\":1,\"ok\":true,\"result\":null}\r\n", Ok(Value::Null)),
             ("{\"id\":1,\"ok\":false,\"error\":\"unknown command\"}\n", Err("unknown command".to_string())),
             ("{\"ok\":false,\"error\":\"too many control connections\"}\n", Err("too many control connections".to_string())),
+            // The idle-close text in reply to the request (it has the id) is the command's own error.
+            (
+                "{\"id\":1,\"ok\":false,\"error\":\"control connection idle read timed out; closing the connection\"}\n",
+                Err(IDLE_CLOSE_ERROR.to_string()),
+            ),
         ] {
             with_reply(reply.as_bytes(), |remote, result| {
                 assert_eq!(result, expected);
@@ -307,6 +332,7 @@ mod tests {
 
     #[test]
     fn consecutive_replies_match_their_requests_on_one_connection() {
+        let _serial = crate::serial_sockets_and_children();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let worker = std::thread::spawn(move || {
@@ -331,6 +357,7 @@ mod tests {
 
     #[test]
     fn lost_reply_is_not_resent() {
+        let _serial = crate::serial_sockets_and_children();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let seen = Arc::new(AtomicUsize::new(0));
@@ -353,6 +380,7 @@ mod tests {
 
     #[test]
     fn connection_closed_by_app_reconnects_before_sending() {
+        let _serial = crate::serial_sockets_and_children();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap().to_string();
         let seen = Arc::new(AtomicUsize::new(0));
@@ -374,6 +402,150 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
         assert_eq!(remote.call("engine.commands", json!({})).unwrap(), json!(7));
         assert_eq!(seen.load(Ordering::SeqCst), 2);
+    }
+
+    /// Accept the next connection within 5 s, as a blocking stream with a 3 s read timeout.
+    fn accept(listener: &TcpListener) -> (BufReader<TcpStream>, TcpStream) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("accept: {e}"),
+            }
+        };
+        // BSD kernels (macOS, FreeBSD) let an accepted socket inherit the listener's non-blocking flag.
+        stream.set_nonblocking(false).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        (BufReader::new(stream.try_clone().unwrap()), stream)
+    }
+
+    fn read_request(reader: &mut BufReader<TcpStream>) -> Value {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap()
+    }
+
+    /// The app's idle-close notice, as `apps/lightcraft/src/control_server.rs` writes it.
+    fn idle_notice() -> Value {
+        json!({"ok": false, "error": IDLE_CLOSE_ERROR, "closed": "idle"})
+    }
+
+    /// Issue #3069. The app closes an idle connection with an id-less notice. Either the notice
+    /// arrives before the next request (the client sees the close and reconnects before sending),
+    /// or the request crosses it (sent just as the app stopped reading): the notice then comes
+    /// back as the request's reply although the app never ran it, so the client sends it once more
+    /// on a new connection. Both orders are forced here, so the test does not depend on timing.
+    #[test]
+    fn idle_close_reconnects_without_replaying_a_command() {
+        let _serial = crate::serial_sockets_and_children();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let (closed, expired) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut ran = Vec::new();
+            let mut run = |request: &Value, writer: &mut TcpStream| {
+                ran.push(request["id"].as_u64().unwrap());
+                writeln!(writer, "{}", json!({"id": request["id"], "ok": true, "result": ran.len()})).unwrap();
+            };
+
+            // 1. Idle with nothing sent: the notice (in an older app's form, without `closed`) and
+            //    the close reach the client before its next request.
+            let (mut reader, mut writer) = accept(&listener);
+            run(&read_request(&mut reader), &mut writer);
+            writer.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+            let mut line = String::new();
+            let error = reader.read_line(&mut line).unwrap_err();
+            assert!(matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut));
+            assert!(line.is_empty(), "no command is resent while idle");
+            writeln!(writer, "{}", json!({"ok": false, "error": IDLE_CLOSE_ERROR})).unwrap();
+            drop((reader, writer));
+            closed.send(()).unwrap();
+
+            // 2. The client reconnected before sending. Its next request crosses the notice: the
+            //    app's read timed out just before the request arrived, so it is not run. (Reading
+            //    it here only shows that it was sent on this connection and keeps the close clean.)
+            let (mut reader, mut writer) = accept(&listener);
+            run(&read_request(&mut reader), &mut writer);
+            let crossed = read_request(&mut reader);
+            writeln!(writer, "{}", idle_notice()).unwrap();
+            drop((reader, writer));
+
+            // 3. The crossed request, sent once more on a new connection, and nothing after it.
+            let (mut reader, mut writer) = accept(&listener);
+            let resent = read_request(&mut reader);
+            assert_eq!(resent, crossed, "the same request is sent again");
+            run(&resent, &mut writer);
+            line.clear();
+            assert_eq!(reader.read_line(&mut line).unwrap(), 0, "nothing else arrives: {line}");
+            ran
+        });
+        let mut remote = Remote::lazy(&addr);
+        assert_eq!(remote.call("engine.execute", json!({"command": "edit.undo"})).unwrap(), json!(1));
+        expired.recv_timeout(Duration::from_secs(5)).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !remote.conn.as_ref().is_some_and(|(_, writer)| peer_closed(writer)) {
+            assert!(std::time::Instant::now() < deadline, "the idle close never reached the client");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(remote.call("engine.execute", json!({"command": "edit.undo"})).unwrap(), json!(2));
+        assert_eq!(remote.call("engine.execute", json!({"command": "edit.undo"})).unwrap(), json!(3));
+        drop(remote);
+        assert_eq!(server.join().unwrap(), [1, 2, 3], "each command ran once");
+    }
+
+    /// The resend after an idle close happens once: a second notice is the call's error.
+    #[test]
+    fn idle_close_is_resent_only_once() {
+        let _serial = crate::serial_sockets_and_children();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut reader, mut writer) = accept(&listener);
+                assert_eq!(read_request(&mut reader)["id"], 1);
+                writeln!(writer, "{}", idle_notice()).unwrap();
+            }
+            listener
+        });
+        let mut remote = Remote::lazy(&addr);
+        assert_eq!(remote.call("engine.execute", json!({"command": "edit.undo"})), Err(IDLE_CLOSE_ERROR.to_string()));
+        assert!(remote.conn.is_none(), "the closed connection is not reused");
+        drop(remote);
+        let listener = server.join().unwrap();
+        assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock, "a third connection was opened");
+    }
+
+    #[test]
+    fn only_the_idle_close_notice_counts_as_undelivered() {
+        let idle = [
+            json!({"ok": false, "error": IDLE_CLOSE_ERROR, "closed": "idle"}),
+            // an app from before the `closed` marker
+            json!({"ok": false, "error": IDLE_CLOSE_ERROR}),
+            // the marker decides when present, whatever the wording
+            json!({"ok": false, "error": "idle, closing", "closed": "idle"}),
+        ];
+        for reply in idle {
+            assert!(is_idle_close(&reply), "{reply}");
+        }
+        let delivered = [
+            // a reply to the request itself
+            json!({"id": 1, "ok": false, "error": IDLE_CLOSE_ERROR}),
+            json!({"id": 1, "ok": false, "error": IDLE_CLOSE_ERROR, "closed": "idle"}),
+            // other refusals and closes
+            json!({"ok": false, "error": "too many control connections"}),
+            json!({"ok": false, "error": "bad JSON; closing the connection"}),
+            json!({"ok": false, "error": "bad JSON; closing the connection", "closed": "junk"}),
+            json!({"ok": false, "error": format!("{IDLE_CLOSE_ERROR}.")}),
+            json!({"ok": true, "result": IDLE_CLOSE_ERROR, "closed": "idle"}),
+        ];
+        for reply in delivered {
+            assert!(!is_idle_close(&reply), "{reply}");
+        }
     }
 
     #[test]

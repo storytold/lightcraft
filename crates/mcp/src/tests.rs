@@ -147,6 +147,43 @@ fn export_refuses_unknown_params_and_bad_values() {
     assert!(e.contains("did you mean `quality`"), "{e}");
 }
 
+/// Review of #1966: a `path` whose extension names no format exports PNG through the headless
+/// backend, so its `bitDepth` is checked against PNG's, not let through to an 8-bit file.
+#[test]
+fn export_checks_the_depth_of_the_format_a_bare_path_gets() {
+    let mut b = Headless::demo();
+    let base = std::env::temp_dir().join(format!("lc-mcp-bare-path-depth-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    for name in ["output", "output.xyz"] {
+        let e = b.call("app.export", json!({"path": base.join(name).to_string_lossy(), "longEdge": 32, "bitDepth": 10})).unwrap_err();
+        assert!(e.contains("`bitDepth` must be 8 or 16 for png"), "{name}: {e}");
+    }
+    assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0, "nothing written");
+    // the format such a path gets is still PNG, and 16 bits is one of its depths
+    b.call("app.export", json!({"path": base.join("output").to_string_lossy(), "longEdge": 32, "bitDepth": 16})).unwrap();
+    let written = std::fs::read_dir(&base).unwrap().next().unwrap().unwrap().path();
+    let bytes = std::fs::read(&written).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG"), "{written:?} is a PNG");
+    assert_eq!(bytes[24], 16, "{written:?} is 16-bit");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+/// Review of #1966: a preset's `bitDepth` is judged against the format this backend writes, PNG
+/// for a `path` that names none, so a 16-bit preset without `format` writes a 16-bit PNG.
+#[test]
+fn a_preset_depth_is_judged_against_the_format_written() {
+    let mut b = Headless::demo();
+    let base = std::env::temp_dir().join(format!("lc-mcp-preset-depth-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    b.session.export_presets.push(lightcraft_engine::export::ExportPreset { name: "Deep".into(), params: json!({"bitDepth": 16}) });
+    b.call("app.export", json!({"preset": "Deep", "path": base.join("output").to_string_lossy(), "longEdge": 32})).unwrap();
+    let bytes = std::fs::read(base.join("output")).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG") && bytes[24] == 16, "a 16-bit PNG: {:?}", bytes.get(..25));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
 /// Every option the `export` tool advertises reaches `app.export` (they were accepted, then dropped).
 #[test]
 fn export_tool_forwards_its_advertised_options() {
@@ -225,6 +262,7 @@ fn a_one_shot_process_never_ends_during_a_photos_import() {
         drop(h); // what lightcraft-cli does before it exits
         return;
     }
+    let _serial = crate::serial_sockets_and_children();
     for mode in ["default", "nowait"] {
         let dir = std::env::temp_dir().join(format!("lc-mcp-photos-child-{mode}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -500,4 +538,67 @@ fn the_clipboard_tool_cuts_copies_and_pastes_in_the_app() {
     let r = call_tool(&mut b, "clipboard", &json!({"action": "paste", "text": "travel"}));
     assert!(!r.is_error, "{r:?}");
     assert_eq!(b.0, vec![("ui.clipboard".to_string(), json!({"action": "paste", "text": "travel"}))]);
+}
+
+/// A running app that writes the PNG `ui.render` / `ui.screenshot` ask for. It notes each path and
+/// what its folder looked like then; with `dies_mid_write` it leaves a half-written temp file and
+/// fails instead, like an app that quits part-way through.
+struct PngWriter {
+    seen: Vec<(std::path::PathBuf, Option<std::fs::Metadata>)>,
+    dies_mid_write: bool,
+}
+
+impl Backend for PngWriter {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        assert!(matches!(method, "ui.render" | "ui.screenshot"), "{method}");
+        let path = std::path::PathBuf::from(params["path"].as_str().unwrap());
+        self.seen.push((path.clone(), path.parent().and_then(|d| std::fs::symlink_metadata(d).ok())));
+        if self.dies_mid_write {
+            std::fs::write(path.with_file_name(".lightcraft-mcp-test.tmp"), b"half a png").unwrap();
+            return Err("connection closed".into());
+        }
+        crate::write_image(&path, &lightcraft_raster::Rgba8::new(1, 1), 92)?;
+        Ok(json!({"width": 1, "height": 1}))
+    }
+    fn has_ui(&self) -> bool {
+        true
+    }
+    fn describe(&self) -> String {
+        "png writer".into()
+    }
+}
+
+/// Renders and screenshots reach the agent through a PNG the app writes. In a shared /tmp other
+/// users could read it or take its predictable name first and make the render fail, so it goes in
+/// a new folder of its own, private on Unix, that is gone afterwards even when the write fails
+/// (#2573).
+#[test]
+fn render_and_screenshot_pngs_go_through_a_private_folder() {
+    let mut b = PngWriter { seen: vec![], dies_mid_write: false };
+    for (tool, args) in [("render_photo", json!({"id": 1})), ("render_preview", json!({"id": 1})), ("screenshot", json!({}))] {
+        let r = call_tool(&mut b, tool, &args);
+        assert!(!r.is_error, "{tool}: {r:?}");
+        assert_eq!(r.image().map(|(_, mime)| mime), Some("image/png"), "{tool}: {r:?}");
+    }
+    b.dies_mid_write = true;
+    assert!(call_tool(&mut b, "screenshot", &json!({})).is_error);
+    assert_eq!(b.seen.len(), 4);
+    let temp = std::env::temp_dir();
+    let mut folders = vec![];
+    for (file, folder) in &b.seen {
+        let dir = file.parent().unwrap();
+        let meta = folder.as_ref().unwrap();
+        assert!(meta.is_dir() && !meta.file_type().is_symlink(), "{}", dir.display());
+        assert_ne!(dir, temp, "{} is right in the shared temp dir", file.display());
+        assert_eq!(dir.parent(), Some(temp.as_path()), "{}", file.display());
+        assert!(dir.file_name().unwrap().to_string_lossy().starts_with("lightcraft-mcp-"), "{}", dir.display());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(meta.permissions().mode() & 0o777, 0o700, "{}", dir.display());
+        }
+        assert!(!dir.exists(), "{} was left behind", dir.display());
+        assert!(!folders.contains(&dir), "{} was used twice", dir.display());
+        folders.push(dir);
+    }
 }
