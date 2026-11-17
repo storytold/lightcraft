@@ -737,14 +737,16 @@ mod issue4417 {
         }
     }
 
-    /// Given a grid with nothing selected, when Space is pressed, then the grid stays.
+    /// Given a grid with nothing selected, when Space is pressed, then the grid stays and the zoom is unchanged.
     #[test]
     fn space_in_the_grid_without_a_photo_does_nothing() {
         for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
             let mut h = grid(view);
             h.app.session.selection = Default::default();
+            let zoom = h.app.ui.zoom;
             key(&mut h, "Space", false);
             assert_eq!(h.app.ui.view, view);
+            assert_eq!(h.app.ui.zoom, zoom, "the zoom a photo opens at later is left alone");
         }
     }
 }
