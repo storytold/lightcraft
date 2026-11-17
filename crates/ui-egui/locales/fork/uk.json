@@ -1201,6 +1201,7 @@
   "Immich hides the photos of its locked folders until this session is unlocked with the account's PIN or password.": "Immich приховує фотографії своїх заблокованих папок, доки цей сеанс не розблоковано PIN-кодом або паролем облікового запису.",
   "Immich is rescanning {} libraries": "Immich повторно сканує {} бібліотек",
   "Immich keeps an XMP sidecar for every asset: push yours into it, or pull Immich's into the catalog": "Immich зберігає XMP-файл для кожного об'єкта: надішліть свій або завантажте файл Immich у каталог",
+  "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.": "Immich відкриває заблоковані теки лише для сеансу з виконаним входом (PIN-код або пароль), а не для ключа API, а це підключення використовує ключ API. Фотографії із заблокованих тек звідси недоступні.",
   "Immich path": "Шлях в Immich",
   "Immich reads ratings, descriptions and keywords from the sidecars on its next library scan": "Immich прочитає оцінки, описи й ключові слова із супровідних файлів під час наступного сканування бібліотеки",
   "Immich servers": "Сервери Immich",

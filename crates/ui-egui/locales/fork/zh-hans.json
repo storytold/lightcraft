@@ -1248,6 +1248,7 @@
   "Immich hides the photos of its locked folders until this session is unlocked with the account's PIN or password.": "Immich 会隐藏其锁定文件夹中的照片，直到使用账户的 PIN 或密码解锁此会话。",
   "Immich is rescanning {} libraries": "Immich 正在重新扫描 {} 个图库",
   "Immich keeps an XMP sidecar for every asset: push yours into it, or pull Immich's into the catalog": "Immich 为每个资产保留一个 XMP 附属文件：推送你的文件，或把 Immich 的文件拉取到目录",
+  "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.": "Immich 只对已登录的会话（PIN 码或密码）开放锁定文件夹，不对 API 密钥开放，而此连接使用的是 API 密钥。无法从这里访问锁定文件夹中的照片。",
   "Immich path": "Immich 路径",
   "Immich reads ratings, descriptions and keywords from the sidecars on its next library scan": "Immich 会在下次扫描图库时从附属文件读取评级、描述和关键字",
   "Immich servers": "Immich 服务器",

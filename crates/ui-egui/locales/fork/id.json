@@ -1290,6 +1290,7 @@
   "Immich hides the photos of its locked folders until this session is unlocked with the account's PIN or password.": "Immich menyembunyikan foto di folder terkunci sampai sesi ini dibuka dengan PIN atau kata sandi akun.",
   "Immich is rescanning {} libraries": "Immich sedang memindai ulang pustaka: {}",
   "Immich keeps an XMP sidecar for every asset: push yours into it, or pull Immich's into the catalog": "Immich menyimpan file sidecar XMP untuk setiap aset: dorong milik Anda ke sana, atau tarik milik Immich ke katalog",
+  "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.": "Immich hanya membuka folder terkunci untuk sesi yang telah masuk (PIN atau kata sandi), bukan untuk kunci API, dan koneksi ini memakai kunci API. Foto di folder terkunci tidak dapat dijangkau dari sini.",
   "Immich path": "Jalur Immich",
   "Immich reads ratings, descriptions and keywords from the sidecars on its next library scan": "Immich membaca rating, deskripsi, dan kata kunci dari file sidecar pada pemindaian pustaka berikutnya",
   "Immich servers": "Server Immich",

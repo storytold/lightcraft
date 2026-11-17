@@ -40,9 +40,10 @@ The account card shows **Sync Now**, **Import…**, **Choose Albums…** (with a
 - Long runs show in the activity stack; linking, importing and downloading an original can be stopped there.
 
 ## Locked folders
-- Photos in Immich's **locked folders** can be synced, imported and linked once the session is unlocked.
+- Photos in Immich's **locked folders** can be synced, imported and linked only while the server session is unlocked.
 - **Settings ▸ Connections**, account card ▸ **Locked Folders** shows whether the session is unlocked; **Unlock…** asks for the account's PIN (4–6 digits) or password.
-- The PIN or password is sent once and never stored or logged. The unlock lasts until Immich locks the session again; locked photos then drop out of the next sync.
+- The app connects with an API key, and Immich opens locked folders only for a signed-in session (PIN or password), never for an API key. With an API key the section says so in plain words, and the photos in locked folders stay out of sync, import and link. A key with fewer permissions is not the cause, and giving it more does not help.
+- The PIN or password is sent once and never stored or logged. Where Immich accepts the unlock, it lasts until Immich locks the session again; locked photos then drop out of the next sync.
 
 ## Review comments
 - **Library ▸ Review Comments** lists the comments on photos published to an Immich service (the album's activity: author, date, text), per photo; **Refresh** asks again.
