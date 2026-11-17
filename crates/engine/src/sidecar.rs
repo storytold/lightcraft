@@ -979,18 +979,26 @@ fn attr_value_range(data: &str, start: usize, end: usize, name: &str) -> Option<
     None
 }
 
-/// The start-tag range of the active global `rdf:Description`: the first `rdf:Description`
-/// that is a direct child of `rdf:RDF`, before any other element opens inside it. Nested
-/// structured-property descriptions are skipped, so global-field write-back never touches
-/// them. Falls back to the first `rdf:Description` in the document when there is no
-/// `rdf:RDF`. Returns `(tag_start, tag_end)` where `end` is the index of `>`.
-fn global_description(data: &str) -> Option<(usize, usize)> {
+/// Collect all direct-child `rdf:Description` elements of `rdf:RDF` (or all
+/// top-level descriptions if no `rdf:RDF`). Returns a vector of `(tag_start, tag_end)`
+/// where `tag_end` is the index of `>`. Nested descriptions are skipped.
+fn global_descriptions(data: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
     let first_desc = || data.find("<rdf:Description").and_then(|s| tag_end(data, s).map(|e| (s, e)));
-    let Some(rdf) = data.find("<rdf:RDF") else { return first_desc() };
-    let Some(rdf_end) = tag_end(data, rdf) else { return first_desc() };
+    let Some(rdf) = data.find("<rdf:RDF") else {
+        if let Some(d) = first_desc() {
+            out.push(d);
+        }
+        return out;
+    };
+    let Some(rdf_end) = tag_end(data, rdf) else {
+        if let Some(d) = first_desc() {
+            out.push(d);
+        }
+        return out;
+    };
     let bytes = data.as_bytes();
     let mut i = rdf_end;
-    let mut first_desc_range = None;
     while i < data.len() {
         while i < data.len() && bytes[i].is_ascii_whitespace() {
             i += 1;
@@ -1008,14 +1016,12 @@ fn global_description(data: &str) -> Option<(usize, usize)> {
         }
         if rest.starts_with("<?") || rest.starts_with("<!") {
             if rest.starts_with("<!--") {
-                // A comment's `>` does not close a tag: skip to its end.
                 if let Some(rel) = data[i..].find("-->") {
                     i += rel + 3;
                 } else {
                     break;
                 }
             } else if rest.starts_with("<![CDATA[") {
-                // A CDATA section's `>` does not close a tag: skip to its end.
                 if let Some(rel) = data[i..].find("]]>") {
                     i += rel + 3;
                 } else {
@@ -1032,14 +1038,8 @@ fn global_description(data: &str) -> Option<(usize, usize)> {
         }
         if rest.starts_with("<rdf:Description") {
             if let Some(e) = tag_end(data, i) {
-                if first_desc_range.is_none() {
-                    first_desc_range = Some((i, e));
-                }
-                if is_crs_description(data, i, e) {
-                    return Some((i, e));
-                }
-                // Not the CRS description: skip past its whole element so
-                // sibling descriptions are still considered.
+                out.push((i, e));
+                // Skip past this description's whole element so siblings are still considered.
                 let mut depth = 0usize;
                 let mut k = e + 1;
                 while k < data.len() {
@@ -1100,7 +1100,27 @@ fn global_description(data: &str) -> Option<(usize, usize)> {
         // Any other element opens first: descriptions after it are nested inside it.
         break;
     }
-    first_desc_range.or_else(first_desc)
+    if out.is_empty()
+        && let Some(d) = first_desc()
+    {
+        out.push(d);
+    }
+    out
+}
+
+/// The start-tag range of the preferred global `rdf:Description` for inserting new
+/// `crs:` attributes: the first direct-child `rdf:Description` that declares the CRS
+/// namespace, or the first direct-child description if none declares it. Falls back to
+/// the first `rdf:Description` in the document when there is no `rdf:RDF`.
+/// Returns `(tag_start, tag_end)` where `end` is the index of `>`.
+fn global_description(data: &str) -> Option<(usize, usize)> {
+    let descs = global_descriptions(data);
+    for (start, end) in &descs {
+        if is_crs_description(data, *start, *end) {
+            return Some((*start, *end));
+        }
+    }
+    descs.first().copied()
 }
 
 fn is_crs_description(data: &str, start: usize, end: usize) -> bool {
@@ -1108,117 +1128,119 @@ fn is_crs_description(data: &str, start: usize, end: usize) -> bool {
 }
 
 /// Update an existing `crs:name` field in place and report whether one was found: as an
-/// attribute of the active global `rdf:Description`, or as an element
+/// attribute of any direct-child `rdf:Description` of `rdf:RDF`, or as an element
 /// `<prefix:name>value</prefix:name>` inside it where `prefix` is bound to the CRS
 /// namespace. Returns `true` for a malformed occurrence too, so a duplicate is not inserted
-/// alongside it. Only the active global description is written: a matching attribute or
+/// alongside it. Only direct-child descriptions are written: a matching attribute or
 /// element on a nested structured-property description is left alone, and a match under a
 /// non-`crs:` prefix is updated in place under that prefix rather than duplicated.
 fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
-    let Some((gstart, gend)) = global_description(data) else { return false };
-    // Attribute form on the active global description.
-    if let Some(found) = attr_value_range(data, gstart, gend, name) {
-        if let Some((vs, ve)) = found {
-            data.replace_range(vs..ve, &escape_attr(value));
-        }
-        return true;
-    }
-    // Element form inside the active global description.
-    let content_start = gend + 1;
-    // Find the matching close of the global description, not the first nested one.
-    let mut close_depth = 0usize;
-    let mut search_to = data.len();
-    let mut i = content_start;
-    while i < data.len() {
-        let Some(rel) = data[i..].find('<') else {
-            break;
-        };
-        let s = i + rel;
-        let rest = data.get(s..).unwrap_or_default();
-        if rest.starts_with("</rdf:Description>") {
-            if close_depth == 0 {
-                search_to = s;
-                break;
+    let descs = global_descriptions(data);
+    for (gstart, gend) in descs {
+        // Attribute form on this global description.
+        if let Some(found) = attr_value_range(data, gstart, gend, name) {
+            if let Some((vs, ve)) = found {
+                data.replace_range(vs..ve, &escape_attr(value));
             }
-            close_depth = close_depth.saturating_sub(1);
-            i = s + "</rdf:Description>".len();
-            continue;
+            return true;
         }
-        if rest.starts_with("<rdf:Description") {
-            close_depth += 1;
-            if let Some(e) = tag_end(data, s) {
-                i = e + 1;
-            } else {
+        // Element form inside this global description.
+        let content_start = gend + 1;
+        // Find the matching close of this description, not the first nested one.
+        let mut close_depth = 0usize;
+        let mut search_to = data.len();
+        let mut i = content_start;
+        while i < data.len() {
+            let Some(rel) = data[i..].find('<') else {
                 break;
+            };
+            let s = i + rel;
+            let rest = data.get(s..).unwrap_or_default();
+            if rest.starts_with("</rdf:Description>") {
+                if close_depth == 0 {
+                    search_to = s;
+                    break;
+                }
+                close_depth = close_depth.saturating_sub(1);
+                i = s + "</rdf:Description>".len();
+                continue;
             }
-            continue;
-        }
-        i = s + 1;
-    }
-    let mut from = content_start;
-    let mut depth = 0usize;
-    while let Some(rel) = data[from..search_to].find('<') {
-        let s = from + rel;
-        let rest = data.get(s..search_to).unwrap_or_default();
-        if rest.starts_with("</") {
-            depth = depth.saturating_sub(1);
-            from = s + 2;
-            continue;
-        }
-        if rest.starts_with("<?") || rest.starts_with("<!") {
-            if let Some(rel2) = rest[2..].find('>') {
-                from = s + 2 + rel2 + 1;
-            } else {
-                break;
+            if rest.starts_with("<rdf:Description") {
+                close_depth += 1;
+                if let Some(e) = tag_end(data, s) {
+                    i = e + 1;
+                } else {
+                    break;
+                }
+                continue;
             }
-            continue;
+            i = s + 1;
         }
-        let Some(b) = rest.as_bytes().get(1) else {
-            from = s + 1;
-            continue;
-        };
-        if !b.is_ascii_alphabetic() {
-            from = s + 1;
-            continue;
-        }
-        let mut k = s + 1;
-        while k < search_to {
-            let b = data.as_bytes()[k];
-            if b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=' {
-                break;
+        let mut from = content_start;
+        let mut depth = 0usize;
+        while let Some(rel) = data[from..search_to].find('<') {
+            let s = from + rel;
+            let rest = data.get(s..search_to).unwrap_or_default();
+            if rest.starts_with("</") {
+                depth = depth.saturating_sub(1);
+                from = s + 2;
+                continue;
             }
-            k += 1;
-        }
-        let tag_name = data.get(s + 1..k).unwrap_or_default();
-        let (prefix, local) = tag_name.split_once(':').unwrap_or(("", tag_name));
-        if depth == 0 && local == name {
-            let Some(end) = tag_end(data, s) else { return true };
-            let bindings = ns_bindings(data, s, end);
-            if bindings.iter().any(|(p, uri)| p == prefix && uri == CRS_NS) {
-                let escaped = escape_attr(value);
-                if is_self_closing(data, end) {
-                    let mut slash = end;
-                    while slash > s + 1 && data.as_bytes()[slash - 1].is_ascii_whitespace() {
-                        slash -= 1;
+            if rest.starts_with("<?") || rest.starts_with("<!") {
+                if let Some(rel2) = rest[2..].find('>') {
+                    from = s + 2 + rel2 + 1;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            let Some(b) = rest.as_bytes().get(1) else {
+                from = s + 1;
+                continue;
+            };
+            if !b.is_ascii_alphabetic() {
+                from = s + 1;
+                continue;
+            }
+            let mut k = s + 1;
+            while k < search_to {
+                let b = data.as_bytes()[k];
+                if b.is_ascii_whitespace() || b == b'>' || b == b'/' || b == b'=' {
+                    break;
+                }
+                k += 1;
+            }
+            let tag_name = data.get(s + 1..k).unwrap_or_default();
+            let (prefix, local) = tag_name.split_once(':').unwrap_or(("", tag_name));
+            if depth == 0 && local == name {
+                let Some(end) = tag_end(data, s) else { return true };
+                let bindings = ns_bindings(data, s, end);
+                if bindings.iter().any(|(p, uri)| p == prefix && uri == CRS_NS) {
+                    let escaped = escape_attr(value);
+                    if is_self_closing(data, end) {
+                        let mut slash = end;
+                        while slash > s + 1 && data.as_bytes()[slash - 1].is_ascii_whitespace() {
+                            slash -= 1;
+                        }
+                        if slash > s + 1 && data.as_bytes()[slash - 1] == b'/' {
+                            slash -= 1;
+                        }
+                        let attrs = data.get(s + 1 + tag_name.len()..slash).unwrap_or_default().trim_end();
+                        data.replace_range(s..end + 1, &format!("<{tag_name}{attrs}>{escaped}</{tag_name}>"));
+                        return true;
                     }
-                    if slash > s + 1 && data.as_bytes()[slash - 1] == b'/' {
-                        slash -= 1;
-                    }
-                    let attrs = data.get(s + 1 + tag_name.len()..slash).unwrap_or_default().trim_end();
-                    data.replace_range(s..end + 1, &format!("<{tag_name}{attrs}>{escaped}</{tag_name}>"));
+                    let close = format!("</{tag_name}>");
+                    let Some(rel) = data[end + 1..].find(&close) else { return true };
+                    data.replace_range(end + 1..end + 1 + rel, &escaped);
                     return true;
                 }
-                let close = format!("</{tag_name}>");
-                let Some(rel) = data[end + 1..].find(&close) else { return true };
-                data.replace_range(end + 1..end + 1 + rel, &escaped);
-                return true;
             }
+            let Some(end) = tag_end(data, s) else { return true };
+            if !is_self_closing(data, end) {
+                depth += 1;
+            }
+            from = end + 1;
         }
-        let Some(end) = tag_end(data, s) else { return true };
-        if !is_self_closing(data, end) {
-            depth += 1;
-        }
-        from = end + 1;
     }
     false
 }
@@ -2836,6 +2858,27 @@ mod tests {
         assert_eq!(attr_f64(&data, first.0, first.1, "LocalContrast2012"), Some(50.0), "{data}");
         assert_eq!(attr_f64(&data, second.0, second.1, "LocalExposure2012"), Some(-1.0), "{data}");
         assert_eq!(attr_f64(&data, second.0, second.1, "LocalContrast2012"), Some(0.0), "the field it did not change is left alone:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// A `crs:` field on a sibling `rdf:Description` must be found by `crs:` write-back even
+    /// when the CRS namespace is declared on the parent `<rdf:RDF>`. `global_description`
+    /// must search all direct-child descriptions for the field before choosing an insertion
+    /// target, otherwise the field is duplicated onto the first description and the stale
+    /// value on the sibling remains unchanged.
+    #[test]
+    fn crs_write_finds_field_in_sibling_description_with_crs_on_rdf() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+          </rdf:Description>
+          <rdf:Description rdf:about="" crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the field on the sibling description is updated:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated onto the first description:\n{data}");
         assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
     }
 
