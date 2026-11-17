@@ -1250,6 +1250,18 @@ fn mask_component_descriptions(data: &str, _corr_start: usize, corr_end: usize) 
     out
 }
 
+/// Extract the Mask.id from a correction tag, if present.
+/// Returns the id from the crs:MaskId attribute on the correction tag itself, or None.
+fn correction_mask_id(data: &str, corr_start: usize, corr_end: usize) -> Option<u32> {
+    if let Some(found) = attr_value_range(data, corr_start, corr_end, "MaskId")
+        && let Some((vs, ve)) = found
+        && let Ok(id) = data.get(vs..ve)?.trim().parse::<u32>()
+    {
+        return Some(id);
+    }
+    None
+}
+
 /// Whether the tag at `start..end` is a `crs:` correction: it carries `What="Correction"`
 /// (or, as a fallback, a `CorrectionAmount` attribute) under the CRS namespace prefix. The
 /// prefix is resolved from the tag's `xmlns:` declarations, so corrections bound under another
@@ -1275,8 +1287,8 @@ fn is_correction(data: &str, start: usize, end: usize) -> bool {
 /// The start-tag ranges of the `crs:` corrections in `data`, in document order. Corrections
 /// are matched anywhere under `rdf:RDF` (they are normally nested inside
 /// `crs:MaskGroupBasedCorrections` > `rdf:Seq` > `rdf:li`), not only as direct children of
-/// `rdf:RDF`. Corrections are matched to the photo's masks by order, so their identity, count
-/// and order are preserved.
+/// `rdf:RDF`. Corrections are matched to the photo's masks by Mask.id, so their identity,
+/// count and order are preserved.
 fn correction_descriptions(data: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let Some(rdf) = data.find("<rdf:RDF") else { return out };
@@ -1367,7 +1379,7 @@ fn put_attr_on_tag(data: &mut String, start: usize, end: usize, prefix: &str, na
 }
 
 /// Write back local-correction changes to the existing `crs:` corrections in `data`.
-/// Corrections are matched to the photo's masks by order and updated in place
+/// Corrections are matched to the photo's masks by Mask.id and updated in place
 /// (`CorrectionAmount` and the `crs:Local*` sliders); their identity, count and order are
 /// preserved: no correction is added, removed or reordered. Only fields that differ from
 /// `previous` are written, so a foreign correction we did not edit is left alone.
@@ -1376,17 +1388,37 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
     const EPS: f64 = 1e-6;
     let masks = &settings.masks;
     let prev_masks = &previous.masks;
-    let count = masks.len().min(prev_masks.len());
-    if count == 0 {
+    if masks.is_empty() || prev_masks.is_empty() {
         return;
     }
     let corrections = correction_descriptions(data);
-    // from the last correction back, so lengthening one never moves the offsets of the ones still
-    // to come (a correction is matched to its mask by order, not by position)
-    for i in (0..corrections.len().min(count)).rev() {
-        let (tag_start, mut corr_end) = corrections[i];
-        let a = &masks[i].adjust;
-        let b = &prev_masks[i].adjust;
+    if corrections.is_empty() {
+        return;
+    }
+
+    // Build a map from Mask.id to correction index for the current XMP corrections.
+    // We process from last to first so that lengthening a correction doesn't move
+    // the offsets of corrections we haven't processed yet.
+    let mut corr_by_id: HashMap<u32, usize> = HashMap::new();
+    for (idx, (tag_start, corr_end)) in corrections.iter().enumerate() {
+        if let Some(mask_id) = correction_mask_id(data, *tag_start, *corr_end) {
+            corr_by_id.insert(mask_id, idx);
+        }
+    }
+
+    // For each current mask, find its corresponding previous mask by id,
+    // then find the XMP correction by that id.
+    for cur_mask in masks {
+        let Some(prev_mask) = prev_masks.iter().find(|m| m.id == cur_mask.id) else {
+            continue;
+        };
+        let Some(&corr_idx) = corr_by_id.get(&cur_mask.id) else {
+            continue;
+        };
+        let (tag_start, mut corr_end) = corrections[corr_idx];
+
+        let a = &cur_mask.adjust;
+        let b = &prev_mask.adjust;
         let fields = [
             ("CorrectionAmount", a.amount / 100.0, b.amount / 100.0),
             ("LocalExposure2012", a.exposure * 4.0, b.exposure * 4.0),
@@ -1418,15 +1450,18 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
 
         let comp_tags = mask_component_descriptions(data, tag_start, corr_end);
         let cur_comps =
-            serde_json::to_value(&masks[i]).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
-        let prev_comps = serde_json::to_value(&prev_masks[i])
-            .ok()
-            .and_then(|v| v.get("components").cloned())
-            .and_then(|v| v.as_array().cloned())
-            .unwrap_or_default();
+            serde_json::to_value(cur_mask).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+        let prev_comps =
+            serde_json::to_value(prev_mask).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
         let ncomp = cur_comps.len().min(prev_comps.len()).min(comp_tags.len());
-        let mut length_delta: usize = 0;
-        for j in 0..ncomp {
+        if ncomp == 0 {
+            continue;
+        }
+
+        // Process components in reverse order so that shorter replacements
+        // correctly adjust offsets of components we haven't processed yet.
+        let mut length_delta: i64 = 0;
+        for j in (0..ncomp).rev() {
             let cur = &cur_comps[j];
             let prev = &prev_comps[j];
             let cur_kind = cur.get("shape").and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or("");
@@ -1436,14 +1471,19 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
             }
             let len_before = data.len();
             let (mut cstart, mut cend) = comp_tags[j];
-            cstart = cstart.saturating_add(length_delta);
-            cend = cend.saturating_add(length_delta);
+            cstart = (cstart as i64 + length_delta) as usize;
+            cend = (cend as i64 + length_delta) as usize;
             let scale = |a: f64| if a >= 1.0 { (1.0, 1.0 / a) } else { (a, 1.0) };
             let (sx, sy) = scale(aspect);
             let inv = |r: f64| {
                 let y = r.clamp(0.0, 1.0) * 12.0 - 8.0;
                 2.0_f64.powf(y).powf(1.0 / 2.2).clamp(1e-4, 1.0)
             };
+            // Track whether component inversion changed, to write it after shape-specific fields
+            let cur_comp_invert = cur.get("invert").and_then(Value::as_bool).unwrap_or(false);
+            let prev_comp_invert = prev.get("invert").and_then(Value::as_bool).unwrap_or(false);
+            let invert_changed = cur_comp_invert != prev_comp_invert;
+
             match cur_kind {
                 "radial" => {
                     let cur_cx = cur["shape"]["center"]["x"].as_f64().unwrap_or(0.5);
@@ -1453,7 +1493,6 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                     let cur_angle = cur["shape"]["angle"].as_f64().unwrap_or(0.0);
                     let cur_feather = cur["shape"]["feather"].as_f64().unwrap_or(50.0);
                     let cur_shape_invert = cur["shape"].get("invert").and_then(Value::as_bool).unwrap_or(false);
-                    let cur_comp_invert = cur.get("invert").and_then(Value::as_bool).unwrap_or(false);
                     let prev_cx = prev["shape"]["center"]["x"].as_f64().unwrap_or(0.5);
                     let prev_cy = prev["shape"]["center"]["y"].as_f64().unwrap_or(0.5);
                     let prev_rx = prev["shape"]["rx"].as_f64().unwrap_or(0.1);
@@ -1461,7 +1500,6 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                     let prev_angle = prev["shape"]["angle"].as_f64().unwrap_or(0.0);
                     let prev_feather = prev["shape"]["feather"].as_f64().unwrap_or(50.0);
                     let prev_shape_invert = prev["shape"].get("invert").and_then(Value::as_bool).unwrap_or(false);
-                    let prev_comp_invert = prev.get("invert").and_then(Value::as_bool).unwrap_or(false);
                     let cur_left = (cur_cx - cur_rx / sx).clamp(0.0, 1.0);
                     let cur_right = (cur_cx + cur_rx / sx).clamp(0.0, 1.0);
                     let cur_top = (cur_cy - cur_ry / sy).clamp(0.0, 1.0);
@@ -1490,9 +1528,6 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                     if cur_shape_invert != prev_shape_invert {
                         put_attr_on_tag(data, cstart, cend, prefix, "Flipped", if cur_shape_invert { "true" } else { "false" });
                         cend = tag_end(data, cstart).unwrap_or(cend);
-                    }
-                    if cur_comp_invert != prev_comp_invert {
-                        put_attr_on_tag(data, cstart, cend, prefix, "MaskInverted", if cur_comp_invert { "true" } else { "false" });
                     }
                 }
                 "linear" => {
@@ -1545,7 +1580,11 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                 }
                 _ => {}
             }
-            length_delta = length_delta.saturating_add(data.len().saturating_sub(len_before));
+            // Write MaskInverted for all component kinds if it changed
+            if invert_changed {
+                put_attr_on_tag(data, cstart, cend, prefix, "MaskInverted", if cur_comp_invert { "true" } else { "false" });
+            }
+            length_delta += data.len() as i64 - len_before as i64;
         }
     }
 }
@@ -2646,7 +2685,7 @@ mod tests {
           <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
             <crs:Exposure2012>0.5</crs:Exposure2012>
             <crs:MaskGroupBasedCorrections>
-              <rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1"/></rdf:li></rdf:Seq>
+              <rdf:Seq><rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:MaskId="1"/></rdf:li></rdf:Seq>
             </crs:MaskGroupBasedCorrections>
           </rdf:Description>
         </rdf:RDF></x:xmpmeta>"#
@@ -2660,7 +2699,7 @@ mod tests {
     }
 
     /// [`write_corrections`] updates each correction on its own tag, matched to its mask by
-    /// order: the corrections are visited from the last back, so the attributes added to the
+    /// Mask.id: the corrections are visited from the last back, so the attributes added to the
     /// first one do not move the second one's offsets.
     #[test]
     fn crs_write_updates_every_correction_on_its_own_tag() {
@@ -2670,15 +2709,16 @@ mod tests {
           <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
             <crs:MaskGroupBasedCorrections>
               <rdf:Seq>
-                <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="0"/></rdf:li>
-                <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="0" crs:LocalContrast2012="0"/></rdf:li>
+                <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="0" crs:MaskId="1"/></rdf:li>
+                <rdf:li><rdf:Description crs:What="Correction" crs:CorrectionAmount="1" crs:LocalExposure2012="0" crs:LocalContrast2012="0" crs:MaskId="2"/></rdf:li>
               </rdf:Seq>
             </crs:MaskGroupBasedCorrections>
           </rdf:Description>
         </rdf:RDF></x:xmpmeta>"#
             .to_string();
 
-        let previous = DevelopSettings { masks: vec![Mask::default(), Mask::default()], ..Default::default() };
+        let previous =
+            DevelopSettings { masks: vec![Mask { id: 1, ..Default::default() }, Mask { id: 2, ..Default::default() }], ..Default::default() };
         let mut current = previous.clone();
         current.masks[0].adjust.exposure = 0.5;
         current.masks[0].adjust.contrast = 0.5;
