@@ -681,6 +681,119 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
     });
 }
 
+/// The six Defringe sliders, as Auto Defringe ([`estimate_defringe`]) sets them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DefringeSliders {
+    pub purple_amount: f64,
+    pub purple_hue_lo: f64,
+    pub purple_hue_hi: f64,
+    pub green_amount: f64,
+    pub green_hue_lo: f64,
+    pub green_hue_hi: f64,
+}
+
+impl DefringeSliders {
+    /// Set the Defringe sliders of `s` to these (a colour with no fringe gets amount 0 and its hue range as it was).
+    pub fn apply(&self, s: &mut DevelopSettings) {
+        let o = &mut s.optics;
+        o.defringe_purple_amount = self.purple_amount;
+        o.defringe_green_amount = self.green_amount;
+        if self.purple_amount > 0.0 {
+            (o.defringe_purple_hue_lo, o.defringe_purple_hue_hi) = (self.purple_hue_lo, self.purple_hue_hi);
+        }
+        if self.green_amount > 0.0 {
+            (o.defringe_green_hue_lo, o.defringe_green_hue_hi) = (self.green_hue_lo, self.green_hue_hi);
+        }
+    }
+}
+
+/// A fringe colour found by [`estimate_defringe`]: (amount, hue low, hue high) in slider units.
+fn fringe_sliders(hues: &mut [(f32, f32)], span: (f32, f32)) -> (f64, f64, f64) {
+    hues.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let at = |q: f32| hues[((hues.len() - 1) as f32 * q).round() as usize];
+    // the middle 80 % of the fringe's hues, a little wider, as positions on the span (the sliders' 0..100)
+    let to_slider = |h: f32| f64::from(((h - span.0) / (span.1 - span.0) * 100.0).clamp(0.0, 100.0));
+    let (mut lo, mut hi) = (to_slider(at(0.1).0 - 5.0).min(90.0), to_slider(at(0.9).0 + 5.0).max(10.0));
+    if hi - lo < 10.0 {
+        let mid = (lo + hi) / 2.0;
+        (lo, hi) = ((mid - 5.0).clamp(0.0, 90.0), (mid + 5.0).clamp(10.0, 100.0));
+    }
+    // enough strength that the median fringe pixel is left with the chroma of a near-grey (Defringe takes
+    // `amount / 8` of it, scaled by how coloured the pixel is)
+    let mut chroma: Vec<f32> = hues.iter().map(|h| h.1).collect();
+    chroma.sort_by(f32::total_cmp);
+    let c = chroma[chroma.len() / 2];
+    let take = (1.0 - 0.012 / c).clamp(0.0, 1.0) / smoothstep(0.015, 0.05, c).max(0.1) / 0.9;
+    let amount = f64::from((take.min(1.0) * 8.0).ceil()).clamp(1.0, 8.0);
+    (amount, lo.round(), hi.round())
+}
+
+/// Auto Defringe: the Defringe sliders that take out the purple and green fringes of `img` (the white-balanced
+/// image Defringe works on, at `scale` output pixels per reference pixel), or `None` when it has none.
+///
+/// A fringe is colour that sits at high-contrast edges, on their dark side, and is much rarer away from them:
+/// a purple flower or a green leaf, coloured all over, is not one. Each colour is judged alone, and one with
+/// no fringe keeps amount 0.
+pub fn estimate_defringe(img: &Rgb32f, scale: f64) -> Option<DefringeSliders> {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    // the edges Defringe looks at with an amount of 8
+    let radius = ((1.0 + 8.0 * 0.3) * scale).round().max(1.0);
+    let radius = if radius.is_finite() { (radius as usize).clamp(1, w.max(h)) } else { 1 };
+    let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
+    let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
+    let (lo, hi) = (min_filter(&l, radius, false), min_filter(&l, radius, true));
+    // per colour: the fringe pixels' (hue, chroma) at edges, and how many such colours sit in flat areas
+    let mut edge_hues: [Vec<(f32, f32)>; 2] = Default::default();
+    let mut flat_count = [0usize; 2];
+    let (mut edges, mut flats) = (0usize, 0usize);
+    for (i, &[ll, a, b]) in lab.iter().enumerate() {
+        let range = hi.data[i] - lo.data[i];
+        let at_edge = smoothstep(0.08, 0.25, range) >= 0.5;
+        let flat = range < 0.04;
+        edges += usize::from(at_edge);
+        flats += usize::from(flat);
+        let c = a.hypot(b);
+        // clearly coloured: Defringe takes most of its strength from 0.035 up
+        if c < 0.035 || !(at_edge || flat) {
+            continue;
+        }
+        let hue = b.atan2(a).to_degrees().rem_euclid(360.0);
+        for (k, span) in [PURPLE_HUES, GREEN_HUES].into_iter().enumerate() {
+            if !(span.0..=span.1).contains(&hue) {
+                continue;
+            }
+            if flat {
+                flat_count[k] += 1;
+            } else if ll < (lo.data[i] + hi.data[i]) / 2.0 {
+                edge_hues[k].push((hue, c));
+            }
+        }
+    }
+    let found = |k: usize| {
+        let n = edge_hues[k].len();
+        let edge_rate = n as f64 / edges.max(1) as f64;
+        let flat_rate = flat_count[k] as f64 / flats.max(1) as f64;
+        n >= 16 && edge_rate >= 0.02 && edge_rate >= 4.0 * flat_rate
+    };
+    let (purple, green) = (found(0), found(1));
+    if !purple && !green {
+        return None;
+    }
+    let mut out =
+        DefringeSliders { purple_amount: 0.0, purple_hue_lo: 30.0, purple_hue_hi: 70.0, green_amount: 0.0, green_hue_lo: 40.0, green_hue_hi: 60.0 };
+    let [p, g] = &mut edge_hues;
+    if purple {
+        (out.purple_amount, out.purple_hue_lo, out.purple_hue_hi) = fringe_sliders(p, PURPLE_HUES);
+    }
+    if green {
+        (out.green_amount, out.green_hue_lo, out.green_hue_hi) = fringe_sliders(g, GREEN_HUES);
+    }
+    Some(out)
+}
+
 /// Separable square min (or max) filter of radius `r`, linear in the pixels whatever `r` is (a
 /// crop can make the radius as wide as the output, and a scan of every neighbourhood was then
 /// cubic in the side).

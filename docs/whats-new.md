@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Auto Defringe
+- Optics ▸ Defringe has an Auto button (`develop.autoDefringe`). It finds the purple and green fringes along
+  high-contrast edges and sets each colour's amount and hue range to take them out, in one undo step. Colour that
+  fills a whole subject, like a purple flower, isn't treated as a fringe, and a photo without fringes is left as it is.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

@@ -449,6 +449,69 @@ fn defringe_removes_purple_at_edges_only() {
     assert!((chroma(flat2.get(20, 10)) - chroma(purple)).abs() < 1e-4);
 }
 
+/// A bright square on a dark ground with a `w`-pixel `fringe` along the dark side of its edges (as lateral CA and
+/// purple fringing leave around highlights), and the plain scene without it.
+fn fringed_scene(fringe: [f32; 3], w: usize) -> Rgb32f {
+    let (n, a, b) = (96usize, 32usize, 64usize);
+    Rgb32f::from_fn(n, n, |x, y| {
+        let inside = (a..b).contains(&x) && (a..b).contains(&y);
+        // pixels just outside the square, within `w` of it
+        let near = (a.saturating_sub(w)..b + w).contains(&x) && (a.saturating_sub(w)..b + w).contains(&y);
+        if inside {
+            [0.9; 3]
+        } else if near {
+            fringe
+        } else {
+            [0.02; 3]
+        }
+    })
+}
+
+fn chroma_of(p: [f32; 3]) -> f32 {
+    let l = oklab_from_2020(p);
+    l[1].hypot(l[2])
+}
+
+/// Auto Defringe finds a purple fringe along the edges of a highlight, leaves green off, and the sliders it picks
+/// take the fringe out when Defringe runs with them.
+#[test]
+fn auto_defringe_finds_a_purple_fringe_and_its_sliders_remove_it() {
+    let purple = [0.12f32, 0.02, 0.22];
+    let mut img = fringed_scene(purple, 2);
+    let found = estimate_defringe(&img, 1.0).expect("a purple fringe");
+    assert!(found.purple_amount > 0.0 && found.green_amount == 0.0, "{found:?}");
+    assert!((0.0..=90.0).contains(&found.purple_hue_lo) && (10.0..=100.0).contains(&found.purple_hue_hi), "{found:?}");
+    assert!(found.purple_hue_hi - found.purple_hue_lo >= 10.0, "{found:?}");
+    let mut s = DevelopSettings::default();
+    found.apply(&mut s);
+    // the fringe's own hue is inside the range the sliders give
+    let p = defringe_params(&s, 1.0).unwrap();
+    let lab = oklab_from_2020(purple);
+    let hue = lab[2].atan2(lab[1]).to_degrees().rem_euclid(360.0);
+    assert!(p.purple.0 <= hue && hue <= p.purple.1, "{hue} outside {:?}", p.purple);
+    let before = chroma_of(img.get(31, 48));
+    defringe(&mut img, &s, 1.0);
+    assert!(chroma_of(img.get(31, 48)) < before * 0.4, "{} → {}", before, chroma_of(img.get(31, 48)));
+}
+
+#[test]
+fn auto_defringe_finds_a_green_fringe() {
+    let green = [0.03f32, 0.16, 0.05];
+    let found = estimate_defringe(&fringed_scene(green, 2), 1.0).expect("a green fringe");
+    assert!(found.green_amount > 0.0 && found.purple_amount == 0.0, "{found:?}");
+}
+
+/// Purple that isn't a fringe is left alone: a flat purple field, a purple subject whose colour fills its whole
+/// shape (a flower, not a rim), and a neutral edge with no colour at all.
+#[test]
+fn auto_defringe_finds_nothing_without_fringes() {
+    let purple = [0.12f32, 0.02, 0.22];
+    assert_eq!(estimate_defringe(&Rgb32f::filled(96, 96, purple), 1.0), None);
+    let flower = Rgb32f::from_fn(96, 96, |x, y| if (24..72).contains(&x) && (24..72).contains(&y) { [0.35, 0.08, 0.6] } else { [0.02; 3] });
+    assert_eq!(estimate_defringe(&flower, 1.0), None);
+    assert_eq!(estimate_defringe(&fringed_scene([0.02; 3], 2), 1.0), None);
+}
+
 /// Found by fuzzing catalog snapshots: a defringe amount far past the sliders' 20 (from a
 /// damaged catalog or sidecar) made the filter's radius overflow (`x + r`), which panics.
 /// It acts as the sliders' end.

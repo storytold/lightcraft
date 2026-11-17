@@ -362,6 +362,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.ui.toggle_flyout("defringe");
         }
         if open {
+            ui.horizontal(|ui| {
+                ui.add_space(24.0);
+                if crate::widgets::text_button(ui, "defringeAuto", crate::i18n::tr("Auto"), false)
+                    .on_hover_text(crate::i18n::tr("Find the purple and green fringes along edges and set Defringe for them"))
+                    .clicked()
+                {
+                    match app.run("develop.autoDefringe", json!({})) {
+                        Ok(r) if r["found"] == false => app.toast(ui.ctx(), crate::i18n::tr("No colour fringes found")),
+                        Ok(_) => {}
+                        Err(e) => app.toast_error(ui.ctx(), e),
+                    }
+                }
+            });
             control(app, ui, d, "optics.defringePurple", true);
             let on = d.optics.defringe_purple_amount > 0.0;
             control(app, ui, d, "optics.defringePurpleHueLo", on);

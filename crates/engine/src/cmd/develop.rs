@@ -774,6 +774,39 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"temp": t, "tint": tint}))
         }),
+        cmd!(
+            "develop.autoDefringe",
+            "Auto Defringe",
+            [],
+            None,
+            "{} — measure the purple and green fringes along high-contrast edges of the active photo and set the Defringe sliders to take them out (one undo step); colour all over a subject is not a fringe, and a colour with none keeps amount 0; a photo with no fringes keeps its settings → {found, purpleAmount?, purpleHueLo?, purpleHueHi?, greenAmount?, greenHueLo?, greenHueHi?}",
+            has_active,
+            |s, _p| {
+                const C: &str = "develop.autoDefringe";
+                let id = active(s, C)?;
+                // fringes are a few pixels wide: measured on the preview, not a thumbnail
+                let src = s.source_now(id, SourceLevel::Preview).map_err(|e| bad(C, e))?;
+                let info = s.source_info(id);
+                let d = s.develop_of(id).unwrap_or_default();
+                let req = lightcraft_pipeline::RenderRequest::fit(2048, 2048);
+                let Some(found) = lightcraft_pipeline::auto_defringe(&src, &info, &d, &req) else {
+                    return Ok(json!({"found": false}));
+                };
+                edit(s, C, "Auto Defringe", |d| {
+                    found.apply(d);
+                    Ok(())
+                })?;
+                Ok(json!({
+                    "found": true,
+                    "purpleAmount": found.purple_amount,
+                    "purpleHueLo": found.purple_hue_lo,
+                    "purpleHueHi": found.purple_hue_hi,
+                    "greenAmount": found.green_amount,
+                    "greenHueLo": found.green_hue_lo,
+                    "greenHueHi": found.green_hue_hi,
+                }))
+            }
+        ),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {
             edit(s, "develop.treatment", "Treatment", |d| {
                 let bw = p.get("bw").and_then(Value::as_bool).unwrap_or(d.treatment != Treatment::Bw);
