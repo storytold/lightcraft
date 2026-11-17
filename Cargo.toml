@@ -18,7 +18,6 @@ craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-l
 craft-crw = { git = "https://github.com/storytold/craft-libs", rev = "2d4b8b8ecd79f87c847961901c40305e7f448d6f" }
 craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "7f30d664695cd5ce14fc30659d36c3e32f234247" }
 craft-mime = { git = "https://github.com/storytold/craft-libs", rev = "f0f4758c01581d79577b9bf5046c06f4e77b1f18", version = "0.1.0" }
-craft-cms = { git = "https://github.com/storytold/craft-libs", rev = "2d4b8b8ecd79f87c847961901c40305e7f448d6f" }
 craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "b77af389f30bb10de10d8436ca9b39fe94e3bb67", features = ["frames"] }
 craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d3c6fad3d613af2a30b35c3bc9f4c0f", default-features = false, features = ["decode", "encode"] }
 jixel = "=0.3.4"
