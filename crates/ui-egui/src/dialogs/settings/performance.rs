@@ -307,10 +307,10 @@ fn smart_previews_result(app: &mut LightcraftApp, ui: &mut egui::Ui, cache: egui
         Ok(v) => {
             let failed = v["failed"].as_array().map_or(0, Vec::len);
             let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
-                (_, 0) => "Smart previews folder changed".to_string(),
-                ("move", n) => format!("Smart previews folder changed; moved {n}"),
-                ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
-                _ => "Smart previews folder changed".to_string(),
+                (_, 0) => crate::i18n::tr("Smart previews folder changed").to_string(),
+                ("move", n) => crate::i18n::tr_format!("Smart previews folder changed; moved {n}", n = n),
+                ("discard", n) => crate::i18n::tr_format!("Smart previews folder changed; deleted {n}", n = n),
+                _ => crate::i18n::tr("Smart previews folder changed").to_string(),
             };
             app.toast(ui.ctx(), if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
         }

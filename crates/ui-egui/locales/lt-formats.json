@@ -203,6 +203,8 @@
   "Skipped {problem}": "Praleista: {problem}",
   "Slideshow exported: {what}": "Skaidrių peržiūra eksportuota: {what}",
   "Smart album: {}": "Išmanusis albumas: {}",
+  "Smart previews folder changed; deleted {n}": "Išmaniųjų peržiūrų aplankas pakeistas; ištrinta: {n}",
+  "Smart previews folder changed; moved {n}": "Išmaniųjų peržiūrų aplankas pakeistas; perkelta: {n}",
   "Tagged {n} photo{} from the tracklog": "Pažymėta nuotraukų pagal maršruto įrašą: {n}{:.0}",
   "Template preview: {name}": "Šablono peržiūra: {name}",
   "The SAM 3 download failed: {e}": "Nepavyko atsisiųsti SAM 3: {e}",
