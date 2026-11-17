@@ -425,7 +425,8 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
             if r.is_ok() && replaced {
                 app.map_tracks.pending = None;
             }
-            let moved = ["path", "gpx", "active"].iter().any(|k| p.get(*k).is_some());
+            // (a null `active` means all tracks: a pick, so it fits too)
+            let moved = given("path") || given("gpx") || p.get("active").is_some();
             if r.is_ok() && moved && p.get("fit") != Some(&Value::Bool(false)) {
                 fit(app);
             }

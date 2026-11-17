@@ -1046,7 +1046,8 @@ impl Session {
     ///
     /// The snapshot is written even when appending the queued ops fails: it is a fresh file
     /// holding everything in memory, so it saves those ops too (the log handle may be the only
-    /// thing that's broken). Fails only if nothing could be saved; the ops then stay queued.
+    /// thing that's broken). Fails if nothing could be saved (the ops then stay queued), or if
+    /// prefs.json still can't be written.
     pub fn close_library(&mut self) -> Result<()> {
         if self.library.is_none() {
             return Ok(());
@@ -1055,6 +1056,11 @@ impl Session {
         let persisted = self.persist();
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
+        // a prefs.json write still failing is tried once more (persist stops before it when the
+        // log can't be appended)
+        if self.library.as_ref().is_some_and(|l| l.prefs_error.is_some()) {
+            let _ = self.save_prefs();
+        }
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         let before = lib.journal.seq();
         let snapshot = lib.journal.snapshot_with_unlogged(&self.catalog, unlogged);
@@ -1074,6 +1080,10 @@ impl Session {
             (Err(EngineError::NotSaved(e)), Err(s)) if lib.journal.seq() == before => Err(EngineError::NotSaved(format!("{e}; snapshot: {s}"))),
             (_, Err(s)) => Err(s.into()),
         };
+        // what prefs.json holds and couldn't write (such as which photos' GPS is LightCraft's) is
+        // lost once another library opens: an error, so a switch keeps this library open and a
+        // quit asks first
+        let result = result.and_then(|()| lib.prefs_error.clone().map_or(Ok(()), |e| Err(EngineError::NotSaved(e))));
         if result.is_ok() {
             self.library_identity = std::sync::Arc::new(());
         }

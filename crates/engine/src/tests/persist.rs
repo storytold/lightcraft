@@ -243,6 +243,28 @@ fn a_failed_prefs_write_is_retried_until_it_lands() {
     assert!(s.unsaved().is_none(), "written");
 }
 
+/// Closing the library while prefs.json can't be written is an error even though the catalog
+/// snapshot landed: what it holds (which photos' GPS is LightCraft's) would be lost when another
+/// library opens, so a switch stops and keeps this one open.
+#[test]
+fn closing_with_prefs_unwritten_is_an_error_until_they_land() {
+    let files = Flaky::default();
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, true).unwrap();
+    let id = s.selection.active.unwrap();
+    files.set_failing(true);
+    s.execute("photo.setGps", &json!({"lat": 1.0, "lon": 2.0})).unwrap();
+    let e = s.close_library().expect_err("prefs.json unwritten");
+    assert!(e.to_string().contains("prefs"), "{e}");
+    assert!(s.gps_edited.contains(&id), "the ownership is still held in memory");
+    files.set_failing(false);
+    s.close_library().unwrap();
+    let prefs = files.files.files.lock().unwrap().get("prefs.json").cloned().unwrap_or_default();
+    let v: serde_json::Value = serde_json::from_slice(&prefs).unwrap();
+    assert_eq!(v["gpsOwned"], json!([id.0]), "written on the close that could");
+}
+
 /// A preference change whose prefs.json write failed is taken back, so nothing is left unsaved:
 /// the failure isn't reported as pending (a quit would ask about a change that never happened).
 #[test]

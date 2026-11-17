@@ -227,5 +227,12 @@ fn a_track_loaded_while_another_is_read_is_not_overwritten() {
     frames(&mut h, 3);
     let t = state(&mut h)["trackLog"].clone();
     assert_eq!(t["tracks"].as_array().map(Vec::len), Some(2), "the log loaded last stays: {t}");
+    // a query with a null path or gpx doesn't fit the map to the track: the view panned away stays
+    h.app.ui.map.center_lat = -33.0;
+    h.app.ui.map.center_lon = 151.0;
+    h.app.ui.map.zoom = 4.0;
+    h.app.run("map.trackLog", json!({"path": null, "gpx": null})).unwrap();
+    let m = &h.app.ui.map;
+    assert_eq!((m.center_lat, m.center_lon, m.zoom), (-33.0, 151.0, 4.0), "the view is left alone");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
