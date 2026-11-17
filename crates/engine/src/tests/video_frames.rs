@@ -200,7 +200,8 @@ fn a_stopped_video_poster_is_not_a_failed_preview() {
     s.media.video_loader = Some(fake_loader(Arc::default(), Some(crate::files::VIDEO_STOPPED)));
     add_clip(&mut s, 1, Path::new("/lc-video-frames-test/clip.mp4"));
     let r = s.execute("library.buildPreviews", &serde_json::json!({"ids": [1], "edge": 300, "wait": true})).unwrap();
-    assert_eq!(r["failed"].as_u64(), Some(0), "{r}");
+    // processed (done counts every photo a build went through, failed ones too), not failed
+    assert_eq!((r["done"].as_u64(), r["failed"].as_u64()), (Some(1), Some(0)), "{r}");
     // a real failure still counts
     s.media.video_loader = Some(fake_loader(Arc::default(), Some("Apple ProRes video can't be decoded yet")));
     let r = s.execute("library.buildPreviews", &serde_json::json!({"ids": [1], "edge": 300, "wait": true})).unwrap();
