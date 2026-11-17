@@ -30,10 +30,12 @@ const FULL_AFTER: u32 = 30;
 const FULL_AFTER_MAX: u32 = 960;
 
 /// When frames are converted at half size: only while playback falls behind (the player drops
-/// late frames), back to full size once the decoder and a full-size conversion would fit in a
-/// frame's time with room to spare. Half size averages 2 × 2 samples: a quarter of the
-/// conversion, and the loupe shows a 4K frame at about half size anyway. Paused, stepped and
-/// scrubbed frames are always full size.
+/// late frames) and only while that helps. Decoding and converting run side by side, so the slower
+/// of the two sets the pace; half size averages 2 × 2 samples and makes the conversion about four
+/// times cheaper, which speeds playback only when the conversion is the slower one. Back to full
+/// size once the decoder and a full-size conversion fit in a frame's time with room to spare, or
+/// at once when the decoder alone is the slower one (half size would only cost picture). Paused,
+/// stepped and scrubbed frames are always full size.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Adapt {
     /// Converting at half size now.
@@ -46,18 +48,27 @@ struct Adapt {
     need: u32,
     /// Full size fell behind since the last time it was chosen.
     tried_full: bool,
+    /// The latest decode time and (estimated) full-size conversion time, in seconds.
+    decode: f64,
+    full: f64,
 }
 
 impl Default for Adapt {
     fn default() -> Adapt {
-        Adapt { half: false, behind: false, fits: 0, need: FULL_AFTER, tried_full: false }
+        Adapt { half: false, behind: false, fits: 0, need: FULL_AFTER, tried_full: false, decode: 0.0, full: 0.0 }
     }
 }
 
 impl Adapt {
+    /// Half size would speed playback up: the conversion, not the decoder, sets the pace (or
+    /// nothing has been measured yet).
+    fn helps(&self) -> bool {
+        self.full > self.decode || (self.full == 0.0 && self.decode == 0.0)
+    }
+
     fn set_behind(&mut self, behind: bool) {
         self.behind = behind;
-        if behind && !self.half {
+        if behind && !self.half && self.helps() {
             self.half = true;
             self.fits = 0;
             // full size was tried and fell behind again: wait longer before the next try
@@ -67,15 +78,23 @@ impl Adapt {
         }
     }
 
-    /// One frame went through: `decode` and `convert` seconds it took (side by side, so the
-    /// slower one sets the pace), whether it was `halved`, and how long a `frame` lasts.
+    /// One frame went through: `decode` and `convert` seconds it took (side by side; `convert`
+    /// is the colour conversion alone, without the 2 × 2 averaging), whether it was `halved`, and
+    /// how long a `frame` lasts.
     fn after(&mut self, decode: f64, convert: f64, halved: bool, frame: f64) {
+        self.decode = decode;
+        // a full-size conversion costs about four times a half-size one
+        self.full = if halved { convert * 4.0 } else { convert };
         if !self.half {
             return;
         }
-        // a full-size conversion costs about four times a half-size one
-        let full = if halved { convert * 4.0 } else { convert };
-        if !self.behind && decode.max(full) <= frame * FULL_FITS {
+        if !self.helps() {
+            // the decoder is the limit: half size can't rescue playback, show the full picture
+            self.half = false;
+            self.fits = 0;
+            return;
+        }
+        if !self.behind && decode.max(self.full) <= frame * FULL_FITS {
             self.fits = self.fits.saturating_add(1);
         } else {
             self.fits = 0;
@@ -87,6 +106,9 @@ impl Adapt {
         }
     }
 }
+
+/// Why nothing plays in a build without video decoding (for people; the UI translates it).
+pub use lightcraft_codecs::video_stream::NO_VIDEO_DECODING;
 
 /// Whether this build can decode video at all (the codecs' `video-frames` feature).
 pub fn available() -> bool {
@@ -141,7 +163,7 @@ pub fn open(src: impl lightcraft_codecs::video_stream::ClipSource + 'static) -> 
         audio,
     };
     let start = if si.start_seconds.is_finite() { si.start_seconds } else { 0.0 };
-    let convert = Convert { converter: None, draft: false, adapt: Adapt::default(), half: [Vec::new(), Vec::new(), Vec::new()], start };
+    let convert = Convert { converter: None, draft: false, adapt: Adapt::default(), max_side: 0, half: [Vec::new(), Vec::new(), Vec::new()], start };
     Ok(CodecSource { stream, info, convert, ahead: None })
 }
 
@@ -185,17 +207,45 @@ struct Convert {
     draft: bool,
     /// Whether to convert at half size while playing.
     adapt: Adapt,
+    /// The largest side the frames may have (the GPU's texture limit; 0: no limit).
+    max_side: usize,
     /// The half-size planes (Y, Cb, Cr), reused from frame to frame.
     half: [Vec<u16>; 3],
     /// When the first picture is shown on the stream's timeline: playback time 0.
     start: f64,
 }
 
+/// How one picture is converted: `halve` it, and whether the frame is a `draft` for that (half
+/// size while playing; a picture halved to fit the GPU is the best this machine can show, not a
+/// draft).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Size {
+    halve: bool,
+    draft: bool,
+}
+
 impl Convert {
-    fn frame(&mut self, f: &Frame, mut buffer: Vec<u8>) -> Result<VideoFrame, String> {
+    /// What to do with a `width × height` picture now: half size while playing and falling
+    /// behind (only big pictures), or when it is bigger than the GPU's textures.
+    fn size(&self, width: usize, height: usize) -> Size {
+        let can = width >= 2 && height >= 2;
+        let too_big = self.max_side > 0 && (width > self.max_side || height > self.max_side);
+        let playing_half = self.draft && self.adapt.half && width.saturating_mul(height) >= HALVE_MIN;
+        Size { halve: can && (too_big || playing_half), draft: can && playing_half && !too_big }
+    }
+
+    /// The frame of `f`, and how long its colour conversion took (seconds, without the 2 × 2
+    /// averaging).
+    fn frame(&mut self, f: &Frame, mut buffer: Vec<u8>) -> Result<(VideoFrame, f64), String> {
         let full = f.picture();
-        let halve = self.draft && self.adapt.half && f.width.saturating_mul(f.height) >= HALVE_MIN && f.width >= 2 && f.height >= 2;
-        let pic = if halve { half_size(&full, &mut self.half) } else { full };
+        let size = self.size(f.width, f.height);
+        let pic = if size.halve { half_size(&full, &mut self.half) } else { full };
+        if self.max_side > 0 && (pic.width > self.max_side || pic.height > self.max_side) {
+            return Err(format!(
+                "The clip's pictures are {} × {} pixels, more than this graphics card can show (at most {} per side)",
+                f.width, f.height, self.max_side
+            ));
+        }
         let key = (f.colour, f.bit_depth, pic.width, pic.height);
         if self.converter.as_ref().is_none_or(|(k, _)| *k != key) {
             // (the full size picks the defaults for unspecified code points)
@@ -208,15 +258,18 @@ impl Convert {
         let len = pic.width.checked_mul(pic.height).and_then(|n| n.checked_mul(4)).ok_or("picture too large")?;
         buffer.clear();
         buffer.resize(len, 0);
+        let t = Instant::now();
         conv.to_srgb8(&pic, bytemuck::cast_slice_mut(&mut buffer)).map_err(|e| describe(&e.into()))?;
-        Ok(VideoFrame {
+        let secs = t.elapsed().as_secs_f64();
+        let frame = VideoFrame {
             pts: f.seconds - self.start,
             width: u32::try_from(pic.width).map_err(|_| "picture too wide")?,
             height: u32::try_from(pic.height).map_err(|_| "picture too tall")?,
             rgba: buffer,
-            // a half-size frame is replaced by the full picture when playback pauses on it
-            draft: f.draft || halve,
-        })
+            // a half-size frame is replaced by the full picture when playback stops on it
+            draft: f.draft || size.draft,
+        };
+        Ok((frame, secs))
     }
 }
 
@@ -253,14 +306,11 @@ impl FrameSource for CodecSource {
         };
         // a stop already asked for: no need to decode ahead
         if stop() {
-            return self.convert.frame(&f, buffer).map(Next::Frame);
+            return self.convert.frame(&f, buffer).map(|(v, _)| Next::Frame(v));
         }
         let (convert, stream) = (&mut self.convert, &mut self.stream);
         let (converted, ahead, decode_secs) = std::thread::scope(|scope| {
-            let worker = std::thread::Builder::new().name("lc-video-convert".into()).spawn_scoped(scope, || {
-                let t = Instant::now();
-                convert.frame(&f, buffer).map(|v| (v, t.elapsed().as_secs_f64()))
-            });
+            let worker = std::thread::Builder::new().name("lc-video-convert".into()).spawn_scoped(scope, || convert.frame(&f, buffer));
             let t = Instant::now();
             let ahead = decode(stream, stop);
             let decode_secs = t.elapsed().as_secs_f64();
@@ -273,7 +323,7 @@ impl FrameSource for CodecSource {
         self.ahead = Some(ahead);
         let (frame, convert_secs) = converted?;
         if self.convert.draft {
-            let halved = frame.width as usize != f.width;
+            let halved = self.convert.size(f.width, f.height).halve;
             self.convert.adapt.after(decode_secs, convert_secs, halved, self.info.frame_duration);
         }
         Ok(Next::Frame(frame))
@@ -286,6 +336,10 @@ impl FrameSource for CodecSource {
 
     fn set_behind(&mut self, behind: bool) {
         self.convert.adapt.set_behind(behind);
+    }
+
+    fn set_max_side(&mut self, pixels: usize) {
+        self.convert.max_side = pixels;
     }
 }
 

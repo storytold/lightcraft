@@ -69,6 +69,28 @@ fn h264_clip(frames: usize, keyint: u32, audio: bool) -> Vec<u8> {
     mux(entry, &samples, start, audio)
 }
 
+/// An all-intra H.264 clip of `frames` flat grey pictures of `w × h` (big enough to be halved).
+fn h264_big(frames: usize, w: usize, h: usize) -> Vec<u8> {
+    use craft_video::h264::{Encoder, EncoderConfig, PacketFormat, RateControl, YuvFrame};
+    let mut cfg = EncoderConfig::new(w as u32, h as u32, FPS, 1);
+    cfg.format = PacketFormat::LengthPrefixed;
+    cfg.rate = RateControl::Qp(30);
+    cfg.bframes = 0;
+    cfg.keyint = 1;
+    cfg.scenecut = false;
+    cfg.threads = 1;
+    let mut enc = Encoder::new(cfg).unwrap();
+    let (y, c) = (vec![120u8; w * h], vec![128u8; w * h / 4]);
+    let mut packets = Vec::new();
+    for i in 0..frames {
+        packets.extend(enc.encode(&YuvFrame { y: &y, u: &c, v: &c, y_stride: w, uv_stride: w / 2 }, i as i64).unwrap());
+    }
+    packets.extend(enc.flush());
+    let entry = SampleEntry::avc(AvcConfig::parse(&enc.avcc()).unwrap(), w as u16, h as u16);
+    let samples: Vec<_> = packets.into_iter().map(|p| (p.data, p.pts, p.dts, p.keyframe)).collect();
+    mux(entry, &samples, None, false)
+}
+
 /// An HEVC Main 10 clip.
 fn hevc10_clip(frames: usize, keyint: u32) -> Vec<u8> {
     use craft_video::hevc::{Encoder, EncoderConfig, Frame, Profile, RateControl};
@@ -343,23 +365,31 @@ fn video_source_halves_only_while_playback_falls_behind() {
 }
 
 #[test]
-fn video_source_stays_half_when_full_size_would_not_fit() {
+fn video_source_stays_half_only_while_it_helps() {
     let frame = 1.0 / 30.0;
+    // the conversion is the slow part: half size takes 8 ms, full would take about 32 ms, more
+    // than 60 % of 33 ms: stays half
     let mut a = Adapt::default();
     a.set_behind(true);
     a.set_behind(false);
-    // half size takes 8 ms: full would take about 32 ms, more than 60 % of 33 ms
     for _ in 0..1000 {
         a.after(0.005, 0.008, true, frame);
     }
     assert!(a.half);
-    // a slow decoder keeps it half too
+    // the decoder is the slow part (30 ms; a full conversion 8 ms): half size can't rescue
+    // playback, so the full picture comes back at once
     let mut b = Adapt::default();
     b.set_behind(true);
-    b.set_behind(false);
-    for _ in 0..1000 {
-        b.after(0.030, 0.002, true, frame);
-    }
+    assert!(b.half);
+    b.after(0.030, 0.002, true, frame);
+    assert!(!b.half, "{b:?}");
+    // and falling behind again doesn't halve while the decoder is what's slow
+    b.after(0.030, 0.008, false, frame);
+    b.set_behind(true);
+    assert!(!b.half, "{b:?}");
+    // once the conversion is the slow part again, it does
+    b.after(0.010, 0.040, false, frame);
+    b.set_behind(true);
     assert!(b.half);
     // the wait is bounded however often full size fails
     let mut c = Adapt::default();
@@ -367,8 +397,66 @@ fn video_source_stays_half_when_full_size_would_not_fit() {
         c.set_behind(true);
         c.set_behind(false);
         for _ in 0..FULL_AFTER_MAX {
-            c.after(0.0, 0.0, true, frame);
+            c.after(0.0, 0.001, true, frame);
         }
     }
     assert_eq!(c.need, FULL_AFTER_MAX);
+}
+
+fn convert(draft: bool, half: bool, max_side: usize) -> Convert {
+    let adapt = Adapt { half, ..Adapt::default() };
+    Convert { converter: None, draft, adapt, max_side, half: [Vec::new(), Vec::new(), Vec::new()], start: 0.0 }
+}
+
+#[test]
+fn video_source_shows_paused_stepped_and_scrubbed_frames_full_size() {
+    let (w, h) = (3840, 2160);
+    // paused, stepped or scrubbed (not draft): full size even while the adaptive rule says half
+    assert_eq!(convert(false, true, 0).size(w, h), Size { halve: false, draft: false });
+    // playing and falling behind: half size, marked draft so a pause replaces it
+    assert_eq!(convert(true, true, 0).size(w, h), Size { halve: true, draft: true });
+    // playing and keeping up: full size
+    assert_eq!(convert(true, false, 0).size(w, h), Size { halve: false, draft: false });
+    // small pictures are never halved for speed
+    assert_eq!(convert(true, true, 0).size(640, 360), Size { halve: false, draft: false });
+    // bigger than the GPU's textures: halved whatever happens, and not a draft (it is the best
+    // this machine can show)
+    assert_eq!(convert(false, false, 2048).size(w, h), Size { halve: true, draft: false });
+    assert_eq!(convert(true, true, 2048).size(w, h), Size { halve: true, draft: false });
+    assert_eq!(convert(false, false, 4096).size(w, h), Size { halve: false, draft: false });
+}
+
+#[test]
+fn video_source_fits_frames_to_the_gpu_or_says_why() {
+    if !decoder_here() {
+        return;
+    }
+    let mut src = open(h264_clip(6, 3, false)).unwrap();
+    src.set_max_side(40);
+    let Next::Frame(f) = src.next_frame(&mut || false, Vec::new()).unwrap() else { panic!("no frame") };
+    assert_eq!((f.width as usize, f.height as usize, f.draft), (W / 2, H / 2, false));
+    // even half size is too big: a reason, not a frame the GPU would refuse
+    let mut src = open(h264_clip(6, 3, false)).unwrap();
+    src.set_max_side(20);
+    let e = src.next_frame(&mut || false, Vec::new()).unwrap_err();
+    assert!(e.contains("more than this graphics card can show"), "{e}");
+}
+
+#[test]
+fn video_source_marks_half_size_frames_draft_and_shows_paused_ones_full() {
+    if !decoder_here() {
+        return;
+    }
+    let (w, h) = (1280, 800);
+    let mut src = open(h264_big(3, w, h)).unwrap();
+    // playing and falling behind: half size, a draft the pause replaces
+    src.set_draft(true);
+    src.set_behind(true);
+    let Next::Frame(f) = src.next_frame(&mut || false, Vec::new()).unwrap() else { panic!("no frame") };
+    assert_eq!((f.width as usize, f.height as usize, f.draft), (w / 2, h / 2, true));
+    // paused on it: the same picture again, full size and exact
+    src.set_draft(false);
+    src.seek(0.0).unwrap();
+    let Next::Frame(f) = src.next_frame(&mut || false, Vec::new()).unwrap() else { panic!("no frame") };
+    assert_eq!((f.width as usize, f.height as usize, f.draft), (w, h, false));
 }
