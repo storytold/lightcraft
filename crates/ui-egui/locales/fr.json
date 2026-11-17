@@ -3736,5 +3736,21 @@
   "Clear Tracklog": "Effacer le tracé",
   "Tagged 1 photo from the tracklog": "1 photo située d'après le tracé",
   "Auto-Tag Photos from Map Tracklog": "Situer les photos d'après le tracé de la carte",
-  "Map Tracklog": "Tracé de la carte"
+  "Map Tracklog": "Tracé de la carte",
+  "Map Pins": "Repères de la carte",
+  "Saved Locations List": "Liste des lieux enregistrés",
+  "Map Tiles…": "Tuiles de la carte…",
+  "Hide Pins": "Masquer les repères",
+  "Hide the photo pins (H); saved locations and the track log stay": "Masquer les repères des photos (H) ; les lieux enregistrés et le tracé restent",
+  "Map tiles": "Tuiles de la carte",
+  "Tile source": "Source des tuiles",
+  "URL template": "Modèle d'URL",
+  "Attribution": "Attribution",
+  "Max zoom": "Zoom max.",
+  "© the provider": "© le fournisseur",
+  "Max zoom is a whole number from 0 to 24": "Le zoom max. est un nombre entier de 0 à 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Un serveur de tuiles voit les tuiles que vous regardez (donc à peu près quels lieux), votre adresse IP et le nom et la version de LightCraft ; rien d'autre ne quitte la machine. Hors ligne ne télécharge rien. L'adresse d'un serveur personnalisé peut contenir votre propre clé, sous votre responsabilité.",
+  "Tile cache": "Cache des tuiles",
+  "About map tiles and privacy (docs/map.md)": "À propos des tuiles et de la confidentialité (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Les tuiles sont désactivées (Réglages › Carte)"
 }

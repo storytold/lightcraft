@@ -2599,5 +2599,21 @@
   "Clear Tracklog": "Vymazat záznam trasy",
   "Tagged 1 photo from the tracklog": "Z záznamu trasy označena 1 fotka",
   "Auto-Tag Photos from Map Tracklog": "Automaticky označit fotky ze záznamu trasy na mapě",
-  "Map Tracklog": "Záznam trasy na mapě"
+  "Map Tracklog": "Záznam trasy na mapě",
+  "Map Pins": "Špendlíky na mapě",
+  "Saved Locations List": "Seznam uložených míst",
+  "Map Tiles…": "Mapové dlaždice…",
+  "Hide Pins": "Skrýt špendlíky",
+  "Hide the photo pins (H); saved locations and the track log stay": "Skrýt špendlíky fotek (H); uložená místa a záznam trasy zůstanou",
+  "Map tiles": "Mapové dlaždice",
+  "Tile source": "Zdroj dlaždic",
+  "URL template": "Šablona URL",
+  "Attribution": "Uvedení zdroje",
+  "Max zoom": "Max. přiblížení",
+  "© the provider": "© poskytovatel",
+  "Max zoom is a whole number from 0 to 24": "Max. přiblížení je celé číslo od 0 do 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Server dlaždic vidí, které dlaždice si prohlížíte (tedy zhruba která místa), vaši IP adresu a název a verzi LightCraftu; nic jiného počítač neopouští. Offline nestahuje nic. Adresa vlastního serveru může obsahovat váš klíč, na vaši odpovědnost.",
+  "Tile cache": "Mezipaměť dlaždic",
+  "About map tiles and privacy (docs/map.md)": "O mapových dlaždicích a soukromí (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Mapové dlaždice jsou vypnuté (Nastavení › Mapa)"
 }

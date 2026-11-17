@@ -2477,5 +2477,21 @@
   "Clear Tracklog": "Wyczyść ślad",
   "Tagged 1 photo from the tracklog": "Oznaczono 1 zdjęcie ze śladu",
   "Auto-Tag Photos from Map Tracklog": "Oznacz zdjęcia ze śladu na mapie",
-  "Map Tracklog": "Ślad na mapie"
+  "Map Tracklog": "Ślad na mapie",
+  "Map Pins": "Pinezki na mapie",
+  "Saved Locations List": "Lista zapisanych lokalizacji",
+  "Map Tiles…": "Kafelki mapy…",
+  "Hide Pins": "Ukryj pinezki",
+  "Hide the photo pins (H); saved locations and the track log stay": "Ukryj pinezki zdjęć (H); zapisane lokalizacje i ślad zostają",
+  "Map tiles": "Kafelki mapy",
+  "Tile source": "Źródło kafelków",
+  "URL template": "Szablon URL",
+  "Attribution": "Atrybucja",
+  "Max zoom": "Maks. powiększenie",
+  "© the provider": "© dostawca",
+  "Max zoom is a whole number from 0 to 24": "Maks. powiększenie to liczba całkowita od 0 do 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Serwer kafelków widzi, które kafelki oglądasz (czyli mniej więcej które miejsca), Twój adres IP oraz nazwę i wersję LightCraft; nic więcej nie opuszcza komputera. Tryb offline niczego nie pobiera. Adres własnego serwera może zawierać Twój klucz, na Twoją odpowiedzialność.",
+  "Tile cache": "Pamięć podręczna kafelków",
+  "About map tiles and privacy (docs/map.md)": "O kafelkach mapy i prywatności (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Kafelki mapy są wyłączone (Ustawienia › Mapa)"
 }

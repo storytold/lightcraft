@@ -2717,5 +2717,21 @@
   "Clear Tracklog": "Rimuovi tracciato",
   "Tagged 1 photo from the tracklog": "1 foto posizionata dal tracciato",
   "Auto-Tag Photos from Map Tracklog": "Posiziona le foto dal tracciato della mappa",
-  "Map Tracklog": "Tracciato della mappa"
+  "Map Tracklog": "Tracciato della mappa",
+  "Map Pins": "Segnaposto della mappa",
+  "Saved Locations List": "Elenco delle posizioni salvate",
+  "Map Tiles…": "Tessere della mappa…",
+  "Hide Pins": "Nascondi segnaposto",
+  "Hide the photo pins (H); saved locations and the track log stay": "Nascondi i segnaposto delle foto (H); posizioni salvate e tracciato restano",
+  "Map tiles": "Tessere della mappa",
+  "Tile source": "Origine delle tessere",
+  "URL template": "Modello URL",
+  "Attribution": "Attribuzione",
+  "Max zoom": "Zoom massimo",
+  "© the provider": "© il fornitore",
+  "Max zoom is a whole number from 0 to 24": "Lo zoom massimo è un numero intero da 0 a 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Un server di tessere vede quali tessere guardi (quindi più o meno quali luoghi), il tuo indirizzo IP e nome e versione di LightCraft; nient'altro lascia il computer. Offline non scarica nulla. L'indirizzo di un server personalizzato può contenere la tua chiave, a tua responsabilità.",
+  "Tile cache": "Cache delle tessere",
+  "About map tiles and privacy (docs/map.md)": "Tessere della mappa e privacy (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Le tessere sono disattivate (Impostazioni › Mappa)"
 }

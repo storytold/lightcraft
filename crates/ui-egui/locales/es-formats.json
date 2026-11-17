@@ -340,5 +340,6 @@
   "Track {n}": "Ruta {n}",
   "camera time, UTC{o}": "hora de la cámara, UTC{o}",
   "{m} of them fall within the track's time range": "{m} de ellas caen dentro del intervalo de la ruta",
-  "{n} more tracks": "{n} rutas más"
+  "{n} more tracks": "{n} rutas más",
+  "{size} MB, {n} tiles": "{size} MB, {n} teselas"
 }

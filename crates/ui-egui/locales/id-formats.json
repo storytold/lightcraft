@@ -339,5 +339,6 @@
   "Track {n}": "Jejak {n}",
   "camera time, UTC{o}": "waktu kamera, UTC{o}",
   "{m} of them fall within the track's time range": "{m} di antaranya dalam rentang waktu jejak",
-  "{n} more tracks": "{n} jejak lagi"
+  "{n} more tracks": "{n} jejak lagi",
+  "{size} MB, {n} tiles": "{size} MB, {n} ubin"
 }

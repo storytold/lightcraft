@@ -340,5 +340,6 @@
   "Track {n}": "軌跡 {n}",
   "camera time, UTC{o}": "相機時間，UTC{o}",
   "{m} of them fall within the track's time range": "其中 {m} 張在軌跡的時間範圍內",
-  "{n} more tracks": "還有 {n} 條軌跡"
+  "{n} more tracks": "還有 {n} 條軌跡",
+  "{size} MB, {n} tiles": "{size} MB，{n} 個圖磚"
 }

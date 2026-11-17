@@ -2398,5 +2398,21 @@
   "Clear Tracklog": "Limpar registro de trajeto",
   "Tagged 1 photo from the tracklog": "1 foto marcada pelo registro de trajeto",
   "Auto-Tag Photos from Map Tracklog": "Marcar fotos pelo registro de trajeto do mapa",
-  "Map Tracklog": "Registro de trajeto do mapa"
+  "Map Tracklog": "Registro de trajeto do mapa",
+  "Map Pins": "Marcadores do mapa",
+  "Saved Locations List": "Lista de locais salvos",
+  "Map Tiles…": "Blocos do mapa…",
+  "Hide Pins": "Ocultar marcadores",
+  "Hide the photo pins (H); saved locations and the track log stay": "Ocultar os marcadores das fotos (H); locais salvos e o registro de trajeto ficam",
+  "Map tiles": "Blocos do mapa",
+  "Tile source": "Origem dos blocos",
+  "URL template": "Modelo de URL",
+  "Attribution": "Atribuição",
+  "Max zoom": "Zoom máximo",
+  "© the provider": "© o provedor",
+  "Max zoom is a whole number from 0 to 24": "O zoom máximo é um número inteiro de 0 a 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Um servidor de blocos vê quais blocos você olha (ou seja, mais ou menos quais lugares), seu endereço IP e o nome e a versão do LightCraft; nada mais sai do computador. Offline não baixa nada. O endereço de um servidor próprio pode levar sua chave, por sua conta.",
+  "Tile cache": "Cache de blocos",
+  "About map tiles and privacy (docs/map.md)": "Sobre blocos do mapa e privacidade (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Os blocos do mapa estão desligados (Configurações › Mapa)"
 }

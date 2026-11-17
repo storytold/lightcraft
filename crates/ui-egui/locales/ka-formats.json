@@ -342,5 +342,6 @@
   "Track {n}": "ტრეკი {n}",
   "camera time, UTC{o}": "კამერის დრო, UTC{o}",
   "{m} of them fall within the track's time range": "მათგან {m} ხვდება ტრეკის დროის შუალედში",
-  "{n} more tracks": "კიდევ {n} ტრეკი"
+  "{n} more tracks": "კიდევ {n} ტრეკი",
+  "{size} MB, {n} tiles": "{size} MB, {n} ფილა"
 }

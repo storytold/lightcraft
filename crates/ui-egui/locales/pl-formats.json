@@ -339,5 +339,6 @@
   "Track {n}": "Ślad {n}",
   "camera time, UTC{o}": "czas aparatu, UTC{o}",
   "{m} of them fall within the track's time range": "{m} z nich mieści się w zakresie czasu śladu",
-  "{n} more tracks": "jeszcze śladów: {n}"
+  "{n} more tracks": "jeszcze śladów: {n}",
+  "{size} MB, {n} tiles": "{size} MB, kafelków: {n}"
 }

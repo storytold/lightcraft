@@ -340,5 +340,6 @@
   "Track {n}": "トラック {n}",
   "camera time, UTC{o}": "カメラの時刻、UTC{o}",
   "{m} of them fall within the track's time range": "そのうち {m} 枚がトラックの時間範囲内です",
-  "{n} more tracks": "ほか {n} 件のトラック"
+  "{n} more tracks": "ほか {n} 件のトラック",
+  "{size} MB, {n} tiles": "{size} MB、{n} タイル"
 }

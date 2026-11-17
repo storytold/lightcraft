@@ -46,16 +46,16 @@ cited here still exists. Formerly docs/parity.md.
 | R. Video (VID) | 0 | 0 | 5 | 1 | — | 0/2 (0%) |
 | S. Export (EXP) | 14 | 5 | 0 | 0 | 7/7 (100%) | 6/7 (86%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
-| U. Map & location (MAP) | 1 | 0 | 1 | 0 | — | 1/1 (100%) |
+| U. Map & location (MAP) | 1 | 1 | 0 | 0 | — | 1/1 (100%) |
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
-| Y. Menus | 86 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
+| Y. Menus | 87 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 45 | 26 | 17 | 8 | — | 24/27 (89%) |
-| **Total** | 425 | 70 | 52 | 35 | 193/203 (95%) | 148/163 (91%) |
+| **Total** | 426 | 71 | 51 | 35 | 193/203 (95%) | 148/163 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **84.1%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.5% of 163 · P2 59.4% of 180.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **84.2%** of 548 in-scope rows — P0 97.5% of 203 · P1 94.5% of 163 · P2 59.9% of 181.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -425,7 +425,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
 | LR-MAP-INFO | Location in the info panel | P1 | ✅ | `cmd:photo.setMeta` (`location`, `city`, `state`, `country`, `gps`), `cmd:map.state`, `crates/ui-egui/src/panels/right/info.rs`, `crates/ui-egui/src/panels/map.rs`, `crates/ui-egui/src/tests/map_info.rs` | location, city, state/province, country and GPS editable; under them a map of the active photo's place (zoom 14, its pin, the tile credit; shares the Map view's tiles and textures; fetches only while on screen; grey with a note offline); a click opens the Map view centred there; Open in Browser shows the place on openstreetmap.org. Private saved locations don't hide it yet (LRC-MAP-LOCATIONS) |
-| LR-MAP-MODULE | Map module [Classic] | P2 | ⬜ | | |
+| LR-MAP-MODULE | Map module [Classic] | P2 | 🟡 | `cmd:view.map`, `cmd:map.state`, `cmd:map.settings`, `cmd:map.showPins`, `crates/engine/src/map.rs`, `crates/ui-egui/src/panels/map.rs`, `crates/ui-egui/src/tests/map_keys.rs`, `docs/map.md` | A Map view (LRC-MAP-VIEW) with geotagging (LRC-MAP-GEOTAG), the location filter (LRC-MAP-FILTER), saved locations (LRC-MAP-LOCATIONS), track logs (LRC-MAP-TRACKLOG), the Info panel map (LR-MAP-INFO), the Map module's keys in the Map view (⌘K, `\`, H, O, = / −), View ▸ Map and Settings ▸ Map (tile source, custom server, cache). Not yet: satellite / hybrid imagery without the user's own key (Esri needs one, and its keyed service has no imagery style), a place search, an offline basemap, the Map module's own panel layout |
 
 ## V. Preferences (PREF)
 
@@ -538,6 +538,7 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-VIEW-ENTERFULLSCREEN | Enter Full Screen | P1 | ✅ | `cmd:view.enterFullScreen` | |
 | MENU-VIEW-PHOTOSPANEL | Show/Hide photos panel | P0 | ✅ | `cmd:view.leftPanel` | |
 | MENU-VIEW-FILMSTRIP | Show/Hide filmstrip | P0 | ✅ | `cmd:view.filmstrip` | |
+| MENU-VIEW-MAP | View ▸ Map submenu [Classic] | P2 | ✅ | `cmd:map.fit`, `cmd:map.zoomIn`, `cmd:map.zoomOut`, `cmd:map.showPins`, `cmd:map.lockMarkers`, `cmd:map.locationFilter`, `cmd:map.location.new`, `cmd:map.showLocations`, `cmd:map.loadTrackLog`, `cmd:map.settings` | the Map view's commands gathered under View ▸ Map (Lightroom Classic's Map module menus), greyed outside the Map view |
 | MENU-VIEW-INFO | Show/Hide info | P0 | ✅ | `cmd:panel.info` | |
 | MENU-VIEW-KEYWORDS | Show/Hide keywords | P0 | ✅ | `cmd:panel.keywords` | |
 | MENU-VIEW-ACTIVITY | Show/Hide activity (comments) | OOS | 🚫 | | our History panel is `panel.activity` |
@@ -803,6 +804,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | LR-MAP-MODULE ⬜ → 🟡: the Map view's keys (⌘K, `\`, H, O, = / −, ⌘= / ⌘− / ⌘0 in the Map view only), Hide Pins (`map.showPins`), View ▸ Map (MENU-VIEW-MAP added), Settings ▸ Map tile source / custom server / cache (`map.settings`) |
 | 2026-11-16 | patch | LRC-MAP-TRACKLOG: track logs drawn on the Map view (simplified per zoom, clipped, cut at ±180°) with the Tracklog menu (tracks, time range, offset, Auto-Tag from the active track, the selected photos marked on the track, fit, clear); loading off the UI thread with an activity row; `map.trackLog`; status unchanged (the row said ✅ already) |
 | 2026-11-16 | patch | LRC-MAP-LOCATIONS: saved locations move to a per-library `locations.json` (migrated once from `prefs.json`), get counts, Go To, select, rename, private (exports drop the location; the Info map hides), confirmed delete, circles with draggable handles, `map.location.*` commands and a GPS Radius rule field; status unchanged (the row said ✅ already) |
 | 2026-11-15 | patch | LRC-MAP-FILTER: the location filter bar now counts each choice and narrows the filmstrip (it only switched pins before); GPS Area and valid-only Has GPS smart-rule fields; status unchanged (the row said ✅ already) |

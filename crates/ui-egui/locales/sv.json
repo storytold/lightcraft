@@ -2614,5 +2614,21 @@
   "Clear Tracklog": "Rensa spårlogg",
   "Tagged 1 photo from the tracklog": "1 foto platsmärkt från spårloggen",
   "Auto-Tag Photos from Map Tracklog": "Platsmärk foton från kartans spårlogg",
-  "Map Tracklog": "Kartans spårlogg"
+  "Map Tracklog": "Kartans spårlogg",
+  "Map Pins": "Kartnålar",
+  "Saved Locations List": "Lista över sparade platser",
+  "Map Tiles…": "Kartrutor…",
+  "Hide Pins": "Dölj nålar",
+  "Hide the photo pins (H); saved locations and the track log stay": "Dölj fotonålarna (H); sparade platser och spårloggen finns kvar",
+  "Map tiles": "Kartrutor",
+  "Tile source": "Rutkälla",
+  "URL template": "URL-mall",
+  "Attribution": "Tillskrivning",
+  "Max zoom": "Max zoom",
+  "© the provider": "© leverantören",
+  "Max zoom is a whole number from 0 to 24": "Max zoom är ett heltal från 0 till 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "En ruteserver ser vilka rutor du tittar på (alltså ungefär vilka platser), din IP-adress samt LightCrafts namn och version; inget annat lämnar datorn. Offline hämtar ingenting. En egen servers adress kan innehålla din egen nyckel, på eget ansvar.",
+  "Tile cache": "Rutcache",
+  "About map tiles and privacy (docs/map.md)": "Om kartrutor och integritet (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Kartrutor är av (Inställningar › Karta)"
 }

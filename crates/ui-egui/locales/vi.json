@@ -2838,5 +2838,21 @@
   "Clear Tracklog": "Xóa nhật ký hành trình",
   "Tagged 1 photo from the tracklog": "Đã gắn vị trí 1 ảnh từ nhật ký hành trình",
   "Auto-Tag Photos from Map Tracklog": "Gắn vị trí ảnh từ nhật ký hành trình trên bản đồ",
-  "Map Tracklog": "Nhật ký hành trình trên bản đồ"
+  "Map Tracklog": "Nhật ký hành trình trên bản đồ",
+  "Map Pins": "Ghim trên bản đồ",
+  "Saved Locations List": "Danh sách vị trí đã lưu",
+  "Map Tiles…": "Ô bản đồ…",
+  "Hide Pins": "Ẩn ghim",
+  "Hide the photo pins (H); saved locations and the track log stay": "Ẩn ghim ảnh (H); vị trí đã lưu và nhật ký hành trình vẫn hiện",
+  "Map tiles": "Ô bản đồ",
+  "Tile source": "Nguồn ô bản đồ",
+  "URL template": "Mẫu URL",
+  "Attribution": "Ghi nguồn",
+  "Max zoom": "Thu phóng tối đa",
+  "© the provider": "© nhà cung cấp",
+  "Max zoom is a whole number from 0 to 24": "Thu phóng tối đa là số nguyên từ 0 đến 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Máy chủ ô bản đồ thấy những ô bạn xem (tức là đại khái những nơi nào), địa chỉ IP của bạn, tên và phiên bản LightCraft; không có gì khác rời khỏi máy. Ngoại tuyến không tải gì. Địa chỉ máy chủ tùy chỉnh có thể chứa khóa của bạn, tự bạn chịu trách nhiệm.",
+  "Tile cache": "Bộ đệm ô bản đồ",
+  "About map tiles and privacy (docs/map.md)": "Về ô bản đồ và quyền riêng tư (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Ô bản đồ đang tắt (Cài đặt › Bản đồ)"
 }

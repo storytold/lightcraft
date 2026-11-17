@@ -336,5 +336,6 @@
   "Track {n}": "Hành trình {n}",
   "camera time, UTC{o}": "giờ máy ảnh, UTC{o}",
   "{m} of them fall within the track's time range": "{m} ảnh nằm trong khoảng thời gian của hành trình",
-  "{n} more tracks": "thêm {n} hành trình"
+  "{n} more tracks": "thêm {n} hành trình",
+  "{size} MB, {n} tiles": "{size} MB, {n} ô"
 }

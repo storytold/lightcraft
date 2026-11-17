@@ -2759,5 +2759,21 @@
   "Clear Tracklog": "Убрать трек",
   "Tagged 1 photo from the tracklog": "По треку привязано 1 фото",
   "Auto-Tag Photos from Map Tracklog": "Привязать фото по треку карты",
-  "Map Tracklog": "Трек на карте"
+  "Map Tracklog": "Трек на карте",
+  "Map Pins": "Маркеры на карте",
+  "Saved Locations List": "Список сохранённых мест",
+  "Map Tiles…": "Тайлы карты…",
+  "Hide Pins": "Скрыть маркеры",
+  "Hide the photo pins (H); saved locations and the track log stay": "Скрыть маркеры фото (H); сохранённые места и трек остаются",
+  "Map tiles": "Тайлы карты",
+  "Tile source": "Источник тайлов",
+  "URL template": "Шаблон URL",
+  "Attribution": "Атрибуция",
+  "Max zoom": "Макс. масштаб",
+  "© the provider": "© поставщик",
+  "Max zoom is a whole number from 0 to 24": "Макс. масштаб — целое число от 0 до 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Сервер тайлов видит, какие тайлы вы смотрите (то есть примерно какие места), ваш IP-адрес, а также название и версию LightCraft; больше ничего не покидает компьютер. «Офлайн» ничего не загружает. Адрес своего сервера может содержать ваш ключ — под вашу ответственность.",
+  "Tile cache": "Кэш тайлов",
+  "About map tiles and privacy (docs/map.md)": "О тайлах карты и конфиденциальности (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Тайлы карты выключены (Настройки › Карта)"
 }

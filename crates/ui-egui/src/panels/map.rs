@@ -161,6 +161,18 @@ fn choose_location(m: &mut crate::state::MapUi, mode: LocationFilter) {
     m.seen_area = None;
 }
 
+/// The location filter's choices as the menus list them: (mode, label).
+pub struct LocationFilterChoice;
+
+impl LocationFilterChoice {
+    pub const ALL: [(LocationFilter, &'static str); 4] = [
+        (LocationFilter::VisibleOnMap, "Visible On Map"),
+        (LocationFilter::Tagged, "Tagged"),
+        (LocationFilter::Untagged, "Untagged"),
+        (LocationFilter::None, "None"),
+    ];
+}
+
 /// A single photo's pin being dragged to a new place.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PinDrag {
@@ -233,6 +245,8 @@ pub fn state(app: &LightcraftApp) -> Value {
         "withGps": d.with_gps,
         "withoutGps": d.without_gps,
         "lockMarkers": app.ui.map.locked,
+        "showPins": app.ui.map.show_pins,
+        "showLocations": app.ui.map.navigator_open,
         "movingPin": d.moving.map(|(id, at)| json!({"id": id, "x": at.x, "y": at.y})),
         "hovered": d.hovered,
         "drop": d.drop.map(|(n, at, to)| json!({"count": n, "x": at.x, "y": at.y, "lat": to.lat, "lon": to.lon})),
@@ -329,6 +343,32 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
             };
             app.run("map.location.add", q).inspect(|v| app.ui.map.active_location = v["id"].as_u64())
         }
+        // {on?}: without it, toggles (H in the Map view, the toolbar's Hide Pins)
+        "map.showPins" => {
+            let on = match p.get("on") {
+                None | Some(Value::Null) => !app.ui.map.show_pins,
+                Some(v) => match v.as_bool() {
+                    Some(b) => b,
+                    None => return Some(Err("map.showPins: `on` is true or false".into())),
+                },
+            };
+            app.ui.map.show_pins = on;
+            Ok(json!({"on": on}))
+        }
+        // {on?}: the navigator panel, which holds the saved locations list (O in the Map view)
+        "map.showLocations" => {
+            let on = match p.get("on") {
+                None | Some(Value::Null) => !app.ui.map.navigator_open,
+                Some(v) => match v.as_bool() {
+                    Some(b) => b,
+                    None => return Some(Err("map.showLocations: `on` is true or false".into())),
+                },
+            };
+            app.ui.map.navigator_open = on;
+            Ok(json!({"on": on}))
+        }
+        // Settings ▸ Map (tile source, cache, the ArcGIS key)
+        "map.settings" => app.run("app.settings", json!({"tab": "map"})),
         // {on?}: without it, toggles (Cmd/Ctrl+K in the Map view, the toolbar's Lock Markers)
         "map.lockMarkers" | "map.toggleLock" | "map.lock" => {
             let on = match p.get("on") {
@@ -484,7 +524,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // 2. Cluster the pins of the view (world-anchored cells: panning never regroups them)
     let started = web_time::Instant::now();
     // Untagged: the filmstrip holds the photos without a position, so no pins
-    let shown: &[MapPoint] = if map_ui.filter == LocationFilter::Untagged { &[] } else { &app.map_points.points };
+    // (and Hide Pins: none at all, so none can be clicked, hovered or dragged)
+    let shown: &[MapPoint] = if map_ui.filter == LocationFilter::Untagged || !map_ui.show_pins { &[] } else { &app.map_points.points };
     let clusters = lightcraft_engine::map::cluster::cluster(shown, &vp, CLUSTER_CELL);
     app.map_drawn.cluster_ms = started.elapsed().as_secs_f64() * 1e3;
     app.map_drawn.with_gps = app.map_points.points.len();
@@ -589,7 +630,8 @@ fn navigate(
     // the active saved location's handles come first; then a drag that starts on a single photo's
     // pin moves it (unless markers are locked); any other drag (the empty map, a cluster) pans
     let busy = drag_location(app, ui, canvas_response, &vp, (canvas_rect, zone), map_ui);
-    let before = lightcraft_engine::map::cluster::cluster(&app.map_points.points, &vp, CLUSTER_CELL);
+    let pins: &[MapPoint] = if map_ui.show_pins { &app.map_points.points } else { &[] };
+    let before = lightcraft_engine::map::cluster::cluster(pins, &vp, CLUSTER_CELL);
     if canvas_response.drag_started() {
         map_ui.pin_drag = None;
         if !map_ui.locked
@@ -1146,6 +1188,12 @@ fn render_bottom_toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rec
         }
 
         ui.add_space(12.0);
+        let pins_btn = ui.selectable_label(!map_ui.show_pins, crate::i18n::tr("Hide Pins"));
+        crate::widgets::register(ui, "map:hidePins", pins_btn.rect);
+        if pins_btn.on_hover_text(crate::i18n::tr("Hide the photo pins (H); saved locations and the track log stay")).clicked() {
+            map_ui.show_pins = !map_ui.show_pins;
+        }
+        ui.add_space(6.0);
         let lock_btn = ui.selectable_label(map_ui.locked, crate::i18n::tr("Lock Markers"));
         crate::widgets::register(ui, "map:lockMarkers", lock_btn.rect);
         if lock_btn.on_hover_text(crate::i18n::tr("Pins can't be dragged to move photos")).clicked() {

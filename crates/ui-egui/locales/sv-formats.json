@@ -339,5 +339,6 @@
   "Track {n}": "Spår {n}",
   "camera time, UTC{o}": "kamerans tid, UTC{o}",
   "{m} of them fall within the track's time range": "{m} av dem faller inom spårets tidsintervall",
-  "{n} more tracks": "{n} spår till"
+  "{n} more tracks": "{n} spår till",
+  "{size} MB, {n} tiles": "{size} MB, {n} rutor"
 }

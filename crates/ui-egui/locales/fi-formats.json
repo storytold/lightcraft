@@ -336,5 +336,6 @@
   "Track {n}": "Reitti {n}",
   "camera time, UTC{o}": "kameran aika, UTC{o}",
   "{m} of them fall within the track's time range": "{m} niistä osuu reitin aikavälille",
-  "{n} more tracks": "{n} reittiä lisää"
+  "{n} more tracks": "{n} reittiä lisää",
+  "{size} MB, {n} tiles": "{size} Mt, {n} ruutua"
 }

@@ -2,7 +2,7 @@
 
 The Map view (View ▸ Map, ⌘⌥3 / Ctrl+Alt+3) shows the photos that have a GPS position on a slippy map.
 This page describes the view, geotagging, where the map's tiles come from, what is sent over the network,
-and the commands behind it. Later sections (keys and menus) are filled in as those parts land.
+and the commands behind it.
 
 ## Map view
 
@@ -211,6 +211,44 @@ level's points, zoom, `levelMs`, `clipMs`), `ticks` (the marks on screen) and `o
 
 The track maths, the loader and the menu are ported from PR #916 (Jason Baldwin); the GPX parser's track indexes,
 names and caps are in the shared craft-metadata library this repository already uses.
+
+## Keys and menus
+
+In the Map view (and only there; elsewhere the keys keep their meaning, see `docs/library-shortcuts.md`):
+
+| Key | Action |
+|---|---|
+| ⌘K / Ctrl+K | Lock Markers on / off |
+| `\` | Location filter bar shown / hidden |
+| `H` | Photo pins hidden / shown (Hide Pins) |
+| `O` | Saved locations list (the navigator panel) shown / hidden |
+| `=` / `-`, ⌘= / ⌘- | Zoom the map in / out |
+| ⌘0 | Fit to Photos |
+
+**Hide Pins** (`H`, the bottom toolbar, `map.showPins {on?}`) hides the photo pins: hidden, they can't be clicked,
+hovered or dragged. Saved locations and the track log stay. The choice is saved with the window state (`ui.json`).
+
+**View ▸ Map** gathers the map's commands, greyed outside the Map view: Fit to Photos, Zoom In / Out on Map, Map
+Pins, Lock Markers, Location Filter Bar, Location Filter ▸ (Visible On Map, Tagged, Untagged, None), Saved
+Locations ▸ (New Location…, Saved Locations List), Tracklog ▸ (Load Tracklog…, Auto-Tag Photos from Map Tracklog,
+Set Time Zone Offset…, Fit Map to Tracklog, Clear Tracklog) and Map Tiles…. Window ▸ Map keeps the panel toggles
+(Map View, Map Navigator, Location Filter Bar, Map Legend, Lock Map Markers).
+
+**Settings ▸ Map** (Map Tiles…, `map.settings`): the tile source (each built-in one usable now, the Esri styles only
+with a key; Offline), or a custom tile server (URL template, attribution, max zoom) applied with Apply or Return,
+never while typing. A server that is refused (not `https://`, a missing placeholder, no credit, a bad max zoom) shows
+why, and nothing changes. Then the tile cache's size with Clear Cache, what a tile server sees, a link to this page,
+and the ArcGIS API key. The map's offline note ("Map tiles are off (Settings › Map)") points there.
+
+| Command | Params | Result |
+|---|---|---|
+| `map.showPins` | `{on?}` | Hide Pins off / on (toggles without `on`) → `{on}` (app only) |
+| `map.showLocations` | `{on?}` | The saved locations list (navigator panel) → `{on}` (app only) |
+| `map.settings` | — | Opens Settings ▸ Map (app only) |
+
+`map.state` also reports `showPins` and `showLocations`. Widgets: `map:hidePins`, `settings:mapSource:<id>`,
+`settings:mapSource:custom`, `field:mapTemplate`, `field:mapAttribution`, `field:mapMaxZoom`, `button:mapCustomApply`,
+`settings:mapError`, `settings:mapCacheSize`, `button:mapClearCache`, `link:mapDocs`.
 
 ## Tile sources and cache
 

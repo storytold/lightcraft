@@ -340,5 +340,6 @@
   "Track {n}": "Трек {n}",
   "camera time, UTC{o}": "час камери, UTC{o}",
   "{m} of them fall within the track's time range": "{m} з них потрапляють у час треку",
-  "{n} more tracks": "ще треків: {n}"
+  "{n} more tracks": "ще треків: {n}",
+  "{size} MB, {n} tiles": "{size} МБ, тайлів: {n}"
 }

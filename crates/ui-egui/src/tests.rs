@@ -64,6 +64,7 @@ mod map_filmstrip;
 mod map_filter;
 mod map_geotag;
 mod map_info;
+mod map_keys;
 mod map_locations;
 mod map_tracks;
 mod mask_effects;

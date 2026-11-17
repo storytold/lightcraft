@@ -340,5 +340,6 @@
   "Track {n}": "Trajeto {n}",
   "camera time, UTC{o}": "hora da câmera, UTC{o}",
   "{m} of them fall within the track's time range": "{m} delas caem no intervalo do trajeto",
-  "{n} more tracks": "mais {n} trajetos"
+  "{n} more tracks": "mais {n} trajetos",
+  "{size} MB, {n} tiles": "{size} MB, {n} blocos"
 }

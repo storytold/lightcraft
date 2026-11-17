@@ -17,6 +17,9 @@ pub struct MapUi {
     pub tracklog_visible: bool,
     pub legend_open: bool,
     pub navigator_open: bool,
+    /// The photo pins are shown (H in the Map view, `map.showPins`); hidden pins can't be clicked,
+    /// hovered or dragged, and saved locations and track logs stay.
+    pub show_pins: bool,
     /// The view was set (fitted, moved, zoomed) this session: the first showing fits the photos
     /// only while this is false. Not saved.
     #[serde(skip)]
@@ -68,6 +71,7 @@ impl Default for MapUi {
             tracklog_visible: true,
             legend_open: true,
             navigator_open: true,
+            show_pins: true,
             fitted: false,
             last_canvas: None,
             pin_drag: None,

@@ -340,5 +340,6 @@
   "Track {n}": "Tracé {n}",
   "camera time, UTC{o}": "heure de l'appareil, UTC{o}",
   "{m} of them fall within the track's time range": "{m} d'entre elles tombent dans la plage horaire du tracé",
-  "{n} more tracks": "{n} autres tracés"
+  "{n} more tracks": "{n} autres tracés",
+  "{size} MB, {n} tiles": "{size} Mo, {n} tuiles"
 }

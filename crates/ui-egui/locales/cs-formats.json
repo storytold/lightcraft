@@ -339,5 +339,6 @@
   "Track {n}": "Trasa {n}",
   "camera time, UTC{o}": "čas fotoaparátu, UTC{o}",
   "{m} of them fall within the track's time range": "{m} z nich spadá do časového rozsahu trasy",
-  "{n} more tracks": "dalších tras: {n}"
+  "{n} more tracks": "dalších tras: {n}",
+  "{size} MB, {n} tiles": "{size} MB, dlaždic: {n}"
 }

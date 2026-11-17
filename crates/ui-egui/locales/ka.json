@@ -3819,5 +3819,21 @@
   "Clear Tracklog": "ტრეკლოგის გასუფთავება",
   "Tagged 1 photo from the tracklog": "ტრეკლოგიდან მონიშნულია 1 ფოტო",
   "Auto-Tag Photos from Map Tracklog": "ფოტოების ავტომონიშვნა რუკის ტრეკლოგიდან",
-  "Map Tracklog": "რუკის ტრეკლოგი"
+  "Map Tracklog": "რუკის ტრეკლოგი",
+  "Map Pins": "რუკის ქინძისთავები",
+  "Saved Locations List": "შენახული ადგილების სია",
+  "Map Tiles…": "რუკის ფილები…",
+  "Hide Pins": "ქინძისთავების დამალვა",
+  "Hide the photo pins (H); saved locations and the track log stay": "ფოტოების ქინძისთავების დამალვა (H); შენახული ადგილები და ტრეკლოგი რჩება",
+  "Map tiles": "რუკის ფილები",
+  "Tile source": "ფილების წყარო",
+  "URL template": "URL შაბლონი",
+  "Attribution": "ატრიბუცია",
+  "Max zoom": "მაქს. მასშტაბი",
+  "© the provider": "© მომწოდებელი",
+  "Max zoom is a whole number from 0 to 24": "მაქს. მასშტაბი არის მთელი რიცხვი 0-დან 24-მდე",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "ფილების სერვერი ხედავს, რომელ ფილებს უყურებთ (ანუ დაახლოებით რომელ ადგილებს), თქვენს IP მისამართს და LightCraft-ის სახელსა და ვერსიას; სხვა არაფერი გადის კომპიუტერიდან. ოფლაინ რეჟიმი არაფერს იწერს. საკუთარი სერვერის მისამართი შეიძლება შეიცავდეს თქვენს გასაღებს, თქვენივე პასუხისმგებლობით.",
+  "Tile cache": "ფილების ქეში",
+  "About map tiles and privacy (docs/map.md)": "რუკის ფილებისა და კონფიდენციალურობის შესახებ (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "რუკის ფილები გამორთულია (პარამეტრები › რუკა)"
 }

@@ -2553,5 +2553,21 @@
   "Clear Tracklog": "清除轨迹记录",
   "Tagged 1 photo from the tracklog": "已根据轨迹记录标记 1 张照片",
   "Auto-Tag Photos from Map Tracklog": "根据地图轨迹记录自动标记照片",
-  "Map Tracklog": "地图轨迹记录"
+  "Map Tracklog": "地图轨迹记录",
+  "Map Pins": "地图图钉",
+  "Saved Locations List": "已存位置列表",
+  "Map Tiles…": "地图图块…",
+  "Hide Pins": "隐藏图钉",
+  "Hide the photo pins (H); saved locations and the track log stay": "隐藏照片图钉（H）；已存位置和轨迹记录保留",
+  "Map tiles": "地图图块",
+  "Tile source": "图块来源",
+  "URL template": "URL 模板",
+  "Attribution": "署名",
+  "Max zoom": "最大缩放",
+  "© the provider": "© 提供方",
+  "Max zoom is a whole number from 0 to 24": "最大缩放为 0 到 24 的整数",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "图块服务器会看到你查看的图块（也就是大致的地点）、你的 IP 地址以及 LightCraft 的名称和版本；其他内容不会离开本机。离线不获取任何内容。自定义服务器地址可以带上你自己的密钥，责任自负。",
+  "Tile cache": "图块缓存",
+  "About map tiles and privacy (docs/map.md)": "关于地图图块与隐私（docs/map.md）",
+  "Map tiles are off (Settings › Map)": "地图图块已关闭（设置 › 地图）"
 }

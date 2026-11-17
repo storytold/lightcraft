@@ -320,13 +320,23 @@ fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
 /// (Lightroom Classic's Library keys; Detail keeps brush size and Show Original). The full-screen
 /// preview keeps the grid's view but shows the photo alone, so backslash stays Show Original there.
 /// The Map view has no original to show, so its backslash shows / hides the map's filter bar, and
-/// its Cmd+K locks the markers instead of adding keywords (Lightroom Classic's Map module keys).
+/// its Cmd+K locks the markers instead of adding keywords (Lightroom Classic's Map module keys). In
+/// the Map view also: H hides / shows the pins (Remove elsewhere), O shows / hides the saved
+/// locations list (the mask overlay elsewhere), `=` / `-` zoom the map (the grid's thumbnail size
+/// elsewhere), and Cmd+= / Cmd+- / Cmd+0 zoom it in, out and fit it to the photos.
 /// Remapped brush and Show Original keys retain their action, and a saved assignment of the key to
 /// another command takes precedence over this default.
 fn grid_key_command(keymap: &Keymap, grid: bool, map: bool, fullscreen: bool, id: &'static str, shortcut: (Modifiers, Key)) -> Option<&'static str> {
     let command = match (grid, id, shortcut) {
         (_, "view.showOriginal", (m, Key::Backslash)) if map && m == Modifiers::NONE && !fullscreen => "view.toggleMapFilter",
         (_, "panel.addKeywords", (m, Key::K)) if map && m == Modifiers::COMMAND && !fullscreen => "map.lockMarkers",
+        (_, "panel.remove", (m, Key::H)) if map && m == Modifiers::NONE && !fullscreen => "map.showPins",
+        (_, "view.maskOverlay", (m, Key::O)) if map && m == Modifiers::NONE && !fullscreen => "map.showLocations",
+        (_, "view.thumbSizeUp", (m, Key::Equals)) if map && m == Modifiers::NONE && !fullscreen => "map.zoomIn",
+        (_, "view.thumbSizeDown", (m, Key::Minus)) if map && m == Modifiers::NONE && !fullscreen => "map.zoomOut",
+        (_, "view.zoomIn", (m, Key::Equals)) if map && m == Modifiers::COMMAND && !fullscreen => "map.zoomIn",
+        (_, "view.zoomOut", (m, Key::Minus)) if map && m == Modifiers::COMMAND && !fullscreen => "map.zoomOut",
+        (_, "view.zoomFit", (m, Key::Num0)) if map && m == Modifiers::COMMAND && !fullscreen => "map.fit",
         (true, "brush.smaller", (m, Key::OpenBracket)) if m == Modifiers::NONE => "photo.decreaseRating",
         (true, "brush.larger", (m, Key::CloseBracket)) if m == Modifiers::NONE => "photo.increaseRating",
         (true, "view.showOriginal", (m, Key::Backslash)) if m == Modifiers::NONE && !fullscreen => "view.filterBar",
@@ -393,7 +403,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         return;
     }
     let (mut fire, aliased, h_press) = pressed_commands(app, ctx);
+    let in_map = app.ui.view == crate::state::ViewMode::Map && !app.ui.fullscreen;
     for (id, params) in aliased {
+        // `+` sizes the grid's thumbnails; in the Map view it zooms the map, as `=` does there
+        let id = if in_map && id == "view.thumbSizeUp" { "map.zoomIn" } else { id };
         fire_alias(app, ctx, id, params);
     }
     // while the Masking panel is open, an unmodified H that no assignment has claimed toggles the
@@ -401,6 +414,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // preview shows no panels and a minimized window hides the panel, so there H keeps its own
     // binding
     if h_press
+        && !in_map
         && app.ui.right == crate::state::RightPanel::Masking
         && !app.ui.fullscreen
         && crate::docking::exposed(app, crate::docking::Panel::Tools)

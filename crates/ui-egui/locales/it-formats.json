@@ -339,5 +339,6 @@
   "Track {n}": "Tracciato {n}",
   "camera time, UTC{o}": "ora della fotocamera, UTC{o}",
   "{m} of them fall within the track's time range": "{m} di esse rientrano nell'intervallo del tracciato",
-  "{n} more tracks": "altri {n} tracciati"
+  "{n} more tracks": "altri {n} tracciati",
+  "{size} MB, {n} tiles": "{size} MB, {n} tessere"
 }

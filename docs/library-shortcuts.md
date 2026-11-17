@@ -62,9 +62,14 @@ in the grids, and `\` given to another command runs that command.
 | ⌘⌥3 / Ctrl+Alt+3 | Open the Map view (View → Map) |
 | `\` (backslash) | In the Map view: show / hide the map's location filter bar |
 | ⌘K / Ctrl+K | In the Map view: lock / unlock the markers (elsewhere it stays Add Keywords) |
+| `H` | In the Map view: hide / show the photo pins (elsewhere it stays Remove) |
+| `O` | In the Map view: show / hide the saved locations list (elsewhere it stays the mask overlay) |
+| `=` / `-` | In the Map view: zoom the map in / out (elsewhere the grid's thumbnail size) |
+| ⌘= / ⌘- / ⌘0 (Ctrl) | In the Map view: zoom the map in / out, fit it to the photos (elsewhere the photo's zoom) |
 
-In the Map view `\` and ⌘K follow the same rule as `\` in the grids: they act on the map only while their default
-commands (Show Original, Add Keywords) keep those keys, and a key given to another command runs that command.
+In the Map view these keys follow the same rule as `\` in the grids: they act on the map only while their default
+commands (Show Original, Add Keywords, Remove, Mask Overlay, the thumbnail size and zoom) keep those keys, and a key
+given to another command runs that command. View ▸ Map lists them.
 
 Flag cycling and raise/lower use each photo's own flag, so a mixed selection steps together without being made uniform. Adobe's shortcut list names the backtick "Cycle flag settings" but does not state the order; unflagged → pick → reject is LightCraft's choice. The key is the logical grave key, so it follows the keyboard layout (on layouts where it is a dead accent key, assign another key in Help → Keyboard Shortcuts to `photo.cycleFlag`).
 

@@ -2552,5 +2552,21 @@
   "Clear Tracklog": "トラックログを消去",
   "Tagged 1 photo from the tracklog": "トラックログから 1 枚の写真にタグを付けました",
   "Auto-Tag Photos from Map Tracklog": "マップのトラックログから写真に自動タグ付け",
-  "Map Tracklog": "マップのトラックログ"
+  "Map Tracklog": "マップのトラックログ",
+  "Map Pins": "マップのピン",
+  "Saved Locations List": "保存場所の一覧",
+  "Map Tiles…": "マップタイル…",
+  "Hide Pins": "ピンを隠す",
+  "Hide the photo pins (H); saved locations and the track log stay": "写真のピンを隠します（H）。保存場所とトラックログは残ります",
+  "Map tiles": "マップタイル",
+  "Tile source": "タイルの提供元",
+  "URL template": "URL テンプレート",
+  "Attribution": "帰属表示",
+  "Max zoom": "最大ズーム",
+  "© the provider": "© 提供元",
+  "Max zoom is a whole number from 0 to 24": "最大ズームは 0〜24 の整数です",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "タイルサーバーには、見ているタイル（つまりおおよその場所）、IP アドレス、LightCraft の名前とバージョンが伝わります。それ以外はコンピューターから出ません。オフラインでは何も取得しません。カスタムサーバーのアドレスに自分のキーを含めるのは自己責任です。",
+  "Tile cache": "タイルキャッシュ",
+  "About map tiles and privacy (docs/map.md)": "マップタイルとプライバシーについて（docs/map.md）",
+  "Map tiles are off (Settings › Map)": "マップタイルはオフです（設定 › マップ）"
 }

@@ -3634,5 +3634,21 @@
   "Clear Tracklog": "Tracklog entfernen",
   "Tagged 1 photo from the tracklog": "1 Foto aus dem Tracklog verortet",
   "Auto-Tag Photos from Map Tracklog": "Fotos aus dem Karten-Tracklog verorten",
-  "Map Tracklog": "Karten-Tracklog"
+  "Map Tracklog": "Karten-Tracklog",
+  "Map Pins": "Kartenstecknadeln",
+  "Saved Locations List": "Liste der gespeicherten Orte",
+  "Map Tiles…": "Kartenkacheln…",
+  "Hide Pins": "Stecknadeln ausblenden",
+  "Hide the photo pins (H); saved locations and the track log stay": "Fotostecknadeln ausblenden (H); gespeicherte Orte und der Tracklog bleiben",
+  "Map tiles": "Kartenkacheln",
+  "Tile source": "Kachelquelle",
+  "URL template": "URL-Vorlage",
+  "Attribution": "Quellenangabe",
+  "Max zoom": "Max. Zoom",
+  "© the provider": "© der Anbieter",
+  "Max zoom is a whole number from 0 to 24": "Der max. Zoom ist eine ganze Zahl von 0 bis 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Ein Kachelserver sieht, welche Kacheln Sie ansehen (also ungefähr welche Orte), Ihre IP-Adresse sowie Name und Version von LightCraft; sonst verlässt nichts den Rechner. Offline lädt nichts. Die Adresse eines eigenen Servers darf Ihren eigenen Schlüssel enthalten, auf eigene Verantwortung.",
+  "Tile cache": "Kachel-Cache",
+  "About map tiles and privacy (docs/map.md)": "Über Kartenkacheln und Datenschutz (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Kartenkacheln sind aus (Einstellungen › Karte)"
 }

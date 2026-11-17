@@ -127,7 +127,13 @@ pub fn draw(session: &mut Session, painter: &Painter, rect: Rect, center: LatLon
     let source = session.map.effective_source();
     if source.is_offline() {
         let at = if rect.height() < 240.0 { egui::pos2(rect.center().x, rect.top() + 14.0) } else { rect.center() };
-        painter.text(at, Align2::CENTER_CENTER, crate::i18n::tr("Map tiles are off"), FontId::proportional(12.0), Color32::from_rgb(90, 96, 104));
+        painter.text(
+            at,
+            Align2::CENTER_CENTER,
+            crate::i18n::tr("Map tiles are off (Settings › Map)"),
+            FontId::proportional(12.0),
+            Color32::from_rgb(90, 96, 104),
+        );
         return Drawn { offline: true, ..Drawn::default() };
     }
     let Some(svc) = session.map_tiles() else { return Drawn { offline: true, ..Drawn::default() } };

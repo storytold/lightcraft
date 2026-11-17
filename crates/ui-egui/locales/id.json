@@ -2525,5 +2525,21 @@
   "Clear Tracklog": "Hapus Log Jejak",
   "Tagged 1 photo from the tracklog": "1 foto ditandai dari log jejak",
   "Auto-Tag Photos from Map Tracklog": "Tandai Foto dari Log Jejak Peta",
-  "Map Tracklog": "Log Jejak Peta"
+  "Map Tracklog": "Log Jejak Peta",
+  "Map Pins": "Pin Peta",
+  "Saved Locations List": "Daftar Lokasi Tersimpan",
+  "Map Tiles…": "Ubin Peta…",
+  "Hide Pins": "Sembunyikan Pin",
+  "Hide the photo pins (H); saved locations and the track log stay": "Sembunyikan pin foto (H); lokasi tersimpan dan log jejak tetap",
+  "Map tiles": "Ubin peta",
+  "Tile source": "Sumber ubin",
+  "URL template": "Templat URL",
+  "Attribution": "Atribusi",
+  "Max zoom": "Zoom maks.",
+  "© the provider": "© penyedia",
+  "Max zoom is a whole number from 0 to 24": "Zoom maks. adalah bilangan bulat 0 sampai 24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Server ubin melihat ubin yang Anda lihat (jadi kira-kira tempat mana), alamat IP Anda, serta nama dan versi LightCraft; tidak ada lagi yang keluar dari komputer. Offline tidak mengambil apa pun. Alamat server kustom boleh memuat kunci Anda sendiri, atas tanggung jawab Anda.",
+  "Tile cache": "Cache ubin",
+  "About map tiles and privacy (docs/map.md)": "Tentang ubin peta dan privasi (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Ubin peta mati (Pengaturan › Peta)"
 }

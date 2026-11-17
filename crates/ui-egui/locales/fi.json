@@ -2510,5 +2510,21 @@
   "Clear Tracklog": "Tyhjennä reittiloki",
   "Tagged 1 photo from the tracklog": "1 kuva merkitty reittilokista",
   "Auto-Tag Photos from Map Tracklog": "Merkitse kuvat kartan reittilokista",
-  "Map Tracklog": "Kartan reittiloki"
+  "Map Tracklog": "Kartan reittiloki",
+  "Map Pins": "Kartan nastat",
+  "Saved Locations List": "Tallennettujen sijaintien luettelo",
+  "Map Tiles…": "Karttaruudut…",
+  "Hide Pins": "Piilota nastat",
+  "Hide the photo pins (H); saved locations and the track log stay": "Piilota kuvien nastat (H); tallennetut sijainnit ja reittiloki jäävät",
+  "Map tiles": "Karttaruudut",
+  "Tile source": "Ruutujen lähde",
+  "URL template": "URL-malli",
+  "Attribution": "Lähdemerkintä",
+  "Max zoom": "Suurin zoom",
+  "© the provider": "© palveluntarjoaja",
+  "Max zoom is a whole number from 0 to 24": "Suurin zoom on kokonaisluku 0–24",
+  "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Ruutupalvelin näkee, mitä ruutuja katsot (eli suunnilleen mitä paikkoja), IP-osoitteesi sekä LightCraftin nimen ja version; mitään muuta ei lähde koneelta. Offline ei lataa mitään. Oman palvelimen osoitteessa voi olla oma avaimesi omalla vastuullasi.",
+  "Tile cache": "Ruutuvälimuisti",
+  "About map tiles and privacy (docs/map.md)": "Karttaruuduista ja yksityisyydestä (docs/map.md)",
+  "Map tiles are off (Settings › Map)": "Karttaruudut ovat pois (Asetukset › Kartta)"
 }

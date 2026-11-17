@@ -194,6 +194,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.survey",
             "view.people",
             "view.map",
+            "@Map",
             "---",
             "view.leftPanel",
             "@Sidebar Sections",
@@ -387,6 +388,55 @@ pub(crate) fn in_normal_album(app: &LightcraftApp) -> bool {
     }
 }
 
+/// View ▸ Map: the Map view's commands (Lightroom Classic has a Map module with its own menus;
+/// LightCraft has one menu bar for every view, so they gather here, greyed outside the Map view).
+/// Each item runs its command, as its key does (the keys shown are the Map view's: ⌘K, H, O, `\`,
+/// `=` / `-`). Window ▸ Map keeps the panel toggles. (After PR #921's map menu, Jason Baldwin.)
+fn map_menu(app: &LightcraftApp) -> Vec<MenuNode> {
+    use crate::panels::map::LocationFilterChoice;
+    let u = &app.ui;
+    let in_map = u.view == ViewMode::Map;
+    let entry = |id: &str, label: &str, key: Option<&str>, enabled: bool| {
+        let checked = checked(app, id);
+        item(id, Value::Null, label, key, enabled, checked)
+    };
+    let filter = LocationFilterChoice::ALL
+        .into_iter()
+        .map(|(mode, label)| item("map.locationFilter", json!({"mode": mode.id()}), label, None, in_map, Some(u.map.filter == mode)))
+        .collect();
+    let track = app.session.map.track.is_some();
+    vec![
+        entry("map.fit", "Fit to Photos", Some("Cmd+0"), in_map),
+        entry("map.zoomIn", "Zoom In on Map", Some("="), in_map),
+        entry("map.zoomOut", "Zoom Out on Map", Some("-"), in_map),
+        MenuNode::Separator,
+        entry("map.showPins", "Map Pins", Some("H"), in_map),
+        entry("map.lockMarkers", "Lock Markers", Some("Cmd+K"), in_map),
+        item("map.filterBar", Value::Null, "Location Filter Bar", Some("\\"), in_map, Some(u.map.show_filter_bar)),
+        MenuNode::Submenu { label: "Location Filter".into(), children: filter },
+        MenuNode::Separator,
+        MenuNode::Submenu {
+            label: "Saved Locations".into(),
+            children: vec![
+                entry("map.location.new", "New Location…", None, in_map),
+                entry("map.showLocations", "Saved Locations List", Some("O"), in_map),
+            ],
+        },
+        MenuNode::Submenu {
+            label: "Tracklog".into(),
+            children: vec![
+                entry("map.loadTrackLog", "Load Tracklog…", None, true),
+                entry("map.trackLog.autoTag", "Auto-Tag Photos from Map Tracklog", None, in_map && track),
+                entry("map.trackLog.setOffset", "Set Time Zone Offset…", None, track),
+                entry("map.trackLog.fit", "Fit Map to Tracklog", None, in_map && track),
+                item("map.trackLog", json!({"clear": true}), "Clear Tracklog", None, track, None),
+            ],
+        },
+        MenuNode::Separator,
+        entry("map.settings", "Map Tiles…", None, true),
+    ]
+}
+
 fn item(id: &str, params: Value, label: impl Into<String>, shortcut: Option<&str>, enabled: bool, checked: Option<bool>) -> MenuNode {
     MenuNode::Item { id: id.into(), params, label: label.into(), shortcut: shortcut.map(str::to_string), enabled, checked }
 }
@@ -412,6 +462,8 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "map.filterBar" | "view.toggleMapFilter" => Some(u.map.show_filter_bar),
         "map.legend" => Some(u.map.legend_open),
         "map.lock" | "map.toggleLock" | "map.lockMarkers" => Some(u.map.locked),
+        "map.showPins" => Some(u.map.show_pins),
+        "map.showLocations" => Some(u.map.navigator_open),
         "view.reference" => Some(u.view == ViewMode::Reference),
         "view.leftPanel" => Some(u.left_panel),
         "view.faceBoxes" => Some(u.face_boxes),
@@ -887,6 +939,9 @@ pub fn menu_bar(app: &LightcraftApp) -> Vec<(String, Vec<MenuNode>)> {
         let mut items = Vec::new();
         let mut last = Vec::new();
         let sub = |name: &str, used: &mut [bool]| -> Vec<MenuNode> {
+            if *title == "View" && name == "Map" {
+                return map_menu(app);
+            }
             let mut children = expanded(app, name).unwrap_or_default();
             let mut dialogs = Vec::new();
             for (i, e) in entries.iter().enumerate() {
