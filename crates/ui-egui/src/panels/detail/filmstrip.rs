@@ -168,9 +168,10 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 }
             }
             // A catalogued video reads as one at a glance in the strip too: its running time (and
-            // its icon while there is no poster frame), as the grid and the loupe show them.
+            // its icon while there is no poster frame, unless the frame failed: then the cell
+            // shows the failure's mark instead), as the grid and the loupe show them.
             if let Some(ph) = app.session.catalog.photo(*id).filter(|p| p.is_video()) {
-                if !has_thumb {
+                if !has_thumb && !failed {
                     crate::icons::paint(p, Rect::from_center_size(img_area.center(), vec2(24.0, 24.0)), crate::icons::Icon::Video, t.text_dim);
                 }
                 if let Some(d) = ph.duration {

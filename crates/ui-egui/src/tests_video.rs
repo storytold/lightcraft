@@ -368,6 +368,19 @@ fn an_undecodable_clip_keeps_its_card_and_says_why_once() {
     h.settle(SETTLE);
     assert!(has(&h, "canvas:videoCard"));
     assert!(marks(&h) >= 4, "and so does the filmstrip");
+    // the mark stands alone in a failed clip's filmstrip cell: no video icon drawn under it
+    let cell = h.app.widgets.iter().find(|(w, _)| w == "film:1").map(|(_, r)| *r).expect("clip 1's filmstrip cell");
+    let centre = egui::Rect::from_center_size(cell.center(), egui::vec2(30.0, 30.0));
+    // (backgrounds and the selection ring cover the whole centre; an icon sits inside it)
+    let under = h
+        .view
+        .painted_shapes()
+        .into_iter()
+        .filter(|s| !matches!(s, egui::epaint::Shape::Text(_)))
+        .map(|s| s.visual_bounding_rect())
+        .filter(|r| centre.intersects(*r) && !r.contains_rect(centre))
+        .count();
+    assert_eq!(under, 0, "nothing but the mark at the cell's centre");
     assert!(has(&h, "notice:videoFrame:info"), "Info says why the clip shows no frame");
     assert!(!has(&h, "loupe:renderFailed"), "a clip without a frame is not a broken photo");
     let asked = calls.load(std::sync::atomic::Ordering::Relaxed);
