@@ -33,6 +33,8 @@ struct Synthetic {
     behind: Arc<std::sync::atomic::AtomicBool>,
     /// The frames' real size when it differs from the header's (`info`).
     real_size: Option<(usize, usize)>,
+    /// From this frame on, frames come at half the size (as when playback falls behind).
+    small_from: Option<usize>,
 }
 
 fn synthetic(frames: usize, gop: usize) -> (Synthetic, Arc<AtomicU64>) {
@@ -55,6 +57,7 @@ fn synthetic(frames: usize, gop: usize) -> (Synthetic, Arc<AtomicU64>) {
         decoded: decoded.clone(),
         behind: Arc::default(),
         real_size: None,
+        small_from: None,
     };
     (s, decoded)
 }
@@ -82,6 +85,7 @@ impl FrameSource for Synthetic {
         self.next += 1;
         self.decoded.fetch_add(1, Ordering::SeqCst);
         let (w, h) = self.real_size.unwrap_or((self.info.width as usize, self.info.height as usize));
+        let (w, h) = if self.small_from.is_some_and(|n| i >= n) { (w / 2, h / 2) } else { (w, h) };
         buffer.clear();
         buffer.resize(w * h * 4, 0);
         buffer[0] = i as u8;
@@ -346,12 +350,21 @@ fn dropping_the_player_never_waits_for_a_clip_being_opened() {
     });
     let p = VideoPlayer::open(PhotoId(3), open, Arc::new(ManualClock::default())).unwrap();
     let ch = p.channel.clone();
-    let started = Instant::now();
-    drop(p);
-    assert!(started.elapsed() < Duration::from_millis(200), "dropping waited {:?} for the open", started.elapsed());
-    // once the drive answers, the thread sees it was dropped and ends without decoding
+    // (dropped on a thread of its own: without the fix the drop waits for the open, and the test
+    // fails instead of hanging)
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        drop(p);
+        let _ = tx.send(started.elapsed());
+    });
+    let waited = rx.recv_timeout(Duration::from_secs(2));
+    // let the open finish either way, so nothing is left waiting
     *gate.0.lock().unwrap() = true;
     gate.1.notify_all();
+    let waited = waited.expect("dropping the player waited for the clip being opened");
+    assert!(waited < Duration::from_millis(200), "dropping waited {waited:?} for the open");
+    // once the drive answered, the thread saw it was dropped and ends without decoding
     for _ in 0..5000 {
         if ch.lock().finished {
             break;
@@ -589,6 +602,61 @@ fn playback_that_ends_on_a_draft_frame_shows_it_exactly() {
     assert_eq!(index(&p), Some(5));
     assert_eq!(p.state()["ended"], true);
     assert!((p.position() - 0.24).abs() < 1e-9, "{}", p.state());
+}
+
+#[test]
+fn a_step_back_while_the_end_is_decoded_exactly_shows_the_frame_before() {
+    let (mut p, clock, _) = player(6, 3);
+    tick_until(&mut p, |p| p.frame().is_some());
+    p.play();
+    p.seek(0.0);
+    tick_until(&mut p, |p| !p.awaiting);
+    for _ in 0..40 {
+        settle(&mut p);
+        clock.advance(0.04);
+        p.tick();
+        if p.state()["ended"] == true {
+            break;
+        }
+    }
+    // the last frame (5) was draft: its exact decode is on its way, the position stays at the end
+    assert_eq!(p.state()["ended"], true);
+    assert!(p.awaiting, "{}", p.state());
+    p.step(-1);
+    tick_until(&mut p, |p| !p.awaiting);
+    assert_eq!(index(&p), Some(4), "{}", p.state());
+}
+
+#[test]
+fn recycled_buffers_never_hold_more_than_the_budget_when_frames_shrink() {
+    // 4K frames, then (from frame 20 on) frames at half size: buffers kept from the 4K frames
+    // must not hold their 33 MB for 8 MB frames
+    let (mut src, _) = synthetic(500, 500);
+    src.real_size = Some((3840, 2160));
+    src.small_from = Some(20);
+    let mut p = VideoPlayer::start(PhotoId(1), Box::new(src), Arc::new(ManualClock::default())).unwrap();
+    let held_now = |p: &mut VideoPlayer| {
+        tick_until(p, |p| p.frame().is_some());
+        settle(p);
+        let s = p.channel.lock();
+        let real: usize = s.queue.iter().map(|(_, f)| f.rgba.capacity()).sum::<usize>() + s.pool.iter().map(Vec::capacity).sum::<usize>();
+        // what the player counts is what the buffers hold
+        assert_eq!(real, s.queued_bytes + s.pool_bytes);
+        real
+    };
+    for i in 0..40 {
+        p.step(1);
+        tick_until(&mut p, |p| !p.awaiting);
+        let real = held_now(&mut p);
+        assert!(real <= QUEUE_BYTES, "{real} bytes held after step {i}");
+    }
+    // past the switch no 4K buffer is held (queued or kept), so the half-size frames fill the
+    // queue: 4K buffers reused for them would hold 33 MB each and leave room for only five
+    let s = p.channel.lock();
+    let small = 2 * 1920 * 1080 * 4;
+    assert!(s.queue.iter().all(|(_, f)| f.rgba.capacity() <= small), "a queued frame holds a 4K buffer");
+    assert!(s.pool.iter().all(|b| b.capacity() <= small), "a 4K buffer is still kept");
+    assert_eq!(s.queue.len(), QUEUE_MAX);
 }
 
 #[test]

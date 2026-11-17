@@ -4,9 +4,10 @@
 //! - **Frames** come from a [`FrameSource`]: the clip's decoder plus the Y′CbCr to sRGB conversion,
 //!   run on the decode thread, so the UI thread only uploads a finished RGBA buffer
 //!   ([`crate::video_source`] opens a clip with the codecs crate's decoders).
-//! - **The queue** holds at most a few frames, capped by the bytes of the frames actually decoded
-//!   ([`QUEUE_BYTES`], the buffers kept for reuse included, and at least one frame): memory stays
-//!   bounded at any resolution, whatever the clip's header claims, and a seek throws the queue away.
+//! - **The queue** holds at most a few frames, capped by the memory their buffers hold
+//!   ([`QUEUE_BYTES`], the buffers kept for reuse included, and at least one frame; a kept buffer
+//!   far bigger than the frames decoded now is freed): memory stays bounded at any resolution,
+//!   whatever the clip's header claims, and a seek throws the queue away.
 //! - **The clock** is a [`Clock`]; playback runs on the wall clock. A clip's audio is not played
 //!   yet (no audio output in LightCraft), so there is no audio master clock; when there is one it
 //!   becomes another [`Clock`] and video keeps following it.
@@ -98,8 +99,10 @@ pub struct VideoFrame {
 }
 
 impl VideoFrame {
+    /// The memory the frame holds: its buffer's capacity (a recycled buffer keeps the size of
+    /// the biggest frame it held), not just the pixels in use.
     fn bytes(&self) -> usize {
-        self.rgba.len()
+        self.rgba.capacity()
     }
 }
 
@@ -205,20 +208,32 @@ impl Shared {
         }
     }
 
-    /// Keep `buffer` for reuse when the pool and the queue have room for it (else free it).
+    /// Keep `buffer` for reuse when the pool and the queue have room for it and it is not far
+    /// bigger than the frames decoded now (else free it).
     fn keep(&mut self, buffer: Vec<u8>) {
         let held = self.queued_bytes.saturating_add(self.pool_bytes).saturating_add(buffer.capacity());
-        if self.pool.len() < POOL_MAX && held <= QUEUE_BYTES {
+        if self.pool.len() < POOL_MAX && held <= QUEUE_BYTES && !self.oversized(buffer.capacity()) {
             self.pool_bytes = self.pool_bytes.saturating_add(buffer.capacity());
             self.pool.push(buffer);
         }
     }
 
-    /// A buffer to decode into: one kept for reuse, or a new (empty) one.
+    /// A buffer to decode into: one kept for reuse, or a new (empty) one. Kept buffers far bigger
+    /// than the frames decoded now (4K buffers once frames come at half size) are freed instead:
+    /// filling one would hold its whole size for a small frame.
     fn buffer(&mut self) -> Vec<u8> {
-        let b = self.pool.pop().unwrap_or_default();
-        self.pool_bytes = self.pool_bytes.saturating_sub(b.capacity());
-        b
+        while let Some(b) = self.pool.pop() {
+            self.pool_bytes = self.pool_bytes.saturating_sub(b.capacity());
+            if !self.oversized(b.capacity()) {
+                return b;
+            }
+        }
+        Vec::new()
+    }
+
+    /// A buffer of `capacity` bytes is more than twice the size of the frames decoded now.
+    fn oversized(&self, capacity: usize) -> bool {
+        self.frame_bytes > 0 && capacity > self.frame_bytes.saturating_mul(2)
     }
 
     /// Whether the decoder may add a frame to the queue: always when it is empty, else while the
@@ -234,7 +249,8 @@ impl Shared {
 
     fn push(&mut self, generation: u64, f: VideoFrame) {
         self.decoded += 1;
-        self.frame_bytes = f.bytes().max(1);
+        // (the pixels of one frame: what a new buffer for the next one takes)
+        self.frame_bytes = f.rgba.len().max(1);
         self.queued_bytes = self.queued_bytes.saturating_add(f.bytes());
         self.queue.push_back((generation, Arc::new(f)));
     }
@@ -289,6 +305,9 @@ pub struct VideoPlayer {
     generation: u64,
     /// Waiting for the first frame of the current generation (the clock holds still meanwhile).
     awaiting: bool,
+    /// The time the latest request asked for: where a step starts while its frame is on its way
+    /// (the anchor may differ, as at the end, where an exact frame is decoded again).
+    target: f64,
     ended: bool,
     current: Option<Arc<VideoFrame>>,
     /// Bumped whenever `current` changes, so the UI uploads a texture only for a new frame.
@@ -354,6 +373,7 @@ impl VideoPlayer {
             anchor_clock: now,
             generation: 0,
             awaiting: true,
+            target: 0.0,
             ended: false,
             current: None,
             serial: 0,
@@ -417,6 +437,7 @@ impl VideoPlayer {
     fn request_frame(&mut self, target: f64, refresh: bool) {
         self.generation += 1;
         self.awaiting = true;
+        self.target = target;
         let mut s = self.channel.lock();
         s.request = Some(Seek { generation: self.generation, target, draft: self.playing, refresh });
         // an error belongs to the position it happened at; a new one starts clean (unless the
@@ -494,7 +515,7 @@ impl VideoPlayer {
         }
         let dur = self.info.frame_duration.max(1e-3);
         // from the frame on screen, or from a seek's target while its frame is on its way
-        let from = if self.awaiting { self.anchor_media } else { self.current.as_ref().map_or(self.anchor_media, |f| f.pts) };
+        let from = if self.awaiting { self.target } else { self.current.as_ref().map_or(self.anchor_media, |f| f.pts) };
         if frames > 0 && !self.awaiting {
             // the decoder runs ahead of a paused frame: the next frame is usually queued already
             let next = {
@@ -697,6 +718,10 @@ impl VideoPlayer {
     }
 }
 
+/// Dropping never waits for the decode thread: it may be inside the clip's open on a drive that
+/// is waking up. Such a thread ends by itself once the open returns (it sees the stop flag and
+/// decodes nothing), so each is bounded by its open; the number of them is not capped: leaving
+/// several clips while each is still opening leaves one thread per clip until their opens return.
 impl Drop for VideoPlayer {
     fn drop(&mut self) {
         {
