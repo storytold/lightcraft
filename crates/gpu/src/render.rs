@@ -1069,6 +1069,12 @@ fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     use lightcraft_pipeline::optics;
     let Some(dp) = optics::defringe_params(&plan.settings, plan.px_per_long / optics::DEFRINGE_REF_LONG) else { return img };
     let (w, h) = (plan.w, plan.h);
+    if plan.settings.optics.defringe_protect {
+        // Protect Colours reads the colours on both sides of each fringe: on the CPU, as the CPU renderer does
+        let mut host = cx.read_rgb(&img, w, h);
+        optics::defringe(&mut host, &plan.settings, plan.px_per_long / optics::DEFRINGE_REF_LONG);
+        return cx.gpu.upload(rgb_words(&host));
+    }
     let n = w * h;
     let lab = cx.gpu.buffer(n * 3);
     map(cx, "fringe_lab", n, &[], [Some(&img), None, None], &lab);

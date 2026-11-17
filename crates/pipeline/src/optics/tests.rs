@@ -494,11 +494,10 @@ fn auto_defringe_finds_a_purple_fringe_and_its_sliders_remove_it() {
     assert!(chroma_of(img.get(31, 48)) < before * 0.4, "{} → {}", before, chroma_of(img.get(31, 48)));
 }
 
+/// Green is the user's to set: a green fringe looks like a leaf between shadow and sky, which is everywhere.
 #[test]
-fn auto_defringe_finds_a_green_fringe() {
-    let green = [0.03f32, 0.16, 0.05];
-    let found = estimate_defringe(&fringed_scene(green, 2), 1.0).expect("a green fringe");
-    assert!(found.green_amount > 0.0 && found.purple_amount == 0.0, "{found:?}");
+fn auto_defringe_leaves_green_to_the_user() {
+    assert_eq!(estimate_defringe(&fringed_scene([0.03, 0.16, 0.05], 2), 1.0), None);
 }
 
 /// Purple that isn't a fringe is left alone: a flat purple field, a purple subject whose colour fills its whole
@@ -510,6 +509,121 @@ fn auto_defringe_finds_nothing_without_fringes() {
     let flower = Rgb32f::from_fn(96, 96, |x, y| if (24..72).contains(&x) && (24..72).contains(&y) { [0.35, 0.08, 0.6] } else { [0.02; 3] });
     assert_eq!(estimate_defringe(&flower, 1.0), None);
     assert_eq!(estimate_defringe(&fringed_scene([0.02; 3], 2), 1.0), None);
+}
+
+/// A deterministic speckle in -1..1 for pixel `(x, y)` (a high-ISO photo's chroma noise).
+fn speckle(x: usize, y: usize, k: u32) -> f32 {
+    let mut v = (x as u32).wrapping_mul(73_856_093) ^ (y as u32).wrapping_mul(19_349_663) ^ k.wrapping_mul(83_492_791);
+    v ^= v >> 13;
+    v = v.wrapping_mul(0x5bd1_e995);
+    v ^= v >> 15;
+    (v % 2001) as f32 / 1000.0 - 1.0
+}
+
+/// The fringe is still found under the colour noise of a high-ISO photo (each channel ±30 % at random).
+#[test]
+fn auto_defringe_finds_a_fringe_through_chroma_noise() {
+    let mut img = fringed_scene([0.12, 0.02, 0.22], 2);
+    for (i, p) in img.data.iter_mut().enumerate() {
+        let (x, y) = (i % 96, i / 96);
+        for (k, v) in p.iter_mut().enumerate() {
+            *v *= 1.0 + 0.3 * speckle(x, y, k as u32);
+        }
+    }
+    let found = estimate_defringe(&img, 1.0).expect("a purple fringe through the noise");
+    assert!(found.purple_amount > 0.0 && found.green_amount == 0.0, "{found:?}");
+}
+
+/// Foliage: green leaves of every shade against dark gaps and bright sky, edges everywhere, is not a fringe.
+#[test]
+fn auto_defringe_finds_nothing_in_foliage() {
+    let img = Rgb32f::from_fn(120, 120, |x, y| {
+        let leaf = ((x / 7 + y / 5) % 3, (x * 3 + y * 7) % 11);
+        match leaf {
+            (0, _) => [0.9, 0.92, 0.95],
+            (1, n) => [0.04 + 0.01 * n as f32, 0.18 + 0.03 * n as f32, 0.03],
+            _ => [0.01, 0.03, 0.01],
+        }
+    });
+    assert_eq!(estimate_defringe(&img, 1.0), None);
+}
+
+fn protect_settings(purple_hue: (f64, f64)) -> DevelopSettings {
+    let mut s = DevelopSettings::default();
+    s.optics.defringe_purple_amount = 8.0;
+    (s.optics.defringe_purple_hue_lo, s.optics.defringe_purple_hue_hi) = purple_hue;
+    s
+}
+
+/// Protect Colours turns a violet fringe between an orange wall and a white sky into the colours of its sides, not
+/// grey: what is left of it leans to the wall's orange, and its violet is gone.
+#[test]
+fn protect_colours_turns_a_fringe_into_its_sides_colours() {
+    let (orange, white, violet) = ([0.7f32, 0.3, 0.05], [0.95f32; 3], [0.12f32, 0.02, 0.22]);
+    let mut img = Rgb32f::from_fn(60, 20, |x, _| {
+        if x < 30 {
+            orange
+        } else if x < 32 {
+            violet
+        } else {
+            white
+        }
+    });
+    let mut s = protect_settings((0.0, 100.0));
+    s.optics.defringe_protect = true;
+    defringe(&mut img, &s, 1.0);
+    let lab = |p: [f32; 3]| oklab_from_2020(p);
+    let (v, o, now) = (lab(violet), lab(orange), lab(img.get(30, 10)));
+    // its violet (along the fringe's own colour) mostly gone, and its colour now on the wall's side
+    let along = |p: [f32; 3], q: [f32; 3]| (p[1] * q[1] + p[2] * q[2]) / q[1].hypot(q[2]);
+    assert!(along(now, v) < 0.3 * along(v, v), "{now:?}");
+    assert!(along(now, o) > 0.0, "it leans to the wall's orange: {now:?}");
+}
+
+/// A blue sign beside a bright light: the classic Defringe, with blue in its hue range, greys the sign's edge;
+/// Protect Colours leaves it, as the sign is blue on its own side of the edge.
+#[test]
+fn protect_colours_leaves_a_colour_its_side_shares() {
+    let (blue, white) = ([0.02f32, 0.06, 0.35], [0.95f32; 3]);
+    let sign = Rgb32f::from_fn(60, 20, |x, _| if x < 30 { blue } else { white });
+    let s = protect_settings((0.0, 40.0));
+    let (mut classic, mut protected) = (sign.clone(), sign.clone());
+    defringe(&mut classic, &s, 1.0);
+    let mut sp = s.clone();
+    sp.optics.defringe_protect = true;
+    defringe(&mut protected, &sp, 1.0);
+    let before = chroma_of(sign.get(29, 10));
+    assert!(chroma_of(classic.get(29, 10)) < 0.5 * before, "the classic Defringe greys it");
+    assert!(chroma_of(protected.get(29, 10)) > 0.9 * before, "{} → {}", before, chroma_of(protected.get(29, 10)));
+}
+
+/// A blue sign panel between white letters and a red border is a region, not a fringe: Protect Colours leaves it
+/// blue (it once pulled it toward the red, in blotches).
+#[test]
+fn protect_colours_leaves_a_coloured_region_between_two_others() {
+    // a dark red border, a lighter blue band a few fringe widths across, white letters
+    let (red, blue, white) = ([0.2f32, 0.01, 0.01], [0.1f32, 0.2, 0.8], [0.95f32; 3]);
+    let sign = Rgb32f::from_fn(80, 20, |x, _| {
+        if x < 30 {
+            red
+        } else if x < 40 {
+            blue
+        } else {
+            white
+        }
+    });
+    let mut s = protect_settings((0.0, 50.0));
+    s.optics.defringe_protect = true;
+    let mut out = sign.clone();
+    defringe(&mut out, &s, 1.0);
+    for x in 30..40 {
+        let (was, now) = (chroma_of(sign.get(x, 10)), chroma_of(out.get(x, 10)));
+        let hue = |p: [f32; 3]| {
+            let l = oklab_from_2020(p);
+            l[2].atan2(l[1]).to_degrees()
+        };
+        assert!((hue(out.get(x, 10)) - hue(sign.get(x, 10))).abs() < 10.0 && now > 0.8 * was, "x {x}: {:?} → {:?}", sign.get(x, 10), out.get(x, 10));
+    }
 }
 
 /// Found by fuzzing catalog snapshots: a defringe amount far past the sliders' 20 (from a

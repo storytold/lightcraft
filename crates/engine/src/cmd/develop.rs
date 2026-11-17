@@ -779,7 +779,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto Defringe",
             [],
             None,
-            "{} — measure the purple and green fringes along high-contrast edges of the active photo and set the Defringe sliders to take them out (one undo step); colour all over a subject is not a fringe, and a colour with none keeps amount 0; a photo with no fringes keeps its settings → {found, purpleAmount?, purpleHueLo?, purpleHueHi?, greenAmount?, greenHueLo?, greenHueHi?}",
+            "{} — turn on Remove Chromatic Aberration (red/cyan, blue/yellow edges), then measure the purple and green fringes along high-contrast edges of the active photo and set the Defringe sliders, with Protect Colours, to take them out (one undo step); colour a side of its edge shares is not a fringe, and a colour with none keeps amount 0 → {found, removeCa: whether this turned Remove Chromatic Aberration on, purpleAmount?, purpleHueLo?, purpleHueHi?, greenAmount?, greenHueLo?, greenHueHi?}",
             has_active,
             |s, _p| {
                 const C: &str = "develop.autoDefringe";
@@ -789,22 +789,28 @@ pub fn specs() -> Vec<CommandSpec> {
                 let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
                 let req = lightcraft_pipeline::RenderRequest::fit(2048, 2048);
-                let Some(found) = lightcraft_pipeline::auto_defringe(&src, &info, &d, &req) else {
-                    return Ok(json!({"found": false}));
-                };
+                let found = lightcraft_pipeline::auto_defringe(&src, &info, &d, &req);
+                let ca = !d.optics.remove_ca;
+                if found.is_none() && !ca {
+                    return Ok(json!({"found": false, "removeCa": false}));
+                }
                 edit(s, C, "Auto Defringe", |d| {
-                    found.apply(d);
+                    d.optics.remove_ca = true;
+                    if let Some(f) = found {
+                        f.apply(d);
+                    }
                     Ok(())
                 })?;
-                Ok(json!({
-                    "found": true,
-                    "purpleAmount": found.purple_amount,
-                    "purpleHueLo": found.purple_hue_lo,
-                    "purpleHueHi": found.purple_hue_hi,
-                    "greenAmount": found.green_amount,
-                    "greenHueLo": found.green_hue_lo,
-                    "greenHueHi": found.green_hue_hi,
-                }))
+                let mut out = json!({"found": found.is_some(), "removeCa": ca});
+                if let Some(f) = found {
+                    out["purpleAmount"] = json!(f.purple_amount);
+                    out["purpleHueLo"] = json!(f.purple_hue_lo);
+                    out["purpleHueHi"] = json!(f.purple_hue_hi);
+                    out["greenAmount"] = json!(f.green_amount);
+                    out["greenHueLo"] = json!(f.green_hue_lo);
+                    out["greenHueHi"] = json!(f.green_hue_hi);
+                }
+                Ok(out)
             }
         ),
         cmd!("develop.treatment", "Black & White", ["Photo"], Some("V"), "{bw?: bool} (toggles when omitted)", has_active, |s, p| {

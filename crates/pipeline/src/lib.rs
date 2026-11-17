@@ -815,12 +815,15 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
 
 /// Auto Defringe of `s` for a render fitting `req`: the Defringe sliders that take out the photo's purple and green
 /// fringes ([`optics::estimate_defringe`]), measured on the image Defringe itself works on (resampled, local tone,
-/// white balance; the current Defringe left out), or `None` when it has none.
+/// white balance, lateral chromatic aberration corrected; the current Defringe left out), or `None` when it has none.
 pub fn auto_defringe(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Option<optics::DefringeSliders> {
     let effective = s.effective();
     let mut rendition = settings_for(&effective, req).into_owned();
     rendition.optics.defringe_purple_amount = 0.0;
     rendition.optics.defringe_green_amount = 0.0;
+    // lateral chromatic aberration (red/cyan, blue/yellow edges) is Remove Chromatic Aberration's: corrected first,
+    // as Auto Defringe turns it on, so its edges aren't taken for purple or green fringes
+    rendition.optics.remove_ca = true;
     let plan = plan(src, info, &rendition, req);
     let mut img = plan.frame.sample(src, plan.w, plan.h);
     lin_cpu(&mut img, info, &plan);

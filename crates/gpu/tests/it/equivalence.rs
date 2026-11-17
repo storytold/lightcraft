@@ -1465,7 +1465,7 @@ fn spots_match() {
 }
 
 /// Defringe on the device: purple and green at several amounts and hue ranges, at preview and
-/// full size (its filter radius follows the output size).
+/// full size (its filter radius follows the output size), and with Protect Colours.
 #[test]
 fn defringe_matches() {
     if !gpu() {
@@ -1486,6 +1486,9 @@ fn defringe_matches() {
         for edge in [640, 1800] {
             check(&format!("defringe {purple}/{green} {hue:?} @{edge}"), &src, &raw, &s, &RenderRequest::fit(edge, edge));
         }
+        // Protect Colours (run on the CPU by the GPU renderer too)
+        s.optics.defringe_protect = true;
+        check(&format!("defringe protect {purple}/{green} {hue:?}"), &src, &raw, &s, &RenderRequest::fit(640, 640));
     }
 }
 

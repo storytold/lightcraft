@@ -369,10 +369,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     .clicked()
                 {
                     match app.run("develop.autoDefringe", json!({})) {
+                        Ok(r) if r["found"] == false && r["removeCa"] == true => {
+                            app.toast(ui.ctx(), crate::i18n::tr("Chromatic aberration removed; no purple or green fringes found"))
+                        }
                         Ok(r) if r["found"] == false => app.toast(ui.ctx(), crate::i18n::tr("No colour fringes found")),
                         Ok(_) => {}
                         Err(e) => app.toast_error(ui.ctx(), e),
                     }
+                }
+                let mut protect = d.optics.defringe_protect;
+                if ui
+                    .checkbox(&mut protect, crate::i18n::tr("Protect Colours"))
+                    .on_hover_text(crate::i18n::tr("Turn fringes into the colours beside them, and leave colours an edge shares"))
+                    .changed()
+                {
+                    let _ = app.run("develop.merge", json!({"settings": {"optics": {"defringe_protect": protect}}, "label": "Protect Colours"}));
                 }
             });
             control(app, ui, d, "optics.defringePurple", true);

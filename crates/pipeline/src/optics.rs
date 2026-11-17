@@ -657,6 +657,10 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
     let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
     let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
     let (lo, hi) = (min_filter(&l, radius, false), min_filter(&l, radius, true));
+    // Protect Colours: the sides' colours, read through 3 × 3 means
+    let protect = s.optics.defringe_protect;
+    let smooth = protect.then(|| Smoothed::new(&lab, w, h));
+    let side = 2 * radius;
     for_rows(&mut img.data, w, |y, row| {
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
@@ -673,6 +677,25 @@ pub fn defringe(img: &mut Rgb32f, s: &DevelopSettings, scale: f64) {
             let hue = b.atan2(a).to_degrees().rem_euclid(360.0);
             let k = (ps * hue_weight(hue, pr.0, pr.1)).max(gs * hue_weight(hue, gr.0, gr.1)) * edge * chroma_w;
             if k <= 0.0 {
+                continue;
+            }
+            if let Some(sm) = &smooth {
+                // the colour the sides give at this lightness, for what stands out beyond both of them
+                let (dark, bright) = side_colours(sm, (x, y), side);
+                let (ma, mb) = (sm.a[i], sm.b[i]);
+                let mc = ma.hypot(mb).max(1e-6);
+                let mut k = k * smoothstep(0.0, 0.03, stands_out(ma, mb, mc, dark, bright));
+                if k > 0.0 {
+                    k *= thin(sm, (x, y), side, [ma, mb, mc]);
+                }
+                if k <= 0.0 {
+                    continue;
+                }
+                let span = bright[0] - dark[0];
+                let t = if span > 1e-4 { ((ll - dark[0]) / span).clamp(0.0, 1.0) } else { 0.5 };
+                let (ta, tb) = (dark[1] + t * (bright[1] - dark[1]), dark[2] + t * (bright[2] - dark[2]));
+                let k = k.min(1.0);
+                *px = oklab_to_2020([ll, a + k * (ta - a), b + k * (tb - b)]).map(|v| v.max(0.0));
                 continue;
             }
             let f = 1.0 - k.min(1.0);
@@ -693,9 +716,13 @@ pub struct DefringeSliders {
 }
 
 impl DefringeSliders {
-    /// Set the Defringe sliders of `s` to these (a colour with no fringe gets amount 0 and its hue range as it was).
+    /// Set the Defringe sliders of `s` to these (a colour with no fringe gets amount 0 and its hue range as it was),
+    /// with Remove Chromatic Aberration and Protect Colours on.
     pub fn apply(&self, s: &mut DevelopSettings) {
         let o = &mut s.optics;
+        // (Auto Defringe measured with these on)
+        o.remove_ca = true;
+        o.defringe_protect = true;
         o.defringe_purple_amount = self.purple_amount;
         o.defringe_green_amount = self.green_amount;
         if self.purple_amount > 0.0 {
@@ -707,33 +734,54 @@ impl DefringeSliders {
     }
 }
 
-/// A fringe colour found by [`estimate_defringe`]: (amount, hue low, hue high) in slider units.
-fn fringe_sliders(hues: &mut [(f32, f32)], span: (f32, f32)) -> (f64, f64, f64) {
+/// A fringe colour found by [`estimate_defringe`] from its pixels' `(hue, chroma)`: (amount, hue low, hue high) in
+/// slider units, or `None` when the hues don't gather: a lens's fringe is one narrow band of hues, chroma noise and
+/// subject colour spread over the whole range.
+fn fringe_sliders(hues: &mut [(f32, f32)], span: (f32, f32)) -> Option<(f64, f64, f64)> {
     hues.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let at = |q: f32| hues[((hues.len() - 1) as f32 * q).round() as usize];
-    // the middle 80 % of the fringe's hues, a little wider, as positions on the span (the sliders' 0..100)
+    // the densest 60° of hues (a lens's violet edges and magenta halos can both be there)
+    const BAND: f32 = 60.0;
+    let (mut best, mut j) = ((0usize, 0usize), 0usize);
+    for i in 0..hues.len() {
+        while hues[i].0 - hues[j].0 > BAND {
+            j += 1;
+        }
+        if i + 1 - j > best.1 - best.0 {
+            best = (j, i + 1);
+        }
+    }
+    let peak = &hues[best.0..best.1];
+    if (peak.len() as f64) < 0.6 * hues.len() as f64 {
+        return None;
+    }
+    // the band, a little wider, as positions on the span (the sliders' 0..100)
     let to_slider = |h: f32| f64::from(((h - span.0) / (span.1 - span.0) * 100.0).clamp(0.0, 100.0));
-    let (mut lo, mut hi) = (to_slider(at(0.1).0 - 5.0).min(90.0), to_slider(at(0.9).0 + 5.0).max(10.0));
+    let (mut lo, mut hi) = (to_slider(peak[0].0 - 5.0).min(90.0), to_slider(peak[peak.len() - 1].0 + 5.0).max(10.0));
     if hi - lo < 10.0 {
         let mid = (lo + hi) / 2.0;
         (lo, hi) = ((mid - 5.0).clamp(0.0, 90.0), (mid + 5.0).clamp(10.0, 100.0));
     }
     // enough strength that the median fringe pixel is left with the chroma of a near-grey (Defringe takes
     // `amount / 8` of it, scaled by how coloured the pixel is)
-    let mut chroma: Vec<f32> = hues.iter().map(|h| h.1).collect();
+    let mut chroma: Vec<f32> = peak.iter().map(|h| h.1).collect();
     chroma.sort_by(f32::total_cmp);
     let c = chroma[chroma.len() / 2];
     let take = (1.0 - 0.012 / c).clamp(0.0, 1.0) / smoothstep(0.015, 0.05, c).max(0.1) / 0.9;
     let amount = f64::from((take.min(1.0) * 8.0).ceil()).clamp(1.0, 8.0);
-    (amount, lo.round(), hi.round())
+    Some((amount, lo.round(), hi.round()))
 }
 
-/// Auto Defringe: the Defringe sliders that take out the purple and green fringes of `img` (the white-balanced
-/// image Defringe works on, at `scale` output pixels per reference pixel), or `None` when it has none.
+/// Auto Defringe: the Defringe sliders that take out the purple fringes of `img` (the white-balanced image
+/// Defringe works on, lateral chromatic aberration already corrected, at `scale` output pixels per reference pixel),
+/// or `None` when it has none.
 ///
-/// A fringe is colour that sits at high-contrast edges, on their dark side, and is much rarer away from them:
-/// a purple flower or a green leaf, coloured all over, is not one. Each colour is judged alone, and one with
-/// no fringe keeps amount 0.
+/// A fringe pixel is a clearly purple or green one on the dark side of a high-contrast edge, next to a highlight,
+/// whose colour stands out beyond the colours of both sides of the edge (Chung, Kim and Song, "Detecting and
+/// eliminating chromatic aberration in digital images", IEEE TIP 2010): violet between an orange wall and a white
+/// sky is one; a magenta wall, a green leaf or a violet evening sky has its colour on one side too. Colours are
+/// read through a 3 × 3 mean, and the sides past the transition, so chroma noise in a high-ISO photo isn't taken for a
+/// fringe. Their hues must gather in one band. Green is left at 0: green fringes are rare, and foliage (a leaf
+/// between shadow and sky) has their shape everywhere.
 pub fn estimate_defringe(img: &Rgb32f, scale: f64) -> Option<DefringeSliders> {
     let (w, h) = (img.width, img.height);
     if w == 0 || h == 0 {
@@ -745,53 +793,129 @@ pub fn estimate_defringe(img: &Rgb32f, scale: f64) -> Option<DefringeSliders> {
     let lab: Vec<[f32; 3]> = img.data.iter().map(|p| oklab_from_2020([p[0].max(0.0), p[1].max(0.0), p[2].max(0.0)])).collect();
     let l = Plane { width: w, height: h, data: lab.iter().map(|p| p[0]).collect() };
     let (lo, hi) = (min_filter(&l, radius, false), min_filter(&l, radius, true));
-    // per colour: the fringe pixels' (hue, chroma) at edges, and how many such colours sit in flat areas
-    let mut edge_hues: [Vec<(f32, f32)>; 2] = Default::default();
-    let mut flat_count = [0usize; 2];
-    let (mut edges, mut flats) = (0usize, 0usize);
-    for (i, &[ll, a, b]) in lab.iter().enumerate() {
+    let sm = Smoothed::new(&lab, w, h);
+    // how far to look for the two sides of an edge: past the fringe
+    let side = 2 * radius;
+    let mut fringe: Vec<(f32, f32)> = Vec::new();
+    let mut edges = 0usize;
+    for (i, px) in lab.iter().enumerate() {
         let range = hi.data[i] - lo.data[i];
-        let at_edge = smoothstep(0.08, 0.25, range) >= 0.5;
-        let flat = range < 0.04;
-        edges += usize::from(at_edge);
-        flats += usize::from(flat);
+        if smoothstep(0.08, 0.25, range) < 0.5 {
+            continue;
+        }
+        edges += 1;
+        let (a, b) = (sm.a[i], sm.b[i]);
         let c = a.hypot(b);
-        // clearly coloured: Defringe takes most of its strength from 0.035 up
-        if c < 0.035 || !(at_edge || flat) {
+        // clearly coloured (Defringe takes most of its strength from 0.035 up), on the dark side of the edge
+        if c < 0.035 || px[0] >= (lo.data[i] + hi.data[i]) / 2.0 {
             continue;
         }
         let hue = b.atan2(a).to_degrees().rem_euclid(360.0);
-        for (k, span) in [PURPLE_HUES, GREEN_HUES].into_iter().enumerate() {
-            if !(span.0..=span.1).contains(&hue) {
-                continue;
-            }
-            if flat {
-                flat_count[k] += 1;
-            } else if ll < (lo.data[i] + hi.data[i]) / 2.0 {
-                edge_hues[k].push((hue, c));
-            }
+        // purple only: green fringes are rare, and foliage (green between shadow and sky) looks like them everywhere
+        if !(PURPLE_HUES.0..=PURPLE_HUES.1).contains(&hue) {
+            continue;
+        }
+        let (dark, bright) = side_colours(&sm, (i % w, i / w), side);
+        // fringes sit next to highlights
+        if bright[0] < 0.75 {
+            continue;
+        }
+        let out = stands_out(a, b, c, dark, bright);
+        if out > 0.02 && out > c / 3.0 && thin(&sm, (i % w, i / w), side, [a, b, c]) > 0.5 {
+            fringe.push((hue, c));
         }
     }
-    let found = |k: usize| {
-        let n = edge_hues[k].len();
-        let edge_rate = n as f64 / edges.max(1) as f64;
-        let flat_rate = flat_count[k] as f64 / flats.max(1) as f64;
-        n >= 16 && edge_rate >= 0.02 && edge_rate >= 4.0 * flat_rate
-    };
-    let (purple, green) = (found(0), found(1));
-    if !purple && !green {
+    // enough of them, among the edges
+    if fringe.len() < 16 || (fringe.len() as f64) < 0.002 * edges as f64 {
         return None;
     }
-    let mut out =
-        DefringeSliders { purple_amount: 0.0, purple_hue_lo: 30.0, purple_hue_hi: 70.0, green_amount: 0.0, green_hue_lo: 40.0, green_hue_hi: 60.0 };
-    let [p, g] = &mut edge_hues;
-    if purple {
-        (out.purple_amount, out.purple_hue_lo, out.purple_hue_hi) = fringe_sliders(p, PURPLE_HUES);
-    }
-    if green {
-        (out.green_amount, out.green_hue_lo, out.green_hue_hi) = fringe_sliders(g, GREEN_HUES);
-    }
+    let (amount, lo, hi) = fringe_sliders(&mut fringe, PURPLE_HUES)?;
+    let out =
+        DefringeSliders { purple_amount: amount, purple_hue_lo: lo, purple_hue_hi: hi, green_amount: 0.0, green_hue_lo: 40.0, green_hue_hi: 60.0 };
     Some(out)
+}
+
+/// OkLab lightness and colour planes through a 3 × 3 mean (so a high-ISO photo's noise doesn't decide what the two
+/// sides of an edge are), for Auto Defringe and Protect Colours.
+struct Smoothed {
+    l: Vec<f32>,
+    a: Vec<f32>,
+    b: Vec<f32>,
+    w: usize,
+    h: usize,
+}
+
+impl Smoothed {
+    fn new(lab: &[[f32; 3]], w: usize, h: usize) -> Self {
+        let plane = |k: usize| box_mean(&lab.iter().map(|p| p[k]).collect::<Vec<_>>(), w, h, 1);
+        Smoothed { l: plane(0), a: plane(1), b: plane(2), w, h }
+    }
+}
+
+/// The colours on the two sides of the edge through pixel `(x, y)`, darker side first: OkLab `[L, a, b]` (3 × 3
+/// means, so noise doesn't decide them) `side` pixels away on either side along the lightness
+/// gradient, past the transition the fringe lies in (as Chung, Kim and Song read the ends of an edge).
+fn side_colours(p: &Smoothed, (x, y): (usize, usize), side: usize) -> ([f32; 3], [f32; 3]) {
+    let (sl, sa, sb, w, h) = (&p.l, &p.a, &p.b, p.w, p.h);
+    let at = |dx: isize, dy: isize| {
+        let xx = (x as isize + dx).clamp(0, w as isize - 1) as usize;
+        let yy = (y as isize + dy).clamp(0, h as isize - 1) as usize;
+        yy * w + xx
+    };
+    let s = side as isize;
+    let (gx, gy) = (sl[at(s, 0)] - sl[at(-s, 0)], sl[at(0, s)] - sl[at(0, -s)]);
+    let g = gx.hypot(gy);
+    let (ux, uy) = if g > 1e-6 { (gx / g, gy / g) } else { (1.0, 0.0) };
+    let step = |k: f32| at((ux * k * side as f32).round() as isize, (uy * k * side as f32).round() as isize);
+    let colour = |j: usize| [sl[j], sa[j], sb[j]];
+    let (m, n) = (colour(step(-1.0)), colour(step(1.0)));
+    if m[0] <= n[0] { (m, n) } else { (n, m) }
+}
+
+/// How much colour `(a, b)` (chroma `c`) at `(x, y)` is a thin line rather than a region: 1 when little of the
+/// square of radius `side` around it has that colour (a fringe is a line along an edge), 0 when much of it has
+/// (a blue sign between white letters and a red border is blue all around the letters).
+fn thin(p: &Smoothed, (x, y): (usize, usize), side: usize, [a, b, c]: [f32; 3]) -> f32 {
+    let (sa, sb, w, h) = (&p.a, &p.b, p.w, p.h);
+    let (mut same, mut all) = (0usize, 0usize);
+    for yy in y.saturating_sub(side)..(y + side + 1).min(h) {
+        for xx in x.saturating_sub(side)..(x + side + 1).min(w) {
+            let j = yy * w + xx;
+            same += usize::from((sa[j] * a + sb[j] * b) / c >= 0.6 * c);
+            all += 1;
+        }
+    }
+    1.0 - smoothstep(0.25, 0.4, same as f32 / all.max(1) as f32)
+}
+
+/// How far colour `(a, b)` (chroma `c`) stands out beyond the colours `dark` and `bright` of the two sides of its
+/// edge, along its own colour (OkLab chroma; ≤ 0: one side has as much of it).
+fn stands_out(a: f32, b: f32, c: f32, dark: [f32; 3], bright: [f32; 3]) -> f32 {
+    let along = |m: [f32; 3]| (m[1] * a + m[2] * b) / c;
+    c - along(dark).max(along(bright)).max(0.0)
+}
+
+/// The mean of `data` (a `w` × `h` plane) over the square of radius `r` around each pixel, clipped to the plane
+/// (a summed-area table: linear in the pixels whatever `r` is).
+fn box_mean(data: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+    let mut sat = vec![0f64; (w + 1) * (h + 1)];
+    for y in 0..h {
+        let mut row = 0f64;
+        for x in 0..w {
+            row += f64::from(data[y * w + x]);
+            sat[(y + 1) * (w + 1) + x + 1] = sat[y * (w + 1) + x + 1] + row;
+        }
+    }
+    let mut out = vec![0f32; w * h];
+    for y in 0..h {
+        let (y0, y1) = (y.saturating_sub(r), (y + r + 1).min(h));
+        for x in 0..w {
+            let (x0, x1) = (x.saturating_sub(r), (x + r + 1).min(w));
+            let sum = sat[y1 * (w + 1) + x1] - sat[y0 * (w + 1) + x1] - sat[y1 * (w + 1) + x0] + sat[y0 * (w + 1) + x0];
+            out[y * w + x] = (sum / ((x1 - x0) * (y1 - y0)) as f64) as f32;
+        }
+    }
+    out
 }
 
 /// Separable square min (or max) filter of radius `r`, linear in the pixels whatever `r` is (a

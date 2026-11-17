@@ -10,7 +10,7 @@ use crate::Session;
 /// on the dark side of its edges when `fringed`.
 fn scene(s: &mut Session, id: PhotoId, fringed: bool) {
     use crate::media::SourceLevel;
-    let (n, a, b, w) = (240usize, 80usize, 160usize, 4usize);
+    let (n, a, b, w) = (1800usize, 600usize, 1200usize, 2usize);
     let img = lightcraft_raster::Rgb32f::from_fn(n, n, |x, y| {
         let inside = (a..b).contains(&x) && (a..b).contains(&y);
         let near = (a - w..b + w).contains(&x) && (a - w..b + w).contains(&y);
@@ -44,6 +44,7 @@ fn auto_defringe_sets_purple_from_the_photo_in_one_undo_step() {
     assert_eq!(r["found"], true, "{r}");
     let o = s.develop_of(id).unwrap().optics;
     assert!(o.defringe_purple_amount > 0.0 && o.defringe_green_amount == 0.0, "{r}");
+    assert!(o.remove_ca && o.defringe_protect, "Remove CA and Protect Colours on: {o:?}");
     assert_eq!(
         (o.defringe_purple_amount, o.defringe_purple_hue_lo, o.defringe_purple_hue_hi),
         (r["purpleAmount"].as_f64().unwrap(), r["purpleHueLo"].as_f64().unwrap(), r["purpleHueHi"].as_f64().unwrap())
@@ -52,11 +53,17 @@ fn auto_defringe_sets_purple_from_the_photo_in_one_undo_step() {
     assert_eq!(s.develop_of(id).unwrap().optics, before, "one undo step puts Defringe back");
 }
 
+/// Without fringes, Auto Defringe only turns Remove Chromatic Aberration on; a second time it changes nothing.
 #[test]
-fn auto_defringe_leaves_a_photo_without_fringes_alone() {
+fn auto_defringe_without_fringes_only_removes_chromatic_aberration() {
     let (mut s, id) = active_demo(false);
-    let before = s.develop_of(id).unwrap();
+    let before = s.develop_of(id).unwrap().optics;
     let r = s.execute("develop.autoDefringe", &json!({})).unwrap();
-    assert_eq!(r, json!({"found": false}));
-    assert_eq!(s.develop_of(id).unwrap(), before, "nothing changed");
+    assert_eq!(r, json!({"found": false, "removeCa": true}));
+    let o = s.develop_of(id).unwrap().optics;
+    assert!(o.remove_ca && !o.defringe_protect, "{o:?}");
+    assert_eq!((o.defringe_purple_amount, o.defringe_green_amount), (before.defringe_purple_amount, before.defringe_green_amount));
+    let again = s.develop_of(id).unwrap();
+    assert_eq!(s.execute("develop.autoDefringe", &json!({})).unwrap(), json!({"found": false, "removeCa": false}));
+    assert_eq!(s.develop_of(id).unwrap(), again, "nothing changed");
 }
