@@ -166,18 +166,26 @@ pub fn list(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &mut MapUi, center: &
     });
     ui.add_space(6.0);
     let selected: std::collections::HashSet<u64> = app.session.selection.ids.iter().map(|p| p.0).collect();
-    let rows: Vec<(SavedLocation, Vec<u64>)> = app
-        .session
-        .map
-        .locations
-        .list()
-        .iter()
-        .map(|l| {
-            let circle = l.circle();
-            let inside = app.map_points.points.iter().filter(|p| circle.contains(p.pos.lat, p.pos.lon)).map(|p| p.id).collect();
-            (l.clone(), inside)
-        })
-        .collect();
+    // which photos each location holds: found again only when the points or the locations change
+    let revision = app.session.map.locations.revision();
+    if app.map_points.inside.as_ref().is_none_or(|(r, _)| *r != revision) {
+        let points = &app.map_points.points;
+        let inside = app
+            .session
+            .map
+            .locations
+            .list()
+            .iter()
+            .map(|l| {
+                let circle = l.circle();
+                (l.id, points.iter().filter(|p| circle.contains(p.pos.lat, p.pos.lon)).map(|p| p.id).collect())
+            })
+            .collect();
+        app.map_points.inside = Some((revision, inside));
+    }
+    let held = app.map_points.inside.as_ref().map(|(_, m)| m);
+    let rows: Vec<(SavedLocation, Vec<u64>)> =
+        app.session.map.locations.list().iter().map(|l| (l.clone(), held.and_then(|m| m.get(&l.id)).cloned().unwrap_or_default())).collect();
     let mut action: Option<(u64, &'static str, Value)> = None;
     egui::ScrollArea::vertical().id_salt("map-locations").show(ui, |ui| {
         if rows.is_empty() {

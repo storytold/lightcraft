@@ -481,6 +481,12 @@ impl Response {
         self.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str())
     }
 
+    /// Every header named `name` (case-insensitive), in the order received: a list header such as
+    /// `Cache-Control` may come in several lines.
+    pub fn header_all(&self, name: &str) -> Vec<&str> {
+        self.headers.iter().filter(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.as_str()).collect()
+    }
+
     /// The body's length when the server announced it.
     pub fn content_length(&self) -> Option<u64> {
         match self.body {

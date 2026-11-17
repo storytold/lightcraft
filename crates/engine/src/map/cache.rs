@@ -1,6 +1,6 @@
 //! The on-disk tile cache.
 //!
-//! Layout: `<root>/<source id>/<z>/<x>/<y>.tile`, one file per tile holding a small header (magic,
+//! Layout: `<root>/<source>/<z>/<x>/<y>.tile` (`<source>`: [`super::TileSource::cache_id`]), one file per tile holding a small header (magic,
 //! JSON [`TileMeta`]: when it was fetched, when it expires, its ETag and Last-Modified) and the
 //! image bytes as the server sent them. `<root>` is LightCraft's cache folder's `map-tiles` (the
 //! engine picks it); every source has its own folder, so switching sources never mixes tiles.
@@ -74,16 +74,23 @@ impl TileMeta {
         (TileMeta { fetched: now, expires, etag: keep(header("etag")), last_modified: keep(header("last-modified")) }, store)
     }
 
-    /// The metadata after a `304 Not Modified` with headers `header`: new freshness, and the
-    /// validators the server sent (else the old ones).
-    pub fn revalidated<'a>(&self, now: i64, header: impl Fn(&str) -> Option<&'a str>) -> TileMeta {
-        let (fresh, _) = TileMeta::from_response(now, header);
-        TileMeta {
+    /// The metadata after a `304 Not Modified` with headers `header`, and whether it may still be
+    /// stored (`no-store` says no). The 304's headers update the stored ones (RFC 9111 §4.3.4): its
+    /// freshness when it gives one (`Cache-Control` max-age / no-cache, or `Expires`), else the
+    /// stored response's lifetime again, from now; the validators it sent, else the old ones.
+    pub fn revalidated<'a>(&self, now: i64, header: impl Fn(&str) -> Option<&'a str>) -> (TileMeta, bool) {
+        let (fresh, store) = TileMeta::from_response(now, &header);
+        let cc = header("cache-control").unwrap_or_default().to_ascii_lowercase();
+        let gives_freshness = cc.contains("max-age") || cc.contains("no-cache") || header("expires").is_some();
+        let expires =
+            if gives_freshness { fresh.expires } else { now.saturating_add(self.expires.saturating_sub(self.fetched).clamp(0, MAX_FRESH_SECS)) };
+        let meta = TileMeta {
             fetched: now,
-            expires: fresh.expires,
+            expires,
             etag: fresh.etag.or_else(|| self.etag.clone()),
             last_modified: fresh.last_modified.or_else(|| self.last_modified.clone()),
-        }
+        };
+        (meta, store)
     }
 
     /// Fresh at `now` (else shown, but revalidated).
@@ -480,11 +487,17 @@ mod tests {
             m.conditional_headers(),
             vec![("If-None-Match", "\"abc\"".to_string()), ("If-Modified-Since", "Sun, 06 Nov 1994 08:49:37 GMT".to_string())]
         );
-        // a 304 without headers: 7 days, same validators
-        let r = m.revalidated(500, headers(&[]));
-        assert_eq!((r.fetched, r.expires, r.etag.as_deref()), (500, 500 + DEFAULT_FRESH_SECS, Some("\"abc\"")));
-        let r = m.revalidated(500, headers(&[("ETag", "\"new\""), ("Cache-Control", "max-age=10")]));
+        // a 304 without freshness headers: the stored policy again (max-age=60), same validators
+        let (r, store) = m.revalidated(500, headers(&[]));
+        assert_eq!((r.fetched, r.expires, r.etag.as_deref(), store), (500, 560, Some("\"abc\""), true));
+        let (r, _) = m.revalidated(500, headers(&[("Cache-Control", "public")]));
+        assert_eq!(r.expires, 560, "a Cache-Control without a lifetime keeps the stored one");
+        let (r, _) = m.revalidated(500, headers(&[("ETag", "\"new\""), ("Cache-Control", "max-age=10")]));
         assert_eq!((r.expires, r.etag.as_deref()), (510, Some("\"new\"")));
+        let (r, _) = m.revalidated(500, headers(&[("Cache-Control", "no-cache")]));
+        assert_eq!(r.expires, 500, "no-cache: revalidated every time");
+        // no-store in the 304: it may not be stored any more
+        assert!(!m.revalidated(500, headers(&[("Cache-Control", "no-store")])).1);
         // a header with a line break is not kept (it would be sent back)
         let (m, _) = TileMeta::from_response(0, headers(&[("ETag", "a\r\nX: 1")]));
         assert_eq!(m.etag, None);

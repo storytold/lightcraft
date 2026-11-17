@@ -216,3 +216,25 @@ fn a_preset_that_cannot_be_written_counts_as_unsaved_until_it_is() {
     assert!(s.unsaved().is_none(), "written once the disk works again");
     assert!(String::from_utf8_lossy(&stored(&files)).contains("Mine"));
 }
+
+/// A prefs.json write that failed (here: which photos' GPS is LightCraft's) is retried by the next
+/// save, though nothing was added to it since.
+#[test]
+fn a_failed_prefs_write_is_retried_until_it_lands() {
+    let files = Flaky::default();
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, true).unwrap();
+    let id = s.selection.active.unwrap();
+    let owned = |f: &Flaky| -> Vec<serde_json::Value> {
+        let prefs = f.files.files.lock().unwrap().get("prefs.json").cloned().unwrap_or_default();
+        serde_json::from_slice::<serde_json::Value>(&prefs).ok().and_then(|v| v["gpsOwned"].as_array().cloned()).unwrap_or_default()
+    };
+    files.set_failing(true);
+    s.execute("photo.setGps", &json!({"lat": 1.0, "lon": 2.0})).unwrap();
+    assert!(owned(&files).is_empty(), "the write failed");
+    files.set_failing(false);
+    // any later save writes it (the set didn't change)
+    s.execute("library.info", &json!({})).unwrap();
+    assert_eq!(owned(&files), vec![json!(id.0)]);
+}

@@ -388,6 +388,8 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         | "map.location.select"
         | "map.location.new"
         | "map.loadTrackLog"
+        // the session's command, then the map's part (fit a new track, drop a load it replaced)
+        | "map.trackLog"
         | "map.trackLog.autoTag"
         | "map.trackLog.setOffset"
         | "map.trackLog.fit"
@@ -411,11 +413,13 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                 let _ = app.run("library.select", json!({"ids": [id.0]}));
                 app.ui.view = ViewMode::Map;
                 if let Some(ph) = app.session.catalog.photo(id) {
-                    if let Some((lat, lon)) = ph.meta.gps {
-                        app.ui.map.center_lat = lat;
-                        app.ui.map.center_lon = lon;
+                    if let Some(pos) = lightcraft_engine::map::from_gps(ph.meta.gps) {
+                        app.ui.map.center_lat = pos.lat.clamp(-lightcraft_engine::map::MAX_LATITUDE, lightcraft_engine::map::MAX_LATITUDE);
+                        app.ui.map.center_lon = pos.lon;
                         app.ui.map.zoom = 15.0;
                         app.ui.map.active_pin_photo = Some(id);
+                        // the view is set: the first showing doesn't fit every photo over it
+                        app.ui.map.fitted = true;
                     } else {
                         app.toast(ctx, crate::i18n::tr("Photo has no GPS coordinates (drag onto map to place)"));
                     }

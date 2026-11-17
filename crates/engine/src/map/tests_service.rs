@@ -239,6 +239,33 @@ fn cached_tiles_need_no_request_and_stale_ones_are_revalidated() {
 }
 
 #[test]
+fn a_304_that_forbids_storing_takes_the_tile_off_the_disk() {
+    let root = tmp("revalidate-no-store");
+    let key = TileKey::new(6, 11, 20).unwrap();
+    let now = crate::map::now_secs();
+    let old = TileMeta { fetched: now - 900_000, expires: now - 10, etag: Some("\"v1\"".into()), last_modified: None };
+    TileCache::new(&root, "test", 100 << 20).unwrap().write(key, &old, &png(256, 256)).unwrap();
+    let fake = Fake::new(|_, _| Ok(HttpResponse { status: 304, headers: vec![("Cache-Control".into(), "no-store".into())], body: vec![] }));
+    let svc = TileService::with_transport(source(), Some(TileCache::new(&root, "test", 100 << 20).unwrap()), Some(fake.clone()));
+    svc.want(&[key]);
+    wait_until("the refresh", 10, || svc.is_idle() && svc.stats().not_modified == 1);
+    assert!(TileCache::new(&root, "test", 100 << 20).unwrap().read(key).is_none(), "no-store: not kept on disk");
+    assert!(svc.get(key).is_some(), "the copy in memory is still shown");
+    assert!(!svc.poll().iter().any(|e| matches!(e, TileEvent::Failed { .. })));
+    drop(svc);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn repeated_cache_control_lines_are_read_together() {
+    let lines = [("cache-control", "max-age=3600"), ("cache-control", "no-store"), ("etag", "\"a\""), ("etag", "\"b\"")];
+    let kept = super::service::kept_headers(|h| lines.iter().filter(|(k, _)| *k == h).map(|(_, v)| *v).collect());
+    assert!(kept.contains(&("cache-control".into(), "max-age=3600, no-store".into())), "{kept:?}");
+    assert!(kept.contains(&("etag".into(), "\"a\"".into())), "the others: their first value");
+    assert!(!kept.iter().any(|(k, _)| k == "expires"));
+}
+
+#[test]
 fn a_stale_tile_whose_refresh_was_dropped_is_refreshed_when_back_in_view() {
     let root = tmp("revalidate-dropped");
     let stale_key = TileKey::new(6, 11, 20).unwrap();

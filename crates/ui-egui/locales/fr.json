@@ -3752,5 +3752,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Un serveur de tuiles voit les tuiles que vous regardez (donc à peu près quels lieux), votre adresse IP et le nom et la version de LightCraft ; rien d'autre ne quitte la machine. Hors ligne ne télécharge rien. L'adresse d'un serveur personnalisé peut contenir votre propre clé, sous votre responsabilité.",
   "Tile cache": "Cache des tuiles",
   "About map tiles and privacy (docs/map.md)": "À propos des tuiles et de la confidentialité (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Les tuiles sont désactivées (Réglages › Carte)"
+  "Map tiles are off (Settings › Map)": "Les tuiles sont désactivées (Réglages › Carte)",
+  "Measuring…": "Mesure en cours…"
 }

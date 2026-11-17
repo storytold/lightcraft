@@ -129,6 +129,13 @@ fn a_location_made_from_the_selection_holds_its_photos() {
     // a selection without positions has nothing to centre on
     s.execute("library.select", &json!({"ids": [p[3].0]})).unwrap();
     assert!(s.execute("map.location.add", &json!({"name": "Nowhere", "fromSelection": true})).is_err());
+    // photos further apart than the largest radius are refused, not left outside the circle
+    place(&mut s, p[3], 40.7484, -73.9857);
+    s.execute("library.select", &json!({"ids": [p[0].0, p[3].0]})).unwrap();
+    let before = listed(&mut s).len();
+    let e = s.execute("map.location.add", &json!({"name": "Paris and New York", "fromSelection": true})).unwrap_err();
+    assert!(e.to_string().contains("largest radius"), "{e}");
+    assert_eq!(listed(&mut s).len(), before, "nothing was saved");
 }
 
 #[test]
@@ -370,6 +377,11 @@ fn a_corrupt_locations_json_is_kept_aside_even_with_old_prefs() {
     assert!(!corrupt_copies(&dir).is_empty(), "the damaged file is kept aside");
     // the old field stays in prefs.json (it was never confirmed elsewhere)
     s.save_prefs().unwrap();
+    let prefs: Value = serde_json::from_slice(&std::fs::read(dir.join("prefs.json")).unwrap()).unwrap();
+    assert_eq!(prefs["savedLocations"].as_array().map(Vec::len), Some(3), "{prefs}");
+    // a location saved now writes a locations.json without the old ones: they stay in prefs.json
+    s.execute("map.location.add", &serde_json::json!({"name": "New", "lat": 1.0, "lon": 2.0})).unwrap();
+    assert_eq!(listed(&mut s).len(), 1, "the old entries aren't merged into the active list");
     let prefs: Value = serde_json::from_slice(&std::fs::read(dir.join("prefs.json")).unwrap()).unwrap();
     assert_eq!(prefs["savedLocations"].as_array().map(Vec::len), Some(3), "{prefs}");
     drop(s);

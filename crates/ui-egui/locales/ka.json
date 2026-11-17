@@ -3835,5 +3835,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "ფილების სერვერი ხედავს, რომელ ფილებს უყურებთ (ანუ დაახლოებით რომელ ადგილებს), თქვენს IP მისამართს და LightCraft-ის სახელსა და ვერსიას; სხვა არაფერი გადის კომპიუტერიდან. ოფლაინ რეჟიმი არაფერს იწერს. საკუთარი სერვერის მისამართი შეიძლება შეიცავდეს თქვენს გასაღებს, თქვენივე პასუხისმგებლობით.",
   "Tile cache": "ფილების ქეში",
   "About map tiles and privacy (docs/map.md)": "რუკის ფილებისა და კონფიდენციალურობის შესახებ (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "რუკის ფილები გამორთულია (პარამეტრები › რუკა)"
+  "Map tiles are off (Settings › Map)": "რუკის ფილები გამორთულია (პარამეტრები › რუკა)",
+  "Measuring…": "იზომება…"
 }

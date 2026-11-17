@@ -2630,5 +2630,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "En ruteserver ser vilka rutor du tittar på (alltså ungefär vilka platser), din IP-adress samt LightCrafts namn och version; inget annat lämnar datorn. Offline hämtar ingenting. En egen servers adress kan innehålla din egen nyckel, på eget ansvar.",
   "Tile cache": "Rutcache",
   "About map tiles and privacy (docs/map.md)": "Om kartrutor och integritet (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Kartrutor är av (Inställningar › Karta)"
+  "Map tiles are off (Settings › Map)": "Kartrutor är av (Inställningar › Karta)",
+  "Measuring…": "Mäter…"
 }

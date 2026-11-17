@@ -33,6 +33,8 @@ const FLAT: f64 = 1e-12;
 /// Distance computations allowed per point when ranking (Douglas–Peucker is n log n on real
 /// tracks; this only stops pathological input).
 const WORK_PER_POINT: usize = 64;
+/// Most copies of the world one chunk is drawn on (a 16k-pixel view at zoom 0 shows 64).
+const MAX_COPIES: u32 = 64;
 
 /// One line cut at the antimeridian: points in the Mercator square (fractions: x from −180°
 /// eastward in [0, 1], y from the north edge in [0, 1]) and their simplification ranks.
@@ -263,8 +265,9 @@ fn clip(a: Point, b: Point, x0: f64, y0: f64, x1: f64, y1: f64) -> Option<(Point
 
 impl Level {
     /// The lines to paint for view `vp`, in screen pixels from its top-left corner, clipped to the
-    /// view grown by `margin` pixels. Each chunk is drawn on the copy of the world nearest the view's
-    /// centre (as pins are). A one-point track gives a one-point line (a dot).
+    /// view grown by `margin` pixels. Each chunk is drawn on every copy of the world the view shows
+    /// it on (a view wider than the world, or across the antimeridian, may show two). A one-point
+    /// track gives a one-point line (a dot).
     pub fn screen_lines(&self, vp: &Viewport, margin: f64) -> Vec<Vec<Point>> {
         let v = Viewport::new(vp.center, vp.zoom, vp.width, vp.height);
         let mut out: Vec<Vec<Point>> = Vec::new();
@@ -276,27 +279,42 @@ impl Level {
         let (cx, cy) = (c.x / ws, c.y / ws);
         let m = if margin.is_finite() { margin.clamp(0.0, 1000.0) } else { 0.0 };
         let (x0, y0, x1, y1) = (-m, -m, v.width + m, v.height + m);
+        let sy = |y: f64| (y - cy) * ws + v.height / 2.0;
+        if !ws.is_finite() || ws <= 0.0 {
+            return out;
+        }
         for ch in &self.chunks {
-            let shift = (cx - (ch.min.x + ch.max.x) / 2.0).round();
-            let sx = |x: f64| (x + shift - cx) * ws + v.width / 2.0;
-            let sy = |y: f64| (y - cy) * ws + v.height / 2.0;
-            if sx(ch.max.x) < x0 || sx(ch.min.x) > x1 || sy(ch.max.y) < y0 || sy(ch.min.y) > y1 {
+            if sy(ch.max.y) < y0 || sy(ch.min.y) > y1 {
                 continue;
             }
-            let screen = |p: &Point| Point::new(sx(p.x), sy(p.y));
-            if let [only] = ch.pts.as_slice() {
-                out.push(vec![screen(only)]);
+            // the whole-world shifts k that put the chunk's x range [min + k, max + k] in view
+            let first = ((x0 - v.width / 2.0) / ws + cx - ch.max.x).ceil();
+            let last = ((x1 - v.width / 2.0) / ws + cx - ch.min.x).floor();
+            if !first.is_finite() || !last.is_finite() || last < first {
                 continue;
             }
-            for pair in ch.pts.windows(2) {
-                let [a, b] = pair else { continue };
-                if let Some((ca, cb, moved_a, _)) = clip(screen(a), screen(b), x0, y0, x1, y1) {
-                    // a line goes on where the last one ended (the next segment, the next chunk)
-                    if moved_a || out.last().and_then(|l| l.last()) != Some(&ca) {
-                        out.push(vec![ca]);
-                    }
-                    if let Some(line) = out.last_mut() {
-                        line.push(cb);
+            // (a view is never more than a few worlds wide; bounded whatever the input)
+            for i in 0..=((last - first) as u32).min(MAX_COPIES) {
+                let shift = first + f64::from(i);
+                let sx = |x: f64| (x + shift - cx) * ws + v.width / 2.0;
+                let screen = |p: &Point| Point::new(sx(p.x), sy(p.y));
+                if let [only] = ch.pts.as_slice() {
+                    out.push(vec![screen(only)]);
+                    continue;
+                }
+                // each copy starts its own line
+                let mut joined = i == 0;
+                for pair in ch.pts.windows(2) {
+                    let [a, b] = pair else { continue };
+                    if let Some((ca, cb, moved_a, _)) = clip(screen(a), screen(b), x0, y0, x1, y1) {
+                        // a line goes on where the last one ended (the next segment, the next chunk)
+                        if !joined || moved_a || out.last().and_then(|l| l.last()) != Some(&ca) {
+                            out.push(vec![ca]);
+                        }
+                        joined = true;
+                        if let Some(line) = out.last_mut() {
+                            line.push(cb);
+                        }
                     }
                 }
             }

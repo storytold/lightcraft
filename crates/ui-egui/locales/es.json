@@ -2570,5 +2570,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Un servidor de teselas ve qué teselas miras (o sea, más o menos qué lugares), tu dirección IP y el nombre y la versión de LightCraft; nada más sale del equipo. Sin conexión no descarga nada. La dirección de un servidor propio puede llevar tu clave, bajo tu responsabilidad.",
   "Tile cache": "Caché de teselas",
   "About map tiles and privacy (docs/map.md)": "Sobre las teselas y la privacidad (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Las teselas están desactivadas (Ajustes › Mapa)"
+  "Map tiles are off (Settings › Map)": "Las teselas están desactivadas (Ajustes › Mapa)",
+  "Measuring…": "Midiendo…"
 }

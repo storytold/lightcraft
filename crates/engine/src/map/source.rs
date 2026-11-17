@@ -115,6 +115,26 @@ impl TileSource {
         }
     }
 
+    /// The name of the folder its tiles are cached in: the id, and for a custom source named by
+    /// the user, that name with a fingerprint of its URL template (`my-tiles-1a2b3c4d`), so the
+    /// same name pointed at another server never shows the first server's tiles. A derived id
+    /// (`custom-<hash>`) already is that fingerprint and is kept as it is.
+    pub fn cache_id(&self) -> String {
+        match self {
+            TileSource::Custom { id, url_template, .. } => {
+                let hash = fnv1a(url_template.as_bytes()) as u32;
+                if *id == format!("custom-{hash:08x}") {
+                    id.clone()
+                } else {
+                    // at most MAX_ID characters with the fingerprint
+                    let head: String = id.chars().take(MAX_ID - 9).collect();
+                    format!("{head}-{hash:08x}")
+                }
+            }
+            other => other.id().to_string(),
+        }
+    }
+
     /// English name for a picker (the UI translates it).
     pub fn label(&self) -> &str {
         match self {
@@ -437,6 +457,29 @@ mod tests {
             assert!(TileSource::custom(id, template, attribution, zoom).is_err(), "{template} {attribution:?} {zoom:?} {id:?}");
         }
         assert!(TileSource::custom(None, &format!("https://a.example/{}{{z}}/{{x}}/{{y}}", "p".repeat(600)), Some("x"), None).is_err());
+    }
+
+    #[test]
+    fn a_named_custom_source_caches_per_server() {
+        // the same name pointed at another server: another cache folder
+        let a = TileSource::custom(Some("my-tiles"), "https://a.example/{z}/{x}/{y}.png", Some("© A"), None).unwrap();
+        let b = TileSource::custom(Some("my-tiles"), "https://b.example/{z}/{x}/{y}.png", Some("© B"), None).unwrap();
+        assert_eq!(a.id(), b.id());
+        assert_ne!(a.cache_id(), b.cache_id());
+        assert!(a.cache_id().starts_with("my-tiles-"), "{}", a.cache_id());
+        // unchanged: the same folder as ever (also its attribution or zoom changed)
+        let a2 = TileSource::custom(Some("my-tiles"), "https://a.example/{z}/{x}/{y}.png", Some("© A, again"), Some(12)).unwrap();
+        assert_eq!(a.cache_id(), a2.cache_id());
+        // a derived id already is the template's fingerprint; built-in sources keep their id
+        let derived = TileSource::custom(None, "https://a.example/{z}/{x}/{y}.png", Some("© A"), None).unwrap();
+        assert_eq!(derived.cache_id(), derived.id());
+        assert_eq!(TileSource::Osm.cache_id(), "osm");
+        // a long name still makes a valid folder name
+        let long = TileSource::custom(Some(&"x".repeat(MAX_ID)), "https://a.example/{z}/{x}/{y}.png", Some("© A"), None).unwrap();
+        assert!(validate_id(&long.cache_id()).is_ok() && long.cache_id().len() <= MAX_ID, "{}", long.cache_id());
+        for s in [a, b, derived] {
+            assert!(validate_id(&s.cache_id()).is_ok(), "{}", s.cache_id());
+        }
     }
 
     #[test]

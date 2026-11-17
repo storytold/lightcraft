@@ -292,16 +292,27 @@ fn locations(s: &mut Session, _: &Value) -> Result<Value> {
 }
 
 /// Where a new location goes when made from photos: the middle of their positions, and a radius
-/// that holds them all (10 % to spare, at least 100 m, at most 1000 km).
-fn around_photos(s: &Session, ids: &[lightcraft_catalog::PhotoId]) -> Option<(f64, f64, f64)> {
+/// that holds them all (10 % to spare, at least 100 m, at most 1000 km). Photos too far apart for
+/// the largest radius are refused rather than left outside it.
+fn around_photos(c: &str, s: &Session, ids: &[lightcraft_catalog::PhotoId]) -> Result<(f64, f64, f64)> {
+    use lightcraft_catalog::rules::MAX_RADIUS_M;
     let pos: Vec<(f64, f64)> =
         ids.iter().filter_map(|id| s.catalog.photo(*id)).filter_map(|p| lightcraft_catalog::rules::valid_gps(p.meta.gps)).collect();
-    let b = crate::map::Bounds::of(pos.iter().copied())?;
-    let c = b.center();
-    let lon = crate::map::mercator::wrap_lon(c.lon);
-    let far = pos.iter().map(|(la, lo)| lightcraft_catalog::rules::distance_m(c.lat, lon, *la, *lo)).filter(|d| d.is_finite()).fold(0.0, f64::max);
-    let radius = (far * 1.1).clamp(100.0, lightcraft_catalog::rules::MAX_RADIUS_M);
-    Some((c.lat, lon, radius))
+    let b = crate::map::Bounds::of(pos.iter().copied()).ok_or_else(|| bad(c, "none of the selected photos has a GPS position"))?;
+    let mid = b.center();
+    let lon = crate::map::mercator::wrap_lon(mid.lon);
+    let far = pos.iter().map(|(la, lo)| lightcraft_catalog::rules::distance_m(mid.lat, lon, *la, *lo)).filter(|d| d.is_finite()).fold(0.0, f64::max);
+    if far > MAX_RADIUS_M {
+        return Err(bad(
+            c,
+            format!(
+                "the selected photos are up to {:.0} km from their middle, more than a saved location's largest radius ({:.0} km); select photos closer together",
+                far / 1000.0,
+                MAX_RADIUS_M / 1000.0
+            ),
+        ));
+    }
+    Ok((mid.lat, lon, (far * 1.1).clamp(100.0, MAX_RADIUS_M)))
 }
 
 fn location_add(s: &mut Session, p: &Value) -> Result<Value> {
@@ -320,7 +331,7 @@ fn location_add(s: &mut Session, p: &Value) -> Result<Value> {
                 EngineError::BadParams { msg, .. } => bad(C, msg),
                 other => other,
             })?;
-            let (la, lo, r) = around_photos(s, &ids).ok_or_else(|| bad(C, "none of the selected photos has a GPS position"))?;
+            let (la, lo, r) = around_photos(C, s, &ids)?;
             (la, lo, radius.unwrap_or(r))
         }
         _ => return Err(bad(C, "give `lat` and `lon` (degrees), or `fromSelection: true`")),

@@ -117,6 +117,27 @@ fn a_line_across_the_antimeridian_is_cut_and_drawn_the_short_way() {
     }
 }
 
+/// A view showing two copies of the world draws the track on both: at zoom 1 (a 512-pixel world) a
+/// 400-pixel view centred at 100° E shows 0° on the left (the copy west of the centre) and −170°
+/// (190° E) on the right.
+#[test]
+fn a_track_is_drawn_on_every_copy_of_the_world_in_view() {
+    let shape = TrackShape::new([vec![(0.0, -170.0), (0.0, 0.0)]]);
+    let vp = Viewport::new(LatLon { lat: 0.0, lon: 100.0 }, 1.0, 400.0, 300.0);
+    let lines = shape.level(1).screen_lines(&vp, 0.0);
+    let at = |lon: f64| ((lon + 180.0) / 360.0 - (100.0 + 180.0) / 360.0) * 512.0 + 200.0;
+    // the copy west of the centre: the part ending at 0° (x ≈ 57.8)
+    let zero = at(0.0);
+    assert!(lines.iter().flatten().any(|p| (p.x - zero).abs() < 1e-6 && (p.y - 150.0).abs() < 1e-6), "0° at x {zero}: {lines:?}");
+    // the copy east of it: from 190° E (x ≈ 328) to the view's edge
+    let east = at(190.0);
+    assert!(lines.iter().flatten().any(|p| (p.x - east).abs() < 1e-6), "190° E at x {east}: {lines:?}");
+    assert_eq!(lines.len(), 2, "two lines, never joined across the world: {lines:?}");
+    for p in lines.iter().flatten() {
+        assert!((0.0..=400.0).contains(&p.x), "{p:?} clipped to the view");
+    }
+}
+
 #[test]
 fn poles_nan_and_degenerate_tracks_never_crash() {
     // points at and beyond the Mercator edge are drawn on it

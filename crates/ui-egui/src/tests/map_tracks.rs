@@ -197,3 +197,32 @@ fn loading_runs_off_the_ui_thread_with_an_activity_row() {
     assert!(h.app.session.activity.list().iter().all(|t| !t.label.contains("walk.gpx")), "the row goes with the load");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
+
+/// A track log loaded (or cleared) while another is still being read wins: the one being read
+/// doesn't overwrite it when it arrives.
+#[test]
+fn a_track_loaded_while_another_is_read_is_not_overwritten() {
+    let mut h = demo();
+    let mut gpx = String::from("<gpx><trk><trkseg>");
+    for i in 0..60_000u32 {
+        let (lat, lon) = (45.0 + f64::from(i) * 1e-5, 6.0 + f64::from(i) * 1e-5);
+        gpx.push_str(&format!("<trkpt lat=\"{lat:.6}\" lon=\"{lon:.6}\"><time>2026-05-01T10:{:02}:{:02}Z</time></trkpt>", (i / 60) % 60, i % 60));
+    }
+    gpx.push_str("</trkseg></trk></gpx>");
+    let path = temp_gpx("race", &gpx);
+    h.app.run("map.loadTrackLog", json!({"path": path.to_string_lossy()})).unwrap();
+    assert!(state(&mut h)["trackLog"]["loading"].is_string());
+    h.app.run("map.trackLog", json!({"gpx": TWO_TRACKS})).unwrap();
+    assert!(state(&mut h)["trackLog"]["loading"].is_null(), "the earlier load is given up");
+    // the worker finishes (its row goes); what it read is dropped
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while h.app.session.activity.list().iter().any(|t| t.label.contains("walk.gpx")) {
+        assert!(std::time::Instant::now() < end, "the read never finished");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.step();
+    }
+    frames(&mut h, 3);
+    let t = state(&mut h)["trackLog"].clone();
+    assert_eq!(t["tracks"].as_array().map(Vec::len), Some(2), "the log loaded last stays: {t}");
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}

@@ -72,6 +72,10 @@ pub struct Points {
     pub points: Vec<MapPoint>,
     /// Photos of the list without a valid position.
     pub without: usize,
+    /// Each saved location's photos among [`Points::points`] (by location id), and the saved
+    /// locations' revision they were found for: found again only when the points (a new
+    /// [`Points`]) or the locations change, not every frame.
+    inside: Option<(u64, std::collections::HashMap<u64, Vec<u64>>)>,
 }
 
 /// The current list's points (recomputed only when the list changed).
@@ -88,7 +92,7 @@ fn refresh_points(app: &mut LightcraftApp) {
             None => without += 1,
         }
     }
-    app.map_points = Points { generation: Some(generation), points, without };
+    app.map_points = Points { generation: Some(generation), points, without, inside: None };
 }
 
 /// The area the map shows now (`None` before it was first drawn): the whole world's width when the

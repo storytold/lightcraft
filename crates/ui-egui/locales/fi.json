@@ -2526,5 +2526,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Ruutupalvelin näkee, mitä ruutuja katsot (eli suunnilleen mitä paikkoja), IP-osoitteesi sekä LightCraftin nimen ja version; mitään muuta ei lähde koneelta. Offline ei lataa mitään. Oman palvelimen osoitteessa voi olla oma avaimesi omalla vastuullasi.",
   "Tile cache": "Ruutuvälimuisti",
   "About map tiles and privacy (docs/map.md)": "Karttaruuduista ja yksityisyydestä (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Karttaruudut ovat pois (Asetukset › Kartta)"
+  "Map tiles are off (Settings › Map)": "Karttaruudut ovat pois (Asetukset › Kartta)",
+  "Measuring…": "Mitataan…"
 }

@@ -2570,5 +2570,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "圖磚伺服器會看到你查看的圖磚（也就是大致的地點）、你的 IP 位址以及 LightCraft 的名稱和版本；其他內容不會離開本機。離線不擷取任何內容。自訂伺服器位址可以帶上你自己的金鑰，責任自負。",
   "Tile cache": "圖磚快取",
   "About map tiles and privacy (docs/map.md)": "關於地圖圖磚與隱私（docs/map.md）",
-  "Map tiles are off (Settings › Map)": "地圖圖磚已關閉（設定 › 地圖）"
+  "Map tiles are off (Settings › Map)": "地圖圖磚已關閉（設定 › 地圖）",
+  "Measuring…": "正在測量…"
 }

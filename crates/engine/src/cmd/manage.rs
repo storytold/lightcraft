@@ -123,6 +123,14 @@ fn auto_tag_tracklog(s: &mut crate::Session, p: &Value) -> Result<Value> {
     }
     let tagged = photos.len();
     if !bool_or(p, "dryRun", false) && !ops.is_empty() {
+        // the positions are LightCraft's (as photo.setGps's): marked before the commit, so the
+        // sidecars written when it lands, and an undo, follow them
+        let before = s.gps_edited.len();
+        s.gps_edited.extend(ops.iter().filter_map(|op| match op {
+            Op::SetMeta { id, .. } => Some(*id),
+            _ => None,
+        }));
+        s.gps_owned_grew(before);
         s.commit("Auto-Tag from Tracklog", Op::Batch { ops })?;
     }
     let iso = |t: f64| format!("{}Z", lightcraft_catalog::dates::civil(t.floor() as i64));

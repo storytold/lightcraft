@@ -87,6 +87,7 @@ fn the_map_keys_work_in_the_map_view_only() {
     assert_eq!(h.app.ui.mask_overlay, overlay, "O doesn't touch the mask overlay in the Map view");
     key(&mut h, "O", false);
     // = / - and Cmd+= / Cmd+- zoom; Cmd+0 fits
+    let thumbs = h.app.ui.thumb_size;
     let z = zoom(&mut h);
     key(&mut h, "=", false);
     assert_eq!(zoom(&mut h), z + 1.0);
@@ -95,7 +96,6 @@ fn the_map_keys_work_in_the_map_view_only() {
     assert_eq!(zoom(&mut h), z - 1.0);
     key(&mut h, "=", true);
     assert_eq!(zoom(&mut h), z);
-    let thumbs = h.app.ui.thumb_size;
     assert_eq!(h.app.ui.thumb_size, thumbs, "the grid's thumbnail size didn't change");
     key(&mut h, "0", true);
     assert!(zoom(&mut h) < z, "Cmd+0 fits every photo with a position (Paris, London, New York)");
@@ -199,4 +199,24 @@ fn settings_map_picks_the_source_applies_a_custom_server_only_on_confirm_and_cle
     h.app.session.execute("map.setEsriKey", &json!({"key": "AAPK0123456789abcdef_TEST-key.x"})).unwrap();
     frames(&mut h, 2);
     assert!(widget(&h, "settings:mapSource:esri-streets").is_some());
+}
+
+/// Show in Map on the map's first showing centres on the photo: the fit to every photo that a
+/// first showing does doesn't replace it.
+#[test]
+fn show_in_map_on_the_first_visit_keeps_the_photos_place() {
+    let mut h = Headless::new(
+        LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() }),
+        [1300.0, 1000.0],
+        1.0,
+    );
+    let ids: Vec<u64> = h.app.session.visible_cloned().iter().take(2).map(|p| p.0).collect();
+    h.app.run("photo.setGps", json!({"ids": [ids[0]], "lat": 48.8584, "lon": 2.2945})).unwrap();
+    h.app.run("photo.setGps", json!({"ids": [ids[1]], "lat": 40.7484, "lon": -73.9857})).unwrap();
+    assert!(!h.app.ui.map.fitted, "the map wasn't shown yet");
+    h.app.run("photo.showInMap", json!({"id": ids[0]})).unwrap();
+    frames(&mut h, 3);
+    let s = state(&mut h);
+    assert_eq!(s["zoom"].as_f64(), Some(15.0), "{s}");
+    assert!((s["lat"].as_f64().unwrap() - 48.8584).abs() < 1e-9 && (s["lon"].as_f64().unwrap() - 2.2945).abs() < 1e-9, "{s}");
 }

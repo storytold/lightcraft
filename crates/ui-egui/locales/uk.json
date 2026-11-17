@@ -2566,5 +2566,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Сервер тайлів бачить, які тайли ви переглядаєте (тобто приблизно які місця), вашу IP-адресу, назву й версію LightCraft; більше нічого не залишає комп'ютер. «Офлайн» нічого не завантажує. Адреса власного сервера може містити ваш ключ — на вашу відповідальність.",
   "Tile cache": "Кеш тайлів",
   "About map tiles and privacy (docs/map.md)": "Про тайли карти й приватність (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Тайли карти вимкнено (Налаштування › Карта)"
+  "Map tiles are off (Settings › Map)": "Тайли карти вимкнено (Налаштування › Карта)",
+  "Measuring…": "Вимірювання…"
 }

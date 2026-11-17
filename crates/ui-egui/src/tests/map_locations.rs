@@ -196,6 +196,14 @@ fn delete_asks_first_and_private_hides_the_info_panel_map() {
     click(&mut h, show, egui::PointerButton::Primary);
     frames(&mut h, 2);
     assert!(widget(&h, "info:miniMap").is_some(), "shown when asked");
+    // moved into another private location, it asks again; back in the first, it doesn't
+    h.app.run("map.location.add", json!({"name": "Cabin", "lat": 45.0, "lon": 6.0, "radius": 1000.0, "private": true})).unwrap();
+    h.app.run("photo.setGps", json!({"ids": [ids[0]], "lat": 45.0, "lon": 6.0})).unwrap();
+    frames(&mut h, 3);
+    assert!(widget(&h, "info:miniMap").is_none(), "another private location: hidden again");
+    h.app.run("photo.setGps", json!({"ids": [ids[0]], "lat": 48.857, "lon": 2.32})).unwrap();
+    frames(&mut h, 3);
+    assert!(widget(&h, "info:miniMap").is_some(), "the location already shown");
     // Delete… asks first; Delete removes it
     let row = widget(&h, &format!("map:location:{id}")).unwrap().center();
     click(&mut h, row, egui::PointerButton::Secondary);

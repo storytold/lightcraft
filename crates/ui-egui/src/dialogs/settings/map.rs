@@ -9,6 +9,9 @@ const ARCGIS_SIGN_UP: &str = "https://location.arcgis.com";
 /// The project's map documentation (sources, the OSM policy, Esri, privacy).
 const MAP_DOCS: &str = "https://github.com/storytold/lightcraft/blob/main/docs/map.md";
 
+/// A measurement of the tile cache (bytes, tiles) running on a worker thread: it lands here.
+type CacheJob = std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>;
+
 /// What Settings ▸ Map remembers between frames (egui temporary memory: never saved): the custom
 /// server's fields as typed, the last refusal, and the cache size with when it was measured.
 #[derive(Clone, Default)]
@@ -19,7 +22,35 @@ struct MapDraft {
     /// The fields were filled from the current custom source (once, when the tab opened).
     seeded: bool,
     error: Option<String>,
+    /// The last measurement that finished: bytes, tiles, when.
     cache: Option<(u64, u64, f64)>,
+    /// A measurement under way (the last one stays shown meanwhile).
+    measuring: Option<CacheJob>,
+}
+
+/// Measure the tile cache under `root` on a worker thread (it walks the cache folder, up to a
+/// million files): the result lands in the job. Where no thread can be started (the web) it is
+/// measured at once.
+fn measure_cache(root: Option<std::path::PathBuf>) -> CacheJob {
+    let job = CacheJob::default();
+    let Some(root) = root else {
+        *job.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((0, 0));
+        return job;
+    };
+    let measure = |root: &std::path::Path| {
+        let info = std::panic::catch_unwind(|| lightcraft_engine::map::cache::info(root)).unwrap_or_default();
+        (info.bytes, info.tiles)
+    };
+    let out = job.clone();
+    let worker_root = root.clone();
+    let started = std::thread::Builder::new().name("map-cache-size".into()).spawn(move || {
+        let r = measure(&worker_root);
+        *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(r);
+    });
+    if started.is_err() {
+        *job.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(measure(&root));
+    }
+    job
 }
 
 /// Settings ▸ Map: where tiles come from (the built-in sources, Offline, or a custom server applied
@@ -102,15 +133,31 @@ pub(super) fn map_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.",
         ),
     );
-    // the cache, measured at most every 5 seconds (it walks the cache folder)
+    // the cache, measured at most every 5 seconds on a worker thread (it walks the cache folder);
+    // the last measurement stays shown until the next one lands
     let now = app.tick_now();
-    if d.cache.is_none_or(|(_, _, at)| now - at > 5.0) {
-        let info = app.session.execute("map.cacheInfo", &json!({})).unwrap_or_default();
-        d.cache = Some((info["bytes"].as_u64().unwrap_or(0), info["tiles"].as_u64().unwrap_or(0), now));
+    if let Some(job) = &d.measuring {
+        let landed = job.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        match landed {
+            Some((bytes, tiles)) => {
+                d.cache = Some((bytes, tiles, now));
+                d.measuring = None;
+            }
+            None => ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)),
+        }
+    }
+    if d.measuring.is_none() && d.cache.is_none_or(|(_, _, at)| now - at > 5.0) {
+        d.measuring = Some(measure_cache(app.session.map.cache_root.clone()));
+        ui.ctx().request_repaint();
     }
     let (bytes, tiles, _) = d.cache.unwrap_or_default();
     row(ui, t, crate::i18n::tr("Tile cache"), |ui| {
-        let r = ui.label(crate::i18n::tr_format!("{size} MB, {n} tiles", size = format!("{:.1}", bytes as f64 / 1_048_576.0), n = tiles));
+        let text = if d.cache.is_some() {
+            crate::i18n::tr_format!("{size} MB, {n} tiles", size = format!("{:.1}", bytes as f64 / 1_048_576.0), n = tiles)
+        } else {
+            crate::i18n::tr("Measuring…").to_string()
+        };
+        let r = ui.label(text);
         register(ui, "settings:mapCacheSize", r.rect);
         let b = ui.add_enabled(tiles > 0, egui::Button::new(crate::i18n::tr("Clear Cache")));
         register(ui, "button:mapClearCache", b.rect);
@@ -118,7 +165,9 @@ pub(super) fn map_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             if let Err(e) = app.run("map.clearCache", json!({})) {
                 app.toast(ui.ctx(), e);
             }
+            // measured again (a measurement from before the clear is dropped)
             d.cache = None;
+            d.measuring = None;
         }
     });
     row(ui, t, "", |ui| {

@@ -2615,5 +2615,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Server dlaždic vidí, které dlaždice si prohlížíte (tedy zhruba která místa), vaši IP adresu a název a verzi LightCraftu; nic jiného počítač neopouští. Offline nestahuje nic. Adresa vlastního serveru může obsahovat váš klíč, na vaši odpovědnost.",
   "Tile cache": "Mezipaměť dlaždic",
   "About map tiles and privacy (docs/map.md)": "O mapových dlaždicích a soukromí (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Mapové dlaždice jsou vypnuté (Nastavení › Mapa)"
+  "Map tiles are off (Settings › Map)": "Mapové dlaždice jsou vypnuté (Nastavení › Mapa)",
+  "Measuring…": "Měření…"
 }

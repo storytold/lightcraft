@@ -3650,5 +3650,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Ein Kachelserver sieht, welche Kacheln Sie ansehen (also ungefähr welche Orte), Ihre IP-Adresse sowie Name und Version von LightCraft; sonst verlässt nichts den Rechner. Offline lädt nichts. Die Adresse eines eigenen Servers darf Ihren eigenen Schlüssel enthalten, auf eigene Verantwortung.",
   "Tile cache": "Kachel-Cache",
   "About map tiles and privacy (docs/map.md)": "Über Kartenkacheln und Datenschutz (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Kartenkacheln sind aus (Einstellungen › Karte)"
+  "Map tiles are off (Settings › Map)": "Kartenkacheln sind aus (Einstellungen › Karte)",
+  "Measuring…": "Wird gemessen…"
 }

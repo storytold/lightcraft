@@ -2493,5 +2493,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Serwer kafelków widzi, które kafelki oglądasz (czyli mniej więcej które miejsca), Twój adres IP oraz nazwę i wersję LightCraft; nic więcej nie opuszcza komputera. Tryb offline niczego nie pobiera. Adres własnego serwera może zawierać Twój klucz, na Twoją odpowiedzialność.",
   "Tile cache": "Pamięć podręczna kafelków",
   "About map tiles and privacy (docs/map.md)": "O kafelkach mapy i prywatności (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Kafelki mapy są wyłączone (Ustawienia › Mapa)"
+  "Map tiles are off (Settings › Map)": "Kafelki mapy są wyłączone (Ustawienia › Mapa)",
+  "Measuring…": "Mierzenie…"
 }

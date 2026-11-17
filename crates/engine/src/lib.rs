@@ -374,6 +374,10 @@ pub struct Session {
     /// in `locations.json`: written back to `prefs.json` until they are, never dropped before
     /// (see [`crate::locations`]).
     pub(crate) legacy_locations: Vec<serde_json::Value>,
+    /// [`Session::legacy_locations`] were taken into the active list, so writing `locations.json`
+    /// confirms them. `false` when `locations.json` was damaged: the list written then doesn't hold
+    /// them, and they stay in `prefs.json`.
+    pub(crate) legacy_in_locations: bool,
     /// The map's tile source (persisted in prefs.json), tile cache folder and tile service.
     pub map: map::MapState,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
@@ -561,6 +565,7 @@ impl Session {
             print: Default::default(),
             print_templates: Vec::new(),
             legacy_locations: Vec::new(),
+            legacy_in_locations: false,
             map: map::MapState::default(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),

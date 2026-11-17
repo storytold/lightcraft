@@ -162,16 +162,17 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let gps = app.session.catalog.photo(id).and_then(|ph| ph.meta.gps);
         if let Some(pos) = lightcraft_engine::map::from_gps(gps) {
             // inside a private saved location: no map (and so no tiles of the place fetched) until asked
-            let private = app.session.map.locations.private_at(gps).map(|l| l.name.clone());
+            // (the approval is for this photo in this location: in another one it asks again)
+            let private = app.session.map.locations.private_at(gps).map(|l| (l.id, l.name.clone()));
             ui.add_space(6.0);
             match private {
-                Some(name) if !app.ui.map.private_shown.contains(&id.0) => {
+                Some((location, name)) if !app.ui.map.private_shown.contains(&(id.0, location)) => {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
                             egui::RichText::new(crate::i18n::tr_format!("In private location “{name}”", name = name)).size(11.0).color(t.text_dim),
                         );
                         if text_button(ui, "showPrivateMap", crate::i18n::tr("Show Map"), false).clicked() {
-                            app.ui.map.private_shown.push(id.0);
+                            app.ui.map.private_shown.push((id.0, location));
                         }
                     });
                 }

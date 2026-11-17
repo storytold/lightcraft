@@ -2568,5 +2568,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "タイルサーバーには、見ているタイル（つまりおおよその場所）、IP アドレス、LightCraft の名前とバージョンが伝わります。それ以外はコンピューターから出ません。オフラインでは何も取得しません。カスタムサーバーのアドレスに自分のキーを含めるのは自己責任です。",
   "Tile cache": "タイルキャッシュ",
   "About map tiles and privacy (docs/map.md)": "マップタイルとプライバシーについて（docs/map.md）",
-  "Map tiles are off (Settings › Map)": "マップタイルはオフです（設定 › マップ）"
+  "Map tiles are off (Settings › Map)": "マップタイルはオフです（設定 › マップ）",
+  "Measuring…": "測定中…"
 }

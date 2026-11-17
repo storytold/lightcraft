@@ -2854,5 +2854,6 @@
   "A tile server sees which tiles you look at (so roughly which places), your IP address and LightCraft's name and version; nothing else leaves the machine. Offline fetches nothing. A custom server's address may carry your own key, on your own responsibility.": "Máy chủ ô bản đồ thấy những ô bạn xem (tức là đại khái những nơi nào), địa chỉ IP của bạn, tên và phiên bản LightCraft; không có gì khác rời khỏi máy. Ngoại tuyến không tải gì. Địa chỉ máy chủ tùy chỉnh có thể chứa khóa của bạn, tự bạn chịu trách nhiệm.",
   "Tile cache": "Bộ đệm ô bản đồ",
   "About map tiles and privacy (docs/map.md)": "Về ô bản đồ và quyền riêng tư (docs/map.md)",
-  "Map tiles are off (Settings › Map)": "Ô bản đồ đang tắt (Cài đặt › Bản đồ)"
+  "Map tiles are off (Settings › Map)": "Ô bản đồ đang tắt (Cài đặt › Bản đồ)",
+  "Measuring…": "Đang đo…"
 }

@@ -51,9 +51,10 @@ pub struct MapUi {
     /// The location whose Delete… asks for confirmation. Not saved.
     #[serde(skip)]
     pub confirm_delete: Option<u64>,
-    /// Photos in a private location whose Info panel map was asked for (Show Map). Not saved.
+    /// Photos in a private location whose Info panel map was asked for (Show Map), with that
+    /// location's id: the photo in another private location asks again. Not saved.
     #[serde(skip)]
-    pub private_shown: Vec<u64>,
+    pub private_shown: Vec<(u64, u64)>,
 }
 
 impl Default for MapUi {

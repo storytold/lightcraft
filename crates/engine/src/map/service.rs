@@ -142,12 +142,24 @@ impl Transport for HttpTransport {
             }
             body.extend_from_slice(buf.get(..n).unwrap_or_default());
         }
-        let headers = ["cache-control", "expires", "date", "etag", "last-modified", "retry-after", "content-type"]
-            .iter()
-            .filter_map(|h| r.header(h).map(|v| (h.to_string(), v.to_string())))
-            .collect();
+        let headers = kept_headers(|h| r.header_all(h));
         Ok(HttpResponse { status: r.status, headers, body })
     }
+}
+
+/// The response headers the tile service reads, from `all` (every value of a header, in order):
+/// the `Cache-Control` lines joined into one list (a `no-store` on a second line counts), the
+/// others' first value.
+#[cfg(any(test, not(target_arch = "wasm32")))]
+pub(super) fn kept_headers<'a>(all: impl Fn(&str) -> Vec<&'a str>) -> Vec<(String, String)> {
+    ["cache-control", "expires", "date", "etag", "last-modified", "retry-after", "content-type"]
+        .iter()
+        .filter_map(|h| {
+            let values = all(h);
+            let v = if *h == "cache-control" { (!values.is_empty()).then(|| values.join(", ")) } else { values.first().map(|v| v.to_string()) };
+            v.map(|v| (h.to_string(), v))
+        })
+        .collect()
 }
 
 /// A decoded tile: 8-bit sRGB RGBA, row-major, `width × height × 4` bytes (unpremultiplied).
@@ -406,7 +418,7 @@ impl TileService {
         let cache = if source.is_offline() {
             None
         } else {
-            cache_root.and_then(|root| TileCache::new(root, source.id(), cache_cap).map_err(|e| log::warn!("map: no tile cache: {e}")).ok())
+            cache_root.and_then(|root| TileCache::new(root, &source.cache_id(), cache_cap).map_err(|e| log::warn!("map: no tile cache: {e}")).ok())
         };
         #[cfg(not(target_arch = "wasm32"))]
         let transport: Option<Arc<dyn Transport>> =
@@ -489,7 +501,9 @@ impl TileService {
         let now_unix = crate::map::now_secs();
         let now = Instant::now();
         let stale_in_memory = |st: &State, k: &TileKey| st.memory.get(k).is_some_and(|t| t.expires <= now_unix) && !st.revalidated.contains(k);
-        let unchanged = list == st.wanted && !list.iter().any(|k| stale_in_memory(&st, k));
+        // a tile whose retry delay ran out is work again, though the view didn't change
+        let retry_due = |st: &State, k: &TileKey| st.failed.get(k).is_some_and(|until| *until <= now);
+        let unchanged = list == st.wanted && !list.iter().any(|k| stale_in_memory(&st, k) || retry_due(&st, k));
         if unchanged {
             return;
         }
@@ -661,6 +675,8 @@ fn worker(sh: &Shared) {
         }
         if r.is_err() {
             st.failed.insert(key, Instant::now() + FAILED_RETRY);
+            // a refresh it was running may be tried again after the delay
+            st.revalidated.remove(&key);
             st.events.push(TileEvent::Failed { key, error: "internal error loading the tile".into() });
         }
         // a tile counts as done once nothing more is queued for it (a cache miss goes on to the network)
@@ -803,13 +819,17 @@ fn net_job(sh: &Shared, k: TileKey) {
     let now = crate::map::now_secs();
     let fail = |st: &mut State, error: String, retry: bool| {
         st.stats.errors += 1;
-        if retry {
+        if retry && st.wanted(&k) {
             // the host is in trouble: wait, then try again if still in view
-            if st.wanted(&k) && !st.net_q.contains(&k) {
+            if !st.net_q.contains(&k) {
                 st.net_q.push(k);
             }
         } else {
-            st.failed.insert(k, Instant::now() + FAILED_RETRY);
+            if !retry {
+                st.failed.insert(k, Instant::now() + FAILED_RETRY);
+            }
+            // a refresh that didn't happen: allowed again (after the retry delay, or back in view)
+            st.revalidated.remove(&k);
         }
         st.events.push(TileEvent::Failed { key: k, error });
     };
@@ -859,11 +879,17 @@ fn net_job(sh: &Shared, k: TileKey) {
         304 => {
             let refreshed = match (&cached, &sh.cache) {
                 (Some(old), Some(c)) => {
-                    let meta = old.revalidated(now, header);
-                    c.refresh(k, &meta).map(|ok| ok.then_some(meta)).unwrap_or_else(|e| {
-                        log::warn!("map: {e}");
-                        None
-                    })
+                    let (meta, store) = old.revalidated(now, header);
+                    if store {
+                        c.refresh(k, &meta).map(|ok| ok.then_some(meta)).unwrap_or_else(|e| {
+                            log::warn!("map: {e}");
+                            None
+                        })
+                    } else {
+                        // no-store now: off the disk; the copy in memory stays until it expires
+                        c.remove(k);
+                        Some(meta)
+                    }
                 }
                 _ => None,
             };

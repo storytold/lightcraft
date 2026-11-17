@@ -138,6 +138,9 @@ pub struct Library {
     /// Why the last write of presets.json failed; `None` once it is written. While set, the preset
     /// changes exist only in memory and count as unsaved ([`Session::unsaved`], issue #2266).
     presets_error: Option<String>,
+    /// A write of prefs.json failed and hasn't succeeded since (what it holds, such as which
+    /// photos' GPS is LightCraft's, exists only in memory): retried by [`Session::persist`].
+    prefs_dirty: bool,
     /// Records the catalog log's own thread holds because writing them failed (it retries them),
     /// and why; refreshed by every persist and every frame ([`Session::persist_if_dirty`]). While
     /// set they count as unsaved ([`Session::unsaved`]), so quitting asks first.
@@ -504,6 +507,7 @@ impl Session {
         let revision = self.map.locations.revision();
         let exists = matches!(files.read(FILE), Ok(Some(_)) | Err(_));
         self.legacy_locations = Vec::new();
+        self.legacy_in_locations = false;
         if exists {
             let read = settings.read::<LocationsFile>(files, FILE);
             // a damaged (or unreadable) locations.json confirms nothing: an older prefs.json copy stays
@@ -553,12 +557,15 @@ impl Session {
         if !confirmed {
             log::error!("library: the saved locations couldn't be moved to {FILE}; they stay in prefs.json");
             self.legacy_locations = legacy;
+            // they are in the active list: its next write confirms them
+            self.legacy_in_locations = true;
         }
         self.map.locations.replace(locations);
     }
 
     /// Save the saved locations (`locations.json`, atomically; no-op for in-memory sessions).
-    /// Once it is written, the older `prefs.json` copy is no longer kept.
+    /// Once it is written with the older `prefs.json` copy's entries in it, that copy is no longer
+    /// kept; when they aren't in it (`locations.json` was damaged), the copy stays.
     pub fn save_locations(&mut self) -> Result<()> {
         let v = self.map.locations.to_file();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -569,8 +576,9 @@ impl Session {
             )));
         }
         lib.files.write_atomic(crate::locations::FILE, &v).map_err(|e| EngineError::Other(format!("saved locations: {e}")))?;
-        if !self.legacy_locations.is_empty() {
+        if self.legacy_in_locations && !self.legacy_locations.is_empty() {
             self.legacy_locations.clear();
+            self.legacy_in_locations = false;
             if let Err(e) = self.save_prefs() {
                 log::warn!("prefs.json: {e}");
             }
@@ -875,6 +883,7 @@ impl Session {
             last_error: None,
             unsaved_error: None,
             presets_error: None,
+            prefs_dirty: false,
             log_held: None,
             retry_at: None,
             forgot_local: None,
@@ -944,6 +953,15 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        // a prefs.json write that failed (GPS ownership, a preference): retried until it lands
+        if self.library.as_ref().is_some_and(|l| l.prefs_dirty)
+            && let Err(e) = self.save_prefs()
+        {
+            log::error!("library: {e}");
+            if let Some(lib) = self.library.as_mut() {
+                lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
+            }
+        }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
@@ -974,7 +992,7 @@ impl Session {
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
-        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
+        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some() || l.prefs_dirty);
         // records the log's thread can't write: a snapshot (a fresh file holding everything) is due
         let log_held = self.library.as_ref().is_some_and(|l| l.log_held.is_some());
         if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || log_held) && !backing_off {
@@ -1099,10 +1117,12 @@ impl Session {
     }
 
     /// After a command added photos to [`Session::gps_edited`] (`before` = its size then): save
-    /// the preferences that keep it across a reopen. A failure is logged, not the command's: the
-    /// position is set, and the set stays for this session.
+    /// the preferences that keep it across a reopen (also when an earlier save failed, though the
+    /// set didn't grow now). A failure is logged, not the command's: the position is set, the set
+    /// stays for this session, and [`Session::persist`] retries the write.
     pub(crate) fn gps_owned_grew(&mut self, before: usize) {
-        if self.gps_edited.len() != before
+        let pending = self.library.as_ref().is_some_and(|l| l.prefs_dirty);
+        if (self.gps_edited.len() != before || pending)
             && let Err(e) = self.save_prefs()
         {
             log::warn!("library: the photos' GPS ownership wasn't saved: {e}");
@@ -1153,7 +1173,10 @@ impl Session {
                 "prefs: prefs.json couldn't be read when the library opened, so it isn't overwritten; reopen the library to save preferences".into(),
             ));
         }
-        lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+        // a failed write stays pending (retried by persist) until one lands
+        let written = lib.files.write_atomic("prefs.json", &v);
+        lib.prefs_dirty = written.is_err();
+        written.map_err(|e| EngineError::Other(format!("prefs: {e}")))
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that
