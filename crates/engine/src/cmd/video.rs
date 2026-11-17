@@ -167,7 +167,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Play/Pause Video",
             [],
             None,
-            "{} — plays the active video, or pauses it when playing (Space in the loupe); opens the clip first when needed. Playback stops when another photo becomes active",
+            "{}: plays the active video, or pauses it when playing (Space in the loupe); opens the clip first when needed. Playback stops when another photo becomes active",
             active_video,
             play_pause
         ),
@@ -176,17 +176,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "Play Video",
             [],
             None,
-            "{at?: seconds (start there)} — plays the active video from the playhead (from the start when it has ended); audio is not played yet",
+            "{at?: seconds (start there)}: plays the active video from the playhead (from the start when it has ended); audio is not played yet",
             active_video,
             play
         ),
-        cmd!(query "video.pause", "Pause Video", [], None, "{} — pauses playback on the frame shown (decoded exactly); nothing playing is fine", always, pause),
+        cmd!(query "video.pause", "Pause Video", [], None, "{}: pauses playback on the frame shown (decoded exactly); nothing playing is fine", always, pause),
         cmd!(
             query "video.seek",
             "Seek Video",
             [],
             None,
-            "{time?: seconds | fraction?: 0–1 of the clip} — moves the playhead (clamped to the clip) and shows the frame at it; playing continues from there",
+            "{time?: seconds | fraction?: 0 to 1 of the clip}: moves the playhead (clamped to the clip) and shows the frame at it; playing continues from there",
             active_video,
             seek
         ),
@@ -195,17 +195,17 @@ pub fn specs() -> Vec<CommandSpec> {
             "Step Video Frame",
             [],
             None,
-            "{frames?: whole number, default 1 (−1 = previous frame), at most ±3600} — pauses and moves by frames",
+            "{frames?: whole number, default 1 (-1 = previous frame), at most ±3600}: pauses and moves by frames",
             active_video,
             step
         ),
-        cmd!(query "video.stop", "Stop Video", [], None, "{} — stops playback and closes the clip → {stopped}", always, stop),
+        cmd!(query "video.stop", "Stop Video", [], None, "{}: stops playback and closes the clip → {stopped}", always, stop),
         cmd!(
             query "video.state",
             "Video Playback State",
             [],
             None,
-            "{} → {open, available (this build decodes video), opening, playing, ended, position, duration (seconds), frameRate, width, height, orientation (EXIF 1–8), codec, frame: {pts, draft}|null, shown, dropped (late frames skipped), decoded, queued, queuedBytes, audio: {track, played: false}|null (audio is not played yet), error|null}",
+            "{} → {open, available (this build decodes video), opening, playing, ended, position, duration (seconds), frameRate, width, height, orientation (EXIF 1 to 8), codec, frame: {pts, draft}|null, shown, dropped (late frames skipped), decoded, queued, queuedBytes, audio: {track, played: false}|null (audio is not played yet), error|null}",
             always,
             state
         ),
