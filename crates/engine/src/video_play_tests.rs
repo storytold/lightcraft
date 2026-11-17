@@ -29,6 +29,8 @@ struct Synthetic {
     fail_at: Option<usize>,
     /// Shared count of frames decoded (to check what a seek costs).
     decoded: Arc<AtomicU64>,
+    /// What the player last said about falling behind.
+    behind: Arc<std::sync::atomic::AtomicBool>,
 }
 
 fn synthetic(frames: usize, gop: usize) -> (Synthetic, Arc<AtomicU64>) {
@@ -49,6 +51,7 @@ fn synthetic(frames: usize, gop: usize) -> (Synthetic, Arc<AtomicU64>) {
         draft: false,
         fail_at: None,
         decoded: decoded.clone(),
+        behind: Arc::default(),
     };
     (s, decoded)
 }
@@ -83,6 +86,9 @@ impl FrameSource for Synthetic {
     }
     fn set_draft(&mut self, on: bool) {
         self.draft = on;
+    }
+    fn set_behind(&mut self, behind: bool) {
+        self.behind.store(behind, Ordering::SeqCst);
     }
 }
 
@@ -309,4 +315,44 @@ fn a_clip_that_cannot_be_opened_reports_why_without_blocking() {
     p.tick();
     assert!(!p.playing());
     assert!(p.frame().is_none());
+}
+
+#[test]
+fn dropping_late_frames_tells_the_source_it_is_behind_until_playback_pauses() {
+    let (src, _) = synthetic(500, 10);
+    let behind = src.behind.clone();
+    let clock = Arc::new(ManualClock::default());
+    let mut p = VideoPlayer::start(PhotoId(7), Box::new(src), clock.clone()).unwrap();
+    tick_until(&mut p, |p| p.frame().is_some());
+    p.play();
+    // on time: not behind
+    for _ in 0..5 {
+        settle(&mut p);
+        clock.advance(0.04);
+        p.tick();
+    }
+    assert_eq!(p.state()["behind"], false);
+    // two stalls of three frames each within a second: behind
+    for _ in 0..2 {
+        settle(&mut p);
+        clock.advance(0.12);
+        p.tick();
+    }
+    assert_eq!(p.state()["behind"], true);
+    tick_until(&mut p, |_| behind.load(Ordering::SeqCst));
+    // a second on time: no longer behind
+    for _ in 0..30 {
+        settle(&mut p);
+        clock.advance(0.04);
+        p.tick();
+    }
+    assert_eq!(p.state()["behind"], false);
+    tick_until(&mut p, |_| !behind.load(Ordering::SeqCst));
+    // paused is never behind
+    settle(&mut p);
+    clock.advance(0.2);
+    p.tick();
+    p.pause();
+    p.tick();
+    assert_eq!(p.state()["behind"], false);
 }

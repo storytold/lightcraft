@@ -307,3 +307,68 @@ fn video_source_keeps_small_pictures_full_size_while_playing() {
     let Next::Frame(f) = src.next_frame(&mut || false, Vec::new()).unwrap() else { panic!("no frame") };
     assert_eq!((f.width as usize, f.height as usize), (W, H), "small pictures are never halved");
 }
+
+#[test]
+fn video_source_halves_only_while_playback_falls_behind() {
+    let frame = 1.0 / 30.0;
+    let mut a = Adapt::default();
+    // keeping up: full size, however slow a frame looked
+    a.after(0.010, 0.030, false, frame);
+    assert!(!a.half);
+    // the player drops late frames: half size at once
+    a.set_behind(true);
+    assert!(a.half);
+    // still behind: stays half
+    for _ in 0..100 {
+        a.after(0.005, 0.004, true, frame);
+    }
+    assert!(a.half);
+    // caught up, and a full-size conversion (4 × 4 ms) would fit: back to full after 30 frames
+    a.set_behind(false);
+    for _ in 0..29 {
+        a.after(0.005, 0.004, true, frame);
+    }
+    assert!(a.half);
+    a.after(0.005, 0.004, true, frame);
+    assert!(!a.half, "{a:?}");
+    // full size falls behind again: half, and twice as long before the next try
+    a.set_behind(true);
+    a.set_behind(false);
+    for _ in 0..59 {
+        a.after(0.005, 0.004, true, frame);
+    }
+    assert!(a.half);
+    a.after(0.005, 0.004, true, frame);
+    assert!(!a.half);
+}
+
+#[test]
+fn video_source_stays_half_when_full_size_would_not_fit() {
+    let frame = 1.0 / 30.0;
+    let mut a = Adapt::default();
+    a.set_behind(true);
+    a.set_behind(false);
+    // half size takes 8 ms: full would take about 32 ms, more than 60 % of 33 ms
+    for _ in 0..1000 {
+        a.after(0.005, 0.008, true, frame);
+    }
+    assert!(a.half);
+    // a slow decoder keeps it half too
+    let mut b = Adapt::default();
+    b.set_behind(true);
+    b.set_behind(false);
+    for _ in 0..1000 {
+        b.after(0.030, 0.002, true, frame);
+    }
+    assert!(b.half);
+    // the wait is bounded however often full size fails
+    let mut c = Adapt::default();
+    for _ in 0..40 {
+        c.set_behind(true);
+        c.set_behind(false);
+        for _ in 0..FULL_AFTER_MAX {
+            c.after(0.0, 0.0, true, frame);
+        }
+    }
+    assert_eq!(c.need, FULL_AFTER_MAX);
+}

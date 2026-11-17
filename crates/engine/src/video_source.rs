@@ -6,6 +6,8 @@
 
 use lightcraft_codecs::video_stream::{Frame, SeekMode, StreamOptions, VideoError, VideoStream};
 use lightcraft_codecs::yuv::{ColourDescription, Converter, Picture, Plane, Samples};
+use web_time::Instant;
+
 use rayon::prelude::*;
 
 use crate::video_play::{FrameSource, Next, SourceInfo, VideoFrame};
@@ -17,10 +19,74 @@ const PLAYBACK_THREADS: usize = 6;
 const DECODER_MEMORY: u64 = 768 << 20;
 /// The largest coded picture read (a 4K intra picture at a high bit rate is a few MB).
 const MAX_SAMPLE_BYTES: u32 = 64 << 20;
-/// While playing, pictures larger than this (pixels) are shown at half size: converting a 4K
-/// picture to sRGB takes 50 to 65 ms on a 14-core laptop, more than a frame lasts, and the loupe
-/// shows it at about half size anyway. Half of 4K is 1920 × 1080; a paused frame is full size.
-const HALVE_ABOVE: usize = 2_600_000;
+/// Pictures at least this big (pixels) may be shown at half size while playback falls behind
+/// ([`Adapt`]); smaller ones always play at full size.
+const HALVE_MIN: usize = 1_000_000;
+/// Back to full size once it would take at most this share of a frame's time…
+const FULL_FITS: f64 = 0.6;
+/// …for this many frames in a row (doubled each time full size fell behind again, up to
+/// [`FULL_AFTER_MAX`], so a machine on the edge does not flip between the two every second).
+const FULL_AFTER: u32 = 30;
+const FULL_AFTER_MAX: u32 = 960;
+
+/// When frames are converted at half size: only while playback falls behind (the player drops
+/// late frames), back to full size once the decoder and a full-size conversion would fit in a
+/// frame's time with room to spare. Half size averages 2 × 2 samples: a quarter of the
+/// conversion, and the loupe shows a 4K frame at about half size anyway. Paused, stepped and
+/// scrubbed frames are always full size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Adapt {
+    /// Converting at half size now.
+    half: bool,
+    /// The player says playback is falling behind.
+    behind: bool,
+    /// Frames in a row a full-size conversion would have fitted.
+    fits: u32,
+    /// How many of those it takes to go back to full size.
+    need: u32,
+    /// Full size fell behind since the last time it was chosen.
+    tried_full: bool,
+}
+
+impl Default for Adapt {
+    fn default() -> Adapt {
+        Adapt { half: false, behind: false, fits: 0, need: FULL_AFTER, tried_full: false }
+    }
+}
+
+impl Adapt {
+    fn set_behind(&mut self, behind: bool) {
+        self.behind = behind;
+        if behind && !self.half {
+            self.half = true;
+            self.fits = 0;
+            // full size was tried and fell behind again: wait longer before the next try
+            if self.tried_full {
+                self.need = self.need.saturating_mul(2).min(FULL_AFTER_MAX);
+            }
+        }
+    }
+
+    /// One frame went through: `decode` and `convert` seconds it took (side by side, so the
+    /// slower one sets the pace), whether it was `halved`, and how long a `frame` lasts.
+    fn after(&mut self, decode: f64, convert: f64, halved: bool, frame: f64) {
+        if !self.half {
+            return;
+        }
+        // a full-size conversion costs about four times a half-size one
+        let full = if halved { convert * 4.0 } else { convert };
+        if !self.behind && decode.max(full) <= frame * FULL_FITS {
+            self.fits = self.fits.saturating_add(1);
+        } else {
+            self.fits = 0;
+        }
+        if self.fits >= self.need {
+            self.half = false;
+            self.fits = 0;
+            self.tried_full = true;
+        }
+    }
+}
 
 /// Whether this build can decode video at all (the codecs' `video-frames` feature).
 pub fn available() -> bool {
@@ -75,7 +141,7 @@ pub fn open(src: impl lightcraft_codecs::video_stream::ClipSource + 'static) -> 
         audio,
     };
     let start = if si.start_seconds.is_finite() { si.start_seconds } else { 0.0 };
-    let convert = Convert { converter: None, draft: false, half: [Vec::new(), Vec::new(), Vec::new()], start };
+    let convert = Convert { converter: None, draft: false, adapt: Adapt::default(), half: [Vec::new(), Vec::new(), Vec::new()], start };
     Ok(CodecSource { stream, info, convert, ahead: None })
 }
 
@@ -115,8 +181,10 @@ enum Ahead {
 struct Convert {
     /// The converter for the current colour description, bit depth and size.
     converter: Option<((ColourDescription, u8, usize, usize), Converter)>,
-    /// Playing: big pictures are converted at half size ([`HALVE_ABOVE`]).
+    /// Playing (frames may be approximate).
     draft: bool,
+    /// Whether to convert at half size while playing.
+    adapt: Adapt,
     /// The half-size planes (Y, Cb, Cr), reused from frame to frame.
     half: [Vec<u16>; 3],
     /// When the first picture is shown on the stream's timeline: playback time 0.
@@ -126,7 +194,7 @@ struct Convert {
 impl Convert {
     fn frame(&mut self, f: &Frame, mut buffer: Vec<u8>) -> Result<VideoFrame, String> {
         let full = f.picture();
-        let halve = self.draft && f.width.saturating_mul(f.height) > HALVE_ABOVE && f.width >= 2 && f.height >= 2;
+        let halve = self.draft && self.adapt.half && f.width.saturating_mul(f.height) >= HALVE_MIN && f.width >= 2 && f.height >= 2;
         let pic = if halve { half_size(&full, &mut self.half) } else { full };
         let key = (f.colour, f.bit_depth, pic.width, pic.height);
         if self.converter.as_ref().is_none_or(|(k, _)| *k != key) {
@@ -188,22 +256,36 @@ impl FrameSource for CodecSource {
             return self.convert.frame(&f, buffer).map(Next::Frame);
         }
         let (convert, stream) = (&mut self.convert, &mut self.stream);
-        let (converted, ahead) = std::thread::scope(|scope| {
-            let worker = std::thread::Builder::new().name("lc-video-convert".into()).spawn_scoped(scope, || convert.frame(&f, buffer));
+        let (converted, ahead, decode_secs) = std::thread::scope(|scope| {
+            let worker = std::thread::Builder::new().name("lc-video-convert".into()).spawn_scoped(scope, || {
+                let t = Instant::now();
+                convert.frame(&f, buffer).map(|v| (v, t.elapsed().as_secs_f64()))
+            });
+            let t = Instant::now();
             let ahead = decode(stream, stop);
+            let decode_secs = t.elapsed().as_secs_f64();
             let converted = match worker {
                 Ok(h) => h.join().unwrap_or_else(|_| Err("the colour conversion failed".to_string())),
                 Err(e) => Err(format!("no thread for the colour conversion: {e}")),
             };
-            (converted, ahead)
+            (converted, ahead, decode_secs)
         });
         self.ahead = Some(ahead);
-        converted.map(Next::Frame)
+        let (frame, convert_secs) = converted?;
+        if self.convert.draft {
+            let halved = frame.width as usize != f.width;
+            self.convert.adapt.after(decode_secs, convert_secs, halved, self.info.frame_duration);
+        }
+        Ok(Next::Frame(frame))
     }
 
     fn set_draft(&mut self, on: bool) {
         self.convert.draft = on;
         self.stream.set_draft(on);
+    }
+
+    fn set_behind(&mut self, behind: bool) {
+        self.convert.adapt.set_behind(behind);
     }
 }
 

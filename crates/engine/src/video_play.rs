@@ -22,7 +22,7 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::time::Instant;
+use web_time::Instant;
 
 use lightcraft_catalog::PhotoId;
 use serde_json::{Value, json};
@@ -114,6 +114,9 @@ pub trait FrameSource: Send {
     fn next_frame(&mut self, stop: &mut dyn FnMut() -> bool, buffer: Vec<u8>) -> Result<Next, String>;
     /// Allow approximate (draft) decoding of pictures nothing predicts from.
     fn set_draft(&mut self, on: bool);
+    /// Playback is falling behind (late frames are being dropped): a source may make frames
+    /// cheaper (smaller) until it can keep up again. Never called while paused.
+    fn set_behind(&mut self, _behind: bool) {}
 }
 
 /// The time playback follows, in seconds from any fixed origin.
@@ -157,6 +160,8 @@ struct Shared {
     end: bool,
     /// Whether draft decoding is allowed now (playing).
     draft: bool,
+    /// Playback is dropping late frames ([`FrameSource::set_behind`]).
+    behind: bool,
     error: Option<String>,
     /// Frames the queue may hold (set from the frame size).
     capacity: usize,
@@ -232,7 +237,16 @@ pub struct VideoPlayer {
     /// Bumped whenever `current` changes, so the UI uploads a texture only for a new frame.
     serial: u64,
     stats: Stats,
+    /// Clock times of the latest late frames dropped (the last [`LATE_WINDOW`] seconds).
+    late: VecDeque<f64>,
+    /// What the decode thread was last told about falling behind.
+    behind: bool,
 }
+
+/// Late frames are counted over this long (s)…
+const LATE_WINDOW: f64 = 1.0;
+/// …and this many in it mean playback is falling behind.
+const LATE_BEHIND: usize = 2;
 
 impl VideoPlayer {
     /// Start the decode thread for an opened `source` and show its first frame (paused at 0).
@@ -283,6 +297,8 @@ impl VideoPlayer {
             current: None,
             serial: 0,
             stats: Stats::default(),
+            late: VecDeque::new(),
+            behind: false,
         };
         player.request(0.0);
         Ok(player)
@@ -427,6 +443,24 @@ impl VideoPlayer {
     /// Advance to the frame due now. Call it every UI frame (and before reading the state). Returns
     /// how long until the next frame is due, so the UI can schedule its next repaint; `None` while
     /// nothing will change by itself (paused, ended, failed).
+    /// Count `skipped` late frames and tell the decode thread when playback starts or stops
+    /// falling behind (more than [`LATE_BEHIND`] of them within [`LATE_WINDOW`]).
+    fn note_late(&mut self, skipped: u64) {
+        let now = self.clock.now();
+        for _ in 0..skipped.min(64) {
+            self.late.push_back(now);
+        }
+        while self.late.front().is_some_and(|t| now - t > LATE_WINDOW) || self.late.len() > 64 {
+            self.late.pop_front();
+        }
+        let behind = self.playing && self.late.len() >= LATE_BEHIND;
+        if behind != self.behind {
+            self.behind = behind;
+            self.channel.lock().behind = behind;
+            self.channel.wake.notify_all();
+        }
+    }
+
     pub fn tick(&mut self) -> Option<f64> {
         let tolerance = self.info.frame_duration.max(1e-3) * 0.5;
         let cur = self.generation;
@@ -465,6 +499,7 @@ impl VideoPlayer {
         };
         self.channel.wake.notify_all();
         self.stats.dropped += skipped;
+        self.note_late(skipped);
         if let Some(f) = due {
             if self.awaiting {
                 self.awaiting = false;
@@ -522,7 +557,8 @@ impl VideoPlayer {
             "height": self.info.height,
             "orientation": self.info.orientation.to_exif(),
             "codec": self.info.codec,
-            "frame": self.current.as_ref().map(|f| json!({"pts": f.pts, "draft": f.draft})),
+            "frame": self.current.as_ref().map(|f| json!({"pts": f.pts, "draft": f.draft, "width": f.width, "height": f.height})),
+            "behind": self.behind,
             "shown": self.stats.shown,
             "dropped": self.stats.dropped,
             "decoded": s.decoded,
@@ -571,6 +607,7 @@ impl std::fmt::Debug for Playback {
 fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
     let mut generation = 0u64;
     let mut draft = false;
+    let mut behind = false;
     loop {
         let seek = {
             let mut s = ch.lock();
@@ -578,14 +615,19 @@ fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
                 if ch.stop.load(Ordering::Relaxed) {
                     return;
                 }
+                // (also while the queue is full: the next frame decoded follows them)
+                if s.draft != draft {
+                    draft = s.draft;
+                    source.set_draft(draft);
+                }
+                if s.behind != behind {
+                    behind = s.behind;
+                    source.set_behind(behind);
+                }
                 if s.request.is_some() || (s.error.is_none() && !s.end && s.queue.len() < s.capacity) {
                     break;
                 }
                 s = ch.wake.wait(s).unwrap_or_else(PoisonError::into_inner);
-            }
-            if s.draft != draft {
-                draft = s.draft;
-                source.set_draft(draft);
             }
             (s.request.take(), s.pool.pop().unwrap_or_default())
         };
