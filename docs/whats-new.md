@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Space opens a photo from the grid
+- In the Grid and the Square Grid, Space opens the active photo in Detail, fitted to the window, as in Lightroom
+  Classic (issue #4417). There, Space toggles the zoom as before.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

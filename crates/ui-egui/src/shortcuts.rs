@@ -534,6 +534,12 @@ fn fire_alias(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: se
         }
         return;
     }
+    // in the library grid, Space opens the active photo in Detail, as in Lightroom Classic (issue
+    // #4417); there it toggles the zoom again. Z, Toggle Zoom's own key, keeps toggling.
+    if id == "view.zoomToggle" && library_grid(app) && !app.ui.fullscreen && app.session.active().is_some() {
+        fire_command(app, ctx, "view.detail", false);
+        return;
+    }
     // over a tool on the photo, held Space is the view's hand; a tap toggles on its release
     if id == "view.zoomToggle" && crate::space_hand::begin(app, ctx) {
         return;

@@ -700,3 +700,48 @@ mod issue1771 {
         assert_eq!(h.app.session.selection.ids.len(), 3);
     }
 }
+
+/// Space in the library grid opens the active photo in Detail, as in Lightroom Classic (issue #4417).
+mod issue4417 {
+    use super::*;
+    use crate::state::{ViewMode, Zoom};
+    use lightcraft_catalog::PhotoId;
+
+    fn grid(view: ViewMode) -> crate::headless::Headless {
+        let mut h = library();
+        h.app.ui.view = view;
+        h.app.session.execute("library.select", &json!({"ids": [1, 2, 3], "active": 2})).unwrap();
+        for _ in 0..3 {
+            h.step();
+        }
+        h
+    }
+
+    /// Given a grid with a multi-selection, when Space is pressed, then the active photo opens in Detail at Fit with
+    /// the selection kept; a second Space there toggles the zoom, as before, and stays in Detail.
+    #[test]
+    fn space_in_the_grid_opens_the_active_photo_then_toggles_the_zoom() {
+        for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+            let mut h = grid(view);
+            key(&mut h, "Space", false);
+            assert_eq!(h.app.ui.view, ViewMode::Detail, "Space from {view:?}");
+            assert_eq!(h.app.session.active(), Some(PhotoId(2)));
+            assert_eq!(h.app.session.selection.ids, vec![PhotoId(1), PhotoId(2), PhotoId(3)]);
+            assert_eq!(h.app.ui.zoom, Zoom::Fit, "opens fitted to the window");
+            key(&mut h, "Space", false);
+            assert_eq!(h.app.ui.view, ViewMode::Detail, "second Space stays in Detail");
+            assert_ne!(h.app.ui.zoom, Zoom::Fit, "and toggles the zoom");
+        }
+    }
+
+    /// Given a grid with nothing selected, when Space is pressed, then the grid stays.
+    #[test]
+    fn space_in_the_grid_without_a_photo_does_nothing() {
+        for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
+            let mut h = grid(view);
+            h.app.session.selection = Default::default();
+            key(&mut h, "Space", false);
+            assert_eq!(h.app.ui.view, view);
+        }
+    }
+}
