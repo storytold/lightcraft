@@ -297,6 +297,8 @@ fn extended_gamut_bt709_curves_read_as_bt709() {
         let conv = Converter::new(desc, 8, 1920, 1080).unwrap();
         assert_eq!(conv.resolved().transfer, code);
         assert!(!conv.is_hdr());
+        // the fast path is picked from the curve read, not from the code point (Sony XAVC writes 11)
+        assert!(conv.srgb_passthrough, "transfer {code}");
         for ycc in [[16, 128, 128], [126, 128, 128], [235, 128, 128], [81, 90, 240]] {
             assert_eq!(srgb(desc, 8, ycc), srgb(ColourDescription::BT709, 8, ycc), "transfer {code}: {ycc:?}");
         }
