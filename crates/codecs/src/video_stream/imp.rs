@@ -175,9 +175,10 @@ struct DecoderPlan {
 /// decode on fewer threads than asked), and the bytes those pictures take, as budget and weight.
 /// A clip whose pictures don't fit even on one thread is too large to decode.
 ///
-/// Sized from the sample entry instead (no sequence header this reads), the estimate may be short
-/// of what the decoder finds: the decoder keeps the whole ceiling and its own check, and only the
-/// weight is the estimate.
+/// When the stream may bring sequence headers of its own (an `avc3` / `hev1` sample entry, or a
+/// record with no sequence header this reads, sized from the sample entry), its pictures may grow
+/// past the estimate, legally: the decoder keeps the whole ceiling and its own check, and the
+/// estimate picks the threads and is the weight.
 fn decoder_plan(sizing: Option<Sizing>, opts: &StreamOptions) -> Result<DecoderPlan, VideoError> {
     let asked = opts.threads.clamp(1, MAX_DECODER_THREADS);
     let Some(sizing) = sizing else {
@@ -187,7 +188,7 @@ fn decoder_plan(sizing: Option<Sizing>, opts: &StreamOptions) -> Result<DecoderP
         .rev()
         .find_map(|threads| sizing.store(threads).filter(|bytes| *bytes <= opts.memory_budget).map(|bytes| (threads, bytes)))
         .ok_or_else(|| VideoError::Unsupported(reason::TOO_LARGE_TO_DECODE.into()))?;
-    let budget = if sizing.from_header { bytes } else { opts.memory_budget };
+    let budget = if sizing.exact { bytes } else { opts.memory_budget };
     Ok(DecoderPlan { threads, budget, weight: bytes })
 }
 
@@ -206,8 +207,9 @@ struct Sizing {
     references: u64,
     /// Pictures held per picture in flight, counting those in flight (see [`Sizing::store`]).
     per_flight: u64,
-    /// From the sequence headers (else from the sample entry's picture size).
-    from_header: bool,
+    /// The record's sequence headers are all the stream has (an `avc1` / `hvc1` sample entry
+    /// that carries them): the decoder needs no more than [`Sizing::store`].
+    exact: bool,
 }
 
 /// Reference pictures assumed when no sequence header says: the most either codec allows.
@@ -241,7 +243,7 @@ impl Sizing {
             bytes_per_sample: if codec == Codec::Hevc { 2 } else { 1 },
         };
         let picture = shape.bytes().filter(|b| *b > 0)?;
-        Some(Sizing { picture, references: MAX_REFERENCES, per_flight: Sizing::per_flight(codec), from_header: false })
+        Some(Sizing { picture, references: MAX_REFERENCES, per_flight: Sizing::per_flight(codec), exact: false })
     }
 }
 
@@ -293,7 +295,7 @@ fn picture_sizing(codec: &CodecConfig) -> Option<Sizing> {
     // (a picture size that overflows counts as the largest)
     let picture = sizes.iter().map(|(shape, _)| shape.bytes().unwrap_or(u64::MAX)).max()?;
     let references = sizes.iter().map(|(_, refs)| *refs).max()?;
-    Some(Sizing { picture, references, per_flight: Sizing::per_flight(codec), from_header: true })
+    Some(Sizing { picture, references, per_flight: Sizing::per_flight(codec), exact: true })
 }
 
 impl Decoder {
@@ -501,7 +503,9 @@ fn entry_codec(track: &isobmff::Track, index: u32) -> Result<(Codec, Vec<u8>, Op
         CodecConfig::Hevc(c) => (Codec::Hevc, c.to_bytes()),
         other => return Err(unsupported_codec(other, entry.format.0)),
     };
-    let sizing = picture_sizing(&entry.codec).or_else(|| {
+    // (`avc3` / `hev1` streams may carry sequence headers in their samples, beyond the record's)
+    let in_band = matches!(&entry.format.0, b"avc3" | b"hev1");
+    let sizing = picture_sizing(&entry.codec).map(|s| Sizing { exact: s.exact && !in_band, ..s }).or_else(|| {
         let (w, h) = entry.video.as_ref().map_or((0, 0), |v| (v.width, v.height));
         Sizing::of_entry(codec, w, h)
     });
@@ -925,7 +929,7 @@ mod tests {
     fn the_budget_covers_the_output_waiting_beside_the_pictures_in_flight() {
         for threads in 1..=16 {
             let flight = in_flight(threads);
-            let at = |codec| Sizing { picture: 1, references: 4, per_flight: Sizing::per_flight(codec), from_header: true }.store(threads);
+            let at = |codec| Sizing { picture: 1, references: 4, per_flight: Sizing::per_flight(codec), exact: true }.store(threads);
             assert_eq!(at(Codec::Hevc), Some(4 + 1 + flight + 2 * flight), "{threads}");
             assert_eq!(at(Codec::H264), Some(4 + 1 + flight.max(2 * flight)), "{threads}");
         }

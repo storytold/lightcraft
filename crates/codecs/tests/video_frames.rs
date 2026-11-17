@@ -859,13 +859,13 @@ fn hevc_on_several_threads_decodes_within_its_planned_budget() {
     }
 }
 
-/// A decoder that refuses a picture over its memory budget partway to the target (here a
-/// sequence header in the stream switches to pictures larger than the clip's record planned for)
-/// leaves the poster the last picture that decoded, marked as a fallback, as damage does.
-#[test]
-fn a_memory_refusal_on_the_way_to_the_target_shows_the_last_good_picture() {
+/// A 64 × 64 H.264 clip of 60 pictures whose stream then switches, by sequence headers in its
+/// 61st picture, to 10 pictures of 512 × 512 (not a sync sample in the container), with sample
+/// entry `format`.
+fn in_band_switch(format: &[u8; 4]) -> Vec<u8> {
     let small = Clip { keyint: 120, ..Clip::new(64, 64, 60) };
-    let (entry, mut samples, _) = h264_samples(&small);
+    let (mut entry, mut samples, _) = h264_samples(&small);
+    entry.format = FourCc(*format);
     let (big_entry, big, _) = h264_samples(&Clip { keyint: 120, ..Clip::new(512, 512, 10) });
     // (the larger stream's parameter sets go in its first picture, length-prefixed)
     let avc = match &big_entry.codec {
@@ -886,9 +886,23 @@ fn a_memory_refusal_on_the_way_to_the_target_shows_the_last_good_picture() {
         // (not a sync sample in the container: a seek past it starts at the first picture)
         samples.push((data, pts + 60, dts + 60, false));
     }
-    let bytes = mux(entry, &samples, &small, None);
+    mux(entry, &samples, &small, None)
+}
+
+/// A decoder that refuses a picture over its memory budget partway to the target (here an
+/// `avc1` stream whose sequence headers switch to pictures larger than its record planned for)
+/// leaves the poster the last picture that decoded, marked as a fallback, as damage does. An
+/// `avc3` stream may carry its own sequence headers: the decoder gets the ceiling, and the larger
+/// pictures decode.
+#[test]
+fn a_memory_refusal_on_the_way_to_the_target_shows_the_last_good_picture() {
     let o = PosterOptions { target_seconds: 65.0 / f64::from(FPS), ..opts() };
-    let p = poster(&bytes, &o).unwrap();
+    let p = poster(&in_band_switch(b"avc1"), &o).unwrap();
     assert!(p.fallback);
     assert_shows_frame(&p.image, 59);
+    let p = poster(&in_band_switch(b"avc3"), &o).unwrap();
+    assert!(!p.fallback);
+    assert_eq!((p.image.width, p.image.height), (512, 512));
+    // (the larger stream's sixth picture)
+    assert_shows_frame(&p.image, 5);
 }
