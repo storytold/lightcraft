@@ -67,7 +67,8 @@ is also available through `library.importLightroom {"status":true}` during that 
 
 Original files are referenced in place. Ratings, picks/rejects, color labels, XMP metadata,
 hierarchical keywords, regular collections/collection sets, smart collections, saved prints, folder stacks,
-virtual copies and mapped develop settings are imported. Missing originals remain catalogued for relinking, count as added records and are reported
+virtual copies and mapped develop settings are imported. An image's caption is taken from Lightroom's own IPTC table (`AgLibraryIPTC`) when it has one
+there, since the XMP packet Lightroom caches for the image can lack it. Missing originals remain catalogued for relinking, count as added records and are reported
 separately from failures reading files that are present. Known-missing originals are not probed
 again. Previously browsed Local records join All Photos even when their originals are offline;
 their promotion is counted once and undone together with the catalog import.
