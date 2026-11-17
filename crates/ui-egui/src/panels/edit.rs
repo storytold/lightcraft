@@ -362,29 +362,38 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.ui.toggle_flyout("defringe");
         }
         if open {
-            ui.horizontal(|ui| {
-                ui.add_space(24.0);
-                if crate::widgets::text_button(ui, "defringeAuto", crate::i18n::tr("Auto"), false)
-                    .on_hover_text(crate::i18n::tr("Find the purple and green fringes along edges and set Defringe for them"))
-                    .clicked()
-                {
-                    match app.run("develop.autoDefringe", json!({})) {
-                        Ok(r) if r["found"] == false && r["removeCa"] == true => {
-                            app.toast(ui.ctx(), crate::i18n::tr("Chromatic aberration removed; no purple or green fringes found"))
+            // Auto on the left, Protect Colours on the right, as the Edit header lays out its buttons
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if crate::widgets::text_button(ui, "defringeAuto", crate::i18n::tr("Auto"), false)
+                        .on_hover_text(crate::i18n::tr(
+                            "Turn on Remove Chromatic Aberration, then find the purple fringes and halos along bright edges and set Defringe for them, with Protect Colours",
+                        ))
+                        .clicked()
+                    {
+                        match app.run("develop.autoDefringe", json!({})) {
+                            Ok(r) if r["found"] == true => app.toast(ui.ctx(), crate::i18n::tr("Purple fringes found and removed")),
+                            Ok(r) if r["removeCa"] == true => {
+                                app.toast(ui.ctx(), crate::i18n::tr("Chromatic aberration removed; no purple fringes found"))
+                            }
+                            Ok(_) => app.toast(ui.ctx(), crate::i18n::tr("No colour fringes found")),
+                            Err(e) => app.toast_error(ui.ctx(), e),
                         }
-                        Ok(r) if r["found"] == false => app.toast(ui.ctx(), crate::i18n::tr("No colour fringes found")),
-                        Ok(_) => {}
-                        Err(e) => app.toast_error(ui.ctx(), e),
                     }
-                }
-                let mut protect = d.optics.defringe_protect;
-                if ui
-                    .checkbox(&mut protect, crate::i18n::tr("Protect Colours"))
-                    .on_hover_text(crate::i18n::tr("Turn fringes into the colours beside them, and leave colours an edge shares"))
-                    .changed()
-                {
-                    let _ = app.run("develop.merge", json!({"settings": {"optics": {"defringe_protect": protect}}, "label": "Protect Colours"}));
-                }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let mut protect = d.optics.defringe_protect;
+                        let r = ui.checkbox(&mut protect, crate::i18n::tr("Protect Colours"));
+                        crate::widgets::register(ui, "check:optics.defringeProtect", r.rect);
+                        if r
+                            .on_hover_text(crate::i18n::tr(
+                                "Fringes take the colours beside them instead of turning grey, and colours that belong to the subject, like a blue sign or a lit wall, are left alone",
+                            ))
+                            .changed()
+                        {
+                            let _ = app.run("develop.merge", json!({"settings": {"optics": {"defringe_protect": protect}}, "label": "Protect Colours"}));
+                        }
+                    });
+                });
             });
             control(app, ui, d, "optics.defringePurple", true);
             let on = d.optics.defringe_purple_amount > 0.0;
