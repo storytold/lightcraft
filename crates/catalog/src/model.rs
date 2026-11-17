@@ -221,7 +221,7 @@ pub struct Meta {
     /// name programs write to `xmp:Label` (`Orange`, `Pink`): Capture One has seven colours, the
     /// library five. Kept so the colour isn't lost; it is not shown or filtered on. Written to
     /// XMP while the photo has no label of its own, and dropped when a label is set here. Left
-    /// out of the catalog JSON when empty, so older catalogs read unchanged.
+    /// out of the catalog JSON when empty; catalog format 14 (an older build would drop it).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub label_text: String,
     pub keywords: Vec<String>,

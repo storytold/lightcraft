@@ -16,7 +16,8 @@
 //! journal (no write-ahead log): a journal next to the database means a write is under way or
 //! was cut short, so the catalog is refused until Capture One has closed it cleanly.
 //!
-//! What the catalog stores, as observed (schema 1400 to 1621, Capture One 21 to 16.3):
+//! What the catalog stores, as observed in catalogs at schema 1621 (Capture One 16.3), one of them first made with
+//! Capture One 21:
 //! - Tables are Core Data–like: `Z_PK` keys, `Z_ENT` entity numbers named in `ZENTITIES`. The
 //!   numbers differ between versions, so entities are told apart by name only.
 //! - `ZVERSIONINFO` lists every program version that wrote the catalog; `ZVERSION` is the schema
