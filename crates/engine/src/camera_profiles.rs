@@ -215,7 +215,7 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
                 if !path.extension().is_some_and(|x| x == "json") || !path.is_file() {
                     continue;
                 }
-                let rank = if path.file_stem().map_or(false, |s| normalize_for_local_match(&s.to_string_lossy()) == needle) { 1 } else { 2 };
+                let rank = if path.file_stem().is_some_and(|s| normalize_for_local_match(&s.to_string_lossy()) == needle) { 1 } else { 2 };
                 ranked.push((rank, path));
             }
             ranked.sort();
