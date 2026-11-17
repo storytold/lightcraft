@@ -33,25 +33,49 @@ fn demux_error(e: isobmff::Error) -> VideoError {
     }
 }
 
-/// Why a file with no movie header has no pictures here: a valid clip of a kind not read (an
-/// AVCHD camcorder's MPEG transport stream, a bare H.264 / HEVC stream) is unsupported, not
-/// damaged. Told by its first bytes: a transport stream's sync byte at the start of two
-/// consecutive 188-byte packets (`.m2ts` puts a 4-byte timestamp before each: 192 bytes apart), a
-/// bare stream's start code at the very start.
-fn not_a_movie(src: &Src) -> VideoError {
-    let mut head = [0u8; 4 + 192 + 1];
-    let n = (src.len().min(head.len() as u64)) as usize;
-    if src.read_at(0, &mut head[..n]).is_ok() {
-        let head = &head[..n];
-        let sync = |at: usize, stride: usize| head.get(at) == Some(&0x47) && head.get(at + stride) == Some(&0x47);
-        if sync(0, 188) || sync(4, 192) {
-            return VideoError::Unsupported(reason::TRANSPORT_STREAM.into());
-        }
-        if head.starts_with(&[0, 0, 1]) || head.starts_with(&[0, 0, 0, 1]) {
-            return VideoError::Unsupported(reason::BARE_STREAM.into());
-        }
+/// Bytes [`not_a_movie`] looks at.
+const SNIFF_BYTES: usize = 4096;
+
+/// Why a file that isn't read as a movie has no pictures here, when it is a valid clip of a kind
+/// not read (an AVCHD camcorder's MPEG transport stream, a bare H.264 / HEVC stream): unsupported,
+/// not damaged. `None` for anything else (the container's own error stands). Told by its first
+/// bytes, whatever the container reader made of them (an `.m2ts` packet's timestamp can read as a
+/// box too small for its header):
+/// - a transport stream: the sync byte at the start of three consecutive 188-byte packets, or of
+///   three 192-byte ones after the 4-byte timestamp `.m2ts` puts before each;
+/// - a bare stream: a start code at the very start, then a valid H.264 or HEVC NAL unit header
+///   and a second start code; not when bytes 4 to 8 read as a box type (a box of 256 bytes or
+///   more, or a 64-bit `mdat` with no movie header, starts `00 00 01` / `00 00 00 01` too).
+fn not_a_movie(src: &Src) -> Option<VideoError> {
+    let mut head = vec![0u8; SNIFF_BYTES];
+    let n = src.len().min(SNIFF_BYTES as u64) as usize;
+    let head = head.get_mut(..n)?;
+    src.read_at(0, head).ok()?;
+    let head = &*head;
+    let sync = |at: usize, stride: usize| (0..3).all(|k| head.get(at + k * stride) == Some(&0x47));
+    if sync(0, 188) || sync(4, 192) {
+        return Some(VideoError::Unsupported(reason::TRANSPORT_STREAM.into()));
     }
-    demux_error(isobmff::Error::NoMoov)
+    bare_stream(head).then(|| VideoError::Unsupported(reason::BARE_STREAM.into()))
+}
+
+/// `head` starts like a bare H.264 / HEVC stream (see [`not_a_movie`]).
+fn bare_stream(head: &[u8]) -> bool {
+    let box_type = head.get(4..8).is_some_and(|t| t.iter().all(|b| b.is_ascii_alphanumeric() || *b == b' '));
+    let nal = if head.starts_with(&[0, 0, 0, 1]) {
+        4
+    } else if head.starts_with(&[0, 0, 1]) {
+        3
+    } else {
+        return false;
+    };
+    let (Some(&a), Some(&b)) = (head.get(nal), head.get(nal + 1)) else { return false };
+    // H.264: forbidden bit 0, a type 1 to 23. HEVC: forbidden bit 0, a type 0 to 40, a temporal
+    // id plus one that isn't 0.
+    let h264 = a & 0x80 == 0 && (1..=23).contains(&(a & 0x1f));
+    let hevc = a & 0x80 == 0 && (a >> 1) & 0x3f <= 40 && b & 0x07 != 0;
+    let second = head.get(nal + 1..).is_some_and(|rest| rest.windows(3).any(|w| w == [0, 0, 1]));
+    !box_type && (h264 || hevc) && second
 }
 
 /// The first audio track's description.
@@ -136,80 +160,140 @@ fn hevc_unsupported(m: &str) -> &'static str {
 /// The most decoder threads [`decoder_plan`] considers (a larger request decodes on this many).
 const MAX_DECODER_THREADS: usize = 64;
 
-/// The decoder threads and memory budget for a clip whose pictures are `sizing`
-/// ([`picture_sizing`]): the most threads up to [`StreamOptions::threads`] whose pictures fit
-/// within the ceiling [`StreamOptions::memory_budget`] (each thread holds pictures in flight, so
-/// an 8K clip may decode on fewer threads than asked), and the bytes those pictures take. A clip
-/// whose pictures don't fit even on one thread is too large to decode. A header this doesn't read
-/// leaves the decoder the threads asked for, the whole ceiling, and its own check.
-fn decoder_plan(sizing: Option<Sizing>, opts: &StreamOptions) -> Result<(usize, u64), VideoError> {
-    let asked = opts.threads.clamp(1, MAX_DECODER_THREADS);
-    let Some(sizing) = sizing else {
-        return Ok((asked, opts.memory_budget));
-    };
-    (1..=asked)
-        .rev()
-        .find_map(|threads| sizing.store(threads).filter(|bytes| *bytes <= opts.memory_budget).map(|bytes| (threads, bytes)))
-        .ok_or_else(|| VideoError::Unsupported(reason::TOO_LARGE_TO_DECODE.into()))
+/// What a clip's decoder is set up with: its threads and memory budget, and the bytes of
+/// pictures a caller weighing memory should count ([`StreamInfo::decoder_bytes`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DecoderPlan {
+    threads: usize,
+    budget: u64,
+    weight: u64,
 }
 
-/// Decoded pictures the decoders hold at once beyond their reference pictures, per thread
-/// setting: craft-video 5c91598 decodes `threads + 2` pictures in flight, plus the one it starts.
+/// The decoder plan for a clip whose pictures are `sizing` ([`picture_sizing`]): the most threads
+/// up to [`StreamOptions::threads`] whose pictures fit within the ceiling
+/// [`StreamOptions::memory_budget`] (each thread holds pictures in flight, so an 8K clip may
+/// decode on fewer threads than asked), and the bytes those pictures take, as budget and weight.
+/// A clip whose pictures don't fit even on one thread is too large to decode.
+///
+/// Sized from the sample entry instead (no sequence header this reads), the estimate may be short
+/// of what the decoder finds: the decoder keeps the whole ceiling and its own check, and only the
+/// weight is the estimate.
+fn decoder_plan(sizing: Option<Sizing>, opts: &StreamOptions) -> Result<DecoderPlan, VideoError> {
+    let asked = opts.threads.clamp(1, MAX_DECODER_THREADS);
+    let Some(sizing) = sizing else {
+        return Ok(DecoderPlan { threads: asked, budget: opts.memory_budget, weight: opts.memory_budget });
+    };
+    let (threads, bytes) = (1..=asked)
+        .rev()
+        .find_map(|threads| sizing.store(threads).filter(|bytes| *bytes <= opts.memory_budget).map(|bytes| (threads, bytes)))
+        .ok_or_else(|| VideoError::Unsupported(reason::TOO_LARGE_TO_DECODE.into()))?;
+    let budget = if sizing.from_header { bytes } else { opts.memory_budget };
+    Ok(DecoderPlan { threads, budget, weight: bytes })
+}
+
+/// Decoded pictures the decoders have in flight per thread setting: craft-video 5c91598 decodes
+/// `threads + 2` at once.
 fn in_flight(threads: usize) -> u64 {
     threads.max(1) as u64 + 2
 }
 
-/// A decoded picture's shape and the reference pictures a clip's first sequence header asks for.
-#[derive(Clone, Copy, Debug)]
+/// How big a clip's decoded pictures are and how many its decoder holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Sizing {
-    shape: craft_video::budget::PictureShape,
+    /// Bytes of the largest decoded picture.
+    picture: u64,
+    /// Reference pictures (the most any sequence header asks for).
     references: u64,
+    /// Pictures held per picture in flight, counting those in flight (see [`Sizing::store`]).
+    per_flight: u64,
+    /// From the sequence headers (else from the sample entry's picture size).
+    from_header: bool,
 }
 
+/// Reference pictures assumed when no sequence header says: the most either codec allows.
+const MAX_REFERENCES: u64 = 16;
+
 impl Sizing {
-    /// Bytes of decoded pictures the decoder needs on `threads` threads (the decoders check the
-    /// same: the reference pictures, the one being decoded and those in flight), with as many
-    /// again in flight for output waiting to be taken.
+    /// Bytes of decoded pictures the decoder may hold on `threads` threads, as craft-video
+    /// 5c91598 counts them: the reference pictures, the one being decoded, those in flight, and
+    /// the output waiting to be taken (at most twice the pictures in flight). H.264 charges the
+    /// larger of the pictures in flight and that output, HEVC both.
     fn store(&self, threads: usize) -> Option<u64> {
-        self.shape.store_bytes(self.references.saturating_add(1).saturating_add(in_flight(threads).saturating_mul(2)))
+        let pictures = self.references.saturating_add(1).saturating_add(in_flight(threads).saturating_mul(self.per_flight));
+        self.picture.checked_mul(pictures)
+    }
+
+    /// Pictures held per picture in flight by `codec`'s decoder ([`Sizing::store`]).
+    fn per_flight(codec: Codec) -> u64 {
+        if codec == Codec::Hevc { 3 } else { 2 }
+    }
+
+    /// Sized from the sample entry's `width` × `height` when no sequence header can be read: 4:2:0
+    /// pictures padded to 64-sample blocks, 2 bytes a sample for HEVC, [`MAX_REFERENCES`].
+    fn of_entry(codec: Codec, width: u16, height: u16) -> Option<Sizing> {
+        let pad = |n: u16| u64::from(n).div_ceil(64).saturating_mul(64);
+        let shape = craft_video::budget::PictureShape {
+            width: pad(width),
+            height: pad(height),
+            shift_x: 1,
+            shift_y: 1,
+            chroma_planes: 2,
+            bytes_per_sample: if codec == Codec::Hevc { 2 } else { 1 },
+        };
+        let picture = shape.bytes().filter(|b| *b > 0)?;
+        Some(Sizing { picture, references: MAX_REFERENCES, per_flight: Sizing::per_flight(codec), from_header: false })
     }
 }
 
-/// How the decoder for `codec` sizes its pictures, from the clip's first sequence header. `None`
-/// when the record has no sequence header this reads (the decoder then says why).
+/// How the decoder for `codec` sizes its pictures, from every sequence header in the record (the
+/// largest picture, the most reference pictures). `None` when the record has none this reads (the
+/// decoder then says why).
 fn picture_sizing(codec: &CodecConfig) -> Option<Sizing> {
     use craft_media::bitstream::unescape_rbsp;
-    let (shape, dpb) = match codec {
-        CodecConfig::Avc(c) => {
-            let sps = h264::decode::params::Sps::parse(&unescape_rbsp(c.sps.first()?.get(1..)?)).ok()?;
-            let chroma = sps.chroma_array_type();
-            let shape = craft_video::budget::PictureShape {
-                width: u64::from(sps.width()),
-                height: u64::from(sps.height()),
-                shift_x: u32::from(chroma != 3),
-                shift_y: u32::from(chroma == 1),
-                chroma_planes: if chroma == 0 { 0 } else { 2 },
-                bytes_per_sample: 1,
-            };
-            (shape, sps.max_dpb_frames() as u64)
-        }
-        CodecConfig::Hevc(c) => {
-            let nal = c.arrays.iter().filter(|a| a.nal_type == 33).flat_map(|a| a.nalus.iter()).next()?;
-            let sps = hevc::decode::params::Sps::parse(&unescape_rbsp(nal.get(2..)?)).ok()?;
-            let chroma = sps.chroma_array_type();
-            let shape = craft_video::budget::PictureShape {
-                width: u64::from(sps.width),
-                height: u64::from(sps.height),
-                shift_x: u32::from(sps.sub_width_c() == 2),
-                shift_y: u32::from(sps.sub_height_c() == 2),
-                chroma_planes: if chroma == 0 { 0 } else { 2 },
-                bytes_per_sample: 2,
-            };
-            (shape, u64::from(sps.max_dec_pic_buffering))
-        }
+    let sizes: Vec<(craft_video::budget::PictureShape, u64)> = match codec {
+        CodecConfig::Avc(c) => c
+            .sps
+            .iter()
+            .filter_map(|nal| h264::decode::params::Sps::parse(&unescape_rbsp(nal.get(1..)?)).ok())
+            .map(|sps| {
+                let chroma = sps.chroma_array_type();
+                let shape = craft_video::budget::PictureShape {
+                    width: u64::from(sps.width()),
+                    height: u64::from(sps.height()),
+                    shift_x: u32::from(chroma != 3),
+                    shift_y: u32::from(chroma == 1),
+                    chroma_planes: if chroma == 0 { 0 } else { 2 },
+                    bytes_per_sample: 1,
+                };
+                (shape, sps.max_dpb_frames() as u64)
+            })
+            .collect(),
+        CodecConfig::Hevc(c) => c
+            .arrays
+            .iter()
+            .filter(|a| a.nal_type == 33)
+            .flat_map(|a| a.nalus.iter())
+            .filter_map(|nal| hevc::decode::params::Sps::parse(&unescape_rbsp(nal.get(2..)?)).ok())
+            .map(|sps| {
+                let chroma = sps.chroma_array_type();
+                let shape = craft_video::budget::PictureShape {
+                    width: u64::from(sps.width),
+                    height: u64::from(sps.height),
+                    shift_x: u32::from(sps.sub_width_c() == 2),
+                    shift_y: u32::from(sps.sub_height_c() == 2),
+                    chroma_planes: if chroma == 0 { 0 } else { 2 },
+                    bytes_per_sample: 2,
+                };
+                (shape, u64::from(sps.max_dec_pic_buffering))
+            })
+            .collect(),
         _ => return None,
     };
-    Some(Sizing { shape, references: dpb })
+    let codec = if matches!(codec, CodecConfig::Hevc(_)) { Codec::Hevc } else { Codec::H264 };
+    // (a picture size that overflows counts as the largest)
+    let picture = sizes.iter().map(|(shape, _)| shape.bytes().unwrap_or(u64::MAX)).max()?;
+    let references = sizes.iter().map(|(_, refs)| *refs).max()?;
+    Some(Sizing { picture, references, per_flight: Sizing::per_flight(codec), from_header: true })
 }
 
 impl Decoder {
@@ -412,11 +496,16 @@ fn entry_codec(track: &isobmff::Track, index: u32) -> Result<(Codec, Vec<u8>, Op
         .and_then(|i| track.entries.get(i as usize))
         .ok_or_else(|| VideoError::Malformed(format!("sample description {index} is missing")))?;
     let colour = entry.video.as_ref().and_then(|v| v.color.as_ref()).and_then(container_colour);
-    match &entry.codec {
-        CodecConfig::Avc(c) => Ok((Codec::H264, c.to_bytes(), colour, picture_sizing(&entry.codec))),
-        CodecConfig::Hevc(c) => Ok((Codec::Hevc, c.to_bytes(), colour, picture_sizing(&entry.codec))),
-        other => Err(unsupported_codec(other, entry.format.0)),
-    }
+    let (codec, config) = match &entry.codec {
+        CodecConfig::Avc(c) => (Codec::H264, c.to_bytes()),
+        CodecConfig::Hevc(c) => (Codec::Hevc, c.to_bytes()),
+        other => return Err(unsupported_codec(other, entry.format.0)),
+    };
+    let sizing = picture_sizing(&entry.codec).or_else(|| {
+        let (w, h) = entry.video.as_ref().map_or((0, 0), |v| (v.width, v.height));
+        Sizing::of_entry(codec, w, h)
+    });
+    Ok((codec, config, colour, sizing))
 }
 
 /// The track to show: the first enabled video track with pictures, else any video track with
@@ -522,16 +611,13 @@ impl VideoStream {
     /// Reads the clip's headers (its `moov`) and gets the decoder ready for the first picture.
     pub fn open(src: impl ClipSource + 'static, opts: &StreamOptions) -> Result<VideoStream, VideoError> {
         let src = Src(Box::new(src));
-        let file = isobmff::open(&src).map_err(|e| match e {
-            isobmff::Error::NoMoov => not_a_movie(&src),
-            e => demux_error(e),
-        })?;
+        let file = isobmff::open(&src).map_err(|e| not_a_movie(&src).unwrap_or_else(|| demux_error(e)))?;
         let track = pick_track(&file)?;
         let t = file.tracks.get(track).ok_or_else(|| VideoError::Malformed("no video track".into()))?;
         let description = t.samples.first().map_or(1, |s| s.description_index);
         let (codec, config, container_colour, sizing) = entry_codec(t, description)?;
-        let (decoder_threads, decoder_bytes) = decoder_plan(sizing, opts)?;
-        let decoder = Decoder::new(codec, &config, decoder_threads, decoder_bytes)?;
+        let plan = decoder_plan(sizing, opts)?;
+        let decoder = Decoder::new(codec, &config, plan.threads, plan.budget)?;
         let (w, h) = t.video().map_or((t.width, t.height), |v| (u32::from(v.width), u32::from(v.height)));
         let window = Window::of(t, file.timescale);
         let (start, end) = (window.start, window.end);
@@ -549,8 +635,8 @@ impl VideoStream {
             start_seconds: seconds(start, t.timescale),
             duration_seconds: seconds(end.saturating_sub(start), t.timescale),
             sample_count: t.samples.len(),
-            decoder_bytes,
-            decoder_threads,
+            decoder_bytes: plan.weight,
+            decoder_threads: plan.threads,
         };
         if t.timescale == 0 {
             return Err(VideoError::Malformed("the video track's timescale is 0".into()));
@@ -670,7 +756,7 @@ impl VideoStream {
     /// no reset, so it is made anew.
     fn restart(&mut self, description: u32) -> Result<(), VideoError> {
         let (codec, config, colour, sizing) = entry_codec(self.track()?, description)?;
-        let (threads, budget) = decoder_plan(sizing, &self.opts)?;
+        let DecoderPlan { threads, budget, weight } = decoder_plan(sizing, &self.opts)?;
         match &mut self.decoder {
             // (a reset keeps the decoder's threads: another description on the same count only)
             Decoder::H264(d) if codec == Codec::H264 && threads == self.info.decoder_threads => {
@@ -680,7 +766,7 @@ impl VideoStream {
             }
             _ => self.decoder = Decoder::new(codec, &config, threads, budget)?,
         }
-        (self.info.decoder_threads, self.info.decoder_bytes) = (threads, budget);
+        (self.info.decoder_threads, self.info.decoder_bytes) = (threads, weight);
         self.decoder.set_draft(self.draft);
         self.description = description;
         self.container_colour = colour;
@@ -785,6 +871,94 @@ impl VideoStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An 8-bit 4:2:0 grey picture of `w` × `h`.
+    fn grey(w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
+        (vec![100; w * h], vec![128; w * h / 4])
+    }
+
+    /// An H.264 stream of one `w` × `h` picture: its avcC record and the picture's sample.
+    fn h264_stream(w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
+        use craft_video::h264::{Encoder, EncoderConfig, PacketFormat, YuvFrame};
+        let mut cfg = EncoderConfig::new(w as u32, h as u32, 30, 1);
+        cfg.format = PacketFormat::LengthPrefixed;
+        cfg.threads = 1;
+        let mut enc = Encoder::new(cfg).unwrap();
+        let (y, c) = grey(w, h);
+        let mut packets = enc.encode(&YuvFrame { y: &y, u: &c, v: &c, y_stride: w, uv_stride: w / 2 }, 0).unwrap();
+        packets.extend(enc.flush());
+        (enc.avcc(), packets.remove(0).data)
+    }
+
+    /// An HEVC stream of one `w` × `h` picture: its hvcC record and the picture's sample.
+    fn hevc_stream(w: usize, h: usize) -> (Vec<u8>, Vec<u8>) {
+        use craft_video::hevc::{Encoder, EncoderConfig, Frame};
+        let mut enc = Encoder::new(EncoderConfig::new(w as u32, h as u32, 30, 1)).unwrap();
+        let (y, c) = grey(w, h);
+        let wide = |p: &[u8]| p.iter().map(|&s| u16::from(s)).collect::<Vec<_>>();
+        let (y, c) = (wide(&y), wide(&c));
+        let p = enc.encode(&Frame { y: &y, u: &c, v: &c, y_stride: w, uv_stride: w / 2 }).unwrap();
+        (enc.hvcc(), p.data)
+    }
+
+    /// The real decoders' memory refusal, whatever its wording, reads as a clip too large to
+    /// decode (the test breaks, not the behaviour, if craft-video rewords it).
+    #[test]
+    fn a_decoder_refusing_for_memory_is_too_large_to_decode() {
+        for (codec, (config, sample)) in [(Codec::H264, h264_stream(64, 64)), (Codec::Hevc, hevc_stream(64, 64))] {
+            let config = match codec {
+                Codec::H264 => isobmff::AvcConfig::parse(&config).unwrap().to_bytes(),
+                _ => isobmff::HevcConfig::parse(&config).unwrap().to_bytes(),
+            };
+            let mut d = Decoder::new(codec, &config, 1, 1000).unwrap();
+            let mut out = Vec::new();
+            let e = d.decode(&sample, 0, &mut out).and_then(|()| d.flush(&mut out)).unwrap_err();
+            assert_eq!(e, VideoError::Unsupported(reason::TOO_LARGE_TO_DECODE.into()), "{codec:?}");
+        }
+    }
+
+    /// The budget covers what craft-video 5c91598 may charge at worst: the reference pictures, the
+    /// one being decoded, those in flight and the output waiting to be taken (at most twice those
+    /// in flight). The HEVC decoder adds the in-flight pictures and that output; H.264 charges the
+    /// larger of them.
+    #[test]
+    fn the_budget_covers_the_output_waiting_beside_the_pictures_in_flight() {
+        for threads in 1..=16 {
+            let flight = in_flight(threads);
+            let at = |codec| Sizing { picture: 1, references: 4, per_flight: Sizing::per_flight(codec), from_header: true }.store(threads);
+            assert_eq!(at(Codec::Hevc), Some(4 + 1 + flight + 2 * flight), "{threads}");
+            assert_eq!(at(Codec::H264), Some(4 + 1 + flight.max(2 * flight)), "{threads}");
+        }
+    }
+
+    /// Every sequence header in the record counts: the largest picture and the most reference
+    /// pictures, not just the first header's.
+    #[test]
+    fn every_sequence_header_counts() {
+        let (small, _) = h264_stream(64, 64);
+        let (big, _) = h264_stream(640, 480);
+        let mut record = isobmff::AvcConfig::parse(&small).unwrap();
+        record.sps.extend(isobmff::AvcConfig::parse(&big).unwrap().sps);
+        let sizing = picture_sizing(&CodecConfig::Avc(record)).unwrap();
+        assert_eq!(sizing.picture, 640 * 480 * 3 / 2);
+        let (small, _) = hevc_stream(64, 64);
+        let (big, _) = hevc_stream(640, 480);
+        let mut record = isobmff::HevcConfig::parse(&small).unwrap();
+        record.arrays.extend(isobmff::HevcConfig::parse(&big).unwrap().arrays.into_iter().filter(|a| a.nal_type == 33));
+        let sizing = picture_sizing(&CodecConfig::Hevc(record)).unwrap();
+        assert_eq!(sizing.picture, 640 * 480 * 3);
+    }
+
+    /// With no sequence header to read, the weight comes from the sample entry's picture size, not
+    /// the whole ceiling; the decoder keeps the ceiling and its own check.
+    #[test]
+    fn without_a_sequence_header_the_entry_size_weighs_the_decode() {
+        let opts = StreamOptions { threads: 2, ..StreamOptions::default() };
+        let plan = decoder_plan(Sizing::of_entry(Codec::Hevc, 1920, 1080), &opts).unwrap();
+        // (1920 × 1088 samples, 4:2:0, 2 bytes each; 16 references, 1, 4 in flight, 8 waiting)
+        assert_eq!(plan, DecoderPlan { threads: 2, budget: opts.memory_budget, weight: 1920 * 1088 * 3 * (16 + 1 + 4 * 3) });
+        assert_eq!(Sizing::of_entry(Codec::H264, 0, 1080), None);
+    }
 
     /// The decoders' own words name bitstream syntax; the reason a person reads doesn't, and a
     /// decoder refusing pictures over its memory budget means a clip too large, not a damaged one.

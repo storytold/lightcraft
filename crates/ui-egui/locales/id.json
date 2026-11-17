@@ -2436,7 +2436,7 @@
   "the clip's file can't be read (no permission)": "berkas klip tidak dapat dibaca (tidak ada izin)",
   "the clip's file can't be read": "berkas klip tidak dapat dibaca",
   "the clip's pictures are too large to decode": "gambar klip terlalu besar untuk didekode",
-  "the clip is too large to read for its picture": "klip terlalu besar untuk membaca gambarnya",
+  "the clip is too large to read": "klip terlalu besar untuk dibaca",
   "the clip is damaged": "klip rusak",
   "H.264 video with 4:2:2 colour can't be decoded yet": "video H.264 dengan warna 4:2:2 belum dapat didekode",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "video H.264 dengan lebih dari 8 bit per warna belum dapat didekode",

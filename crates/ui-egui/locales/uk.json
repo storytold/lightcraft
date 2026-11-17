@@ -2461,7 +2461,7 @@
   "the clip's file can't be read (no permission)": "не вдається прочитати файл кліпу (немає доступу)",
   "the clip's file can't be read": "не вдається прочитати файл кліпу",
   "the clip's pictures are too large to decode": "кадри кліпу завеликі для декодування",
-  "the clip is too large to read for its picture": "кліп завеликий, щоб прочитати його кадр",
+  "the clip is too large to read": "кліп завеликий для читання",
   "the clip is damaged": "кліп пошкоджено",
   "H.264 video with 4:2:2 colour can't be decoded yet": "відео H.264 з кольором 4:2:2 поки що не вдається декодувати",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "відео H.264 з понад 8 бітами на колір поки що не вдається декодувати",

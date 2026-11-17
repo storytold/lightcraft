@@ -2526,7 +2526,7 @@
   "the clip's file can't be read (no permission)": "klippets fil kan inte läsas (behörighet saknas)",
   "the clip's file can't be read": "klippets fil kan inte läsas",
   "the clip's pictures are too large to decode": "klippets bilder är för stora för att avkodas",
-  "the clip is too large to read for its picture": "klippet är för stort för att läsa dess bild",
+  "the clip is too large to read": "klippet är för stort för att läsas",
   "the clip is damaged": "klippet är skadat",
   "H.264 video with 4:2:2 colour can't be decoded yet": "H.264-video med 4:2:2-färg kan inte avkodas än",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "H.264-video med mer än 8 bitar per färg kan inte avkodas än",

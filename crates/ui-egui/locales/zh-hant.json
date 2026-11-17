@@ -2465,7 +2465,7 @@
   "the clip's file can't be read (no permission)": "無法讀取片段的檔案（沒有權限）",
   "the clip's file can't be read": "無法讀取片段的檔案",
   "the clip's pictures are too large to decode": "剪輯的畫面太大，無法解碼",
-  "the clip is too large to read for its picture": "剪輯太大，無法讀取其畫面",
+  "the clip is too large to read": "剪輯太大，無法讀取",
   "the clip is damaged": "剪輯已損壞",
   "H.264 video with 4:2:2 colour can't be decoded yet": "暫時無法解碼 4:2:2 色彩的 H.264 影片",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "暫時無法解碼每種顏色超過 8 位元的 H.264 影片",

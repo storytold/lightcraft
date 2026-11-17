@@ -57,7 +57,7 @@ pub mod reason {
     /// The decoder's pictures would take more memory than [`super::StreamOptions::memory_budget`].
     pub const TOO_LARGE_TO_DECODE: &str = "the clip's pictures are too large to decode";
     /// For a [`super::VideoError::TooLarge`]: a picture or header past a reading limit.
-    pub const TOO_LARGE_TO_READ: &str = "the clip is too large to read for its picture";
+    pub const TOO_LARGE_TO_READ: &str = "the clip is too large to read";
     /// For a [`super::VideoError::Malformed`].
     pub const DAMAGED: &str = "the clip is damaged";
     pub const H264_422: &str = "H.264 video with 4:2:2 colour can't be decoded yet";

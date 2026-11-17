@@ -750,11 +750,13 @@ fn a_picture_over_the_conversion_budget_converts_smaller() {
 /// unsupported, not a damaged clip; anything else without a movie header still is damaged.
 #[test]
 fn a_transport_stream_or_a_bare_stream_is_unsupported_not_damaged() {
-    let packets = |prefix: usize| -> Vec<u8> {
+    let packets = |prefix: usize, stamp: u8| -> Vec<u8> {
         (0..8)
             .flat_map(|i| {
                 let mut p = vec![0u8; prefix + 188];
-                p[..prefix].fill(i as u8);
+                if prefix == 4 {
+                    p[..4].copy_from_slice(&[0, 0, 0, stamp + i as u8]);
+                }
                 p[prefix] = 0x47;
                 p
             })
@@ -763,8 +765,10 @@ fn a_transport_stream_or_a_bare_stream_is_unsupported_not_damaged() {
     let annex_b = [0u8, 0, 0, 1, 0x09, 0x10, 0, 0, 0, 1, 0x67, 0x64, 0, 0x28].repeat(4);
     let short_start_code = [0u8, 0, 1, 0x40, 0x01, 0x0c, 0x01].repeat(4);
     for (what, bytes, says) in [
-        ("transport stream", packets(0), "transport stream"),
-        ("timestamped transport stream", packets(4), "transport stream"),
+        ("transport stream", packets(0, 0), "transport stream"),
+        ("timestamped transport stream", packets(4, 0), "transport stream"),
+        // (a first timestamp of 2 to 7 reads as a box smaller than its header)
+        ("timestamped transport stream, read as a tiny box", packets(4, 5), "transport stream"),
         ("bare stream", annex_b.clone(), "container"),
         ("bare stream, 3-byte start code", short_start_code, "container"),
     ] {
@@ -779,10 +783,30 @@ fn a_transport_stream_or_a_bare_stream_is_unsupported_not_damaged() {
     junk[300..304].copy_from_slice(&[0, 0, 0, 1]);
     assert!(matches!(VideoStream::open(junk, &StreamOptions::default()), Err(VideoError::Malformed(_))));
     assert!(matches!(VideoStream::open(Vec::new(), &StreamOptions::default()), Err(VideoError::Malformed(_) | VideoError::Io(_))));
+    // Box headers start like start codes: a damaged file whose first box is 300 bytes, and one
+    // with no movie header that starts with a 64-bit `mdat` (an interrupted recording), are
+    // damaged, not bare streams.
+    let mut big_box = vec![0u8, 0, 1, 0x2c];
+    big_box.extend_from_slice(b"free");
+    big_box.resize(300, 0);
+    big_box.extend_from_slice(&[0, 0, 0, 1, 0x67, 0x64, 0, 0x28, 0, 0, 1, 0x68]);
+    let mut wide_mdat = vec![0u8, 0, 0, 1];
+    wide_mdat.extend_from_slice(b"mdat");
+    wide_mdat.extend_from_slice(&4096u64.to_be_bytes());
+    wide_mdat.extend_from_slice(&[0, 0, 0, 1, 0x65, 0x88, 0x84].repeat(100));
+    // (a start code then no NAL unit header, or no second start code, is no evidence either)
+    let bad_header = [0u8, 0, 0, 1, 0x80, 0x01, 0, 0, 1, 0x41].to_vec();
+    let one_unit = [0u8, 0, 0, 1, 0x67, 0x64, 0, 0x28, 0xac].to_vec();
+    for (what, bytes) in [("300-byte box", big_box), ("64-bit mdat", wide_mdat), ("bad header", bad_header), ("one unit", one_unit)] {
+        match VideoStream::open(bytes, &StreamOptions::default()) {
+            Err(VideoError::Malformed(_)) => {}
+            other => panic!("{what}: {:?}", other.err()),
+        }
+    }
 }
 
 /// A clip's decoder gets the memory its sequence header asks for, not a fixed amount: an 8K HEVC
-/// clip on 8 decoder threads (some 2 GB of pictures, over the 1 GiB a decoder had) decodes within
+/// clip on 6 decoder threads (some 2.6 GB of pictures, over the 1 GiB a decoder had) decodes within
 /// the default ceiling, and the stream and the poster say what it may hold. Asked for more
 /// threads than the ceiling holds pictures for, it decodes on fewer; only a clip that doesn't fit
 /// on one thread is too large to decode: unsupported, not damaged.
@@ -790,7 +814,7 @@ fn a_transport_stream_or_a_bare_stream_is_unsupported_not_damaged() {
 fn the_decoder_gets_the_memory_the_clip_asks_for_within_a_ceiling() {
     use lightcraft_codecs::video_stream::reason;
     let bytes = hevc_clip(&Clip::new(7680, 4320, 1), false);
-    let opts = StreamOptions { threads: 8, ..StreamOptions::default() };
+    let opts = StreamOptions { threads: 6, ..StreamOptions::default() };
     let mut s = VideoStream::open(bytes.clone(), &opts).unwrap();
     let need = s.info().decoder_bytes;
     // (whole pictures of 16-bit 4:2:0 samples)
@@ -800,7 +824,7 @@ fn the_decoder_gets_the_memory_the_clip_asks_for_within_a_ceiling() {
     let f = s.next_frame().unwrap().unwrap();
     assert_eq!((f.width, f.height), (7680, 4320));
     let tight = VideoStream::open(bytes.clone(), &StreamOptions { memory_budget: need - 1, ..opts }).unwrap();
-    assert!(tight.info().decoder_threads < 8 && tight.info().decoder_bytes < need);
+    assert!(tight.info().decoder_threads < 6 && tight.info().decoder_bytes < need);
     match VideoStream::open(bytes.clone(), &StreamOptions { memory_budget: picture * 4, ..opts }) {
         Err(VideoError::Unsupported(m)) => assert_eq!(m, reason::TOO_LARGE_TO_DECODE),
         other => panic!("{:?}", other.err()),
@@ -813,7 +837,58 @@ fn the_decoder_gets_the_memory_the_clip_asks_for_within_a_ceiling() {
     let many = StreamOptions { threads: 16, ..StreamOptions::default() };
     let mut s = VideoStream::open(bytes, &many).unwrap();
     let (threads, held) = (s.info().decoder_threads, s.info().decoder_bytes);
-    assert!((9..16).contains(&threads) && held <= many.memory_budget && held > need, "{threads} {held}");
+    assert!((7..16).contains(&threads) && held <= many.memory_budget && held > need, "{threads} {held}");
     s.seek(0.0, SeekMode::Exact).unwrap();
     assert!(s.next_frame().unwrap().is_some());
+}
+
+/// craft-video's HEVC decoder charges the pictures in flight and the output waiting to be taken
+/// both (H.264 the larger of them): on several threads a whole clip decodes within the budget the
+/// stream plans for it.
+#[test]
+fn hevc_on_several_threads_decodes_within_its_planned_budget() {
+    let bytes = hevc_clip(&Clip { keyint: 120, noisy: true, ..Clip::new(320, 192, 60) }, false);
+    for threads in [2, 8] {
+        let mut s = VideoStream::open(bytes.clone(), &StreamOptions { threads, ..StreamOptions::default() }).unwrap();
+        s.seek(0.0, SeekMode::Exact).unwrap();
+        let mut shown = 0;
+        while let Some(_f) = s.next_frame().unwrap_or_else(|e| panic!("{threads} threads, after {shown}: {e:?}")) {
+            shown += 1;
+        }
+        assert_eq!(shown, 60, "{threads} threads");
+    }
+}
+
+/// A decoder that refuses a picture over its memory budget partway to the target (here a
+/// sequence header in the stream switches to pictures larger than the clip's record planned for)
+/// leaves the poster the last picture that decoded, marked as a fallback, as damage does.
+#[test]
+fn a_memory_refusal_on_the_way_to_the_target_shows_the_last_good_picture() {
+    let small = Clip { keyint: 120, ..Clip::new(64, 64, 60) };
+    let (entry, mut samples, _) = h264_samples(&small);
+    let (big_entry, big, _) = h264_samples(&Clip { keyint: 120, ..Clip::new(512, 512, 10) });
+    // (the larger stream's parameter sets go in its first picture, length-prefixed)
+    let avc = match &big_entry.codec {
+        isobmff::CodecConfig::Avc(c) => c.clone(),
+        _ => unreachable!(),
+    };
+    for (k, (data, pts, dts, _)) in big.into_iter().enumerate() {
+        let mut data = data;
+        if k == 0 {
+            let mut sets = Vec::new();
+            for nal in avc.sps.iter().chain(&avc.pps) {
+                sets.extend_from_slice(&(nal.len() as u32).to_be_bytes());
+                sets.extend_from_slice(nal);
+            }
+            sets.extend(data);
+            data = sets;
+        }
+        // (not a sync sample in the container: a seek past it starts at the first picture)
+        samples.push((data, pts + 60, dts + 60, false));
+    }
+    let bytes = mux(entry, &samples, &small, None);
+    let o = PosterOptions { target_seconds: 65.0 / f64::from(FPS), ..opts() };
+    let p = poster(&bytes, &o).unwrap();
+    assert!(p.fallback);
+    assert_shows_frame(&p.image, 59);
 }

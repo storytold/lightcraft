@@ -228,11 +228,12 @@ fn reduce_factor(width: usize, height: usize, max_pixels: usize) -> usize {
 }
 
 /// The first picture after the seek. When the run ends early (a picture that fails to read or
-/// decode, a track cut short), the latest picture decoded on the way stands in (`true`).
+/// decode, one the decoder can't decode or has no memory for, a track cut short), the latest
+/// picture decoded on the way stands in (`true`); with none, the error stands.
 fn first_frame(stream: &mut VideoStream, cancel: &AtomicBool) -> Result<(Frame, bool), VideoError> {
     match stream.next_frame_until(|| cancel.load(Ordering::Relaxed)) {
         Ok(Some(f)) => Ok((f, false)),
-        Err(e @ (VideoError::Cancelled | VideoError::Unsupported(_))) => Err(e),
+        Err(e @ VideoError::Cancelled) => Err(e),
         Ok(None) => stream.take_skipped().map(|f| (f, true)).ok_or_else(|| VideoError::Malformed("no picture decoded".into())),
         Err(e) => stream.take_skipped().map(|f| (f, true)).ok_or(e),
     }

@@ -3731,7 +3731,7 @@
   "the clip's file can't be read (no permission)": "კლიპის ფაილის წაკითხვა ვერ ხერხდება (წვდომა არ არის)",
   "the clip's file can't be read": "კლიპის ფაილის წაკითხვა ვერ ხერხდება",
   "the clip's pictures are too large to decode": "კლიპის კადრები დეკოდირებისთვის ზედმეტად დიდია",
-  "the clip is too large to read for its picture": "კლიპი ზედმეტად დიდია მისი კადრის წასაკითხად",
+  "the clip is too large to read": "კლიპი ზედმეტად დიდია წასაკითხად",
   "the clip is damaged": "კლიპი დაზიანებულია",
   "H.264 video with 4:2:2 colour can't be decoded yet": "4:2:2 ფერის მქონე H.264 ვიდეოს დეკოდირება ჯერ შეუძლებელია",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "ფერზე 8 ბიტზე მეტის მქონე H.264 ვიდეოს დეკოდირება ჯერ შეუძლებელია",

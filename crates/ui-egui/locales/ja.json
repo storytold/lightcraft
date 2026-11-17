@@ -2463,7 +2463,7 @@
   "the clip's file can't be read (no permission)": "クリップのファイルを読み込めません (アクセス権がありません)",
   "the clip's file can't be read": "クリップのファイルを読み込めません",
   "the clip's pictures are too large to decode": "クリップの画像が大きすぎてデコードできません",
-  "the clip is too large to read for its picture": "クリップが大きすぎて画像を読み込めません",
+  "the clip is too large to read": "クリップが大きすぎて読み込めません",
   "the clip is damaged": "クリップが破損しています",
   "H.264 video with 4:2:2 colour can't be decoded yet": "4:2:2 カラーの H.264 動画はまだデコードできません",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "1 色あたり 8 ビットを超える H.264 動画はまだデコードできません",

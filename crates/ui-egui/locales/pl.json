@@ -2389,7 +2389,7 @@
   "the clip's file can't be read (no permission)": "nie można odczytać pliku klipu (brak uprawnień)",
   "the clip's file can't be read": "nie można odczytać pliku klipu",
   "the clip's pictures are too large to decode": "klatki klipu są zbyt duże do zdekodowania",
-  "the clip is too large to read for its picture": "klip jest zbyt duży, by odczytać jego obraz",
+  "the clip is too large to read": "klip jest zbyt duży, by go odczytać",
   "the clip is damaged": "klip jest uszkodzony",
   "H.264 video with 4:2:2 colour can't be decoded yet": "wideo H.264 z kolorem 4:2:2 nie może jeszcze zostać zdekodowane",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "wideo H.264 z więcej niż 8 bitami na kolor nie może jeszcze zostać zdekodowane",

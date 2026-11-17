@@ -2422,7 +2422,7 @@
   "the clip's file can't be read (no permission)": "leikkeen tiedostoa ei voi lukea (ei käyttöoikeutta)",
   "the clip's file can't be read": "leikkeen tiedostoa ei voi lukea",
   "the clip's pictures are too large to decode": "leikkeen kuvat ovat liian suuria purettaviksi",
-  "the clip is too large to read for its picture": "leike on liian suuri sen kuvan lukemiseen",
+  "the clip is too large to read": "leike on liian suuri luettavaksi",
   "the clip is damaged": "leike on vioittunut",
   "H.264 video with 4:2:2 colour can't be decoded yet": "H.264-videota 4:2:2-värein ei voi vielä purkaa",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "H.264-videota, jossa on yli 8 bittiä väriä kohden, ei voi vielä purkaa",

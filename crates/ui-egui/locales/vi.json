@@ -2750,7 +2750,7 @@
   "the clip's file can't be read (no permission)": "không thể đọc tệp của clip (không có quyền)",
   "the clip's file can't be read": "không thể đọc tệp của clip",
   "the clip's pictures are too large to decode": "hình ảnh của clip quá lớn để giải mã",
-  "the clip is too large to read for its picture": "clip quá lớn để đọc hình ảnh của nó",
+  "the clip is too large to read": "clip quá lớn để đọc",
   "the clip is damaged": "clip bị hỏng",
   "H.264 video with 4:2:2 colour can't be decoded yet": "chưa thể giải mã video H.264 có màu 4:2:2",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "chưa thể giải mã video H.264 có hơn 8 bit mỗi màu",

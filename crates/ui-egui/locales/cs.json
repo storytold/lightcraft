@@ -2511,7 +2511,7 @@
   "the clip's file can't be read (no permission)": "soubor klipu nelze přečíst (chybí oprávnění)",
   "the clip's file can't be read": "soubor klipu nelze přečíst",
   "the clip's pictures are too large to decode": "snímky klipu jsou příliš velké na dekódování",
-  "the clip is too large to read for its picture": "klip je příliš velký na načtení jeho snímku",
+  "the clip is too large to read": "klip je příliš velký na načtení",
   "the clip is damaged": "klip je poškozený",
   "H.264 video with 4:2:2 colour can't be decoded yet": "video H.264 s barvou 4:2:2 zatím nelze dekódovat",
   "H.264 video with more than 8 bits per colour can't be decoded yet": "video H.264 s více než 8 bity na barvu zatím nelze dekódovat",
