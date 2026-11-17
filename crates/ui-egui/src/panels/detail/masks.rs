@@ -378,28 +378,25 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
 const ROTATE_RING: f32 = 18.0;
 
 /// Whether screen point `q` is just outside the radial gradient's outline (within
-/// [`ROTATE_RING`]), where a drag rotates it.
+/// [`ROTATE_RING`] screen points of its nearest point), where a drag rotates it.
 fn radial_rotate_ring(shape: &MaskShape, q: Pos2, map: &CanvasMap) -> bool {
     let MaskShape::Radial { center, rx, ry, angle, .. } = shape else { return false };
-    if !rx.is_finite() || !ry.is_finite() || *rx <= 0.0 || *ry <= 0.0 {
+    if !rx.is_finite() || !ry.is_finite() || *rx <= 0.0 || *ry <= 0.0 || radial_body_contains(shape, map.norm(q), map) {
         return false;
     }
+    // the outline as drawn (through any warp): the nearest of 720 samples is within a few points
+    // of the nearest outline point even for an ellipse as large as a 5K screen
     let l = frame_long_norm(map);
-    let at = map.norm(q);
-    let (dx, dy) = ((at.x - center.x) / l.0, (at.y - center.y) / l.1);
     let (s, co) = angle.to_radians().sin_cos();
-    let (x, y) = (dx * co + dy * s, -dx * s + dy * co);
-    let r = ((x / rx).powi(2) + (y / ry).powi(2)).sqrt();
-    if r <= 1.0 {
-        return false;
-    }
-    // the gap to the outline along the ray from the centre, in long-edge units, then on screen
-    let gap = (x * x + y * y).sqrt() * (1.0 - 1.0 / r);
-    let o = map.for_mask(false).screen(Point::new(0.0, 0.0));
-    let long_px =
-        f64::from(map.for_mask(false).screen(Point::new(1.0, 0.0)).distance(o).max(map.for_mask(false).screen(Point::new(0.0, 1.0)).distance(o)));
-    gap * long_px <= f64::from(ROTATE_RING)
+    (0..RING_SAMPLES).any(|i| {
+        let a = f64::from(i) / f64::from(RING_SAMPLES) * std::f64::consts::TAU;
+        let (x, y) = (rx * a.cos(), ry * a.sin());
+        map.screen(Point::new(center.x + (x * co - y * s) * l.0, center.y + (x * s + y * co) * l.1)).distance(q) <= ROTATE_RING
+    })
 }
+
+/// Outline points [`radial_rotate_ring`] measures against.
+const RING_SAMPLES: u16 = 720;
 
 pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap) {
     if resp.clicked()

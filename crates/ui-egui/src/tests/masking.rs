@@ -2524,3 +2524,30 @@ fn a_drag_just_outside_a_radial_rotates_it_by_the_turn() {
     exec(&mut h, "edit.undo", json!({}));
     assert_eq!(develop(&h).masks, before.masks, "one undo step");
 }
+
+#[test]
+fn a_long_thin_radial_rotates_from_beside_its_flat_side() {
+    // CodeRabbit's case: beside the flat side of a long, thin ellipse, a point 10 points from the
+    // outline is much further from it along the ray from the centre
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.3, "ry": 0.03}));
+    let image = h.app.image_rect.unwrap();
+    let (w, hh) = (f64::from(image.width()), f64::from(image.height()));
+    let long = w.max(hh);
+    // the outline at 60° above the long axis, then 10 points straight up (screen y grows down)
+    let a = (-60f64).to_radians();
+    let (px, py) = (0.3 * a.cos() * long, 0.03 * a.sin() * long - 10.0);
+    let turn = |deg: f64| {
+        let t = deg.to_radians();
+        (0.5 + (px * t.cos() - py * t.sin()) / w, 0.5 + (px * t.sin() + py * t.cos()) / hh)
+    };
+    let (a0, a1, a2) = (turn(0.0), turn(5.0), turn(10.0));
+    pointer(
+        &mut h,
+        json!([{"kind": "down", "x": a0.0, "y": a0.1}, {"kind": "drag", "x": a1.0, "y": a1.1},
+        {"kind": "drag", "x": a2.0, "y": a2.1}, {"kind": "up", "x": a2.0, "y": a2.1}]),
+    );
+    let MaskShape::Radial { angle, rx, ry, .. } = develop(&h).masks[0].components[0].shape.clone() else { panic!("radial") };
+    assert!((angle - 10.0).abs() < 1.5, "rotated from 10 points off the flat side: {angle}");
+    assert_eq!((rx, ry), (0.3, 0.03));
+}
