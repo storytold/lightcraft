@@ -22,7 +22,7 @@ Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md
    mirror. Needs the maintainer's model decision.
 5. **Compressed ORF** (gap 6 reopened; estimate pending provenance review) and **HE NEF** (gap 7, 20–40 h).
 6. **Lens profiles of our own** (gap 8, 40–80 h).
-7. **Tests in CI on macOS and Windows, and the GPU tests in CI** (gap 9, 6–12 h).
+7. **Full CI test coverage on macOS and Windows, and GPU tests in CI** (gap 9, 6–12 h).
 8. **Per-model verification** (gap 10, 20–35 h).
 
 ## Alpha gate
@@ -107,6 +107,7 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | patch | Document conditional Windows tests and the remaining CI coverage gaps (#4463) |
 | 2026-11-17 | patch | Update current focus and the culling workflow for shipped full-resolution zoom (#4461) |
 | 2026-11-17 | patch | M11 records 26 verified CR3 camera bodies and the remaining CRX limits (#4465) |
 | 2026-11-17 | patch | M10 records native JPEG XL export and the web limitation (#4464) |
