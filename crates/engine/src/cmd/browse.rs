@@ -812,4 +812,18 @@ mod tests {
         assert!(refuse_protected_place_in("folder.rename", &shortcut.to_string_lossy(), Some(&home)).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// A name the folder has, and the same name in another case that two photos share (as a
+    /// case-sensitive file system sees them): one name, listed once, as already in the folder.
+    #[test]
+    fn a_name_in_two_cases_is_one_clash() {
+        let mut c = super::Clashes::default();
+        c.add("A.jpg", true);
+        c.add("a.jpg", false);
+        c.add("a.jpg", false);
+        c.add("b.jpg", false);
+        c.add("B.JPG", true);
+        assert_eq!(c.len(), 2);
+        assert_eq!(c.reason("out"), "A.jpg, b.jpg already in out");
+    }
 }
