@@ -343,7 +343,11 @@ pub fn import_defaults(p: &Photo) -> lcc_develop::DevelopSettings {
 /// fair stand-in)? Not when a default preset changed it on import. As Shot counts as As Shot
 /// whatever numbers it stores ([`Photo::develop_matches`]), as for [`Photo::is_edited`].
 pub fn has_import_look(p: &Photo) -> bool {
-    p.develop_matches(p.camera_defaults())
+    // Remove Hot Pixels doesn't count: raws imported since the box exists start with it on, older
+    // ones with it off, and the camera's JPEG is the picture as imported either way (upstream #4389).
+    let mut defaults = p.camera_defaults();
+    defaults.detail.nr_outliers = p.develop.detail.nr_outliers;
+    p.develop_matches(defaults)
 }
 
 /// [`has_import_look`], or the only change is the camera profile (colour calibration), such as the

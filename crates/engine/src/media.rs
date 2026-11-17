@@ -3411,6 +3411,33 @@ mod thumbnail_hash_tests {
     /// An unedited raw's camera JPEG is read once for the loupe and kept in memory for a step
     /// back; the full-size one (zoomed in) is made at the size asked for and kept nowhere; an
     /// edited raw or another file has none.
+    /// Upstream #4389 (issue #4255): a raw imported before Remove Hot Pixels existed has the box off, one
+    /// imported since has it on: either way its camera JPEG is the picture as imported.
+    #[test]
+    fn remove_hot_pixels_on_or_off_keeps_the_camera_thumbnail() {
+        let mut s = crate::Session::new();
+        s.media.preview_loader =
+            Some(Arc::new(|_: &str, edge: usize| Some(Rgba8 { width: edge.min(64), height: 2, data: vec![[9, 8, 7, 255]; edge.min(64) * 2] })));
+        let mut raw = Photo::new(PhotoId(1), Source::File { path: "a.arw".into() }, "a.arw", "ARW", 6000, 4000, "2026-10-01");
+        raw.kind = MediaKind::Raw;
+        let imported_now = raw.camera_defaults();
+        assert!(imported_now.detail.nr_outliers, "a raw imported now has the box on");
+        let mut imported_before = imported_now.clone();
+        imported_before.detail.nr_outliers = false;
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(raw) }).unwrap();
+        for (settings, what) in [(imported_before, "imported before the box"), (imported_now, "imported now")] {
+            s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(settings.clone()), label: "set".into(), edited: None }).unwrap();
+            let p = s.catalog.photo(PhotoId(1)).unwrap();
+            assert!(crate::import::has_import_look(p), "{what}");
+            assert!(s.embedded_thumb_is_final(p), "{what}");
+            assert!(s.embedded_full_job(PhotoId(1), 8192).is_some(), "{what}: the loupe's camera JPEG");
+            let mut edited = settings;
+            edited.light.exposure = 1.0;
+            s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(edited), label: "edit".into(), edited: None }).unwrap();
+            assert!(!s.embedded_thumb_is_final(s.catalog.photo(PhotoId(1)).unwrap()), "{what}: an edit is still rendered");
+        }
+    }
+
     #[test]
     fn camera_previews_are_kept_for_a_revisit_and_full_size_ones_are_not() {
         let reads = Arc::new(std::sync::atomic::AtomicUsize::new(0));
