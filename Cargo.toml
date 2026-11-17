@@ -10,6 +10,7 @@ rust-version = "1.95"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
+craft-cms-profile = { package = "craft-cms", git = "https://github.com/storytold/craft-libs", rev = "eeb134def2daa7e03512b4946bd59d6b419b9484" }
 craft-plist = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "bea6ed1ff031b81df2d64be470485c1ca808847e" }
 craft-pdf-print = { package = "craft-pdf", git = "https://github.com/storytold/craft-libs", rev = "0fd30aeb3e02207d9d4c7c601540d9da45abf8de", default-features = false, features = ["write-raster"] }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }

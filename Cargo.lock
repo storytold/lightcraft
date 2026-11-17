@@ -1197,6 +1197,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-cms"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=eeb134def2daa7e03512b4946bd59d6b419b9484#eeb134def2daa7e03512b4946bd59d6b419b9484"
+dependencies = [
+ "md-5",
+ "rayon",
+]
+
+[[package]]
 name = "craft-codepage"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18#f0f4758c01581d79577b9bf5046c06f4e77b1f18"
@@ -3980,7 +3989,7 @@ name = "lightcraft-codecs"
 version = "0.21.1"
 dependencies = [
  "bytemuck",
- "craft-cms",
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=7f30d664695cd5ce14fc30659d36c3e32f234247)",
  "craft-gainmap",
  "craft-gif",
  "craft-heif",
@@ -4242,6 +4251,7 @@ dependencies = [
 name = "lightcraft-pipeline"
 version = "0.21.1"
 dependencies = [
+ "craft-cms 0.1.0 (git+https://github.com/storytold/craft-libs?rev=eeb134def2daa7e03512b4946bd59d6b419b9484)",
  "craft-image-codecs 0.1.0 (git+https://github.com/storytold/craft-libs?rev=c28356d400aed7575b04ec1551b4665107cfe845)",
  "dhat",
  "lightcraft-color",
