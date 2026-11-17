@@ -1554,10 +1554,11 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
             continue;
         }
 
-        // Process components in reverse order so that shorter replacements
-        // correctly adjust offsets of components we haven't processed yet.
+        // Process components in forward order. Earlier components come before later ones
+        // in the document, so length changes to earlier components shift later ones.
+        // We track the accumulated delta and apply it to subsequent components.
         let mut length_delta: i64 = 0;
-        for j in (0..ncomp).rev() {
+        for j in 0..ncomp {
             let cur = &cur_comps[j];
             let prev = &prev_comps[j];
             let cur_kind = cur.get("shape").and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or("");
