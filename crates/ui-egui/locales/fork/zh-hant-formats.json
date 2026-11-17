@@ -105,6 +105,7 @@
   "Page {n} (blank)": "第 {n} 頁（空白）",
   "Page {page} of {pages}": "第 {page} 頁，共 {pages} 頁",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "在 HDR 編輯上平移回來或再次放大時會立即顯示，而不必重新算繪。此螢幕最多使用 {need} MB 的顯示記憶體。",
+  "Paste into {n} photo{}": "貼上至 {n} 張照片{:.0}",
   "Person {n}": "人物 {n}",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "{folder} 中的照片會放入收藏集「Camera Roll - 此裝置名稱」。",
   "Picks to unflag: {n}": "將取消標記的選用相片：{n}",

@@ -10,6 +10,8 @@ import NeedsImage from '../../../components/NeedsImage.astro';
 import { Aside } from '@astrojs/starlight/components';
 
 - **Copy Edit Settings** / **Paste** (`⇧⌘V`): choose which groups travel (light, colour, detail, effects, geometry, crop, masks, spots, ...). Spots and red eye stay per photo when syncing.
+- **Paste** applies the groups ticked when copying. Crop, Remove, Masking and Red Eye are unticked by default, so a plain paste leaves them alone. **Paste Selected Settings…** offers every group of the copied photo, also one the copy left out: tick Crop or Remove there to paste it.
+- A crop pasted, pasted from Previous, synced or carried by Auto Sync onto a photo of another shape keeps its shape, angle, tightness and place instead of being stretched; it is turned to the photo's own orientation, and an **Original** lock takes the photo's own shape. On a photo of the same shape the crop goes on as it is.
 - **Previous** (bottom right): paste the settings of the photo you edited before onto this one. With several photos selected the button is **Sync…**.
 - **Sync Settings** copies the settings you changed since the last step to the selection, as one undo step.
 - **Auto Sync** (`⌥⇧⌘A`, the switch at the bottom): every slider drag edits all selected photos live.

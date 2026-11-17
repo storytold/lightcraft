@@ -105,6 +105,7 @@
   "Page {n} (blank)": "ページ {n}（空白）",
   "Page {page} of {pages}": "{page} / {pages} ページ",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "HDR 編集でパンして戻ったり再びズームしたりしたとき、再レンダリングせずにすぐ表示します。この画面で最大 {need} MB のグラフィックメモリを使います。",
+  "Paste into {n} photo{}": "{n}枚に貼り付け{:.0}",
   "Person {n}": "人物 {n}",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "{folder} の写真はコレクション「Camera Roll - このデバイスの名前」に入ります。",
   "Picks to unflag: {n}": "フラグを外す採用写真: {n}",

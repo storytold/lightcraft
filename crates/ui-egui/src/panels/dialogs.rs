@@ -1073,11 +1073,11 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
                 Dialog::PasteSettings { groups } => {
                     let n = app.session.selected().len();
                     crate::dialog_frame::note(ui,
-                        egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{}. Only settings that were copied are pasted", if n == 1 { "" } else { "s" }, n = n))
+                        egui::RichText::new(crate::i18n::tr_format!("Paste into {n} photo{}", if n == 1 { "" } else { "s" }, n = n))
                             .color(t.text_dim),
                     );
-                    let copied = app.session.dialogs.copy.clone();
-                    let _ = group_checklist(ui, "pasteGroup", groups, Some(&copied));
+                    // any setting of the copied photo, also one the copy left out (upstream #3148)
+                    let _ = group_checklist(ui, "pasteGroup", groups, None);
                 }
                 Dialog::SlideshowExport { settings } => slideshow_export_body(app, ui, settings),
                 Dialog::CropOverlays { picked } => crop_overlays_body(ui, picked),

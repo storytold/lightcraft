@@ -142,6 +142,7 @@
   "Paint over what to replace, then click Generate. About ${usd} per variation.": "გადაღებეთ ის, რაც უნდა ჩანაცვლდეს, შემდეგ დააჭირეთ „გენერირებას“. დაახლ. ${usd} თითო ვარიანტზე.",
   "Paired: {name}": "დაწყვილებულია: {name}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "HDR რედაქტირებაზე უკან გადაადგილებისას ან ხელახლა გადიდებისას ხედი მაშინვე ჩანს, თავიდან რენდერის გარეშე. იყენებს ამ ეკრანზე {need} MB-მდე გრაფიკულ მეხსიერებას.",
+  "Paste into {n} photo{}": "ჩასმა ფოტოებში: {n}{:.0}",
   "Person {n}": "პირი {n}",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "{folder}-ის ფოტოები გადადის კოლექციაში „Camera Roll - ამ მოწყობილობის სახელი“.",
   "Picks to unflag: {n}": "ნიშნის მოსახსნელი არჩეულები: {n}",

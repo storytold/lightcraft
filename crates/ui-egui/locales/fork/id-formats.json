@@ -115,6 +115,7 @@
   "Page {page} of {pages}": "Halaman {page} dari {pages}",
   "Paint over what to replace, then click Generate. About ${usd} per variation.": "Lukis di atas yang ingin diganti, lalu klik Buat. Sekitar ${usd} per variasi.",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Menggeser kembali atau memperbesar lagi pada editan HDR langsung menampilkannya tanpa merender ulang. Memakai hingga {need} MB memori grafis di layar ini.",
+  "Paste into {n} photo{}": "Tempel ke {n} foto{:.0}",
   "Person {n}": "Orang {n}",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Foto di {folder} masuk ke koleksi “Camera Roll - nama perangkat ini”.",
   "Picks to unflag: {n}": "Pilihan yang tandanya dihapus: {n}",

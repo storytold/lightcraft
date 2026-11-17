@@ -116,6 +116,7 @@
   "Page {page} of {pages}": "Sivu {page}/{pages}",
   "Paint over what to replace, then click Generate. About ${usd} per variation.": "Maalaa korvattavan kohdan yli ja napsauta Luo. Noin ${usd} muunnelmaa kohden.",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Kun panoroit takaisin tai lähennät uudelleen HDR-muokkaukseen, se näytetään heti eikä piirretä uudelleen. Käyttää tällä näytöllä enintään {need} Mt näyttömuistia.",
+  "Paste into {n} photo{}": "Liitä kuviin: {n}{:.0}",
   "Person {n}": "Henkilö {n}",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Kansion {folder} kuvat menevät kokoelmaan ”Camera Roll - tämän laitteen nimi”.",
   "Picks to unflag: {n}": "Liputuksen poistettavat valinnat: {n}",

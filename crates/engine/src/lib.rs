@@ -482,8 +482,13 @@ pub struct Session {
     pub(crate) focus_scan: focus_scan::FocusScan,
     /// Photo ▸ Enhance jobs on worker threads (`enhance.rawDetails`, `enhance.superResolution`, `enhance.pump`).
     pub(crate) enhance: enhance::EnhanceJobs,
-    /// Copied develop settings (partial JSON, portable: a flat-field map goes with them) for Paste.
+    /// Copied develop settings for Paste: the copied photo's whole settings (JSON, portable: a flat-field
+    /// map goes with them), so Paste Selected Settings can paste any group, also one the copy left out (crop,
+    /// Remove, masks; upstream #3148); a plain Paste applies what Copy ticked (`dialogs.copy`).
     pub clipboard: Option<Value>,
+    /// The copied photo's frame (width, height as oriented), to refit a pasted crop to a photo of another
+    /// shape; `None` when unknown (the crop is then pasted as it is).
+    pub clipboard_dims: Option<(f64, f64)>,
     /// Flat-field maps that came in with settings (a paste, a preset, an agent's partial) and wait for the edit that
     /// uses them to store them ([`vignetting_calibration_io`]).
     pub(crate) incoming_vignetting_maps: std::collections::BTreeMap<lcc_develop::VignettingMapId, lcc_develop::EmbeddedVignettingMap>,
@@ -888,6 +893,7 @@ impl Session {
             focus_scan: Default::default(),
             enhance: Default::default(),
             clipboard: None,
+            clipboard_dims: None,
             incoming_vignetting_maps: Default::default(),
             vignetting_calibration_placements: Default::default(),
             vignetting_calibration_dir_override: None,

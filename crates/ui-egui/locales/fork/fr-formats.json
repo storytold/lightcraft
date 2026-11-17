@@ -101,6 +101,7 @@
   "Page {n} (blank)": "Page {n} (vierge)",
   "Page {page} of {pages}": "Page {page} sur {pages}",
   "Panning back or zooming in again on an HDR edit shows it at once instead of rendering it again. Uses up to {need} MB of graphics memory on this screen.": "Revenir en arrière ou zoomer de nouveau sur une retouche HDR l’affiche immédiatement au lieu de la rendre de nouveau. Utilise jusqu’à {need} Mo de mémoire graphique sur cet écran.",
+  "Paste into {n} photo{}": "Coller dans {n} photo{}",
   "Person {n}": "Personne {n}",
   "Photos in {folder} go into the collection “Camera Roll - this device's name”.": "Les photos de {folder} vont dans la collection « Camera Roll - nom de cet appareil ».",
   "Picks to unflag: {n}": "Retenues à déflaguer : {n}",
