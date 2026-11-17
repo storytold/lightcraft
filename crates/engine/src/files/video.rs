@@ -166,7 +166,7 @@ fn open_clip(path: &str) -> Result<FileSource, String> {
 
 /// Why a clip's file can't be opened, as the card says it.
 #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-fn open_failure(kind: std::io::ErrorKind) -> &'static str {
+pub(crate) fn open_failure(kind: std::io::ErrorKind) -> &'static str {
     match kind {
         std::io::ErrorKind::NotFound => "the clip's file is missing",
         std::io::ErrorKind::PermissionDenied => "the clip's file can't be read (no permission)",

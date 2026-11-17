@@ -258,7 +258,7 @@ pub(crate) fn transport(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
         ));
     }
     // why the clip doesn't play, above the bar (also a build without video decoding, once asked)
-    let problem = error.map(|e| crate::i18n::tr_format!("Can't play this clip: {reason}", reason = e.as_str()).to_string());
+    let problem = error.map(|e| crate::i18n::tr_format!("Can't play this clip: {reason}", reason = crate::i18n::tr(e.as_str())).to_string());
     if let Some(msg) = problem {
         let g = p.layout(msg, t.font(12.0), Color32::from_gray(235), width - 24.0);
         let r = Rect::from_center_size(pos2(bar.center().x, bar.top() - 8.0 - g.size().y / 2.0 - 6.0), g.size() + vec2(16.0, 12.0));

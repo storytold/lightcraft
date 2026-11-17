@@ -28,6 +28,10 @@ const FULL_FITS: f64 = 0.6;
 /// [`FULL_AFTER_MAX`], so a machine on the edge does not flip between the two every second).
 const FULL_AFTER: u32 = 30;
 const FULL_AFTER_MAX: u32 = 960;
+/// After the decoder was the slower part, half size returns (playback still behind) only once a
+/// full-size conversion takes this many times the decode, so timings that hover around each other
+/// don't switch sizes every frame.
+const HELPS_AGAIN: f64 = 1.5;
 
 /// When frames are converted at half size: only while playback falls behind (the player drops
 /// late frames) and only while that helps. Decoding and converting run side by side, so the slower
@@ -69,12 +73,16 @@ impl Adapt {
     fn set_behind(&mut self, behind: bool) {
         self.behind = behind;
         if behind && !self.half && self.helps() {
-            self.half = true;
-            self.fits = 0;
-            // full size was tried and fell behind again: wait longer before the next try
-            if self.tried_full {
-                self.need = self.need.saturating_mul(2).min(FULL_AFTER_MAX);
-            }
+            self.halve();
+        }
+    }
+
+    fn halve(&mut self) {
+        self.half = true;
+        self.fits = 0;
+        // full size was tried and fell behind again: wait longer before the next try
+        if self.tried_full {
+            self.need = self.need.saturating_mul(2).min(FULL_AFTER_MAX);
         }
     }
 
@@ -86,12 +94,19 @@ impl Adapt {
         // a full-size conversion costs about four times a half-size one
         self.full = if halved { convert * 4.0 } else { convert };
         if !self.half {
+            // still behind, and the conversion is clearly the slower part again (the player says
+            // "behind" only when that changes): half size helps once more
+            if self.behind && self.full > self.decode * HELPS_AGAIN {
+                self.halve();
+            }
             return;
         }
         if !self.helps() {
             // the decoder is the limit: half size can't rescue playback, show the full picture
+            // (a later return to half size counts as full size having fallen behind: back-off)
             self.half = false;
             self.fits = 0;
+            self.tried_full = true;
             return;
         }
         if !self.behind && decode.max(self.full) <= frame * FULL_FITS {
@@ -126,10 +141,15 @@ pub fn describe(e: &VideoError) -> String {
     }
 }
 
-/// The clip at `path` (a file on this computer), ready to play.
+/// The clip at `path` (a file on this computer), ready to play. Why it can't be opened is worded
+/// as the poster card words it (translated in the UI, no path: the bar shows it); the log keeps
+/// the system's own message.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_file(path: &str) -> Result<Box<dyn FrameSource>, String> {
-    let file = lightcraft_codecs::video_stream::FileSource::open(path).map_err(|e| format!("The clip could not be opened: {e}"))?;
+    let file = lightcraft_codecs::video_stream::FileSource::open(path).map_err(|e| {
+        log::warn!("video playback: {path}: {e}");
+        crate::files::open_failure(e.kind()).to_string()
+    })?;
     open(file).map(|s| Box::new(s) as Box<dyn FrameSource>)
 }
 

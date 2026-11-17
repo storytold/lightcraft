@@ -66,6 +66,7 @@ pub use preview::{PreviewRead, embedded_preview_srgb, fs_preview_loader, load_em
 pub use probe::{embedded_lens, probe_bytes};
 #[cfg(test)]
 use probe::{meta_of, preview_reason};
+pub(crate) use video::open_failure;
 pub use video::{VIDEO_FRAMES_KIND, VIDEO_FRAMES_LABEL, VIDEO_STOPPED, VideoFrames, video_reason, video_reasons};
 
 /// Sensor clip level (normalised) for highlight reconstruction.

@@ -460,3 +460,37 @@ fn video_source_marks_half_size_frames_draft_and_shows_paused_ones_full() {
     let Next::Frame(f) = src.next_frame(&mut || false, Vec::new()).unwrap() else { panic!("no frame") };
     assert_eq!((f.width as usize, f.height as usize, f.draft), (w, h, false));
 }
+
+#[test]
+fn a_clip_that_cannot_be_opened_says_why_without_its_path() {
+    // (a name in the temp folder nobody creates: nothing is written)
+    let path = std::env::temp_dir().join(format!("lc-gone-clip-{}.mp4", std::process::id()));
+    let path = path.to_string_lossy();
+    let Err(e) = open_file(&path) else { panic!("a missing clip opened") };
+    // the poster card's wording (translated in every catalog), never the path
+    assert_eq!(e, "the clip's file is missing");
+    assert!(!e.contains("gone-clip"), "{e}");
+}
+
+#[test]
+fn video_source_halves_again_while_behind_once_the_conversion_is_slow_again() {
+    let frame = 1.0 / 30.0;
+    let mut a = Adapt::default();
+    a.set_behind(true);
+    assert!(a.half);
+    // the decoder is the slow part: full size at once
+    a.after(0.030, 0.002, true, frame);
+    assert!(!a.half);
+    // still behind (the player says so only when it changes): timings close to each other keep
+    // full size, so the size doesn't switch every frame
+    a.after(0.020, 0.024, false, frame);
+    assert!(!a.half, "{a:?}");
+    // the conversion is clearly the slow part again: half size, with the longer wait to go back
+    a.after(0.010, 0.040, false, frame);
+    assert!(a.half, "{a:?}");
+    assert_eq!(a.need, FULL_AFTER * 2);
+    // not behind: full size stays full whatever the timings
+    let mut b = Adapt::default();
+    b.after(0.010, 0.040, false, frame);
+    assert!(!b.half);
+}
