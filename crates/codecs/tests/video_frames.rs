@@ -22,9 +22,14 @@ fn luma_of(i: usize) -> u8 {
 }
 
 /// Planes of frame `i` (8-bit 4:2:0): flat grey of [`luma_of`], with a red patch in the
-/// top-left quarter (to see the rotation).
-fn planes(w: usize, h: usize, i: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    let y = vec![luma_of(i); w * h];
+/// top-left quarter (to see the rotation); `noisy` adds a different pattern to every frame, so
+/// each coded picture is about as large as a sync picture.
+fn planes(w: usize, h: usize, i: usize, noisy: bool) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let noise = |k: usize| {
+        let x = (k as u32).wrapping_mul(2_654_435_761).wrapping_add(i as u32 * 40_503) >> 27;
+        x as i32 - 16
+    };
+    let y = (0..w * h).map(|k| if noisy { (i32::from(luma_of(i)) + noise(k)).clamp(0, 255) as u8 } else { luma_of(i) }).collect();
     let (cw, ch) = (w / 2, h / 2);
     let cb = vec![128u8; cw * ch];
     let cr: Vec<u8> = (0..cw * ch).map(|k| if k % cw < cw / 2 && k / cw < ch / 2 { 220 } else { 128 }).collect();
@@ -42,24 +47,50 @@ struct Clip {
     audio: bool,
     /// An explicit edit list (segment durations in the writer's movie timescale, 1000 per second).
     edits: Vec<isobmff::Edit>,
+    /// The last picture's duration in ticks (every other one lasts [`TICK`]).
+    last_duration: Option<u32>,
+    noisy: bool,
+    /// The HEVC encoder signals full range in its VUI.
+    vui_full_range: bool,
+    /// The movie timescale (the writer's default 1000 when `None`).
+    movie_timescale: Option<u32>,
 }
 
 impl Clip {
     fn new(w: usize, h: usize, frames: usize) -> Clip {
-        Clip { w, h, frames, bframes: 0, keyint: 250, brand: Brand::Mp4, colour: None, audio: false, edits: Vec::new() }
+        Clip {
+            w,
+            h,
+            frames,
+            bframes: 0,
+            keyint: 250,
+            brand: Brand::Mp4,
+            colour: None,
+            audio: false,
+            edits: Vec::new(),
+            last_duration: None,
+            noisy: false,
+            vui_full_range: false,
+            movie_timescale: None,
+        }
     }
 }
 
 fn mux(entry: SampleEntry, samples: &[(Vec<u8>, i64, i64, bool)], c: &Clip, media_start: Option<i64>) -> Vec<u8> {
     let (brand, audio) = (c.brand, c.audio);
-    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(brand)).unwrap();
+    let mut wo = WriterOptions::new(brand);
+    if let Some(t) = c.movie_timescale {
+        wo.movie_timescale = t;
+    }
+    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), wo).unwrap();
     let mut cfg = TrackConfig::new(entry, FPS * TICK);
     cfg.media_start = media_start;
     cfg.edits.clone_from(&c.edits);
     let v = w.add_track(cfg).unwrap();
-    for (data, pts, dts, key) in samples {
+    for (k, (data, pts, dts, key)) in samples.iter().enumerate() {
         let off = i32::try_from((pts - dts) * i64::from(TICK)).unwrap();
-        w.write_sample(v, WriteSample { data, duration: TICK, composition_offset: off, is_sync: *key }).unwrap();
+        let duration = if k + 1 == samples.len() { c.last_duration.unwrap_or(TICK) } else { TICK };
+        w.write_sample(v, WriteSample { data, duration, composition_offset: off, is_sync: *key }).unwrap();
     }
     if audio {
         let pcm = PcmConfig { bits: 16, float: false, big_endian: false, signed: true, channels: 2, sample_rate: 48000.0 };
@@ -70,10 +101,16 @@ fn mux(entry: SampleEntry, samples: &[(Vec<u8>, i64, i64, bool)], c: &Clip, medi
 }
 
 fn h264_clip(c: &Clip) -> Vec<u8> {
+    let (entry, samples, start) = h264_samples(c);
+    mux(entry, &samples, c, start)
+}
+
+/// A clip's H.264 sample entry, its samples (data, pts, dts, sync) and the edit start muxers write.
+fn h264_samples(c: &Clip) -> (SampleEntry, Vec<(Vec<u8>, i64, i64, bool)>, Option<i64>) {
     use craft_video::h264::{Encoder, EncoderConfig, PacketFormat, RateControl, YuvFrame};
     let mut cfg = EncoderConfig::new(c.w as u32, c.h as u32, FPS, 1);
     cfg.format = PacketFormat::LengthPrefixed;
-    cfg.rate = RateControl::Qp(20);
+    cfg.rate = RateControl::Qp(12);
     cfg.bframes = c.bframes;
     cfg.keyint = c.keyint;
     cfg.scenecut = false;
@@ -81,7 +118,7 @@ fn h264_clip(c: &Clip) -> Vec<u8> {
     let mut enc = Encoder::new(cfg).unwrap();
     let mut packets = Vec::new();
     for i in 0..c.frames {
-        let (y, u, v) = planes(c.w, c.h, i);
+        let (y, u, v) = planes(c.w, c.h, i, c.noisy);
         let f = YuvFrame { y: &y, u: &u, v: &v, y_stride: c.w, uv_stride: c.w / 2 };
         packets.extend(enc.encode(&f, i as i64).unwrap());
     }
@@ -93,7 +130,7 @@ fn h264_clip(c: &Clip) -> Vec<u8> {
     let samples: Vec<_> = packets.into_iter().map(|p| (p.data, p.pts, p.dts, p.keyframe)).collect();
     // B-frames delay the first picture shown: an edit list starts the track there, as muxers do
     let start = samples.iter().enumerate().map(|(k, s)| k as i64 + s.1 - s.2).min().filter(|&d| d != 0).map(|d| d * i64::from(TICK));
-    mux(entry, &samples, c, start)
+    (entry, samples, start)
 }
 
 fn hevc_clip(c: &Clip, ten_bit: bool) -> Vec<u8> {
@@ -101,6 +138,7 @@ fn hevc_clip(c: &Clip, ten_bit: bool) -> Vec<u8> {
     let mut cfg = EncoderConfig::new(c.w as u32, c.h as u32, FPS, 1);
     cfg.rate = RateControl::ConstantQp(22);
     cfg.keyint = c.keyint;
+    cfg.full_range = c.vui_full_range;
     if ten_bit {
         cfg.profile = Profile::Main10;
     }
@@ -108,7 +146,7 @@ fn hevc_clip(c: &Clip, ten_bit: bool) -> Vec<u8> {
     let scale = if ten_bit { 4u16 } else { 1 };
     let mut samples = Vec::new();
     for i in 0..c.frames {
-        let (y, u, v) = planes(c.w, c.h, i);
+        let (y, u, v) = planes(c.w, c.h, i, c.noisy);
         let wide = |p: &[u8]| p.iter().map(|&s| u16::from(s) * scale).collect::<Vec<_>>();
         let (y, u, v) = (wide(&y), wide(&u), wide(&v));
         let p = enc.encode(&Frame { y: &y, u: &u, v: &v, y_stride: c.w, uv_stride: c.w / 2 }).unwrap();
@@ -149,10 +187,12 @@ fn level_of(y: u8) -> f32 {
     (f32::from(y) - 16.0) / 219.0 * 255.0
 }
 
+/// The picture shows frame `i`: neighbouring frames are 2.33 display levels apart, the clips are
+/// coded finely enough (QP 12) that a frame lands within 0.1 of its own level.
 fn assert_shows_frame(img: &lightcraft_raster::Rgb32f, i: usize) {
     let got = grey_level(img);
     let want = level_of(luma_of(i));
-    assert!((got - want).abs() < 2.5, "shows level {got}, frame {i} has {want}");
+    assert!((got - want).abs() < 0.6, "shows level {got}, frame {i} has {want}");
 }
 
 #[test]
@@ -273,14 +313,34 @@ fn hevc_8_and_10_bit_posters() {
     assert_shows_frame(&p.image, 30);
 }
 
+/// ISO/IEC 14496-12: colour in the `colr` box takes precedence over the bitstream's (AVFoundation
+/// reads it so too). The encoder writes BT.709 limited range in the VUI throughout.
 #[test]
-fn container_colour_fills_what_the_stream_leaves_open_and_hdr_is_tone_mapped() {
+fn container_colour_wins_over_the_bitstream_and_hdr_is_tone_mapped() {
     let mut c = Clip::new(64, 48, 45);
-    // the encoder writes BT.709 in the VUI; the container's HLG transfer must not override it
     c.colour = Some(ColorInfo::Nclx { primaries: 9, transfer: 18, matrix: 9, full_range: false });
     let p = poster(&hevc_clip(&c, true), &opts()).unwrap();
-    assert_eq!((p.colour.primaries, p.colour.transfer, p.colour.matrix), (1, 1, 1));
-    assert!(!p.hdr);
+    assert_eq!((p.colour.primaries, p.colour.transfer, p.colour.matrix), (9, 18, 9));
+    assert!(p.hdr);
+    assert!(p.image.data.iter().flatten().all(|v| v.is_finite() && *v <= 1.0 + 1e-4));
+}
+
+#[test]
+fn the_bitstream_fills_what_the_container_leaves_unspecified() {
+    let resolved = |colour: ColorInfo, vui_full_range: bool| {
+        let mut c = Clip::new(64, 48, 10);
+        (c.colour, c.vui_full_range) = (Some(colour), vui_full_range);
+        let p = poster(&hevc_clip(&c, false), &opts()).unwrap();
+        (p.colour.primaries, p.colour.transfer, p.colour.matrix, p.colour.full_range)
+    };
+    // primaries from the box, transfer and matrix (unspecified there) from the VUI
+    assert_eq!(resolved(ColorInfo::Nclx { primaries: 9, transfer: 2, matrix: 2, full_range: false }, false), (9, 1, 1, false));
+    // `nclx` carries a range flag: the box's wins either way, never or-ed with the VUI's
+    assert_eq!(resolved(ColorInfo::Nclx { primaries: 1, transfer: 1, matrix: 1, full_range: true }, false), (1, 1, 1, true));
+    assert_eq!(resolved(ColorInfo::Nclx { primaries: 1, transfer: 1, matrix: 1, full_range: false }, true), (1, 1, 1, false));
+    // QuickTime's `nclc` has no range flag: the VUI's stands
+    assert_eq!(resolved(ColorInfo::Nclc { primaries: 9, transfer: 1, matrix: 9 }, true), (9, 1, 9, true));
+    assert_eq!(resolved(ColorInfo::Nclc { primaries: 9, transfer: 1, matrix: 9 }, false), (9, 1, 9, false));
 }
 
 #[test]
@@ -558,4 +618,112 @@ fn an_edit_list_that_cuts_the_start_and_end_hides_those_pictures() {
     let p = poster(&bytes, &opts()).unwrap();
     assert!((p.seconds - 1.0).abs() < 1e-9, "{}", p.seconds);
     assert_shows_frame(&p.image, 60);
+}
+
+/// An edit list that starts far past the only sync picture: even a keyframe seek would decode
+/// every picture up to the first one shown. The poster stops at `max_frames` and shows the latest
+/// picture it decoded (a cut one, as a fallback) instead of decoding 301 pictures.
+#[test]
+fn a_keyframe_seek_to_an_edit_far_past_its_sync_picture_stops_at_max_frames() {
+    let mut c = Clip::new(64, 48, 360);
+    c.keyint = 1000;
+    c.edits = vec![isobmff::Edit { segment_duration: 1500, media_time: 300 * i64::from(TICK), media_rate: 0x0001_0000 }];
+    let bytes = h264_clip(&c);
+    let p = poster(&bytes, &PosterOptions { max_frames: 240, ..opts() }).unwrap();
+    assert!(p.frames_decoded <= 240, "{} pictures decoded", p.frames_decoded);
+    assert!(p.fallback);
+    assert_shows_frame(&p.image, p.frames_decoded - 1);
+    // without the limit, a stream still reaches the first picture shown
+    let mut s = VideoStream::open(bytes, &StreamOptions::default()).unwrap();
+    s.seek(0.0, SeekMode::Keyframe).unwrap();
+    assert!(s.next_frame().unwrap().unwrap().seconds.abs() < 1e-9);
+    assert_eq!(s.frames_decoded(), 301);
+}
+
+/// A sample with no duration (some muxers write the last one so) is still shown, for the usual
+/// picture duration.
+#[test]
+fn a_last_picture_without_a_duration_is_shown() {
+    let mut c = Clip::new(64, 48, 1);
+    c.last_duration = Some(0);
+    let p = poster(&h264_clip(&c), &opts()).unwrap();
+    assert_shows_frame(&p.image, 0);
+    let mut c = Clip::new(64, 48, 10);
+    c.last_duration = Some(0);
+    let mut s = VideoStream::open(h264_clip(&c), &StreamOptions::default()).unwrap();
+    assert!((s.info().duration_seconds - 10.0 / 30.0).abs() < 1e-9, "{}", s.info().duration_seconds);
+    let mut n = 0;
+    while s.next_frame().unwrap().is_some() {
+        n += 1;
+    }
+    assert_eq!(n, 10);
+}
+
+/// An edit whose segment rescales to no media ticks (a movie timescale finer than the track's)
+/// still shows the picture at its start.
+#[test]
+fn an_edit_shorter_than_a_tick_still_shows_a_picture() {
+    let mut c = Clip::new(64, 48, 10);
+    // one microsecond at the track's 30000 ticks per second is 0.03 ticks
+    c.movie_timescale = Some(1_000_000);
+    c.edits = vec![isobmff::Edit { segment_duration: 1, media_time: 9 * i64::from(TICK), media_rate: 0x0001_0000 }];
+    let mut s = VideoStream::open(h264_clip(&c), &StreamOptions::default()).unwrap();
+    assert!(s.next_frame().unwrap().is_some());
+}
+
+/// The sample-bytes budget alone (pictures within `max_frames`, but more bytes to the target than
+/// half the read budget) shows the sync picture.
+#[test]
+fn too_many_bytes_to_the_target_shows_the_sync_picture() {
+    let mut c = Clip::new(64, 48, 60);
+    c.noisy = true;
+    let bytes = h264_clip(&c);
+    let f = isobmff::open(bytes.as_slice()).unwrap();
+    let to_target: u64 = f.tracks[0].samples[..=30].iter().map(|s| u64::from(s.size)).sum();
+    let full = poster(&bytes, &opts()).unwrap();
+    assert!(!full.fallback && full.frames_decoded == 31);
+    // half the read budget is one byte short of the run, yet the header and sync picture fit
+    let p = poster(&bytes, &PosterOptions { max_read_bytes: 2 * (to_target - 1), ..opts() }).unwrap();
+    assert!(p.fallback);
+    assert_eq!((p.seconds, p.frames_decoded), (0.0, 1));
+}
+
+/// An open GOP: pictures that follow a sync picture in decode order but are shown before it need
+/// the previous group, so a target among them decodes from the sync picture and shows it. (A
+/// sample table crafted from a B-frame clip, with a P picture marked sync: craft-video's encoders
+/// write closed GOPs only.)
+#[test]
+fn an_open_gop_leading_picture_seeks_to_its_sync_picture() {
+    let mut c = Clip::new(64, 48, 30);
+    c.bframes = 2;
+    c.keyint = 1000;
+    let (entry, mut samples, start) = h264_samples(&c);
+    // when sample `k` is shown, in frames from the first picture shown (as `mux` writes them)
+    let shown = |k: usize| k as i64 + samples[k].1 - samples[k].2;
+    let first = (0..samples.len()).map(shown).min().unwrap();
+    let at = |k: usize| (shown(k) - first) as f64 / 30.0;
+    // the first P picture after the IDR, with B pictures after it in decode order shown before it
+    let p = (1..samples.len() - 1).find(|&k| shown(k + 1) < shown(k)).unwrap();
+    let (sync_at, leading_at) = (at(p), at(p + 1));
+    samples[p].3 = true;
+    let bytes = mux(entry, &samples, &c, start);
+    let s = VideoStream::open(bytes, &StreamOptions::default()).unwrap();
+    let plan = s.seek_plan(leading_at).unwrap();
+    assert!((plan.keyframe_seconds - sync_at).abs() < 1e-9, "{plan:?}");
+    assert!((plan.target_seconds - plan.keyframe_seconds).abs() < 1e-9, "the sync picture stands in: {plan:?}");
+    assert_eq!(plan.frames, 1);
+}
+
+/// A picture over the conversion budget converts straight to a smaller one (block means in linear
+/// light), never to a full-size float copy.
+#[test]
+fn a_picture_over_the_conversion_budget_converts_smaller() {
+    let bytes = h264_clip(&Clip::new(128, 96, 40));
+    let full = poster(&bytes, &opts()).unwrap();
+    assert_eq!((full.image.width, full.image.height), (128, 96));
+    let p = poster(&bytes, &PosterOptions { max_convert_pixels: 64 * 48, ..opts() }).unwrap();
+    assert_eq!((p.image.width, p.image.height), (64, 48));
+    assert_shows_frame(&p.image, 0);
+    let p = poster(&bytes, &PosterOptions { max_convert_pixels: 64 * 48 - 1, ..opts() }).unwrap();
+    assert_eq!((p.image.width, p.image.height), (43, 32), "factor 3, partial blocks at the edges");
 }

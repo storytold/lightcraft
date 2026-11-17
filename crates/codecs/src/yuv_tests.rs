@@ -306,16 +306,18 @@ fn extended_gamut_bt709_curves_read_as_bt709() {
 }
 
 /// HLG is shown as its scene light, peak at SDR white (as macOS renders HLG video for an SDR
-/// screen, measured on a 16-step HLG chart): reference white (75 % signal) is a light grey, the
-/// highlights above it keep their steps instead of piling into white.
+/// screen, measured on a 16-step HLG chart, steps k / 15): reference white (75 % signal) is a
+/// light grey, the highlights above it keep their steps instead of piling into white.
 #[test]
 fn hlg_shows_its_scene_light_with_highlights_kept() {
     let hlg = ColourDescription { primaries: 9, transfer: 18, matrix: 9, full_range: false };
     let code = |signal: f32| (64.0 + 876.0 * signal).round() as u16;
     let at = |signal: f32| linear(hlg, 10, [code(signal), 512, 512])[1];
-    // macOS (Quick Look): 0.258 at 73 % signal, 0.048 at 33 %, 0.716 at 93 %, white at peak
+    // macOS (Quick Look): 0.258 at step 11 (73 % signal), 0.048 at step 5 (33 %), 0.716 at
+    // step 14 (93 %), white at peak
+    assert!((0.22..=0.31).contains(&at(11.0 / 15.0)), "step 11: {}", at(11.0 / 15.0));
     let reference = at(0.75);
-    assert!((0.22..=0.31).contains(&reference), "reference white {reference}");
+    assert!((0.24..=0.29).contains(&reference), "reference white {reference}");
     assert!((0.03..=0.06).contains(&at(1.0 / 3.0)), "{}", at(1.0 / 3.0));
     assert!((0.6..=0.8).contains(&at(14.0 / 15.0)), "{}", at(14.0 / 15.0));
     assert!(at(1.0) > 0.97, "peak {}", at(1.0));
@@ -485,4 +487,170 @@ fn the_row_converter_matches_the_per_pixel_reference_exactly() {
         }
     }
     assert!(checked > 1000, "{checked}");
+}
+
+/// R′G′B′ (0..1) to 10-bit Y′CbCr codes with luma weights `kr`, `kb`: the forward equations of
+/// BT.601 / BT.709 / BT.2020 and H.273's quantisation, written out here in f64 rather than taken
+/// from the converter's tables.
+fn encode10(rgb: [f64; 3], kr: f64, kb: f64, full: bool) -> [u16; 3] {
+    let y = kr * rgb[0] + (1.0 - kr - kb) * rgb[1] + kb * rgb[2];
+    let (cb, cr) = ((rgb[2] - y) / (2.0 * (1.0 - kb)), (rgb[0] - y) / (2.0 * (1.0 - kr)));
+    let q = |v: f64| v.round() as u16;
+    if full {
+        [q(1023.0 * y), q(512.0 + 1023.0 * cb), q(512.0 + 1023.0 * cr)]
+    } else {
+        [q(64.0 + 876.0 * y), q(512.0 + 896.0 * cb), q(512.0 + 896.0 * cr)]
+    }
+}
+
+/// 75 % colour bars (and a dark one) under every Kr/Kb matrix decode back to their R′G′B′,
+/// through the fast path (BT.709 primaries and curve), so only the matrix and range are under
+/// test. The converter's size default is BT.709, so a matrix it lost would read as BT.709 and
+/// miss by several code values.
+#[test]
+fn every_kr_kb_matrix_decodes_colour_bars_from_the_spec_equations() {
+    let bars: [[f64; 3]; 7] =
+        [[0.75, 0.75, 0.0], [0.0, 0.75, 0.75], [0.0, 0.75, 0.0], [0.75, 0.0, 0.75], [0.75, 0.0, 0.0], [0.0, 0.0, 0.75], [0.2, 0.1, 0.05]];
+    let matrices =
+        [(1, 0.2126, 0.0722), (4, 0.30, 0.11), (5, 0.299, 0.114), (6, 0.299, 0.114), (7, 0.212, 0.087), (9, 0.2627, 0.0593), (10, 0.2627, 0.0593)];
+    for full in [false, true] {
+        for (code, kr, kb) in matrices {
+            let desc = ColourDescription { primaries: 1, transfer: 1, matrix: code, full_range: full };
+            for rgb in bars {
+                let want = rgb.map(|v| (v * 255.0).round() as u8);
+                let got = srgb(desc, 10, encode10(rgb, kr, kb, full));
+                assert!(near(got, want, 1), "matrix {code} full {full}: {rgb:?} -> {got:?}, want {want:?}");
+            }
+        }
+    }
+}
+
+/// An RGB → XYZ matrix from chromaticities (the textbook derivation, in f64).
+fn rgb_to_xyz(p: [(f64, f64); 3], w: (f64, f64)) -> [[f64; 3]; 3] {
+    let col = |(x, y): (f64, f64)| [x / y, 1.0, (1.0 - x - y) / y];
+    let m = [col(p[0]), col(p[1]), col(p[2])];
+    let m = [[m[0][0], m[1][0], m[2][0]], [m[0][1], m[1][1], m[2][1]], [m[0][2], m[1][2], m[2][2]]];
+    let s = mul3(inv3(m), col(w));
+    m.map(|r| [r[0] * s[0], r[1] * s[1], r[2] * s[2]])
+}
+
+fn inv3(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let c =
+        |r: usize, k: usize| m[(r + 1) % 3][(k + 1) % 3] * m[(r + 2) % 3][(k + 2) % 3] - m[(r + 1) % 3][(k + 2) % 3] * m[(r + 2) % 3][(k + 1) % 3];
+    let det = m[0][0] * c(0, 0) + m[0][1] * c(0, 1) + m[0][2] * c(0, 2);
+    [[c(0, 0) / det, c(1, 0) / det, c(2, 0) / det], [c(0, 1) / det, c(1, 1) / det, c(2, 1) / det], [c(0, 2) / det, c(1, 2) / det, c(2, 2) / det]]
+}
+
+fn mul3(m: [[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    m.map(|r| r[0] * v[0] + r[1] * v[1] + r[2] * v[2])
+}
+
+fn mat3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let col = |k: usize| mul3(a, [b[0][k], b[1][k], b[2][k]]);
+    let (c0, c1, c2) = (col(0), col(1), col(2));
+    [[c0[0], c1[0], c2[0]], [c0[1], c1[1], c2[1]], [c0[2], c1[2], c2[2]]]
+}
+
+/// Each primaries code converts linear light to Rec.2020 as its chromaticities (H.273 table 2,
+/// written out here) say; linear transfer (8) and BT.709 matrix, so only the primaries differ.
+#[test]
+fn primaries_convert_to_rec2020_by_their_chromaticities() {
+    const D65: (f64, f64) = (0.3127, 0.3290);
+    let to_xyz_2020 = rgb_to_xyz([(0.708, 0.292), (0.170, 0.797), (0.131, 0.046)], D65);
+    let bt709 = rgb_to_xyz([(0.64, 0.33), (0.30, 0.60), (0.15, 0.06)], D65);
+    let cases = [
+        (5, [(0.64, 0.33), (0.29, 0.60), (0.15, 0.06)]),
+        (6, [(0.630, 0.340), (0.310, 0.595), (0.155, 0.070)]),
+        (1, [(0.64, 0.33), (0.30, 0.60), (0.15, 0.06)]),
+        (9, [(0.708, 0.292), (0.170, 0.797), (0.131, 0.046)]),
+    ];
+    // (mostly green: BT.601 625 and BT.709 differ only in the green primary)
+    let rgb = [0.05, 0.9, 0.05];
+    let codes = encode10(rgb, 0.2126, 0.0722, false);
+    for (code, p) in cases {
+        let desc = ColourDescription { primaries: code, transfer: 8, matrix: 1, full_range: false };
+        let want = mul3(mat3(inv3(to_xyz_2020), rgb_to_xyz(p, D65)), rgb);
+        let got = linear(desc, 10, codes);
+        for k in 0..3 {
+            assert!((f64::from(got[k]) - want[k]).abs() < 3e-3, "primaries {code}: {got:?}, want {want:?}");
+        }
+        // (the case tells primaries apart: BT.709's answer misses by twice the tolerance)
+        if code != 1 {
+            let other = mul3(mat3(inv3(to_xyz_2020), bt709), rgb);
+            let miss = (0..3).map(|k| (other[k] - want[k]).abs()).fold(0.0, f64::max);
+            assert!(miss > 6e-3, "primaries {code} vs BT.709: {miss}");
+        }
+    }
+}
+
+/// A missing matrix follows the primaries and missing primaries follow the matrix; only when
+/// neither says anything does the picture size decide (an HLG Rec.2020 stream that names only its
+/// primaries and transfer must not read with the BT.709 matrix).
+#[test]
+fn missing_code_points_are_inferred_from_the_others_before_the_size() {
+    let resolved = |p: u8, t: u8, m: u8, w: usize, h: usize| {
+        let r = Converter::new(ColourDescription { primaries: p, transfer: t, matrix: m, full_range: false }, 10, w, h).unwrap().resolved();
+        (r.primaries, r.matrix)
+    };
+    assert_eq!(resolved(9, 18, 2, 1920, 1080), (9, 9));
+    assert_eq!(resolved(2, 18, 9, 1920, 1080), (9, 9));
+    assert_eq!(resolved(2, 1, 10, 1920, 1080), (9, 10));
+    assert_eq!(resolved(5, 1, 2, 1920, 1080), (5, 5));
+    assert_eq!(resolved(22, 1, 2, 1920, 1080), (22, 5));
+    assert_eq!(resolved(2, 1, 6, 1920, 1080), (6, 6));
+    assert_eq!(resolved(1, 1, 2, 720, 576), (1, 1));
+    assert_eq!(resolved(2, 1, 1, 720, 576), (1, 1));
+    // P3 implies no matrix, GBR and YCgCo imply no primaries: the size decides
+    assert_eq!(resolved(12, 1, 2, 1920, 1080), (12, 1));
+    assert_eq!(resolved(12, 1, 2, 720, 576), (12, 5));
+    assert_eq!(resolved(2, 1, 0, 720, 480), (6, 0));
+    assert_eq!(resolved(2, 1, 8, 1920, 1080), (1, 8));
+    assert_eq!(resolved(2, 2, 2, 720, 576), (5, 5));
+}
+
+/// Transfer 5 (BT.470 System B/G, nominally gamma 2.8) reads as players show it: like BT.709.
+#[test]
+fn transfer_5_reads_like_bt709() {
+    let desc = ColourDescription { transfer: 5, ..ColourDescription::BT709 };
+    for ycc in [[16, 128, 128], [126, 128, 128], [235, 128, 128], [81, 90, 240]] {
+        assert_eq!(srgb(desc, 8, ycc), srgb(ColourDescription::BT709, 8, ycc), "{ycc:?}");
+    }
+}
+
+/// The reduced conversion is the mean of the full conversion over each block, partial blocks at
+/// the edges included, for every factor.
+#[test]
+fn reduced_conversion_is_the_block_mean_of_the_full_one() {
+    let (w, h) = (11, 7);
+    let y: Vec<u16> = (0..w * h).map(|k| (64 + (k * 37) % 870) as u16).collect();
+    let (cw, ch) = Chroma::C420.plane_size(w, h);
+    let cb: Vec<u16> = (0..cw * ch).map(|k| (100 + (k * 53) % 800) as u16).collect();
+    let cr: Vec<u16> = (0..cw * ch).map(|k| (900 - (k * 29) % 800) as u16).collect();
+    let pic = Picture { width: w, height: h, bit_depth: 10, chroma: Chroma::C420, y: plane16(&y, w), cb: plane16(&cb, cw), cr: plane16(&cr, cw) };
+    for desc in [ColourDescription::BT709, ColourDescription { primaries: 9, transfer: 18, matrix: 9, full_range: false }] {
+        let conv = Converter::new(desc, 10, w, h).unwrap();
+        let mut full = vec![[0f32; 3]; w * h];
+        conv.to_linear_rec2020(&pic, &mut full).unwrap();
+        for factor in [1, 2, 3, 4, 11, 20] {
+            let (rw, rh) = (w.div_ceil(factor), h.div_ceil(factor));
+            let mut out = vec![[0f32; 3]; rw * rh];
+            conv.to_linear_rec2020_reduced(&pic, factor, &mut out).unwrap();
+            for (oy, row) in out.chunks(rw).enumerate() {
+                for (ox, got) in row.iter().enumerate() {
+                    let mut sum = [0f64; 3];
+                    let mut n = 0.0;
+                    for y in oy * factor..((oy + 1) * factor).min(h) {
+                        for x in ox * factor..((ox + 1) * factor).min(w) {
+                            (0..3).for_each(|k| sum[k] += f64::from(full[y * w + x][k]));
+                            n += 1.0;
+                        }
+                    }
+                    for k in 0..3 {
+                        assert!((f64::from(got[k]) - sum[k] / n).abs() < 1e-5, "factor {factor} at {ox},{oy}: {got:?} vs {sum:?}/{n}");
+                    }
+                }
+            }
+            assert!(conv.to_linear_rec2020_reduced(&pic, factor, &mut vec![[0f32; 3]; rw * rh + 1]).is_err());
+        }
+    }
 }

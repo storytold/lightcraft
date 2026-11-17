@@ -289,8 +289,9 @@ pub struct Frame {
     /// Row strides in samples.
     pub y_stride: usize,
     pub uv_stride: usize,
-    /// The colour description to convert with: the bitstream's, with the container's `colr`
-    /// filling what the bitstream leaves unspecified.
+    /// The colour description to convert with: the container's `colr` where it specifies a code
+    /// point (ISO/IEC 14496-12 gives it precedence), the bitstream's VUI for the rest; the range
+    /// flag is the `nclx` box's, else the bitstream's.
     pub colour: ColourDescription,
     /// Decoded in draft mode ([`VideoStream::set_draft`]): approximate, never for a still.
     pub draft: bool,
@@ -383,6 +384,9 @@ impl VideoStream {
         match self.never {}
     }
     pub fn set_draft(&mut self, _on: bool) {
+        match self.never {}
+    }
+    pub fn set_feed_limit(&mut self, _limit: Option<usize>) {
         match self.never {}
     }
     pub fn seek_plan(&self, _seconds: f64) -> Result<SeekPlan, VideoError> {

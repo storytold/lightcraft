@@ -141,6 +141,24 @@ fn vui(full_range: bool, primaries: u8, transfer: u8, matrix: u8) -> ColourDescr
     ColourDescription { primaries, transfer, matrix, full_range }
 }
 
+/// A sample entry's `colr` box: its code points, and its range flag when it has one (`nclx` does,
+/// QuickTime's `nclc` does not).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ContainerColour {
+    desc: ColourDescription,
+    full_range: Option<bool>,
+}
+
+impl ContainerColour {
+    /// The colour a picture is read with: ISO/IEC 14496-12 (the `colr` box) gives the box
+    /// precedence over the bitstream where both describe the colour, as AVFoundation does. So each
+    /// code point the box specifies wins, the bitstream's VUI fills those it leaves unspecified,
+    /// and the range flag is the box's when it carries one, else the bitstream's.
+    fn over(self, bitstream: ColourDescription) -> ColourDescription {
+        ColourDescription { full_range: self.full_range.unwrap_or(bitstream.full_range), ..self.desc.or(bitstream) }
+    }
+}
+
 impl Decoded {
     fn pts(&self) -> i64 {
         match self {
@@ -149,7 +167,7 @@ impl Decoded {
         }
     }
 
-    fn into_frame(self, container: Option<ColourDescription>, timescale: u32) -> Result<Frame, VideoError> {
+    fn into_frame(self, container: Option<ContainerColour>, timescale: u32) -> Result<Frame, VideoError> {
         let (width, height, chroma, bit_depth, planes, y_stride, uv_stride, colour, key, draft, pts) = match self {
             Decoded::H264(p) => {
                 let c = p.color;
@@ -194,13 +212,7 @@ impl Decoded {
                 )
             }
         };
-        // The bitstream's description first; the container's `colr` fills what it leaves open (an
-        // encoder that writes no VUI colour leaves it all unspecified), and a full-range flag in
-        // either counts (a stream without a VUI reads as limited range).
-        let colour = match container {
-            Some(c) => ColourDescription { full_range: colour.full_range || c.full_range, ..colour.or(c) },
-            None => colour,
-        };
+        let colour = container.map_or(colour, |c| c.over(colour));
         Ok(Frame {
             pts,
             seconds: seconds(pts, timescale),
@@ -222,11 +234,15 @@ fn seconds(ticks: i64, timescale: u32) -> f64 {
     if timescale == 0 { 0.0 } else { ticks as f64 / f64::from(timescale) }
 }
 
-fn container_colour(c: &ColorInfo) -> Option<ColourDescription> {
+fn container_colour(c: &ColorInfo) -> Option<ContainerColour> {
     let code = |v: u16| u8::try_from(v).unwrap_or(yuv::UNSPECIFIED);
     match c {
-        ColorInfo::Nclx { primaries, transfer, matrix, full_range } => Some(vui(*full_range, code(*primaries), code(*transfer), code(*matrix))),
-        ColorInfo::Nclc { primaries, transfer, matrix } => Some(vui(false, code(*primaries), code(*transfer), code(*matrix))),
+        ColorInfo::Nclx { primaries, transfer, matrix, full_range } => {
+            Some(ContainerColour { desc: vui(*full_range, code(*primaries), code(*transfer), code(*matrix)), full_range: Some(*full_range) })
+        }
+        ColorInfo::Nclc { primaries, transfer, matrix } => {
+            Some(ContainerColour { desc: vui(false, code(*primaries), code(*transfer), code(*matrix)), full_range: None })
+        }
         ColorInfo::Icc { .. } => None,
     }
 }
@@ -249,7 +265,7 @@ fn unsupported_codec(codec: &CodecConfig, format: [u8; 4]) -> VideoError {
 }
 
 /// The decoder for sample entry `index` (1-based): its codec and configuration record.
-fn entry_codec(track: &isobmff::Track, index: u32) -> Result<(Codec, Vec<u8>, Option<ColourDescription>), VideoError> {
+fn entry_codec(track: &isobmff::Track, index: u32) -> Result<(Codec, Vec<u8>, Option<ContainerColour>), VideoError> {
     let entry = index
         .checked_sub(1)
         .and_then(|i| track.entries.get(i as usize))
@@ -296,12 +312,17 @@ struct Window {
 impl Window {
     fn of(t: &isobmff::Track, movie_timescale: u32) -> Window {
         let pts = |i: usize| t.presentation_pts(i);
+        // (a picture without a duration, often the last one, is shown for the usual time: with
+        // none, a one-picture clip would show nothing)
+        let usual = median_duration(t).map_or(1, i64::from);
+        let shown_for = |d: u32| if d == 0 { usual } else { i64::from(d) };
         let all_start = (0..t.samples.len()).filter_map(pts).min().unwrap_or(0);
         let all_end =
-            (0..t.samples.len()).filter_map(|i| Some(pts(i)?.saturating_add(i64::from(t.samples.get(i)?.duration)))).max().unwrap_or(all_start);
+            (0..t.samples.len()).filter_map(|i| Some(pts(i)?.saturating_add(shown_for(t.samples.get(i)?.duration)))).max().unwrap_or(all_start);
         // craft-media's `edit_offset` places the first non-empty edit's `media_time` after the
-        // leading empty edits: that is where the clip starts
-        let (start, end) = match t.edits.iter().find(|e| e.media_time >= 0) {
+        // leading empty edits (empty: `media_time` -1, as craft-media reads them): that is where
+        // the clip starts
+        let (start, end) = match t.edits.iter().find(|e| e.media_time != -1) {
             Some(e) => {
                 let start = e.media_time.saturating_add(t.edit_offset).clamp(all_start, all_end);
                 // (a zero-length segment, or no movie timescale, says nothing about the end)
@@ -313,7 +334,9 @@ impl Window {
             None => (all_start, all_end),
         };
         let first = t.sample_at_presentation_time(start).and_then(pts).filter(|&p| p <= start).unwrap_or(start);
-        let end = end.max(start);
+        // (a track with pictures always shows one: a segment that rescales to no ticks still
+        // shows the picture at its start)
+        let end = if t.samples.is_empty() { end.max(start) } else { end.max(start.saturating_add(1)) };
         let feed_end = (0..t.samples.len()).rev().find(|&i| pts(i).is_some_and(|p| p < end)).map_or(t.samples.len(), |i| i + 1);
         Window { start, end, first, feed_end }
     }
@@ -329,9 +352,13 @@ pub struct VideoStream {
     decoder: Decoder,
     /// The sample description the decoder is configured for, and its colour box.
     description: u32,
-    container_colour: Option<ColourDescription>,
+    container_colour: Option<ContainerColour>,
     /// Next sample to feed, in decode order.
     next_sample: usize,
+    /// Samples fed after a seek at most ([`Self::set_feed_limit`]), and the sample feeding stops
+    /// before.
+    feed_limit: Option<usize>,
+    feed_stop: usize,
     /// Pictures shown before this time are dropped (a seek's target; open-GOP leading pictures).
     min_pts: i64,
     /// Pictures shown before this time are no stand-ins either (open-GOP leading pictures).
@@ -372,7 +399,7 @@ impl VideoStream {
             width: w,
             height: h,
             orientation: matrix_orientation(&t.matrix),
-            container_colour,
+            container_colour: container_colour.map(|c| c.desc),
             timescale: t.timescale,
             start_seconds: seconds(start, t.timescale),
             duration_seconds: seconds(end.saturating_sub(start), t.timescale),
@@ -391,6 +418,8 @@ impl VideoStream {
             description,
             container_colour,
             next_sample: 0,
+            feed_limit: None,
+            feed_stop: usize::MAX,
             min_pts: window.first,
             keep_from: window.first,
             window,
@@ -422,6 +451,16 @@ impl VideoStream {
     pub fn set_draft(&mut self, on: bool) {
         self.draft = on;
         self.decoder.set_draft(on);
+    }
+
+    /// At most `limit` coded pictures are fed from here and after each later seek (`None`: no
+    /// limit). Reaching it ends the run as the track's end does: the pictures still in the
+    /// decoder come out, and [`Self::take_skipped`] holds the latest one decoded on the way.
+    /// A poster frame sets it, so a seek that never reaches a shown picture (an edit list that
+    /// cuts the only sync picture far before the clip starts) stays as cheap as its plan.
+    pub fn set_feed_limit(&mut self, limit: Option<usize>) {
+        self.feed_limit = limit;
+        self.feed_stop = limit.map_or(usize::MAX, |l| self.next_sample.saturating_add(l));
     }
 
     fn track(&self) -> Result<&isobmff::Track, VideoError> {
@@ -463,13 +502,15 @@ impl VideoStream {
         let (sync, target) = self.seek_points(seconds)?;
         let shown = if mode == SeekMode::Exact { target } else { sync };
         let t = self.track()?;
-        // (a sync picture the edit list cuts is decoded, not shown: the first picture shown is)
+        // (a sync picture the edit list cuts is decoded, not shown: the first picture shown is;
+        // it and the cut pictures after it can still stand in when nothing shown decodes)
         let first = self.window.first;
         let min_pts = t.presentation_pts(shown).unwrap_or(i64::MIN).max(first);
-        let keep_from = t.presentation_pts(sync).unwrap_or(i64::MIN).max(first);
+        let keep_from = t.presentation_pts(sync).unwrap_or(i64::MIN);
         let description = t.samples.get(sync).map_or(1, |s| s.description_index);
         self.restart(description)?;
         self.next_sample = sync;
+        self.feed_stop = self.feed_limit.map_or(usize::MAX, |l| sync.saturating_add(l));
         self.min_pts = min_pts;
         self.keep_from = keep_from;
         self.skipped = None;
@@ -516,8 +557,9 @@ impl VideoStream {
             if stop() {
                 return Err(VideoError::Cancelled);
             }
-            // (past the last picture shown, the track's remaining samples are not fed)
-            let len = self.track()?.samples.len().min(self.window.feed_end);
+            // (past the last picture shown, the track's remaining samples are not fed; nor past
+            // the feed limit)
+            let len = self.track()?.samples.len().min(self.window.feed_end).min(self.feed_stop);
             if self.next_sample >= len {
                 if self.flushed {
                     return Ok(None);

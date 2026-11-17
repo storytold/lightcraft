@@ -16,22 +16,42 @@
 //!
 //! Interpretation choices, the same for both outputs:
 //!
-//! - **SDR transfer curves** (BT.709, BT.601, BT.2020 10/12-bit, sRGB, and BT.709 with extended range:
-//!   xvYCC, BT.1361, clipped to SDR) are read with the sRGB curve,
-//!   as browsers and most players show such video, so a picture looks the way the clip looks in a
-//!   player. An 8-bit BT.709 stream in BT.709 primaries therefore converts to display sRGB without
-//!   any linearisation (the fast path).
+//! - **SDR transfer curves** (BT.709, BT.601, BT.2020 10/12-bit, sRGB, BT.709 with extended range:
+//!   xvYCC, BT.1361, clipped to SDR, and BT.470 System B/G, transfer 5) are read with the sRGB
+//!   curve, as browsers and most players show such video, so a picture looks the way the clip looks
+//!   in a player. An 8-bit BT.709 stream in BT.709 primaries therefore converts to display sRGB
+//!   without any linearisation (the fast path). Transfer 5's nominal display gamma is 2.8, but
+//!   625-line material is graded and shown at about 2.2 to 2.4 in practice, so reading it as 2.8
+//!   would show it darker than any player does. Transfer 4 (System M, gamma 2.2) keeps its gamma,
+//!   which is within a few code values of the sRGB curve.
 //! - **HDR** is mapped to SDR, as macOS shows HDR video on an SDR screen (measured on HLG and PQ
-//!   step charts): PQ's BT.2408 reference white (203 cd/m²) becomes nearly SDR white and the range
-//!   above it is compressed into a shoulder; HLG, which is scene-referred, is shown as its scene
-//!   light with its peak at SDR white (reference white a light grey, highlights kept). Good enough
-//!   for a thumbnail or a preview on an SDR screen, not a grading tool.
-//! - **Unspecified or reserved code points** fall back to what the picture size implies: BT.709 for
-//!   HD and larger, BT.601 (625 or 525 lines) for SD. They never make a conversion fail.
+//!   step charts): PQ's BT.2408 reference white (203 cd/m²) becomes nearly SDR white (0.91 in
+//!   linear light) and the range above it is compressed into a shoulder. HLG, which is
+//!   scene-referred, is shown as its scene light with its peak at SDR white, without BT.2100's
+//!   system gamma (OOTF): reference white (75 % signal) lands at 0.27, highlights keep their steps.
+//!   That is a decision, not the standard's display chain: macOS's readings of a 16-step HLG chart
+//!   fit the scene light raised to an exponent of about 0.92 to 0.96, close enough to 1 that the
+//!   simpler mapping stands (an OOTF for a 1000 cd/m² display, exponent 1.2, would show them
+//!   visibly darker than macOS does). Good enough for a thumbnail or a preview on an SDR screen,
+//!   not a grading tool.
+//! - **Unspecified or reserved code points** are inferred from the other code points first, then
+//!   from the picture size. A missing matrix follows the primaries (BT.709 → BT.709, BT.601 625 and
+//!   EBU Tech 3213 → BT.601, BT.601 525 → BT.601, SMPTE 240M → SMPTE 240M, BT.2020 → BT.2020
+//!   non-constant luminance, System M → FCC); missing primaries follow the matrix the same way
+//!   (BT.2020 constant luminance → BT.2020). DCI-P3 and Display P3 primaries imply no matrix, nor do
+//!   the identity (GBR), YCgCo and chromaticity-derived matrices imply primaries: those fall back on
+//!   the size, BT.709 for HD and larger, BT.601 (625 or 525 lines) for SD. So an HLG Rec.2020
+//!   stream that names only its primaries and transfer reads with the BT.2020 matrix. Nothing here
+//!   ever makes a conversion fail.
 //! - **Chroma** is upsampled linearly, with the sample positions H.264 and HEVC use by default
 //!   (horizontally co-sited with the left luma sample, vertically between the two rows for 4:2:0).
-//! - Matrix 10 (BT.2020 constant luminance) is converted as the non-constant-luminance matrix,
-//!   a small error on saturated colours. ICtCp (matrix 14) is refused ([`YuvError::Unsupported`]).
+//! - Matrix 10 (BT.2020 constant luminance) is converted as the non-constant-luminance matrix, and
+//!   matrix 13 (chromaticity-derived constant luminance) as matrix 12 (its non-constant-luminance
+//!   twin), a small error on saturated colours. ICtCp (matrix 14) is refused
+//!   ([`YuvError::Unsupported`]).
+//! - **Very large pictures** can convert straight to a picture `factor` times smaller on each side
+//!   ([`Converter::to_linear_rec2020_reduced`], block means in linear light), so a caller that
+//!   only needs a thumbnail never holds the full size in floats.
 
 use lightcraft_color::{RgbSpace, Xy};
 
@@ -213,7 +233,8 @@ impl Transfer {
             // which an SDR picture clips)
             1 | 6 | 11 | 12 | 13 | 14 | 15 => Transfer::Sdr,
             4 => Transfer::Gamma(2.2),
-            5 => Transfer::Gamma(2.8),
+            // (nominally gamma 2.8; read as players show it, see the module documentation)
+            5 => Transfer::Sdr,
             8 => Transfer::Linear,
             16 => Transfer::Pq,
             18 => Transfer::Hlg,
@@ -242,6 +263,32 @@ fn size_default(width: usize, height: usize) -> (u8, u8) {
     } else {
         (6, 6)
     }
+}
+
+/// The matrix that goes with primaries `code` when a stream names no matrix (module documentation).
+fn matrix_for_primaries(code: u8) -> Option<u8> {
+    Some(match code {
+        1 => 1,
+        4 => 4,
+        5 | 22 => 5,
+        6 => 6,
+        7 => 7,
+        9 => 9,
+        _ => return None,
+    })
+}
+
+/// The primaries that go with matrix `code` when a stream names no primaries.
+fn primaries_for_matrix(code: u8) -> Option<u8> {
+    Some(match code {
+        1 => 1,
+        4 => 4,
+        5 => 5,
+        6 => 6,
+        7 => 7,
+        9 | 10 => 9,
+        _ => return None,
+    })
 }
 
 fn primaries_of(code: u8) -> Option<RgbSpace> {
@@ -334,14 +381,17 @@ impl Converter {
         if !(8..=16).contains(&bit_depth) {
             return Err(YuvError::Layout(format!("bit depth {bit_depth} outside 8 to 16")));
         }
+        // (each missing code point from the other one first, the picture size last)
         let (def_matrix, def_primaries) = size_default(width, height);
-        let (primaries_code, primaries) = match primaries_of(desc.primaries) {
-            Some(p) => (desc.primaries, p),
-            None => (def_primaries, primaries_of(def_primaries).unwrap_or(lightcraft_color::SRGB)),
-        };
+        let primaries_given = primaries_of(desc.primaries).is_some();
+        let primaries_code = if primaries_given { desc.primaries } else { primaries_for_matrix(desc.matrix).unwrap_or(def_primaries) };
+        let primaries = primaries_of(primaries_code).unwrap_or(lightcraft_color::SRGB);
         let (matrix_code, matrix) = match matrix_of(desc.matrix, &primaries)? {
             Some(m) => (desc.matrix, m),
-            None => (def_matrix, matrix_of(def_matrix, &primaries)?.unwrap_or(Matrix::Kr { kr: 0.2126, kb: 0.0722 })),
+            None => {
+                let code = primaries_given.then(|| matrix_for_primaries(desc.primaries)).flatten().unwrap_or(def_matrix);
+                (code, matrix_of(code, &primaries)?.unwrap_or(Matrix::Kr { kr: 0.2126, kb: 0.0722 }))
+            }
         };
         let (transfer_code, transfer) = match Transfer::from_code(desc.transfer) {
             Some(t) => (desc.transfer, t),
@@ -412,6 +462,43 @@ impl Converter {
             let px = row.iter_mut().zip(scratch.r.iter().zip(scratch.g.iter().zip(scratch.b.iter())));
             for (o, (&r, (&g, &b))) in px {
                 *o = apply(&self.to_2020, self.linearise([r, g, b])).map(|v| v.max(0.0));
+            }
+        });
+        Ok(())
+    }
+
+    /// [`Self::to_linear_rec2020`] reduced by `factor` on each side: every output pixel is the
+    /// mean, in linear light, of a `factor` × `factor` block (partial at the right and bottom
+    /// edges). `out` must hold exactly ⌈width / factor⌉ × ⌈height / factor⌉ pixels; `factor` 0
+    /// reads as 1. Only one band of picture rows is ever held in floats.
+    pub fn to_linear_rec2020_reduced(&self, pic: &Picture<'_>, factor: usize, out: &mut [[f32; 3]]) -> Result<(), YuvError> {
+        let factor = factor.max(1);
+        let (w, h) = (pic.width.div_ceil(factor), pic.height.div_ceil(factor));
+        let pixels = w.checked_mul(h).ok_or_else(|| YuvError::Layout("picture too large".into()))?;
+        self.check(pic, pic.width.saturating_mul(pic.height))?;
+        if pixels != out.len() {
+            return Err(YuvError::Layout(format!("output holds {} pixels, the reduced picture has {w}×{h}", out.len())));
+        }
+        for_rows(out, w, |oy, row, scratch| {
+            row.fill([0.0; 3]);
+            let first = oy.saturating_mul(factor);
+            let rows = pic.height.saturating_sub(first).min(factor);
+            for y in first..first + rows {
+                self.signal_row(pic, y, scratch);
+                let px = scratch.r.iter().zip(scratch.g.iter().zip(scratch.b.iter()));
+                for (x, (&r, (&g, &b))) in px.enumerate() {
+                    if let Some(o) = row.get_mut(x / factor) {
+                        let v = apply(&self.to_2020, self.linearise([r, g, b]));
+                        for (o, v) in o.iter_mut().zip(v) {
+                            *o += v.max(0.0);
+                        }
+                    }
+                }
+            }
+            for (x, o) in row.iter_mut().enumerate() {
+                let cols = pic.width.saturating_sub(x * factor).min(factor);
+                let n = (cols * rows).max(1) as f32;
+                *o = o.map(|v| v / n);
             }
         });
         Ok(())

@@ -10,9 +10,11 @@
 //!
 //! Bounded: the bytes read from the file (header and pictures) stop at
 //! [`PosterOptions::max_read_bytes`], at most [`PosterOptions::max_frames`] pictures are decoded
-//! (a target further from its sync picture shows the sync picture instead), and `cancel` is
-//! checked between pictures. A clip damaged after its sync picture shows the last picture that
-//! decoded.
+//! (a target further from its sync picture shows the sync picture instead; when even that would
+//! decode more, because an edit list starts the clip far past its only sync picture, the latest
+//! picture decoded stands in), at most [`PosterOptions::max_convert_pixels`] are held in floats,
+//! and `cancel` is checked between pictures. A clip damaged after its sync picture shows the last
+//! picture that decoded.
 
 use std::io;
 use std::sync::Arc;
@@ -31,12 +33,18 @@ pub struct PosterOptions {
     pub target_seconds: f64,
     /// Clips shorter than this show their first picture.
     pub short_clip_seconds: f64,
-    /// Longest edge of the result (upright); 0 keeps the decoded size.
+    /// Longest edge of the result (upright); 0 keeps the decoded size (within
+    /// [`Self::max_convert_pixels`]).
     pub max_edge: usize,
     /// Bytes read from the file, its headers included.
     pub max_read_bytes: u64,
     /// Coded pictures decoded.
     pub max_frames: usize,
+    /// Pixels converted to linear light at full size (12 bytes each). A larger picture converts
+    /// straight to one an integer factor smaller on each side, which the final resize then fits:
+    /// the decoder's memory budget admits pictures of some 200 megapixels, whose full-size float
+    /// copy would take gigabytes. 0: no limit.
+    pub max_convert_pixels: usize,
     /// Decoder limits.
     pub stream: StreamOptions,
 }
@@ -49,6 +57,7 @@ impl Default for PosterOptions {
             max_edge: 512,
             max_read_bytes: 256 << 20,
             max_frames: 240,
+            max_convert_pixels: 16 << 20,
             stream: StreamOptions { threads: 1, memory_budget: 1 << 30, max_sample_bytes: 64 << 20 },
         }
     }
@@ -65,7 +74,8 @@ pub struct PosterFrame {
     /// HDR (PQ / HLG), tone mapped for the picture.
     pub hdr: bool,
     pub bit_depth: u8,
-    /// When the picture is shown, in seconds of the clip's timeline.
+    /// When the picture is shown, in seconds of the clip's timeline (negative for a stand-in the
+    /// edit list cuts, shown before the clip starts).
     pub seconds: f64,
     /// The target was too far from its sync picture (or after damage): an earlier picture shows.
     pub fallback: bool,
@@ -124,13 +134,22 @@ fn decode<S: ClipSource + 'static>(src: Arc<Budgeted<S>>, opts: &PosterOptions, 
     let plan = stream.seek_plan(at)?;
     let sample_budget = opts.max_read_bytes / 2;
     let keyframe_only = plan.frames > opts.max_frames.max(1) || plan.bytes > sample_budget;
+    // (a keyframe seek still decodes up to the first picture shown, which an edit list can put
+    // far past the sync picture: the limit keeps it to `max_frames`)
+    stream.set_feed_limit(Some(opts.max_frames.max(1)));
     stream.seek(at, if keyframe_only { SeekMode::Keyframe } else { SeekMode::Exact })?;
     let (frame, damaged) = first_frame(&mut stream, cancel)?;
     let fallback = keyframe_only || damaged || (frame.seconds - plan.target_seconds).abs() > 1e-6;
     let conv = Converter::new(frame.colour, frame.bit_depth, frame.width, frame.height)?;
-    let mut lin = vec![[0f32; 3]; frame.width.saturating_mul(frame.height)];
-    conv.to_linear_rec2020(&frame.picture(), &mut lin)?;
-    let image = Rgb32f { width: frame.width, height: frame.height, data: lin };
+    let factor = reduce_factor(frame.width, frame.height, opts.max_convert_pixels);
+    let (width, height) = (frame.width.div_ceil(factor), frame.height.div_ceil(factor));
+    let mut lin = vec![[0f32; 3]; width.saturating_mul(height)];
+    if factor == 1 {
+        conv.to_linear_rec2020(&frame.picture(), &mut lin)?;
+    } else {
+        conv.to_linear_rec2020_reduced(&frame.picture(), factor, &mut lin)?;
+    }
+    let image = Rgb32f { width, height, data: lin };
     drop(frame.planes);
     let image = if opts.max_edge > 0 { fit(&image, opts.max_edge, opts.max_edge, Filter::Lanczos3) } else { image };
     Ok(PosterFrame {
@@ -144,6 +163,20 @@ fn decode<S: ClipSource + 'static>(src: Arc<Budgeted<S>>, opts: &PosterOptions, 
         frames_decoded: stream.frames_decoded(),
         bytes_read: 0,
     })
+}
+
+/// The smallest factor that brings a `width` × `height` picture within `max_pixels` (1 when it
+/// fits, or when `max_pixels` is 0).
+fn reduce_factor(width: usize, height: usize, max_pixels: usize) -> usize {
+    if max_pixels == 0 {
+        return 1;
+    }
+    // (the root is a lower bound; at most a step or two more)
+    let mut k = ((width.saturating_mul(height) as f64 / max_pixels as f64).sqrt() as usize).max(1);
+    while width.div_ceil(k).saturating_mul(height.div_ceil(k)) > max_pixels && k < width.max(height) {
+        k += 1;
+    }
+    k
 }
 
 /// The first picture after the seek. When the run ends early (a picture that fails to read or
