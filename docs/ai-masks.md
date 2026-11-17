@@ -109,6 +109,11 @@ submitted to the shared worker may finish in the background, but its result is i
 pastes keep their place and may still wait for that worker. Waiting-mode clients complete the
 computation before returning `{changed}`.
 
+**Copy Mask** and **Paste Mask** (a mask's right-click menu, or the Photo menu; `mask.copy`,
+`mask.paste`) move one mask instead of all of them. Paste Mask adds the mask, with its effect,
+beside each selected photo's own masks. Its Object and Describe components are recomputed on each
+photo as above; the photo's own masks keep their selections. Manual masks paste at once.
+
 ## Remote Metal inference
 
 Native builds with `sam` can keep the editor, RAW files, library, and exports local while

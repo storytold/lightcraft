@@ -679,3 +679,76 @@ fn object_masks_without_points_or_with_too_many_points_are_actionable_errors() {
         assert!(s.activity.list().is_empty());
     }
 }
+
+/// Copy Mask on the source photo, which has `settings()` (one mask, id 7, with AI components).
+fn mask_copied(manual: bool) -> (Session, PhotoId, PhotoId) {
+    let (mut s, source, target) = copied();
+    if manual {
+        let mut d = settings();
+        d.masks[0].components.drain(..2);
+        s.set_develop(source, d, "Manual").unwrap();
+    }
+    s.active_mask = Some(7);
+    let out = s.execute("mask.copy", &json!({})).unwrap();
+    assert_eq!(out["name"], "People");
+    (s, source, target)
+}
+
+#[test]
+fn paste_mask_adds_the_copied_mask_beside_the_photos_own_in_one_undo_step() {
+    let (mut s, source, target) = mask_copied(true);
+    let mut own = DevelopSettings::default();
+    own.masks.push(Mask { id: 7, name: "Own".into(), ..Default::default() });
+    s.set_develop(target, own.clone(), "Own").unwrap();
+    let commits = s.commits();
+    let out = s.execute("mask.paste", &json!({"ids": [target.0]})).unwrap();
+    assert_eq!(out["changed"], 1);
+    let after = s.develop_of(target).unwrap();
+    assert_eq!(after.masks.len(), 2, "added, not replacing the photo's own");
+    assert_eq!(after.masks[0], own.masks[0]);
+    let pasted = &after.masks[1];
+    let copied = &s.develop_of(source).unwrap().masks[0];
+    assert_eq!(pasted.id, 8, "the next free id");
+    assert_eq!((&pasted.name, &pasted.components, &pasted.adjust), (&copied.name, &copied.components, &copied.adjust));
+    assert_eq!(after.light, own.light, "only the mask is pasted");
+    assert_eq!(s.commits(), commits + 1);
+    s.undo_step().unwrap();
+    assert_eq!(*s.develop_of(target).unwrap(), own);
+}
+
+#[test]
+fn paste_mask_with_ai_selections_needs_the_model_and_changes_nothing_without_it() {
+    for background in [false, true] {
+        let (mut s, _, target) = mask_copied(false);
+        s.segmenter.background = background;
+        let before = s.develop_of(target).unwrap();
+        let commits = s.commits();
+        let e = s.execute("mask.paste", &json!({"ids": [target.0]})).unwrap_err();
+        assert!(e.to_string().contains("AI masks") || e.to_string().contains("SAM 3"), "{e}");
+        assert_eq!(s.develop_of(target).unwrap(), before);
+        assert_eq!(s.commits(), commits);
+    }
+}
+
+#[test]
+fn paste_mask_is_refused_until_a_mask_is_copied() {
+    let (mut s, _, target) = copied();
+    s.active_mask = None;
+    assert!(s.execute("mask.copy", &json!({})).is_err(), "no mask selected");
+    assert!(s.execute("mask.paste", &json!({"ids": [target.0]})).is_err(), "nothing copied");
+}
+
+#[cfg(feature = "sam")]
+#[test]
+fn paste_mask_recomputes_only_the_pasted_mask_not_the_photos_own_ai_masks() {
+    let (s, _, target) = mask_copied(false);
+    // the photo has its own AI mask; the pasted one comes last
+    let mut proposed = settings();
+    let mut pasted = settings().masks[0].clone();
+    pasted.id = 8;
+    proposed.masks.push(pasted);
+    let pending = Pending::recomputing(&s, vec![(target, proposed.clone())], "Paste Mask", true).unwrap();
+    assert_eq!(pending.queue.len(), 2, "the pasted mask's two AI components only");
+    assert!(pending.queue.iter().all(|q| q.mask == 1));
+    assert_eq!(pending.targets[0].settings.masks[0], proposed.masks[0], "the photo's own mask keeps its selection");
+}

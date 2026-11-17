@@ -308,6 +308,8 @@ pub struct Session {
     pub(crate) focus_scan: focus_scan::FocusScan,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
+    /// The mask Copy Mask copied (`mask.copy`), for Paste Mask (`mask.paste`).
+    pub mask_clipboard: Option<lightcraft_develop::Mask>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
     pub browse: Option<Browse>,
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
@@ -507,6 +509,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
             clipboard: None,
+            mask_clipboard: None,
             meta_clipboard: None,
             browse: None,
             library_folder: None,

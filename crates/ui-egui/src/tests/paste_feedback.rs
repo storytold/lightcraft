@@ -178,3 +178,36 @@ fn both_context_menu_paste_actions_report_refusal_for_the_whole_selection() {
         assert_eq!(f.h.app.session.selection.ids, f.ids);
     }
 }
+
+#[test]
+fn copy_mask_and_paste_mask_say_what_they_did() {
+    let mut s = Session::with_demo();
+    let ids = s.visible_cloned();
+    let (source, targets) = (ids[0], [ids[1], ids[2]]);
+    s.execute("library.select", &json!({"ids": [source.0]})).unwrap();
+    let mut d = DevelopSettings::default();
+    d.masks.push(Mask {
+        id: 1,
+        name: "Sky gradient".into(),
+        on_photo: true,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Linear { start: lightcraft_geom::Point::new(0.5, 0.0), end: lightcraft_geom::Point::new(0.5, 0.4) },
+        }],
+        ..Default::default()
+    });
+    s.set_develop(source, d, "Source").unwrap();
+    s.active_mask = Some(1);
+    let mut app = LightcraftApp::new(s, Services::default());
+    app.run("mask.copy", json!({})).unwrap();
+    assert_eq!(app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Mask copied"));
+    app.session.execute("library.select", &json!({"ids": [targets[0].0, targets[1].0], "active": targets[0].0})).unwrap();
+    let out = app.run("mask.paste", json!({})).unwrap();
+    assert_eq!(out["changed"], 2);
+    assert_eq!(app.ui.toast.as_ref().map(|t| t.0.as_str()), Some("Settings pasted"));
+    for t in targets {
+        assert_eq!(app.session.develop_of(t).unwrap().masks.iter().filter(|m| m.name == "Sky gradient").count(), 1);
+    }
+}

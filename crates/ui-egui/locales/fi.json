@@ -2413,5 +2413,8 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Copy Mask": "Kopioi maski",
+  "Paste Mask": "Liitä maski",
+  "Mask copied": "Maski kopioitu"
 }

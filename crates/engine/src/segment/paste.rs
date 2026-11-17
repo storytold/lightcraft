@@ -21,6 +21,34 @@ impl Session {
     pub(crate) fn paste_settings(&mut self, ids: &[PhotoId], partial: &Value, label: &str) -> Result<Value> {
         let copied_ai =
             if partial.get("masks").is_some() { count_ai(&lightcraft_develop::apply_partial(&DevelopSettings::default(), partial, 1.0)) } else { 0 };
+        self.paste_into(ids, copied_ai, label, false, |before| lightcraft_develop::apply_partial(before, partial, 1.0))
+    }
+
+    /// Paste Mask: `mask` added to each photo's own masks (with the next free id), its Object
+    /// and Describe components recomputed on each photo as [`Session::paste_settings`] does. The
+    /// photos' own masks are left as they are.
+    pub(crate) fn paste_mask(&mut self, ids: &[PhotoId], mask: &lightcraft_develop::Mask, label: &str) -> Result<Value> {
+        let copied_ai = mask.components.iter().filter(|c| matches!(c.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. })).count();
+        self.paste_into(ids, copied_ai, label, true, |before| {
+            let mut d = before.clone();
+            let mut m = mask.clone();
+            m.id = d.next_mask_id();
+            d.masks.push(m);
+            d
+        })
+    }
+
+    /// Gives each photo of `ids` the settings `paste` makes of its own, as one undo step. The new
+    /// settings hold `copied_ai` Object / Describe components a photo, which are recomputed on it
+    /// first: in every mask, or only in its last one when `last_only`.
+    fn paste_into(
+        &mut self,
+        ids: &[PhotoId],
+        copied_ai: usize,
+        label: &str,
+        last_only: bool,
+        paste: impl Fn(&DevelopSettings) -> DevelopSettings,
+    ) -> Result<Value> {
         // Bound the work before cloning the clipboard's segmentation grids for every target.
         if copied_ai.saturating_mul(ids.len()) > MAX_SELECTIONS {
             return Err(crate::EngineError::Other(TOO_MANY.into()));
@@ -29,8 +57,7 @@ impl Session {
         if copied_ai > 0 {
             self.check_paste_queue(ids, copied_ai)?;
         }
-        let targets: Vec<_> =
-            ids.iter().filter_map(|id| self.develop_of(*id).map(|before| (*id, lightcraft_develop::apply_partial(&before, partial, 1.0)))).collect();
+        let targets: Vec<_> = ids.iter().filter_map(|id| self.develop_of(*id).map(|before| (*id, paste(&before)))).collect();
         // Settings that did not include Masking must not recompute or discard existing masks.
         if copied_ai == 0 || targets.is_empty() {
             let ops: Vec<_> = targets.into_iter().filter_map(|(id, d)| self.develop_op(id, d, label)).collect();
@@ -41,7 +68,7 @@ impl Session {
         self.segmenter.require_model()?;
         #[cfg(feature = "sam")]
         {
-            let mut pending = Pending::new(self, targets, label).map_err(crate::EngineError::Other)?;
+            let mut pending = Pending::recomputing(self, targets, label, last_only).map_err(crate::EngineError::Other)?;
             let changed = pending.targets.len();
             if self.segmenter.background {
                 let task = pending.task.id();
@@ -68,7 +95,10 @@ impl Session {
             Ok(json!({"changed": changed}))
         }
         #[cfg(not(feature = "sam"))]
-        Err(crate::EngineError::Other("AI masks are not available in this build".into()))
+        {
+            let _ = last_only;
+            Err(crate::EngineError::Other("AI masks are not available in this build".into()))
+        }
     }
 
     #[cfg(feature = "sam")]
@@ -139,7 +169,14 @@ pub(super) struct Pending {
 
 #[cfg(feature = "sam")]
 impl Pending {
+    #[cfg(test)]
     fn new(s: &Session, proposed: Vec<(PhotoId, DevelopSettings)>, label: &str) -> std::result::Result<Self, String> {
+        Self::recomputing(s, proposed, label, false)
+    }
+
+    /// [`Pending::new`], recomputing only each photo's last mask when `last_only` (Paste Mask:
+    /// the photo's own masks are not touched).
+    fn recomputing(s: &Session, proposed: Vec<(PhotoId, DevelopSettings)>, label: &str, last_only: bool) -> std::result::Result<Self, String> {
         let mut targets = Vec::new();
         let mut queue = VecDeque::new();
         for (id, mut settings) in proposed {
@@ -147,7 +184,8 @@ impl Pending {
             // Legacy mask clicks must be moved onto the photo before being sent to the model.
             let drawn = settings.clone();
             s.attach_masks(id, &drawn, &mut settings);
-            for (mask, m) in settings.masks.iter_mut().enumerate() {
+            let first = if last_only { settings.masks.len().saturating_sub(1) } else { 0 };
+            for (mask, m) in settings.masks.iter_mut().enumerate().skip(first) {
                 for (component, c) in m.components.iter_mut().enumerate() {
                     match &mut c.shape {
                         MaskShape::Object { hint, exclude, seg, detail, .. } => {

@@ -2517,5 +2517,8 @@
   "Top bar": "Övre fältet",
   "Tool strip": "Verktygsfält",
   "Bottom bar": "Nedre fältet",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "Copy Mask": "Kopiera mask",
+  "Paste Mask": "Klistra in mask",
+  "Mask copied": "Masken kopierades"
 }

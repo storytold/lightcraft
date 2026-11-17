@@ -300,8 +300,11 @@ impl LightcraftApp {
             }
             Ok(_) => {}
         }
-        if matches!(id, "develop.paste" | "develop.pastePrevious") {
+        if matches!(id, "develop.paste" | "develop.pastePrevious" | "mask.paste") {
             self.paste_feedback(&r);
+        }
+        if id == "mask.copy" && r.is_ok() {
+            self.ui.toast = Some((i18n::tr("Mask copied").to_string(), self.tick_now() + TOAST_SECONDS, None));
         }
         r
     }

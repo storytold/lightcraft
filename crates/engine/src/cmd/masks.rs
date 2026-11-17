@@ -6,7 +6,7 @@ use lightcraft_develop::{
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
-use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
+use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, has_mask, has_mask_clipboard, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
 
@@ -740,6 +740,37 @@ pub fn specs() -> Vec<CommandSpec> {
                     *active = Some(next);
                     Ok(())
                 })
+            }
+        ),
+        cmd!(
+            "mask.copy",
+            "Copy Mask",
+            ["Photo"],
+            None,
+            "{id?: maskId (default: the selected mask)} — copies the mask and its effect for Paste Mask → {name}",
+            has_mask,
+            |s, p| {
+                let c = "mask.copy";
+                let mid = mask_id(p, s.active_mask, c)?;
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let m =
+                    s.develop_of(id).and_then(|d| d.masks.iter().find(|m| m.id == mid).cloned()).ok_or_else(|| bad(c, format!("no mask {mid}")))?;
+                let name = m.name.clone();
+                s.mask_clipboard = Some(m);
+                Ok(json!({"name": name}))
+            }
+        ),
+        cmd!(
+            "mask.paste",
+            "Paste Mask",
+            ["Photo"],
+            None,
+            "{ids?} — adds the copied mask to each photo (default: the selected ones), beside its own masks; its Object and Describe selections are recomputed on each photo (SAM 3 required), as Paste Settings does → {changed} or {pending, …}",
+            has_mask_clipboard,
+            |s, p| {
+                let m = s.mask_clipboard.clone().ok_or_else(|| bad("mask.paste", "copy a mask first"))?;
+                let ids = s.targets(p)?;
+                s.paste_mask(&ids, &m, "Paste Mask")
             }
         ),
         cmd!(
