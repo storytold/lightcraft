@@ -199,13 +199,16 @@ impl LossWatch {
     }
 }
 
-/// Whether a dropped frame counts towards a lost device: not a hidden window (`Occluded`) or one
-/// being resized (`Outdated`, reconfigured right away).
+/// Whether a dropped frame counts towards a lost device: not a hidden window (`Occluded`), one
+/// being resized (`Outdated`, reconfigured right away), or a compositor that hands out no frame
+/// for now (`Timeout`: a minimised or covered window can time out for as long as it stays hidden,
+/// and the device is fine).
 fn counts_as_failure(status: &wgpu::CurrentSurfaceTexture) -> bool {
     !matches!(
         status,
         wgpu::CurrentSurfaceTexture::Occluded
             | wgpu::CurrentSurfaceTexture::Outdated
+            | wgpu::CurrentSurfaceTexture::Timeout
             | wgpu::CurrentSurfaceTexture::Success(_)
             | wgpu::CurrentSurfaceTexture::Suboptimal(_)
     )
@@ -495,6 +498,7 @@ mod tests {
         // hidden / resized windows do not count
         assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Occluded));
         assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Outdated));
+        assert!(!counts_as_failure(&wgpu::CurrentSurfaceTexture::Timeout));
         assert!(counts_as_failure(&wgpu::CurrentSurfaceTexture::Validation));
         assert!(counts_as_failure(&wgpu::CurrentSurfaceTexture::Lost));
     }
