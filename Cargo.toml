@@ -49,8 +49,6 @@ lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 # TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "c28356d400aed7575b04ec1551b4665107cfe845" }
-# Camera raw files, the format layer: every maker but CR3, ARW, RAF, RW2 and ORF (craft-libs#862 and the maker PRs).
-# On the same commit as craft-tiff: its errors and IFDs are shared.
 craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "c28356d400aed7575b04ec1551b4665107cfe845" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
