@@ -1035,6 +1035,15 @@ fn global_descriptions(data: &str) -> Vec<(usize, usize)> {
                 } else {
                     break;
                 }
+            } else if rest.starts_with("<?") {
+                // A processing instruction ends at `?>`, not at the first `>`: its text may
+                // contain `>` (for example `<?p > <fake ...> ?>`), and stopping at `>` would
+                // scan the PI's inner text as ancestor tags.
+                if let Some(rel) = data[i..].find("?>") {
+                    i += rel + 2;
+                } else {
+                    break;
+                }
             } else {
                 if let Some(rel) = rest[2..].find('>') {
                     i += 2 + rel + 1;
@@ -1204,7 +1213,18 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
                 from = s + 2;
                 continue;
             }
-            if rest.starts_with("<?") || rest.starts_with("<!") {
+            if rest.starts_with("<?") {
+                // A processing instruction ends at `?>`, not at the first `>`: its text may
+                // contain `>` (for example `<?p > <fake ...> ?>`), and stopping at `>` would
+                // scan the PI's inner text as tags.
+                if let Some(rel2) = data[s..search_to].find("?>") {
+                    from = s + rel2 + 2;
+                } else {
+                    break;
+                }
+                continue;
+            }
+            if rest.starts_with("<!") {
                 if let Some(rel2) = rest[2..].find('>') {
                     from = s + 2 + rel2 + 1;
                 } else {
@@ -1577,8 +1597,6 @@ fn put_attr_on_tag(data: &mut String, start: usize, end: usize, prefix: &str, na
 /// preserved: no correction is added, removed or reordered. Only fields that differ from
 /// `previous` are written, so a foreign correction we did not edit is left alone.
 fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &DevelopSettings, prefix: &str, aspect: f64) {
-    // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
-    const EPS: f64 = 1e-6;
     let masks = &settings.masks;
     let prev_masks = &previous.masks;
     if masks.is_empty() || prev_masks.is_empty() {
@@ -1589,14 +1607,42 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
         return;
     }
 
+    // Match each correction to a mask by Mask.id, falling back to document order for
+    // corrections without one.
+    let mask_ids = match_corrections_to_masks(data, &corrections, masks);
+
+    // Process corrections in reverse document order so that lengthening a
+    // correction doesn't move the offsets of corrections we haven't processed yet.
+    for (corr_idx, &(tag_start, mut corr_end)) in corrections.iter().enumerate().rev() {
+        let Some(mask_id) = mask_ids[corr_idx] else {
+            continue;
+        };
+        let Some(cur_mask) = masks.iter().find(|m| m.id == mask_id) else {
+            continue;
+        };
+        let Some(prev_mask) = prev_masks.iter().find(|m| m.id == mask_id) else {
+            continue;
+        };
+
+        corr_end = write_correction_slider_fields(data, tag_start, corr_end, prefix, cur_mask, prev_mask);
+        write_correction_components(data, tag_start, corr_end, prefix, aspect, cur_mask, prev_mask);
+    }
+}
+
+/// Match each `crs:` correction to a mask by Mask.id, falling back to document order for
+/// corrections without one. Returns, for each correction index, the mask id it writes to
+/// (`None` when there is no matching mask).
+fn match_corrections_to_masks(data: &str, corrections: &[(usize, usize)], masks: &[lightcraft_develop::Mask]) -> Vec<Option<u32>> {
     // Build a map from MaskId to correction index (in document order).
     // Corrections without a MaskId are matched by document order to masks
     // that don't have a MaskId correction pointing to them.
     let mut mask_id_to_corr_idx: HashMap<u32, usize> = HashMap::new();
     let mut corr_idx_without_mask_id: Vec<usize> = Vec::new();
+    let mut mask_ids: Vec<Option<u32>> = vec![None; corrections.len()];
     for (idx, &(tag_start, corr_end)) in corrections.iter().enumerate() {
         if let Some(mask_id) = correction_mask_id(data, tag_start, corr_end) {
             mask_id_to_corr_idx.insert(mask_id, idx);
+            mask_ids[idx] = Some(mask_id);
         } else {
             corr_idx_without_mask_id.push(idx);
         }
@@ -1617,199 +1663,232 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
     for corr_idx in corr_idx_without_mask_id {
         if let Some(mask_idx) = mask_idx_iter.next() {
             mask_id_for_corr_idx.insert(corr_idx, masks[mask_idx].id);
+            mask_ids[corr_idx] = Some(masks[mask_idx].id);
         }
     }
+    mask_ids
+}
 
-    // Process corrections in reverse document order so that lengthening a
-    // correction doesn't move the offsets of corrections we haven't processed yet.
-    for (corr_idx, &(tag_start, mut corr_end)) in corrections.iter().enumerate().rev() {
-        let mask_id = if let Some(mask_id) = correction_mask_id(data, tag_start, corr_end) {
-            mask_id
-        } else if let Some(mask_id) = mask_id_for_corr_idx.get(&corr_idx) {
-            *mask_id
-        } else {
-            continue;
-        };
-        let Some(cur_mask) = masks.iter().find(|m| m.id == mask_id) else {
-            continue;
-        };
-        let Some(prev_mask) = prev_masks.iter().find(|m| m.id == mask_id) else {
-            continue;
-        };
-
-        let a = &cur_mask.adjust;
-        let b = &prev_mask.adjust;
-        let fields = [
-            ("CorrectionAmount", a.amount / 100.0, b.amount / 100.0),
-            ("LocalExposure2012", a.exposure * 4.0, b.exposure * 4.0),
-            ("LocalContrast2012", a.contrast * 100.0, b.contrast * 100.0),
-            ("LocalHighlights2012", a.highlights * 100.0, b.highlights * 100.0),
-            ("LocalShadows2012", a.shadows * 100.0, b.shadows * 100.0),
-            ("LocalWhites2012", a.whites * 100.0, b.whites * 100.0),
-            ("LocalBlacks2012", a.blacks * 100.0, b.blacks * 100.0),
-            ("LocalTexture", a.texture * 100.0, b.texture * 100.0),
-            ("LocalClarity2012", a.clarity * 100.0, b.clarity * 100.0),
-            ("LocalDehaze", a.dehaze * 100.0, b.dehaze * 100.0),
-            ("LocalTemperature", a.temp * 100.0, b.temp * 100.0),
-            ("LocalTint", a.tint * 100.0, b.tint * 100.0),
-            ("LocalSaturation", a.saturation * 100.0, b.saturation * 100.0),
-            ("LocalHue", a.hue * 100.0, b.hue * 100.0),
-            ("LocalSharpness", a.sharpness * 100.0, b.sharpness * 100.0),
-            ("LocalLuminanceNoise", a.noise * 100.0, b.noise * 100.0),
-            ("LocalMoire", a.moire * 100.0, b.moire * 100.0),
-            ("LocalDefringe", a.defringe * 100.0, b.defringe * 100.0),
-            ("LocalToningSaturation", a.color_sat * 100.0, b.color_sat * 100.0),
-            ("LocalToningHue", a.color_hue, b.color_hue),
-        ];
-        for (name, current, previous_value) in fields {
-            if (current - previous_value).abs() >= EPS {
-                put_attr_on_tag(data, tag_start, corr_end, prefix, name, &current.to_string());
-                corr_end = tag_end(data, tag_start).unwrap_or(corr_end);
-            }
-        }
-
-        let comp_tags = mask_component_descriptions(data, tag_start, corr_end);
-        let cur_comps =
-            serde_json::to_value(cur_mask).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
-        let prev_comps =
-            serde_json::to_value(prev_mask).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
-        let ncomp = cur_comps.len().min(prev_comps.len()).min(comp_tags.len());
-        if ncomp == 0 {
-            continue;
-        }
-
-        // Process components in forward order. Earlier components come before later ones
-        // in the document, so length changes to earlier components shift later ones.
-        // We track the accumulated delta and apply it to subsequent components.
-        let mut length_delta: i64 = 0;
-        for j in 0..ncomp {
-            let cur = &cur_comps[j];
-            let prev = &prev_comps[j];
-            let cur_kind = cur.get("shape").and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or("");
-            let prev_kind = prev.get("shape").and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or("");
-            if cur_kind.is_empty() || cur_kind != prev_kind {
-                continue;
-            }
-            let len_before = data.len();
-            let (mut cstart, mut cend) = comp_tags[j];
-            cstart = (cstart as i64 + length_delta) as usize;
-            cend = (cend as i64 + length_delta) as usize;
-            let scale = |a: f64| if a >= 1.0 { (1.0, 1.0 / a) } else { (a, 1.0) };
-            let (sx, sy) = scale(aspect);
-            let inv = |r: f64| {
-                let y = r.clamp(0.0, 1.0) * 12.0 - 8.0;
-                2.0_f64.powf(y).powf(1.0 / 2.2).clamp(1e-4, 1.0)
-            };
-            // Track whether component inversion changed, to write it after shape-specific fields
-            let cur_comp_invert = cur.get("invert").and_then(Value::as_bool).unwrap_or(false);
-            let prev_comp_invert = prev.get("invert").and_then(Value::as_bool).unwrap_or(false);
-            let invert_changed = cur_comp_invert != prev_comp_invert;
-
-            match cur_kind {
-                "radial" => {
-                    let cur_cx = cur["shape"]["center"]["x"].as_f64().unwrap_or(0.5);
-                    let cur_cy = cur["shape"]["center"]["y"].as_f64().unwrap_or(0.5);
-                    let cur_rx = cur["shape"]["rx"].as_f64().unwrap_or(0.1);
-                    let cur_ry = cur["shape"]["ry"].as_f64().unwrap_or(0.1);
-                    let cur_angle = cur["shape"]["angle"].as_f64().unwrap_or(0.0);
-                    let cur_feather = cur["shape"]["feather"].as_f64().unwrap_or(50.0);
-                    let cur_shape_invert = cur["shape"].get("invert").and_then(Value::as_bool).unwrap_or(false);
-                    let prev_cx = prev["shape"]["center"]["x"].as_f64().unwrap_or(0.5);
-                    let prev_cy = prev["shape"]["center"]["y"].as_f64().unwrap_or(0.5);
-                    let prev_rx = prev["shape"]["rx"].as_f64().unwrap_or(0.1);
-                    let prev_ry = prev["shape"]["ry"].as_f64().unwrap_or(0.1);
-                    let prev_angle = prev["shape"]["angle"].as_f64().unwrap_or(0.0);
-                    let prev_feather = prev["shape"]["feather"].as_f64().unwrap_or(50.0);
-                    let prev_shape_invert = prev["shape"].get("invert").and_then(Value::as_bool).unwrap_or(false);
-                    let cur_left = (cur_cx - cur_rx / sx).clamp(0.0, 1.0);
-                    let cur_right = (cur_cx + cur_rx / sx).clamp(0.0, 1.0);
-                    let cur_top = (cur_cy - cur_ry / sy).clamp(0.0, 1.0);
-                    let cur_bottom = (cur_cy + cur_ry / sy).clamp(0.0, 1.0);
-                    let prev_left = (prev_cx - prev_rx / sx).clamp(0.0, 1.0);
-                    let prev_right = (prev_cx + prev_rx / sx).clamp(0.0, 1.0);
-                    let prev_top = (prev_cy - prev_ry / sy).clamp(0.0, 1.0);
-                    let prev_bottom = (prev_cy + prev_ry / sy).clamp(0.0, 1.0);
-                    let version = attr_f64(data, cstart, cend, "Version").unwrap_or(0.0);
-                    let versionless = version < 2.0;
-                    let to_feather = |f: f64| if versionless { (f * 2.0).clamp(0.0, 100.0) } else { f.clamp(0.0, 100.0) };
-                    let pairs = [
-                        ("Left", cur_left, prev_left),
-                        ("Right", cur_right, prev_right),
-                        ("Top", cur_top, prev_top),
-                        ("Bottom", cur_bottom, prev_bottom),
-                        ("Angle", cur_angle, prev_angle),
-                        ("Feather", to_feather(cur_feather), to_feather(prev_feather)),
-                    ];
-                    for (name, cur_v, prev_v) in pairs {
-                        if (cur_v - prev_v).abs() >= EPS {
-                            put_attr_on_tag(data, cstart, cend, prefix, name, &cur_v.to_string());
-                            cend = tag_end(data, cstart).unwrap_or(cend);
-                        }
-                    }
-                    if cur_shape_invert != prev_shape_invert {
-                        put_attr_on_tag(data, cstart, cend, prefix, "Flipped", if cur_shape_invert { "true" } else { "false" });
-                        cend = tag_end(data, cstart).unwrap_or(cend);
-                    }
-                }
-                "linear" => {
-                    let cur_start_x = cur["shape"]["start"]["x"].as_f64().unwrap_or(0.5);
-                    let cur_start_y = cur["shape"]["start"]["y"].as_f64().unwrap_or(0.0);
-                    let cur_end_x = cur["shape"]["end"]["x"].as_f64().unwrap_or(0.5);
-                    let cur_end_y = cur["shape"]["end"]["y"].as_f64().unwrap_or(1.0);
-                    let prev_start_x = prev["shape"]["start"]["x"].as_f64().unwrap_or(0.5);
-                    let prev_start_y = prev["shape"]["start"]["y"].as_f64().unwrap_or(0.0);
-                    let prev_end_x = prev["shape"]["end"]["x"].as_f64().unwrap_or(0.5);
-                    let prev_end_y = prev["shape"]["end"]["y"].as_f64().unwrap_or(1.0);
-                    let pairs = [
-                        ("FullX", cur_start_x, prev_start_x),
-                        ("FullY", cur_start_y, prev_start_y),
-                        ("ZeroX", cur_end_x, prev_end_x),
-                        ("ZeroY", cur_end_y, prev_end_y),
-                    ];
-                    for (name, cur_v, prev_v) in pairs {
-                        if (cur_v - prev_v).abs() >= EPS {
-                            put_attr_on_tag(data, cstart, cend, prefix, name, &cur_v.to_string());
-                            cend = tag_end(data, cstart).unwrap_or(cend);
-                        }
-                    }
-                }
-                "luminanceRange" => {
-                    let cur_lo = cur["shape"]["lo"].as_f64().unwrap_or(0.0);
-                    let cur_hi = cur["shape"]["hi"].as_f64().unwrap_or(1.0);
-                    let cur_lo_f = cur["shape"]["lo_feather"].as_f64().unwrap_or(0.0);
-                    let cur_hi_f = cur["shape"]["hi_feather"].as_f64().unwrap_or(0.0);
-                    let prev_lo = prev["shape"]["lo"].as_f64().unwrap_or(0.0);
-                    let prev_hi = prev["shape"]["hi"].as_f64().unwrap_or(1.0);
-                    let prev_lo_f = prev["shape"]["lo_feather"].as_f64().unwrap_or(0.0);
-                    let prev_hi_f = prev["shape"]["hi_feather"].as_f64().unwrap_or(0.0);
-                    let cur_open = cur_hi >= 1.0 - EPS;
-                    let prev_open = prev_hi >= 1.0 - EPS;
-                    let cur_a = (cur_lo - cur_lo_f).clamp(0.0, 1.0);
-                    let cur_b = cur_lo.clamp(0.0, 1.0);
-                    let cur_c = if cur_open { 1.0 } else { cur_hi.clamp(0.0, 1.0) };
-                    let cur_d = if cur_open { 1.0 } else { (cur_hi + cur_hi_f).clamp(0.0, 1.0) };
-                    let prev_a = (prev_lo - prev_lo_f).clamp(0.0, 1.0);
-                    let prev_b = prev_lo.clamp(0.0, 1.0);
-                    let prev_c = if prev_open { 1.0 } else { prev_hi.clamp(0.0, 1.0) };
-                    let prev_d = if prev_open { 1.0 } else { (prev_hi + prev_hi_f).clamp(0.0, 1.0) };
-                    let cur_vals = [inv(cur_a), inv(cur_b), inv(cur_c), inv(cur_d)];
-                    let prev_vals = [inv(prev_a), inv(prev_b), inv(prev_c), inv(prev_d)];
-                    if cur_vals.iter().zip(prev_vals.iter()).any(|(x, y)| (x - y).abs() >= EPS) {
-                        let s = cur_vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
-                        put_attr_on_tag(data, cstart, cend, prefix, "LumRange", &s);
-                        // Refresh cend after writing LumRange in case the tag length changed
-                        cend = tag_end(data, cstart).unwrap_or(cend);
-                    }
-                }
-                _ => {}
-            }
-            // Write MaskInverted for all component kinds if it changed
-            if invert_changed {
-                put_attr_on_tag(data, cstart, cend, prefix, "MaskInverted", if cur_comp_invert { "true" } else { "false" });
-            }
-            length_delta += data.len() as i64 - len_before as i64;
+/// Write the simple `crs:` slider attributes of one correction that differ from the
+/// previous settings, in place, and return the tag's new end (the tag may have grown).
+fn write_correction_slider_fields(
+    data: &mut String,
+    tag_start: usize,
+    corr_end: usize,
+    prefix: &str,
+    cur_mask: &lightcraft_develop::Mask,
+    prev_mask: &lightcraft_develop::Mask,
+) -> usize {
+    // Practical epsilon for develop settings comparison (f64::EPSILON is too strict).
+    const EPS: f64 = 1e-6;
+    let a = &cur_mask.adjust;
+    let b = &prev_mask.adjust;
+    let mut corr_end = corr_end;
+    let fields = [
+        ("CorrectionAmount", a.amount / 100.0, b.amount / 100.0),
+        ("LocalExposure2012", a.exposure * 4.0, b.exposure * 4.0),
+        ("LocalContrast2012", a.contrast * 100.0, b.contrast * 100.0),
+        ("LocalHighlights2012", a.highlights * 100.0, b.highlights * 100.0),
+        ("LocalShadows2012", a.shadows * 100.0, b.shadows * 100.0),
+        ("LocalWhites2012", a.whites * 100.0, b.whites * 100.0),
+        ("LocalBlacks2012", a.blacks * 100.0, b.blacks * 100.0),
+        ("LocalTexture", a.texture * 100.0, b.texture * 100.0),
+        ("LocalClarity2012", a.clarity * 100.0, b.clarity * 100.0),
+        ("LocalDehaze", a.dehaze * 100.0, b.dehaze * 100.0),
+        ("LocalTemperature", a.temp * 100.0, b.temp * 100.0),
+        ("LocalTint", a.tint * 100.0, b.tint * 100.0),
+        ("LocalSaturation", a.saturation * 100.0, b.saturation * 100.0),
+        ("LocalSharpness", a.sharpness * 100.0, b.sharpness * 100.0),
+        ("LocalLuminanceNoise", a.noise * 100.0, b.noise * 100.0),
+        ("LocalMoire", a.moire * 100.0, b.moire * 100.0),
+        ("LocalDefringe", a.defringe * 100.0, b.defringe * 100.0),
+        ("LocalToningSaturation", a.color_sat * 100.0, b.color_sat * 100.0),
+        ("LocalToningHue", a.color_hue, b.color_hue),
+    ];
+    for (name, current, previous_value) in fields {
+        if (current - previous_value).abs() >= EPS {
+            put_attr_on_tag(data, tag_start, corr_end, prefix, name, &current.to_string());
+            corr_end = tag_end(data, tag_start).unwrap_or(corr_end);
         }
     }
+    corr_end
+}
+
+/// Write the mask-component attributes of one correction that differ from the previous
+/// settings, in place. Components are processed in document order; the accumulated length
+/// delta shifts the offsets of later components.
+fn write_correction_components(
+    data: &mut String,
+    tag_start: usize,
+    corr_end: usize,
+    prefix: &str,
+    aspect: f64,
+    cur_mask: &lightcraft_develop::Mask,
+    prev_mask: &lightcraft_develop::Mask,
+) {
+    let comp_tags = mask_component_descriptions(data, tag_start, corr_end);
+    let cur_comps =
+        serde_json::to_value(cur_mask).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let prev_comps =
+        serde_json::to_value(prev_mask).ok().and_then(|v| v.get("components").cloned()).and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let ncomp = cur_comps.len().min(prev_comps.len()).min(comp_tags.len());
+    if ncomp == 0 {
+        return;
+    }
+
+    // Process components in forward order. Earlier components come before later ones
+    // in the document, so length changes to earlier components shift later ones.
+    // We track the accumulated delta and apply it to subsequent components.
+    let mut length_delta: i64 = 0;
+    for j in 0..ncomp {
+        let cur = &cur_comps[j];
+        let prev = &prev_comps[j];
+        let cur_kind = cur.get("shape").and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or("");
+        let prev_kind = prev.get("shape").and_then(|s| s.get("kind")).and_then(Value::as_str).unwrap_or("");
+        if cur_kind.is_empty() || cur_kind != prev_kind {
+            continue;
+        }
+        let len_before = data.len();
+        let (mut cstart, mut cend) = comp_tags[j];
+        cstart = (cstart as i64 + length_delta) as usize;
+        cend = (cend as i64 + length_delta) as usize;
+        let cur_comp_invert = cur.get("invert").and_then(Value::as_bool).unwrap_or(false);
+        let prev_comp_invert = prev.get("invert").and_then(Value::as_bool).unwrap_or(false);
+        let invert_changed = cur_comp_invert != prev_comp_invert;
+
+        cend = match cur_kind {
+            "radial" => write_radial_fields(data, cstart, cend, prefix, cur, prev, aspect),
+            "linear" => write_linear_fields(data, cstart, cend, prefix, cur, prev),
+            "luminanceRange" => write_luminance_range_fields(data, cstart, cend, prefix, cur, prev),
+            _ => cend,
+        };
+
+        // Write MaskInverted for all component kinds if it changed
+        if invert_changed {
+            put_attr_on_tag(data, cstart, cend, prefix, "MaskInverted", if cur_comp_invert { "true" } else { "false" });
+            cend = tag_end(data, cstart).unwrap_or(cend);
+        }
+        length_delta += data.len() as i64 - len_before as i64;
+    }
+}
+
+/// Write the radial-gradient component fields that differ from the previous settings,
+/// in place, and return the component tag's new end.
+fn write_radial_fields(data: &mut String, cstart: usize, cend: usize, prefix: &str, cur: &Value, prev: &Value, aspect: f64) -> usize {
+    const EPS: f64 = 1e-6;
+    let cur_cx = cur["shape"]["center"]["x"].as_f64().unwrap_or(0.5);
+    let cur_cy = cur["shape"]["center"]["y"].as_f64().unwrap_or(0.5);
+    let cur_rx = cur["shape"]["rx"].as_f64().unwrap_or(0.1);
+    let cur_ry = cur["shape"]["ry"].as_f64().unwrap_or(0.1);
+    let cur_angle = cur["shape"]["angle"].as_f64().unwrap_or(0.0);
+    let cur_feather = cur["shape"]["feather"].as_f64().unwrap_or(50.0);
+    let cur_shape_invert = cur["shape"].get("invert").and_then(Value::as_bool).unwrap_or(false);
+    let prev_cx = prev["shape"]["center"]["x"].as_f64().unwrap_or(0.5);
+    let prev_cy = prev["shape"]["center"]["y"].as_f64().unwrap_or(0.5);
+    let prev_rx = prev["shape"]["rx"].as_f64().unwrap_or(0.1);
+    let prev_ry = prev["shape"]["ry"].as_f64().unwrap_or(0.1);
+    let prev_angle = prev["shape"]["angle"].as_f64().unwrap_or(0.0);
+    let prev_feather = prev["shape"]["feather"].as_f64().unwrap_or(50.0);
+    let prev_shape_invert = prev["shape"].get("invert").and_then(Value::as_bool).unwrap_or(false);
+    let scale = |a: f64| if a >= 1.0 { (1.0, 1.0 / a) } else { (a, 1.0) };
+    let (sx, sy) = scale(aspect);
+    let cur_left = (cur_cx - cur_rx / sx).clamp(0.0, 1.0);
+    let cur_right = (cur_cx + cur_rx / sx).clamp(0.0, 1.0);
+    let cur_top = (cur_cy - cur_ry / sy).clamp(0.0, 1.0);
+    let cur_bottom = (cur_cy + cur_ry / sy).clamp(0.0, 1.0);
+    let prev_left = (prev_cx - prev_rx / sx).clamp(0.0, 1.0);
+    let prev_right = (prev_cx + prev_rx / sx).clamp(0.0, 1.0);
+    let prev_top = (prev_cy - prev_ry / sy).clamp(0.0, 1.0);
+    let prev_bottom = (prev_cy + prev_ry / sy).clamp(0.0, 1.0);
+    let version = attr_f64(data, cstart, cend, "Version").unwrap_or(0.0);
+    let versionless = version < 2.0;
+    let to_feather = |f: f64| if versionless { (f * 2.0).clamp(0.0, 100.0) } else { f.clamp(0.0, 100.0) };
+    let mut cend = cend;
+    let pairs = [
+        ("Left", cur_left, prev_left),
+        ("Right", cur_right, prev_right),
+        ("Top", cur_top, prev_top),
+        ("Bottom", cur_bottom, prev_bottom),
+        ("Angle", cur_angle, prev_angle),
+        ("Feather", to_feather(cur_feather), to_feather(prev_feather)),
+    ];
+    for (name, cur_v, prev_v) in pairs {
+        if (cur_v - prev_v).abs() >= EPS {
+            put_attr_on_tag(data, cstart, cend, prefix, name, &cur_v.to_string());
+            cend = tag_end(data, cstart).unwrap_or(cend);
+        }
+    }
+    if cur_shape_invert != prev_shape_invert {
+        put_attr_on_tag(data, cstart, cend, prefix, "Flipped", if cur_shape_invert { "true" } else { "false" });
+        cend = tag_end(data, cstart).unwrap_or(cend);
+    }
+    cend
+}
+
+/// Write the linear-gradient component fields that differ from the previous settings,
+/// in place, and return the component tag's new end.
+fn write_linear_fields(data: &mut String, cstart: usize, cend: usize, prefix: &str, cur: &Value, prev: &Value) -> usize {
+    const EPS: f64 = 1e-6;
+    let cur_start_x = cur["shape"]["start"]["x"].as_f64().unwrap_or(0.5);
+    let cur_start_y = cur["shape"]["start"]["y"].as_f64().unwrap_or(0.0);
+    let cur_end_x = cur["shape"]["end"]["x"].as_f64().unwrap_or(0.5);
+    let cur_end_y = cur["shape"]["end"]["y"].as_f64().unwrap_or(1.0);
+    let prev_start_x = prev["shape"]["start"]["x"].as_f64().unwrap_or(0.5);
+    let prev_start_y = prev["shape"]["start"]["y"].as_f64().unwrap_or(0.0);
+    let prev_end_x = prev["shape"]["end"]["x"].as_f64().unwrap_or(0.5);
+    let prev_end_y = prev["shape"]["end"]["y"].as_f64().unwrap_or(1.0);
+    let mut cend = cend;
+    let pairs = [
+        ("FullX", cur_start_x, prev_start_x),
+        ("FullY", cur_start_y, prev_start_y),
+        ("ZeroX", cur_end_x, prev_end_x),
+        ("ZeroY", cur_end_y, prev_end_y),
+    ];
+    for (name, cur_v, prev_v) in pairs {
+        if (cur_v - prev_v).abs() >= EPS {
+            put_attr_on_tag(data, cstart, cend, prefix, name, &cur_v.to_string());
+            cend = tag_end(data, cstart).unwrap_or(cend);
+        }
+    }
+    cend
+}
+
+/// Write the luminance-range component fields that differ from the previous settings,
+/// in place, and return the component tag's new end.
+fn write_luminance_range_fields(data: &mut String, cstart: usize, cend: usize, prefix: &str, cur: &Value, prev: &Value) -> usize {
+    const EPS: f64 = 1e-6;
+    let cur_lo = cur["shape"]["lo"].as_f64().unwrap_or(0.0);
+    let cur_hi = cur["shape"]["hi"].as_f64().unwrap_or(1.0);
+    let cur_lo_f = cur["shape"]["lo_feather"].as_f64().unwrap_or(0.0);
+    let cur_hi_f = cur["shape"]["hi_feather"].as_f64().unwrap_or(0.0);
+    let prev_lo = prev["shape"]["lo"].as_f64().unwrap_or(0.0);
+    let prev_hi = prev["shape"]["hi"].as_f64().unwrap_or(1.0);
+    let prev_lo_f = prev["shape"]["lo_feather"].as_f64().unwrap_or(0.0);
+    let prev_hi_f = prev["shape"]["hi_feather"].as_f64().unwrap_or(0.0);
+    let inv = |r: f64| {
+        let y = r.clamp(0.0, 1.0) * 12.0 - 8.0;
+        2.0_f64.powf(y).powf(1.0 / 2.2).clamp(1e-4, 1.0)
+    };
+    let cur_open = cur_hi >= 1.0 - EPS;
+    let prev_open = prev_hi >= 1.0 - EPS;
+    let cur_a = (cur_lo - cur_lo_f).clamp(0.0, 1.0);
+    let cur_b = cur_lo.clamp(0.0, 1.0);
+    let cur_c = if cur_open { 1.0 } else { cur_hi.clamp(0.0, 1.0) };
+    let cur_d = if cur_open { 1.0 } else { (cur_hi + cur_hi_f).clamp(0.0, 1.0) };
+    let prev_a = (prev_lo - prev_lo_f).clamp(0.0, 1.0);
+    let prev_b = prev_lo.clamp(0.0, 1.0);
+    let prev_c = if prev_open { 1.0 } else { prev_hi.clamp(0.0, 1.0) };
+    let prev_d = if prev_open { 1.0 } else { (prev_hi + prev_hi_f).clamp(0.0, 1.0) };
+    let cur_vals = [inv(cur_a), inv(cur_b), inv(cur_c), inv(cur_d)];
+    let prev_vals = [inv(prev_a), inv(prev_b), inv(prev_c), inv(prev_d)];
+    let mut cend = cend;
+    if cur_vals.iter().zip(prev_vals.iter()).any(|(x, y)| (x - y).abs() >= EPS) {
+        let s = cur_vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
+        put_attr_on_tag(data, cstart, cend, prefix, "LumRange", &s);
+        // Refresh cend after writing LumRange in case the tag length changed
+        cend = tag_end(data, cstart).unwrap_or(cend);
+    }
+    cend
 }
 
 /// What [`Session::save_sidecar`] did.
@@ -3127,6 +3206,50 @@ mod tests {
         update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
         assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the field on the sibling description is updated:\n{data}");
         assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated onto the first description:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// A direct-child `rdf:Description` that contains a self-closing nested
+    /// `<rdf:Description/>` must not consume the following sibling description: the depth
+    /// counter returns to zero after the self-closing one, so a `crs:` field on the sibling
+    /// is updated in place once instead of being duplicated.
+    #[test]
+    fn crs_write_updates_sibling_after_self_closing_nested_description() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
+    }
+
+    /// A direct-child `rdf:Description` that contains a self-closing nested
+    /// `<rdf:Description/>` must not consume the following sibling description: the depth
+    /// counter returns to zero after the self-closing one, so a `crs:` field on the sibling
+    /// is updated in place once instead of being duplicated.
+    #[test]
+    fn crs_write_updates_sibling_after_self_closing_nested_description() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the sibling field is updated in place:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
         assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
     }
 }
