@@ -1,8 +1,11 @@
 //! Times `yuv::Converter::to_srgb8` and `to_linear_rec2020` on synthetic 3840×2160 4:2:0 pictures:
 //! 8-bit BT.709 (the sRGB fast path) and 10-bit BT.2020 HLG.
 //!
-//! `cargo run --release -p lightcraft-codecs --example yuv_bench [-- RUNS]`; `RAYON_NUM_THREADS=1`
-//! for one thread.
+//! `cargo run --release -p lightcraft-codecs --example yuv_bench [-- RUNS [FILTER]]`, FILTER a
+//! part of a case's name ("8-bit BT.709 to_srgb8") to time only matching cases; `RAYON_NUM_THREADS=1`
+//! for one thread. On a busy machine, time one case on one thread with `/usr/bin/time` at two run
+//! counts: the difference in user time over the difference in runs is the CPU time per picture,
+//! which other processes barely change.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::time::Instant;
@@ -24,6 +27,9 @@ fn plane(w: usize, h: usize, max: u32, seed: u32) -> Vec<u32> {
 }
 
 fn time(label: &str, runs: usize, mut f: impl FnMut()) {
+    if !std::env::args().nth(2).is_none_or(|filter| label.contains(&filter)) {
+        return;
+    }
     f();
     let mut ms: Vec<f64> = (0..runs)
         .map(|_| {
@@ -33,7 +39,9 @@ fn time(label: &str, runs: usize, mut f: impl FnMut()) {
         })
         .collect();
     ms.sort_by(f64::total_cmp);
-    println!("{label}: min {:.2} ms, median {:.2} ms ({runs} runs)", ms[0], ms[ms.len() / 2]);
+    if let (Some(min), Some(median)) = (ms.first(), ms.get(ms.len() / 2)) {
+        println!("{label}: min {min:.2} ms, median {median:.2} ms ({runs} runs)");
+    }
 }
 
 fn main() {
