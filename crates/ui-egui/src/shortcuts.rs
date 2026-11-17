@@ -83,6 +83,17 @@ pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
     find_bindable(id).and_then(|b| binding(keymap, id, b.default))
 }
 
+/// The key that plays and pauses a video in the loupe as bound now: Play/Pause Video's own
+/// shortcut, else Space (Toggle Zoom's alias, KEY-VIDEO-PLAY) unless another command has taken
+/// Space; `None` when no key does.
+pub fn video_play_key(keymap: &Keymap) -> Option<&str> {
+    if let Some(sc) = shortcut_of(keymap, "video.playPause") {
+        return Some(sc);
+    }
+    let taken = bindable().iter().any(|b| b.id != "view.zoomToggle" && binding(keymap, b.id, b.default) == Some("Space"));
+    (!taken).then_some("Space")
+}
+
 /// Engine commands that intentionally share a key and are disambiguated by context in [`handle`]:
 /// the X pair by the Crop panel, A by whether it is open (Visualize Spots everywhere, the aspect
 /// lock under the Crop panel).

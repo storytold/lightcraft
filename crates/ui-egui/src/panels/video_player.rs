@@ -6,7 +6,9 @@
 //! A clip's audio is not played (LightCraft has no audio output yet): the bar says so, quietly,
 //! when the clip has an audio track.
 
-use egui::{Align2, Color32, Id, Mesh, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
+use std::sync::Arc;
+
+use egui::{Align2, Color32, ColorImage, Id, Mesh, Pos2, Rect, Sense, Stroke, StrokeKind, TextureHandle, TextureOptions, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_geom::Orientation;
 use serde_json::json;
@@ -30,6 +32,22 @@ fn texture_id() -> Id {
     Id::unique("lc-video-frame")
 }
 
+/// The last frame's pixels as handed to egui: once egui has uploaded them (by the next frame) the
+/// buffer is filled again instead of allocating 33 MB per 4K frame on the UI thread.
+#[derive(Clone, Default)]
+struct UploadBuffer(Option<Arc<ColorImage>>);
+
+fn upload_id() -> Id {
+    Id::unique("lc-video-upload")
+}
+
+/// Whether a frame of `size` fits the GPU's textures (`max_side` 0: unknown, no limit). The
+/// player scales bigger pictures down or reports why it can't; this keeps one from ever reaching
+/// the renderer, which would fail on it.
+fn uploadable(size: [usize; 2], max_side: usize) -> bool {
+    size[0] > 0 && size[1] > 0 && (max_side == 0 || (size[0] <= max_side && size[1] <= max_side))
+}
+
 /// Whether the loupe shows `app`'s active photo and it is a video: the clip Space plays.
 pub(crate) fn loupe_video(app: &LightcraftApp) -> Option<PhotoId> {
     let loupe = app.ui.fullscreen || app.ui.view == ViewMode::Detail;
@@ -41,6 +59,11 @@ pub(crate) fn loupe_video(app: &LightcraftApp) -> Option<PhotoId> {
 /// (another photo, the grid, a slideshow), advance the player to the frame due now and ask for the
 /// next repaint when that frame is due.
 pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // frames are made to fit the GPU's textures, from the first one on
+    app.session.video.max_side = app.max_texture_side;
+    if let Some(p) = app.session.video.player.as_mut() {
+        p.set_max_side(app.max_texture_side);
+    }
     if app.session.video.player.is_none() {
         forget_texture(ctx);
         return;
@@ -56,7 +79,10 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 }
 
 fn forget_texture(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<FrameTexture>(texture_id()));
+    ctx.data_mut(|d| {
+        d.remove::<FrameTexture>(texture_id());
+        d.remove::<UploadBuffer>(upload_id());
+    });
 }
 
 /// The texture of the player's frame for `id`, uploaded when the frame changed; `None` while the
@@ -69,12 +95,17 @@ fn frame_texture(app: &LightcraftApp, ctx: &egui::Context, id: PhotoId) -> Optio
     if let Some(c) = cached.as_ref().filter(|c| c.photo == id && c.serial == serial) {
         return Some((c.tex.clone(), size));
     }
-    // frames are opaque: a plain copy into egui's pixels
-    let pixels: Vec<Color32> = frame.rgba.chunks_exact(4).map(|p| Color32::from_rgb(p[0], p[1], p[2])).collect();
-    if pixels.len() != size[0] * size[1] {
+    if !uploadable(size, app.max_texture_side) || frame.rgba.len() != size[0].saturating_mul(size[1]).saturating_mul(4) {
         return None;
     }
-    let image = egui::ColorImage { size, source_size: vec2(size[0] as f32, size[1] as f32), pixels };
+    // the previous upload's buffer, when egui is done with it
+    let reused = ctx.data_mut(|d| d.remove_temp::<UploadBuffer>(upload_id())).and_then(|b| b.0).and_then(|a| Arc::try_unwrap(a).ok());
+    let mut pixels = reused.map(|i| i.pixels).unwrap_or_default();
+    pixels.clear();
+    // frames are opaque: a plain copy into egui's pixels
+    pixels.extend(frame.rgba.chunks_exact(4).map(|p| Color32::from_rgb(p[0], p[1], p[2])));
+    let image = Arc::new(ColorImage { size, source_size: vec2(size[0] as f32, size[1] as f32), pixels });
+    ctx.data_mut(|d| d.insert_temp(upload_id(), UploadBuffer(Some(image.clone()))));
     let tex = match cached {
         Some(mut c) if c.tex.size() == size => {
             c.tex.set(image, TextureOptions::LINEAR);
@@ -126,6 +157,15 @@ pub(crate) fn draw_frame(app: &LightcraftApp, ui: &egui::Ui, p: &egui::Painter, 
     Some(r)
 }
 
+/// The Play or Pause button's tooltip (`base`, translated) with the key that does it as bound now.
+fn play_tip(keymap: &crate::shortcuts::Keymap, mac: bool, base: &str) -> String {
+    let base = crate::i18n::tr(base);
+    match crate::shortcuts::video_play_key(keymap) {
+        Some(sc) => format!("{base} ({})", crate::menubar::shortcut_text(sc, mac)),
+        None => base.to_string(),
+    }
+}
+
 /// Height of the transport bar, and its distance from the canvas edges.
 pub(crate) const BAR_H: f32 = 40.0;
 const BAR_INSET: f32 = 12.0;
@@ -143,12 +183,18 @@ pub(crate) fn transport(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
         return;
     }
     let bar = Rect::from_center_size(pos2(canvas.center().x, canvas.bottom() - BAR_INSET - BAR_H / 2.0), vec2(width, BAR_H));
+    let available = app.session.video.available();
     let player = app.session.video.player.as_ref().filter(|p| p.photo() == id);
     let playing = player.is_some_and(|p| p.playing());
     let duration = player.and_then(|p| p.info()).map(|i| i.duration).or(catalog_duration).filter(|d| d.is_finite() && *d > 0.0);
     let position = player.map_or(0.0, |p| p.position());
     let audio = player.and_then(|p| p.info()).and_then(|i| i.audio.clone());
-    let error = player.and_then(|p| p.error());
+    // a build without video decoding offers no Play and says why (the poster still shows)
+    let error = if available {
+        player.and_then(|p| p.error())
+    } else {
+        Some(crate::i18n::tr(lightcraft_engine::video_source::NO_VIDEO_DECODING).to_string())
+    };
     let p = ui.painter_at(canvas);
     p.rect_filled(bar, 8.0, Color32::from_black_alpha(190));
     register(ui, "video:transport", bar);
@@ -157,14 +203,19 @@ pub(crate) fn transport(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
     child.spacing_mut().item_spacing.x = 2.0;
     let size = vec2(32.0, 32.0);
     let mut fire: Option<(&str, serde_json::Value)> = None;
-    if icon_button(&mut child, "video:stepBack", Icon::ChevronLeft, size, false, true, "Previous frame").clicked() {
+    if icon_button(&mut child, "video:stepBack", Icon::ChevronLeft, size, false, available, "Previous frame").clicked() {
         fire = Some(("video.step", json!({"frames": -1})));
     }
-    let (icon, tip) = if playing { (Icon::Pause, "Pause (Space)") } else { (Icon::Play, "Play (Space)") };
-    if icon_button(&mut child, "video:playPause", icon, size, false, true, tip).clicked() {
+    let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
+    let (icon, tip) = if playing {
+        (Icon::Pause, play_tip(&app.ui.settings.keymap, mac, "Pause"))
+    } else {
+        (Icon::Play, play_tip(&app.ui.settings.keymap, mac, "Play"))
+    };
+    if icon_button(&mut child, "video:playPause", icon, size, false, available, &tip).clicked() {
         fire = Some(("video.playPause", json!({})));
     }
-    if icon_button(&mut child, "video:stepForward", Icon::ChevronRight, size, false, true, "Next frame").clicked() {
+    if icon_button(&mut child, "video:stepForward", Icon::ChevronRight, size, false, available, "Next frame").clicked() {
         fire = Some(("video.step", json!({"frames": 1})));
     }
     // time, scrub bar, duration, audio note: what is left of the bar
@@ -178,7 +229,7 @@ pub(crate) fn transport(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
     let scrub_w = (rest - 2.0 * label_w - note_w).max(40.0);
     let (lr, _) = child.allocate_exact_size(vec2(label_w, 32.0), Sense::hover());
     child.painter().text(lr.center(), Align2::CENTER_CENTER, time, font.clone(), Color32::from_gray(230));
-    let (sr, resp) = child.allocate_exact_size(vec2(scrub_w, 32.0), Sense::click_and_drag());
+    let (sr, resp) = child.allocate_exact_size(vec2(scrub_w, 32.0), if available { Sense::click_and_drag() } else { Sense::hover() });
     register(ui, "video:scrub", sr);
     let track = Rect::from_center_size(sr.center(), vec2(sr.width() - 8.0, 4.0));
     child.painter().rect_filled(track, 2.0, Color32::from_gray(90));
@@ -248,6 +299,30 @@ mod tests {
             seen.sort_unstable();
             assert_eq!(seen, vec![(0, 0), (0, 1), (1, 0), (1, 1)], "{o:?}");
         }
+    }
+
+    #[test]
+    fn the_play_tooltip_names_the_key_as_bound() {
+        let mut keymap = crate::shortcuts::Keymap::new();
+        assert_eq!(play_tip(&keymap, false, "Play"), "Play (Space)");
+        // its own shortcut wins
+        keymap.insert("video.playPause".into(), "K".into());
+        assert_eq!(play_tip(&keymap, false, "Pause"), "Pause (K)");
+        // Space given to another command: no key plays, so none is named
+        keymap.clear();
+        keymap.insert("photo.flag".into(), "Space".into());
+        assert_eq!(play_tip(&keymap, false, "Play"), "Play");
+    }
+
+    #[test]
+    fn frames_bigger_than_the_gpu_allows_are_never_uploaded() {
+        assert!(uploadable([3840, 2160], 8192));
+        assert!(uploadable([8192, 4320], 8192));
+        assert!(!uploadable([8704, 4352], 8192));
+        assert!(!uploadable([2160, 9000], 8192));
+        // an unknown limit (0) blocks nothing but empty frames
+        assert!(uploadable([16384, 8640], 0));
+        assert!(!uploadable([0, 10], 0));
     }
 
     #[test]

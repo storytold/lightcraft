@@ -87,6 +87,7 @@ fn state(h: &mut Headless) -> Value {
 fn app() -> Headless {
     let mut session = lightcraft_engine::Session::new();
     session.video.opener = opener;
+    session.video.decodes = || true;
     for (id, name, kind) in [(CLIP, "clip.mp4", MediaKind::Video), (STILL, "still.jpg", MediaKind::Image)] {
         let mut p = Photo::new(id, Source::File { path: format!("/lightcraft-video-test/{name}") }, name, "MP4", 64, 36, "2026-05-04T10:00:00");
         p.kind = kind;
@@ -192,4 +193,19 @@ fn a_clip_that_cannot_play_says_why_above_the_bar() {
     let v = state(&mut h);
     assert_eq!(v["playing"], false);
     assert!(v["error"].as_str().is_some_and(|e| e.contains("no video decoding")), "{v}");
+}
+
+#[test]
+fn a_build_without_video_decoding_offers_no_play_and_says_why() {
+    let mut h = app();
+    h.app.session.video.decodes = || false;
+    assert!(h.step_until(T, |h| has(h, "video:problem")));
+    // Space and the Play button start no decoder
+    h.request("ui.key", json!({"key": "space"}), T);
+    h.settle(SETTLE);
+    let _ = h.request("ui.clickWidget", json!({"id": "icon:video:playPause"}), T);
+    h.settle(SETTLE);
+    assert!(h.app.session.video.player.is_none());
+    let v = state(&mut h);
+    assert_eq!(v["available"], false, "{v}");
 }
