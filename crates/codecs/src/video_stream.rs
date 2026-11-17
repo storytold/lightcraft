@@ -282,7 +282,8 @@ pub const DECODER_MEMORY_CEILING: u64 = 3 << 30;
 /// Limits and settings for a [`VideoStream`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamOptions {
-    /// Decoder worker threads (1 decodes on the calling thread).
+    /// Decoder worker threads (1 decodes on the calling thread); a clip whose pictures would not
+    /// fit [`Self::memory_budget`] on this many decodes on fewer ([`StreamInfo::decoder_threads`]).
     pub threads: usize,
     /// The most bytes of decoded pictures a decoder may hold (current, references, reordering,
     /// pictures in flight). The decoder gets what the clip's sequence header asks for
@@ -328,6 +329,9 @@ pub struct StreamInfo {
     /// Bytes of decoded pictures the decoder may hold for this clip, from its sequence header and
     /// the decoder threads: what a caller weighing memory should count for the decode.
     pub decoder_bytes: u64,
+    /// The decoder's worker threads: [`StreamOptions::threads`], or fewer when the clip's pictures
+    /// on that many would not fit [`StreamOptions::memory_budget`].
+    pub decoder_threads: usize,
 }
 
 /// An audio track as its sample entry describes it.

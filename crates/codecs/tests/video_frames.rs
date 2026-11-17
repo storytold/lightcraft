@@ -783,8 +783,9 @@ fn a_transport_stream_or_a_bare_stream_is_unsupported_not_damaged() {
 
 /// A clip's decoder gets the memory its sequence header asks for, not a fixed amount: an 8K HEVC
 /// clip on 8 decoder threads (some 2 GB of pictures, over the 1 GiB a decoder had) decodes within
-/// the default ceiling, and the stream and the poster say what it may hold. Over the ceiling the
-/// clip is too large to decode: unsupported, not damaged.
+/// the default ceiling, and the stream and the poster say what it may hold. Asked for more
+/// threads than the ceiling holds pictures for, it decodes on fewer; only a clip that doesn't fit
+/// on one thread is too large to decode: unsupported, not damaged.
 #[test]
 fn the_decoder_gets_the_memory_the_clip_asks_for_within_a_ceiling() {
     use lightcraft_codecs::video_stream::reason;
@@ -798,12 +799,21 @@ fn the_decoder_gets_the_memory_the_clip_asks_for_within_a_ceiling() {
     s.seek(0.0, SeekMode::Exact).unwrap();
     let f = s.next_frame().unwrap().unwrap();
     assert_eq!((f.width, f.height), (7680, 4320));
-    match VideoStream::open(bytes.clone(), &StreamOptions { memory_budget: need - 1, ..opts }) {
+    let tight = VideoStream::open(bytes.clone(), &StreamOptions { memory_budget: need - 1, ..opts }).unwrap();
+    assert!(tight.info().decoder_threads < 8 && tight.info().decoder_bytes < need);
+    match VideoStream::open(bytes.clone(), &StreamOptions { memory_budget: picture * 4, ..opts }) {
         Err(VideoError::Unsupported(m)) => assert_eq!(m, reason::TOO_LARGE_TO_DECODE),
         other => panic!("{:?}", other.err()),
     }
     let o = PosterOptions { max_edge: 64, stream: opts, ..PosterOptions::default() };
-    let clip = open_poster(bytes, &o).unwrap();
+    let clip = open_poster(bytes.clone(), &o).unwrap();
     assert_eq!(clip.decoder_bytes(), need, "the poster weighs what the decoder may hold");
     assert!(clip.decode(&AtomicBool::new(false)).is_ok());
+    // More threads than the ceiling holds pictures for: the clip decodes on fewer, not refused.
+    let many = StreamOptions { threads: 16, ..StreamOptions::default() };
+    let mut s = VideoStream::open(bytes, &many).unwrap();
+    let (threads, held) = (s.info().decoder_threads, s.info().decoder_bytes);
+    assert!((9..16).contains(&threads) && held <= many.memory_budget && held > need, "{threads} {held}");
+    s.seek(0.0, SeekMode::Exact).unwrap();
+    assert!(s.next_frame().unwrap().is_some());
 }
