@@ -1359,7 +1359,7 @@ fn put_attr_on_tag(data: &mut String, start: usize, end: usize, prefix: &str, na
     let is_crs = |attr_prefix: &str| bindings.iter().any(|(p, uri)| p == attr_prefix && *uri == CRS_NS);
     // Find an effective CRS prefix on this tag (one bound to CRS_NS), preferring the
     // passed prefix if it's bound to CRS_NS here.
-    let effective_prefix = bindings.iter().find(|(p, uri)| *uri == CRS_NS).map(|(p, _)| p.as_str()).unwrap_or(prefix);
+    let effective_prefix = bindings.iter().find(|(_, uri)| *uri == CRS_NS).map(|(p, _)| p.as_str()).unwrap_or(prefix);
     for ((ns, ne), value_range) in tag_attrs(data, start, end) {
         let attr_name = data.get(ns..ne).unwrap_or_default();
         let (attr_prefix, local) = attr_name.split_once(':').unwrap_or(("", attr_name));
