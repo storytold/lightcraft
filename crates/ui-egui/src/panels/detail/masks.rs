@@ -309,6 +309,14 @@ fn moved_shape(shape: &MaskShape, handle: u8, dn: Point, at: Point, map: &Canvas
                 let new_angle = dy.atan2(dx).to_degrees();
                 MaskShape::Radial { center, rx, ry, angle: new_angle, feather, invert }
             }
+            // dragged round from just outside the outline: turned as far as the pointer went round
+            6 => {
+                let l = frame_long_norm(map);
+                let turn = |q: Point| ((q.y - center.y) / l.1).atan2((q.x - center.x) / l.0);
+                let from = Point::new(at.x - dn.x, at.y - dn.y);
+                let new_angle = (angle + (turn(at) - turn(from)).to_degrees() + 180.0).rem_euclid(360.0) - 180.0;
+                MaskShape::Radial { center, rx, ry, angle: new_angle, feather, invert }
+            }
             _ => MaskShape::Radial { center: mv(center), rx, ry, angle, feather, invert },
         },
         MaskShape::Linear { start, end } => match handle {
@@ -345,6 +353,33 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
 /// Colour Range eyedropper: a click samples the colour under it for the selected mask's
 /// colour range, at normalized frame coordinates (crop, rotation and zoom aware);
 /// ⇧-click adds a sample (up to 5).
+/// How far outside a radial gradient's outline (screen points) a drag rotates it, as in Lightroom.
+const ROTATE_RING: f32 = 18.0;
+
+/// Whether screen point `q` is just outside the radial gradient's outline (within
+/// [`ROTATE_RING`]), where a drag rotates it.
+fn radial_rotate_ring(shape: &MaskShape, q: Pos2, map: &CanvasMap) -> bool {
+    let MaskShape::Radial { center, rx, ry, angle, .. } = shape else { return false };
+    if !rx.is_finite() || !ry.is_finite() || *rx <= 0.0 || *ry <= 0.0 {
+        return false;
+    }
+    let l = frame_long_norm(map);
+    let at = map.norm(q);
+    let (dx, dy) = ((at.x - center.x) / l.0, (at.y - center.y) / l.1);
+    let (s, co) = angle.to_radians().sin_cos();
+    let (x, y) = (dx * co + dy * s, -dx * s + dy * co);
+    let r = ((x / rx).powi(2) + (y / ry).powi(2)).sqrt();
+    if r <= 1.0 {
+        return false;
+    }
+    // the gap to the outline along the ray from the centre, in long-edge units, then on screen
+    let gap = (x * x + y * y).sqrt() * (1.0 - 1.0 / r);
+    let o = map.for_mask(false).screen(Point::new(0.0, 0.0));
+    let long_px =
+        f64::from(map.for_mask(false).screen(Point::new(1.0, 0.0)).distance(o).max(map.for_mask(false).screen(Point::new(0.0, 1.0)).distance(o)));
+    gap * long_px <= f64::from(ROTATE_RING)
+}
+
 pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap) {
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
@@ -862,6 +897,26 @@ fn grip_gestures(
     {
         let _ = app.run("mask.select", json!({"id": mid}));
     }
+    // just outside the selected radial's outline a drag rotates it: no system cursor shows that,
+    // so draw the crop tool's curved double arrow, turned to face away from the centre
+    let rotating = match &app.gesture {
+        Some(Gesture::MaskHandle { mask, comp, handle: 6, .. }) => Some((*mask, *comp)),
+        _ => None,
+    };
+    if let Some(q) = resp.hover_pos().or(resp.interact_pointer_pos())
+        && let Some(m) = d.masks.iter().find(|m| Some(m.id) == rotating.map(|r| r.0).or(active))
+        && let map = map.for_mask(m.on_photo)
+        && let Some(c) = match rotating {
+            Some((_, ci)) => m.components.get(ci),
+            None if hit(q).is_none() && !resp.dragged() => m.components.iter().find(|c| radial_rotate_ring(&c.shape, q, &map)),
+            None => None,
+        }
+        && let MaskShape::Radial { center, .. } = c.shape
+    {
+        let from = q - map.screen(center);
+        super::crop::rotate_cursor(ui, q, from.y.atan2(from.x) + std::f32::consts::FRAC_PI_2);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+    }
     if resp.drag_started()
         && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
     {
@@ -873,6 +928,9 @@ fn grip_gestures(
             let at = map.norm(q);
             if let Some(ci) = m.components.iter().position(|c| radial_body_contains(&c.shape, at, map)) {
                 return Some((m.id, ci, 0));
+            }
+            if let Some(ci) = m.components.iter().position(|c| radial_rotate_ring(&c.shape, q, map)) {
+                return Some((m.id, ci, 6));
             }
             // anywhere on the photo drags the selected linear gradient
             matches!(m.components.first()?.shape, MaskShape::Linear { .. }).then_some((m.id, 0, 0))

@@ -2387,3 +2387,41 @@ fn subtract_radial_draws_a_component_of_the_selected_mask() {
     let MaskShape::Radial { center, .. } = c.shape.clone() else { panic!("radial") };
     assert!((center.x - 0.5).abs() < 0.005 && (center.y - 0.5).abs() < 0.005, "{center:?}");
 }
+
+#[test]
+fn a_drag_just_outside_a_radial_rotates_it_by_the_turn() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.18, "ry": 0.1}));
+    let before = develop(&h);
+    let image = h.app.image_rect.unwrap();
+    let (w, hh) = (f64::from(image.width()), f64::from(image.height()));
+    let long = w.max(hh);
+    // a screen point (px from the centre) as an image fraction
+    let frac = |px: f64, py: f64| (0.5 + px / w, 0.5 + py / hh);
+    // the outline at 45° (between the edge grips), `out` px further out along the same ray
+    let at = |out: f64, turn_deg: f64| {
+        let a = 45f64.to_radians();
+        let (ex, ey) = (0.18 * a.cos() * long, 0.1 * a.sin() * long);
+        let len = (ex * ex + ey * ey).sqrt();
+        let k = (len + out) / len;
+        let (t, (x, y)) = (turn_deg.to_radians(), (ex * k, ey * k));
+        frac(x * t.cos() - y * t.sin(), x * t.sin() + y * t.cos())
+    };
+    let rot_drag = |h: &mut Headless, out: f64| {
+        let (a, b, c) = (at(out, 0.0), at(out, 10.0), at(out, 20.0));
+        pointer(
+            h,
+            json!([{"kind": "down", "x": a.0, "y": a.1}, {"kind": "drag", "x": b.0, "y": b.1},
+            {"kind": "drag", "x": c.0, "y": c.1}, {"kind": "up", "x": c.0, "y": c.1}]),
+        );
+    };
+    // well outside the ring: nothing turns
+    rot_drag(&mut h, 60.0);
+    assert_eq!(develop(&h).masks, before.masks, "a drag far outside the outline doesn't rotate it");
+    rot_drag(&mut h, 8.0);
+    let MaskShape::Radial { center, rx, ry, angle, .. } = develop(&h).masks[0].components[0].shape.clone() else { panic!("radial") };
+    assert!((angle - 20.0).abs() < 2.0, "turned as far as the pointer went round: {angle}");
+    assert!((center.x - 0.5).abs() < 1e-9 && (center.y - 0.5).abs() < 1e-9 && rx == 0.18 && ry == 0.1, "only the angle changes");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).masks, before.masks, "one undo step");
+}
