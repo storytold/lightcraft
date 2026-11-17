@@ -717,12 +717,15 @@ mod issue4417 {
         h
     }
 
-    /// Given a grid with a multi-selection, when Space is pressed, then the active photo opens in Detail at Fit with
-    /// the selection kept; a second Space there toggles the zoom, as before, and stays in Detail.
+    /// Given a grid with a multi-selection and the zoom left at 200 %, when Space is pressed, then the active photo
+    /// opens in Detail at Fit with the selection kept; a second Space there toggles the zoom, as before, and stays in
+    /// Detail.
     #[test]
     fn space_in_the_grid_opens_the_active_photo_then_toggles_the_zoom() {
         for view in [ViewMode::PhotoGrid, ViewMode::SquareGrid] {
             let mut h = grid(view);
+            // left zoomed in from an earlier visit to Detail
+            h.app.ui.zoom = Zoom::Percent(200.0);
             key(&mut h, "Space", false);
             assert_eq!(h.app.ui.view, ViewMode::Detail, "Space from {view:?}");
             assert_eq!(h.app.session.active(), Some(PhotoId(2)));
