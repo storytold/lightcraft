@@ -144,8 +144,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             let _ = app.run("tool.brush", json!({"new": true}));
                         }
                         "linear" | "radial" => {
-                            app.ui.tool = kind.to_string();
-                            let _ = app.run("mask.add", json!({"kind": kind}));
+                            let _ = app.run(&format!("tool.{kind}"), json!({}));
                         }
                         k => {
                             let _ = app.run("mask.add", json!({"kind": k}));
@@ -921,6 +920,8 @@ fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
         if b.clicked() {
             if kind == "brush" {
                 let _ = app.run("tool.brush", json!({"op": op}));
+            } else if kind == "linear" || kind == "radial" {
+                let _ = app.run(&format!("tool.{kind}"), json!({"op": op}));
             } else {
                 let _ = app.run("mask.addComponent", json!({"op": op, "kind": kind}));
             }

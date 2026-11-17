@@ -106,6 +106,12 @@ pub enum Gesture {
         handle: u8,
         original_shape: MaskShape,
     },
+    /// Linear / Radial tool: a gradient being drawn from `from` (normalized, in the coordinates of
+    /// the mask it joins); `shape` is the gradient as the pointer last left it.
+    MaskDraw {
+        from: Point,
+        shape: Option<MaskShape>,
+    },
     /// Guided Upright: a guide being drawn from `a` (normalized transformed coordinates).
     Guide {
         a: Point,

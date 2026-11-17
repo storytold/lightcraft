@@ -1035,7 +1035,7 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
 }
 
 /// Part 8 of 12 of the UI commands; `None` means the id is not one of this part's.
-fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
+fn ui_commands_8(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let r: Result<Value, String> = match id {
         s if s.starts_with("section.") => bool_param(s, p, "solo").and_then(|solo| {
             // only the Edit sections listed above: an unknown one would close the real ones
@@ -1091,10 +1091,13 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.tool = "brush".into();
                 }
                 "linear" | "radial" => {
+                    // arms the tool: the gradient is drawn on the photo (`{op?: add|subtract|intersect}`
+                    // makes it a component of the selected mask; else it is a new mask)
                     app.ui.right = RightPanel::Masking;
                     app.ui.view = ViewMode::Detail;
                     app.ui.tool = tool.into();
-                    return Some(app.session.execute("mask.add", &json!({"kind": tool})).map_err(|e| e.to_string()));
+                    app.ui.draw_op = p.get("op").and_then(Value::as_str).unwrap_or("new").to_string();
+                    app.toast(ctx, crate::i18n::tr("Drag on the photo to draw the gradient"));
                 }
                 "wbPicker" => {
                     app.ui.right = RightPanel::Edit;

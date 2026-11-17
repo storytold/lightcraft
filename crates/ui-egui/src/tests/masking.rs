@@ -2309,3 +2309,81 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     assert!(!h.app.ui.section_folded("maskLensBlur"));
     h.settle(SETTLE);
 }
+
+fn drag(h: &mut Headless, from: (f64, f64), to: (f64, f64)) {
+    let mid = ((from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0);
+    pointer(
+        h,
+        json!([{"kind": "down", "x": from.0, "y": from.1}, {"kind": "drag", "x": mid.0, "y": mid.1},
+        {"kind": "drag", "x": to.0, "y": to.1}, {"kind": "up", "x": to.0, "y": to.1}]),
+    );
+}
+
+#[test]
+fn the_radial_tile_arms_a_tool_that_draws_the_mask_from_its_centre() {
+    let mut h = detail("panel.masking");
+    click(&mut h, "maskNew:radial");
+    assert!(develop(&h).masks.is_empty(), "the tile adds nothing until the gradient is drawn");
+    assert_eq!(h.app.ui.tool, "radial");
+    drag(&mut h, (0.3, 0.4), (0.45, 0.6));
+    let d = develop(&h);
+    assert_eq!(d.masks.len(), 1);
+    let MaskShape::Radial { center, rx, ry, angle, .. } = d.masks[0].components[0].shape.clone() else { panic!("radial") };
+    assert!((center.x - 0.3).abs() < 0.005 && (center.y - 0.4).abs() < 0.005, "centred on the press: {center:?}");
+    // reaches the pointer (radii in long-edge units)
+    let image = h.app.image_rect.unwrap();
+    let (w, hh) = (f64::from(image.width()), f64::from(image.height()));
+    let long = w.max(hh);
+    assert!((rx - 0.15 * w / long).abs() < 0.01 && (ry - 0.2 * hh / long).abs() < 0.01, "{rx} {ry}");
+    assert_eq!(angle, 0.0);
+    assert!(h.app.ui.tool.is_empty(), "drawing disarms the tool");
+    exec(&mut h, "edit.undo", json!({}));
+    assert!(develop(&h).masks.is_empty(), "one undo removes the drawn mask");
+}
+
+#[test]
+fn the_linear_tile_draws_from_the_press_to_the_release() {
+    let mut h = detail("panel.masking");
+    click(&mut h, "maskNew:linear");
+    assert!(develop(&h).masks.is_empty());
+    drag(&mut h, (0.2, 0.3), (0.6, 0.7));
+    let MaskShape::Linear { start, end } = develop(&h).masks[0].components[0].shape.clone() else { panic!("linear") };
+    assert!((start.x - 0.2).abs() < 0.005 && (start.y - 0.3).abs() < 0.005, "{start:?}");
+    assert!((end.x - 0.6).abs() < 0.005 && (end.y - 0.7).abs() < 0.005, "{end:?}");
+}
+
+#[test]
+fn a_click_with_the_gradient_tool_places_the_default_size_there() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.radial", json!({}));
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.6}, {"kind": "up", "x": 0.3, "y": 0.6}]));
+    let MaskShape::Radial { center, rx, ry, .. } = develop(&h).masks[0].components[0].shape.clone() else { panic!("radial") };
+    assert!((center.x - 0.3).abs() < 0.005 && (center.y - 0.6).abs() < 0.005, "{center:?}");
+    assert_eq!((rx, ry), (0.22, 0.16));
+}
+
+#[test]
+fn escape_disarms_the_gradient_tool_without_a_mask() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.linear", json!({}));
+    let _ = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert!(h.app.ui.tool.is_empty());
+    drag(&mut h, (0.2, 0.3), (0.6, 0.7));
+    assert!(develop(&h).masks.is_empty(), "a drag after Esc draws nothing");
+}
+
+#[test]
+fn subtract_radial_draws_a_component_of_the_selected_mask() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    click(&mut h, "button:maskMinus:1");
+    click(&mut h, "maskComp:subtract:radial");
+    assert_eq!(develop(&h).masks[0].components.len(), 1, "the menu adds nothing until it is drawn");
+    drag(&mut h, (0.5, 0.5), (0.6, 0.6));
+    let d = develop(&h);
+    assert_eq!(d.masks.len(), 1, "no new mask");
+    let c = &d.masks[0].components[1];
+    assert_eq!(c.op, lightcraft_develop::MaskOp::Subtract);
+    let MaskShape::Radial { center, .. } = c.shape.clone() else { panic!("radial") };
+    assert!((center.x - 0.5).abs() < 0.005 && (center.y - 0.5).abs() < 0.005, "{center:?}");
+}

@@ -415,7 +415,101 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         brush_tool(app, ui, resp, map, p, clip, d);
         return;
     }
+    if app.ui.tool == "linear" || app.ui.tool == "radial" {
+        gradient_tool(app, ui, resp, map, p, d);
+        return;
+    }
+    // (Esc disarmed the tool mid-drag: nothing is drawn)
+    if matches!(app.gesture, Some(Gesture::MaskDraw { .. })) {
+        app.gesture = None;
+    }
     grip_gestures(app, ui, resp, map, d, &grips);
+}
+
+/// The Linear / Radial tool: a drag on the photo draws the gradient, which becomes a new mask
+/// or (armed from Add / Subtract / Intersect) a component of the selected one, as one undo step.
+/// A click without a drag places one of the default size there. Either disarms the tool.
+fn gradient_tool(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap, p: &egui::Painter, d: &DevelopSettings) {
+    let radial = app.ui.tool == "radial";
+    let op = match app.ui.draw_op.as_str() {
+        op @ ("add" | "subtract" | "intersect") => Some(op.to_string()),
+        _ => None,
+    };
+    // a new mask is on the photo; a component is in its mask's coordinates
+    let map = &if op.is_some() { map.for_mask_id(d, app.session.active_mask) } else { map.for_mask(true) };
+    if resp.hovered() || resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+    if resp.drag_started()
+        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+    {
+        app.gesture = Some(Gesture::MaskDraw { from: map.norm(q), shape: None });
+    }
+    if resp.dragged()
+        && let (Some(Gesture::MaskDraw { from, shape }), Some(q)) = (&mut app.gesture, resp.interact_pointer_pos())
+    {
+        let (shift, alt) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt));
+        *shape = Some(drawn_gradient(radial, *from, map.norm(q), frame_long_norm(map), shift, alt));
+    }
+    if let Some(Gesture::MaskDraw { shape: Some(shape), .. }) = &app.gesture {
+        component_outline(ui, p, map, (0, 0), shape, false, &mut Vec::new());
+    }
+    let done = if resp.drag_stopped()
+        && let Some(Gesture::MaskDraw { from, shape }) = app.gesture.take()
+    {
+        Some(shape.unwrap_or_else(|| placed_gradient(radial, from)))
+    } else if resp.clicked()
+        && let Some(q) = resp.interact_pointer_pos()
+    {
+        Some(placed_gradient(radial, map.norm(q)))
+    } else {
+        None
+    };
+    let Some(shape) = done else { return };
+    let mut params = match shape {
+        MaskShape::Radial { center, rx, ry, .. } => json!({"kind": "radial", "center": [center.x, center.y], "rx": rx, "ry": ry}),
+        MaskShape::Linear { start, end } => json!({"kind": "linear", "start": [start.x, start.y], "end": [end.x, end.y]}),
+        _ => return,
+    };
+    app.ui.tool.clear();
+    match op {
+        Some(op) => {
+            params["op"] = json!(op);
+            let _ = app.run("mask.addComponent", params);
+        }
+        None => {
+            let _ = app.run("mask.add", params);
+        }
+    }
+}
+
+/// The gradient a drag from `from` to `to` (normalized) draws: a radial gradient centred on
+/// `from` reaching `to` (⌥: from corner to corner; ⇧: a circle), or a linear one from `from`
+/// to `to` (⇧: kept horizontal or vertical). `l` converts long-edge units to normalized ones
+/// ([`frame_long_norm`]): radii are in long-edge units, so a circle is round on screen.
+fn drawn_gradient(radial: bool, from: Point, to: Point, l: (f64, f64), shift: bool, alt: bool) -> MaskShape {
+    let (dx, dy) = ((to.x - from.x) / l.0, (to.y - from.y) / l.1);
+    if radial {
+        let (center, rx, ry) =
+            if alt { (Point::new((from.x + to.x) / 2.0, (from.y + to.y) / 2.0), dx.abs() / 2.0, dy.abs() / 2.0) } else { (from, dx.abs(), dy.abs()) };
+        let (rx, ry) = if shift { (rx.max(ry), rx.max(ry)) } else { (rx, ry) };
+        return MaskShape::Radial { center, rx: rx.max(0.01), ry: ry.max(0.01), angle: 0.0, feather: 50.0, invert: false };
+    }
+    let end = match shift {
+        true if dx.abs() >= dy.abs() => Point::new(to.x, from.y),
+        true => Point::new(from.x, to.y),
+        false => to,
+    };
+    MaskShape::Linear { start: from, end }
+}
+
+/// The gradient a click at `at` (normalized) places: `mask.add`'s default size, centred there.
+fn placed_gradient(radial: bool, at: Point) -> MaskShape {
+    if radial {
+        MaskShape::Radial { center: at, rx: 0.22, ry: 0.16, angle: 0.0, feather: 50.0, invert: false }
+    } else {
+        MaskShape::Linear { start: Point::new(at.x, at.y - 0.175), end: Point::new(at.x, at.y + 0.175) }
+    }
 }
 
 /// The outline of one mask component, and (on the selected mask) its grips, registered and
@@ -1020,5 +1114,43 @@ mod region_drag_tests {
         assert!(((moved.y1 - moved.y0) - 0.2).abs() < 0.02, "height kept: {moved:?}");
         assert!((moved.x0 - 0.3).abs() < 0.02 && (moved.y0 - 0.25).abs() < 0.02, "moved by the drag: {moved:?}");
         assert!(moved.x0 >= 0.0 && moved.y0 >= 0.0 && moved.x1 <= 1.0 && moved.y1 <= 1.0, "inside the photo: {moved:?}");
+    }
+}
+
+#[cfg(test)]
+mod gradient_tests {
+    use super::*;
+
+    fn radial(s: MaskShape) -> (Point, f64, f64) {
+        let MaskShape::Radial { center, rx, ry, .. } = s else { panic!("radial") };
+        (center, rx, ry)
+    }
+
+    #[test]
+    fn a_radial_is_drawn_from_its_centre_in_long_edge_units() {
+        // a 3:2 landscape frame: a normalized y unit is 2/3 of a long-edge unit
+        let l = (1.0, 1.5);
+        let (c, rx, ry) = radial(drawn_gradient(true, Point::new(0.5, 0.5), Point::new(0.7, 0.8), l, false, false));
+        assert_eq!((c.x, c.y), (0.5, 0.5));
+        assert!((rx - 0.2).abs() < 1e-9 && (ry - 0.2).abs() < 1e-9, "{rx} {ry}");
+        // ⌥ draws from corner to corner; ⇧ keeps a circle
+        let (c, rx, ry) = radial(drawn_gradient(true, Point::new(0.2, 0.2), Point::new(0.6, 0.35), l, false, true));
+        assert!((c.x - 0.4).abs() < 1e-9 && (c.y - 0.275).abs() < 1e-9 && (rx - 0.2).abs() < 1e-9 && (ry - 0.05).abs() < 1e-9);
+        let (_, rx, ry) = radial(drawn_gradient(true, Point::new(0.5, 0.5), Point::new(0.9, 0.55), l, true, false));
+        assert_eq!(rx, ry);
+        // a drag along one axis still leaves an ellipse that can be grabbed
+        let (_, _, ry) = radial(drawn_gradient(true, Point::new(0.5, 0.5), Point::new(0.9, 0.5), l, false, false));
+        assert_eq!(ry, 0.01);
+    }
+
+    #[test]
+    fn a_linear_runs_from_the_press_to_the_pointer_and_shift_keeps_it_level() {
+        let l = (1.0, 1.5);
+        let MaskShape::Linear { start, end } = drawn_gradient(false, Point::new(0.2, 0.3), Point::new(0.6, 0.4), l, false, false) else { panic!() };
+        assert_eq!((start, end), (Point::new(0.2, 0.3), Point::new(0.6, 0.4)));
+        let MaskShape::Linear { end, .. } = drawn_gradient(false, Point::new(0.2, 0.3), Point::new(0.6, 0.4), l, true, false) else { panic!() };
+        assert_eq!(end, Point::new(0.6, 0.3));
+        let MaskShape::Linear { end, .. } = drawn_gradient(false, Point::new(0.2, 0.3), Point::new(0.25, 0.8), l, true, false) else { panic!() };
+        assert_eq!(end, Point::new(0.2, 0.8));
     }
 }
