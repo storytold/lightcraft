@@ -55,7 +55,8 @@ use lcc_raw::{
 /// #3402).
 /// 22: a camera profile without a tone curve of its own keeps the tone the photo has without it (its DNG tone curve,
 /// else the tone fitted to its camera JPEG) instead of the default tone (OneSlips).
-pub const LOOK_VERSION: u32 = 22;
+/// 23: the bundled Panasonic DMC-GM5 profile (upstream #4064).
+pub const LOOK_VERSION: u32 = 23;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
