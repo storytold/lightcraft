@@ -808,10 +808,14 @@ impl Photo {
             defaults.wb = self.develop.wb;
         }
     }
-    /// Edited by the user: settings differ from what import gave the photo.
+    /// Edited by the user: settings differ from what import gave the photo, As Shot's stored numbers and Remove Hot
+    /// Pixels aside.
     pub fn is_edited(&self) -> bool {
         let mut defaults = self.import_defaults();
         self.as_shot_normalised(&mut defaults);
+        // Remove Hot Pixels is on for raws imported since the box exists and off for older ones
+        // (upstream #4390); a photo doesn't record which it had, so neither is an edit.
+        defaults.detail.nr_outliers = self.develop.detail.nr_outliers;
         // Before lens corrections started off, import turned them on for every raw with lens data
         // (a database match too): a photo with no history that differs from its defaults only
         // there is still as imported.
@@ -927,6 +931,26 @@ mod camera_label_tests {
 mod edited_tests {
     use super::*;
     use lcc_develop::WbScale;
+
+    /// Upstream #4390 (issue #4255): a raw imported before Remove Hot Pixels existed has the box off, one imported
+    /// since has it on: neither is an edit, and a real edit on top of either still is one.
+    #[test]
+    fn remove_hot_pixels_on_or_off_is_not_an_edit() {
+        let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, "a.arw", "ARW", 10, 10, "2026-10-01T00:00:00");
+        p.kind = MediaKind::Raw;
+        let now = p.import_defaults();
+        assert!(now.detail.nr_outliers, "a raw imported now has the box on");
+        let mut before = now.clone();
+        before.detail.nr_outliers = false;
+        for (settings, what) in [(before, "imported before the box"), (now, "imported now")] {
+            p.develop = Arc::new(settings.clone());
+            assert!(!p.is_edited(), "{what}");
+            let mut edited = settings;
+            edited.light.exposure = 0.5;
+            p.develop = Arc::new(edited);
+            assert!(p.is_edited(), "{what}: an edit still is one");
+        }
+    }
 
     #[test]
     fn shutter_seconds_prefers_the_exact_time_while_the_text_still_shows_it() {
