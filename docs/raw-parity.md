@@ -158,7 +158,7 @@ checked (the per-model CC0 sweeps of October 2026).
 | RAF | uncompressed, lossless and lossy compressed; Bayer and X-Trans; GFX 14/16-bit | ✅ | 24 files from 13 bodies exact |
 | RAF | pre-X FinePix without a raw IFD | ⬜ | `raf.rs` refuses (26 Adobe models, estimated split) |
 | ORF | uncompressed 16-bit, 12-bit packed, two-field 12-bit, 12.8 bpp | ✅ | E-1, E-400, XZ-2 corpus; #651 |
-| ORF | **compressed** | ✅ | clean-room pure-Rust decoder implemented from US Patents 7,333,035 & 7,715,639 (`crates/raw/src/vendor/orf_compressed.rs`, `clean-room/orf/`); verified on CC0 sample files |
+| ORF | **compressed** | ✅ | clean-room pure-Rust decoder implemented from US Patents 7,333,035 & 7,715,639 (`crates/raw/src/orf_compressed.rs`, `clean-room/orf/`); verified on CC0 sample files |
 | RW2 / RWL / RAW | formats 2, 4, 5, 6, 7, 8 and 16-bit words | ✅ | 118 bodies (#215) |
 | PEF | uncompressed, Huffman, packed 12-bit | ✅ | K10D, K-3, K-5 IIs; files without area tags lose their masked, empty and saturated border lines (#1271: KP, KF, K-3 Mark III, K-70, K-1, K-1 Mark II, K-S1, K-S2, 645Z) |
 | PEF / DNG | Pentax pixel shift | ⬜ | frames not combined |
@@ -179,7 +179,7 @@ checked (the per-model CC0 sweeps of October 2026).
 
 ### Compressed ORF: clean-room implementation
 
-LightCraft decodes compressed ORF and ORI sensor data via a clean-room pure-Rust bitstream decoder (`crates/raw/src/vendor/orf_compressed.rs`).
+LightCraft decodes compressed ORF and ORI sensor data via a clean-room pure-Rust bitstream decoder (`crates/raw/src/orf_compressed.rs`).
 
 The implementation was developed adhering strictly to clean-room principles (`AGENTS.md`) from public patent disclosures:
 - Olympus Corporation patents [US7333035B2](https://patents.google.com/patent/US7333035) and [US7715639B2](https://patents.google.com/patent/US7715639B2/en).
@@ -269,7 +269,7 @@ works, from [raw/usage-weights.tsv](raw/usage-weights.tsv).
 
 | # | Camera / variant | Gain (points of photographers) | Hours | Gain per hour | Needs |
 |---:|---|---:|---:|---:|---|
-| 1 | ~~Compressed ORF~~ (clean-room restored) | +2.3 (taken) | — | — | clean-room decoder in `crates/raw/src/vendor/orf_compressed.rs`, [status](orf-compression.md) |
+| 1 | ~~Compressed ORF~~ (clean-room restored) | +2.3 (taken) | — | — | clean-room decoder in `crates/raw/src/orf_compressed.rs`, [status](orf-compression.md) |
 | 2 | CR3: remaining CRX variants (no public file uses them) | +0.3 | 10–25 | ~0.02 | files that open as a preview, from users |
 | 3 | ~~Verify popular Nikon, Fujifilm, Canon CR2 and Pentax bodies (one CC0 file each, fix what breaks)~~ done (#1045, #1081) | (+2.0, taken) | — | — | public samples |
 | 4 | Nikon packed 14-bit under a compressed tag (Z 6II uncompressed, #769) | +0.2 | 1–2 | ~0.13 | PR #671 exists |
@@ -292,7 +292,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-07 | minor | Compressed ORF clean-room decoder implemented in pure Rust from patent disclosures (`crates/raw/src/vendor/orf_compressed.rs`, `clean-room/orf/`); coverage regenerated: 560 verified, 720 unverified, 129 preview-only, 37 unsupported; 97% use-weighted coverage |
+| 2026-11-07 | minor | Compressed ORF clean-room decoder implemented in pure Rust from patent disclosures (`crates/raw/src/orf_compressed.rs`, `clean-room/orf/`); coverage regenerated: 560 verified, 720 unverified, 129 preview-only, 37 unsupported; 97% use-weighted coverage |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-26 | patch | Bundled camera profile count 5 → 9 (Nikon Z 6II, Z 8 and D5300, ILCE-7RM5); counts only |

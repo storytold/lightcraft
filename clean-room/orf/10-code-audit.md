@@ -1,6 +1,6 @@
 # Clean-Room Code Audit: Olympus ORF Compressed Decoder
 
-**Target:** `crates/raw/src/vendor/orf_compressed.rs`  
+**Target:** `crates/raw/src/orf_compressed.rs`  
 **Date:** 2026-11-07  
 **Auditor:** Independent Code Auditor (Clean-Room Review)  
 **Applicable Rules:** `AGENTS.md` and `CLAUDE.md` clean-room policy; complete prohibition of GPL/LGPL/AGPL code (LibRaw, dcraw, darktable, RawTherapee, etc.).
@@ -9,7 +9,7 @@
 
 ## 1. Provenance Verification
 
-The implementation in `crates/raw/src/vendor/orf_compressed.rs` was verified against the written functional specification in `clean-room/orf/orf-spec.md`, which is derived solely from:
+The implementation in `crates/raw/src/orf_compressed.rs` was verified against the written functional specification in `clean-room/orf/orf-spec.md`, which is derived solely from:
 - US Patent US7333035B2 (Takashi Ishikawa / Olympus Corp.)
 - US Patent US7715639B2 (Takashi Ishikawa / Olympus Corp.)
 - TIFF 6.0 and Exif 2.3 standard specifications
@@ -46,5 +46,5 @@ The implementation in `crates/raw/src/vendor/orf_compressed.rs` was verified aga
    - `Olympus - E-M1MarkII - 16bit (4_3).ORI`: Pearson $r = 0.998$ against camera embedded JPEG.
    - `Olympus - E-M5 Mark II - 16bit 16bit _normal_ (4_3).ORI`: Pearson $r = 0.994$ against camera embedded JPEG.
 
-**Conclusion:** The code in `crates/raw/src/vendor/orf_compressed.rs` is certified clean-room and conforms fully to `AGENTS.md` and `CLAUDE.md`.
+**Conclusion:** The code in `crates/raw/src/orf_compressed.rs` is certified clean-room and conforms fully to `AGENTS.md` and `CLAUDE.md`.
 

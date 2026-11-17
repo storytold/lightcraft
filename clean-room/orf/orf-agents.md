@@ -19,8 +19,8 @@ This document tracks the steps and status of the clean-room Olympus ORF decoder 
 | **0** | Initialize `clean-room/orf/orf-agents.md` tracking plan | **DONE** | Created to enable session continuity across interruptions |
 | **1** | Verify complete removal of tainted `orfc.rs` and references in `orf.rs` | **DONE** | Verified: `crates/raw/src/vendor/orfc.rs` is absent; `orf.rs` safely returns unsupported |
 | **2** | **Specification Author:** Produce pure functional spec in `clean-room/orf/orf-spec.md` | **DONE** | Pure mathematical specification derived from US7333035B2, US7715639B2, TIFF/Exif |
-| **3** | **Implementer:** Pure-Rust clean-room implementation of compressed bitstream parser | **DONE** | Implemented in `crates/raw/src/vendor/orf_compressed.rs` |
-| **4** | Integrate decoder into `crates/raw/src/vendor/orf.rs` for both compressed & uncompressed | **DONE** | Integrated into `crates/raw/src/vendor/orf.rs` and `vendor.rs` |
+| **3** | **Implementer:** Pure-Rust clean-room implementation of compressed bitstream parser | **DONE** | Implemented in `crates/raw/src/orf_compressed.rs` |
+| **4** | Integrate decoder ahead of the shared ORF reader for compressed files | **DONE** | `crates/raw/src/orf_compressed/container.rs`, called from `crates/raw/src/convert.rs` before `craft-raw` (which reads uncompressed ORF and refuses compressed sensor data) |
 | **5** | **Code Auditor:** Audit new implementation for clean-room integrity | **DONE** | Documented in `clean-room/orf/10-code-audit.md` |
 | **6** | Execute LightCraft test suites and verify against CC0 corpus in `corpus/raw` | **DONE** | Tests pass; clippy, layers, roots, assets, wasm, and fmt green |
 | **7** | Run `coderabbit review --agent` and resolve all findings iteratively until 0 findings | **DONE** | CodeRabbit completed with 0 findings |
@@ -41,16 +41,16 @@ This document tracks the steps and status of the clean-room Olympus ORF decoder 
 - Produced `clean-room/orf/orf-spec.md` based strictly on US Patent US7333035B2, US Patent US7715639B2, TIFF 6.0, and Exif 2.3 specifications.
 
 ### Step 3: Pure-Rust Clean-Room Implementation
-- Implemented `crates/raw/src/vendor/orf_compressed.rs` using idiomatic, memory-safe Rust with zero unsafe code, bounded allocations, and checked arithmetic.
+- Implemented `crates/raw/src/orf_compressed.rs` using idiomatic, memory-safe Rust with zero unsafe code, bounded allocations, and checked arithmetic.
 
 ### Step 4: Integration
-- Wired `orf_compressed` into `crates/raw/src/vendor/orf.rs` and `crates/raw/src/vendor.rs`.
+- Wired `orf_compressed` into `crates/raw/src/convert.rs` (via `crates/raw/src/orf_compressed/container.rs`); the ORF container moved to `craft-raw` in craft-libs, which still refuses compressed sensor data.
 
 ### Step 5: Independent Code Audit
 - Audited implementation against clean-room specifications and provenance requirements; certified zero external code derivation in `clean-room/orf/10-code-audit.md`.
 
 ### Step 6: Testing & Empirical Validation
-- Verified unit tests in `crates/raw/src/vendor/orf_compressed.rs`.
+- Verified unit tests in `crates/raw/src/orf_compressed.rs`.
 - Tested against real CC0 files:
   - `orf-olympus-em1.orf` (r = 0.995)
   - `orf-olympus-em10iii.orf` (r = 0.929)
@@ -84,12 +84,12 @@ Per `AGENTS.md` (section *Start every session here*, rule 2) and the raw-parity 
 - `docs/raw-parity.md`:
   - Updates the *By-use estimated* table (OM/Olympus to 81%, weighted camera total from 94% to 97%).
   - Updates the per-manufacturer breakdown table for Olympus and OM Digital Solutions.
-  - Adds notes citing the clean-room implementation in `crates/raw/src/vendor/orf_compressed.rs`.
+  - Adds notes citing the clean-room implementation in `crates/raw/src/orf_compressed.rs`.
 - `docs/orf-compression.md`: Documents clean-room status, patent citations (US7333035B2, US7715639B2), CC0 verification results, and links to `clean-room/orf/`.
 
 ### 3. Feature & Parity Trackers
 - `docs/gaps.md`: Gap #6 (Compressed ORF) — status update from withdrawn/pending to closed (`0 h` remaining), citing the clean-room implementation and the 58 newly unlocked camera bodies.
-- `docs/parity-checklist.md`: Updates row `LR-IMP-FORMATS` with a note citing `crates/raw/src/vendor/orf_compressed.rs` and the clean-room verification.
+- `docs/parity-checklist.md`: Updates row `LR-IMP-FORMATS` with a note citing `crates/raw/src/orf_compressed.rs` and the clean-room verification.
   - **Rule from `AGENTS.md`:** Run `cargo xtask parity --write` to automatically synchronize and refresh the summary table and counts at the top of the file.
 
 ### 4. Headline Numbers & Project Milestones

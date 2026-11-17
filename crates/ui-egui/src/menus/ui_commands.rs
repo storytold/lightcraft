@@ -65,7 +65,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // G: Photo Grid ↔ Square Grid (from other views: the photo grid)
     ("view.gridToggle", "Grid", Some("G"), ""),
     ("library.selectOnlyActive", "Select Only Active Photo", Some("Cmd+Shift+D"), "Edit"),
-    ("tool.guidedUpright", "Guided Upright", Some("Shift+G"), "Window>Tools"),
+    ("tool.guidedUpright", "Guided Perspective", Some("Shift+G"), "Window>Tools"),
     ("view.detail", "Detail View", Some("D"), "View"),
     ("view.compare", "Compare", Some("Shift+C"), "View"),
     ("view.survey", "Survey", Some("N"), "View"),

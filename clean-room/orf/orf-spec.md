@@ -159,9 +159,11 @@ The directional predicted baseline $\hat{P}$ is selected as:
        - If $\Delta_V > E_{th}$: $\hat{P} = N + W - NW$
        - Else if $\Delta_H \le E_{th}$: $\hat{P} = (N + W) \gg 1$
        - Otherwise: $\hat{P} = N + W - NW$
-     - Else: $\hat{P} = W$
+     - Else: $\hat{P} = N$ (see the note below)
    - Else: $\hat{P} = W$
 2. Otherwise: $\hat{P} = N$
+
+*(Correction, measured on CC0 samples: in the innermost "Else" above, an earlier revision of this section gave $\hat{P} = W$. Decoding the CC0 Olympus OM-D E-M1 sample that way, its green photosites follow the camera's embedded JPEG with $r = 0.448$; with $\hat{P} = N$ they follow it with $r = 0.995$, and the E-M10 Mark III, E-M1 Mark II (ORI) and E-M5 Mark II (ORI) samples with $r = 0.929$, $0.998$ and $0.994$. The black-box measurement decides: $\hat{P} = N$.)*
 
 *(Note to implementer: Ensure all intermediate calculations use saturating or checked 32-bit signed arithmetic to prevent arithmetic overflow on corrupted input data).*
 

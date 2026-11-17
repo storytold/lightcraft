@@ -17,14 +17,14 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
      - Standard TIFF 6.0 and Exif 2.3 container specifications.
    - Fully specifies the 12-bit MSB-first variable-length bitstream, token decoding table, differential prediction across identical Bayer color channels, and row-stride packing.
 
-2. **Pure Safe-Rust Implementer (`crates/raw/src/vendor/orf_compressed.rs`)**:
+2. **Pure Safe-Rust Implementer (`crates/raw/src/orf_compressed.rs`)**:
    - `MsbBitReader`: 64-bit sliding window accumulator for MSB-first bit consumption with bounds-checked slice indexing.
    - `decompress_stream`: Decodes predictive residuals across Bayer channels, clamping outputs to `u16` (`[0, 65535]`).
    - Hostile input handling: Strict boundary checks for SubIFD dimensions, offsets, lengths, and pixel counts; non-panicking error paths returning typed `Result` (`Result<Vec<u16>>` / `Result<RawImage>`).
    - Crate-level `#![forbid(unsafe_code)]` compliance.
 
-3. **Vendor Integration & Dispatch (`crates/raw/src/vendor/orf.rs`, `crates/raw/src/vendor.rs`)**:
-   - Attempts compressed decoding for IFD0 strips with `Compression == 1` when no uncompressed layout matches and the ImageProcessing configuration is valid.
+3. **Integration & Dispatch (`crates/raw/src/orf_compressed/container.rs`, `crates/raw/src/convert.rs`)**:
+   - Decodes IFD0 strips with `Compression == 1` whose ImageProcessing sub-IFD states valid stream parameters, before `craft-raw` reads the file; a damaged stream header is a `Corrupt` error, never misread as 16-bit words. Every other ORF goes to `craft-raw` unchanged.
    - Graceful fallback to embedded preview when compressed data is truncated or corrupt.
 
 4. **Independent Code Audit (`clean-room/orf/10-code-audit.md`)**:
@@ -58,7 +58,7 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
 
 ## Merging
 
-- **Overlap:** Replaces the withdrawn implementation from #3775. No concurrent PRs touching `crates/raw/src/vendor/orf.rs`.
+- **Overlap:** Replaces the withdrawn implementation from #3775. ORF container reading now lives in `craft-raw` (craft-libs), which refuses compressed sensor data; this decoder runs before it in `crates/raw/src/convert.rs`.
 - **Existing edits and libraries:** Unchanged for uncompressed ORF files. Compressed ORF files now produce sensor mosaic rasters rather than preview-only fallbacks.
 - **Shared numbers taken:** None.
 - **Where it came from:** Clean-room derivation from US Patents 7,333,035 B2 and 7,715,639 B2, TIFF 6.0, Exif 2.3, and public CC0 raw corpus samples (`corpus/raw/`). Zero GPL/LGPL/CDDL/dcraw/LibRaw code inspected or translated. Provenance documented in `clean-room/orf/orf-spec.md` and certified in `clean-room/orf/10-code-audit.md`.
@@ -69,7 +69,7 @@ Implemented a clean-room, pure safe-Rust bitstream decoder for compressed Olympu
 - [x] No new panic path in non-test code: no `unwrap` / `expect` / `panic!`, no indexing or unchecked arithmetic on a number from a file, a person or an agent (`get`, `checked_mul`, NaN and char boundaries handled)
 - [x] New text on screen goes through `tr()` and has its key in `crates/ui-egui/locales/*.json`; a new shortcut is free in `docs/library-shortcuts.md` (N/A — no new UI text or shortcuts)
 - [x] The feature's rows in `docs/parity-checklist.md` (LR-IMP-FORMATS restored) and its entry in `docs/gaps.md` (Gap 6 closed) are updated honestly, with verified 97% use-weighted camera coverage recorded in `docs/raw-parity.md`, `docs/target-app-parity.md`, `docs/orf-compression.md`, and `ROADMAP.md`.
-- [x] New code has a caller: wired into `crates/raw/src/vendor/orf.rs` and `vendor.rs`.
+- [x] New code has a caller: `crates/raw/src/convert.rs` calls `orf_compressed::decode` for ORF files.
 - [x] Every new image, icon or other asset has its entry in `assets/ATTRIBUTION.md`; no font or media files added.
 - [x] Ready to merge.
 

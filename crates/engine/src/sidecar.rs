@@ -1323,6 +1323,8 @@ mod tests {
                     w.push(0);
                 }
             }
+            let size = u32::try_from(w.len() - 8).unwrap();
+            w[4..8].copy_from_slice(&size.to_le_bytes());
             w
         };
         let image = |len: usize| (&b"VP8L"[..], vec![0; len]);

@@ -2,14 +2,14 @@
 
 LightCraft decodes uncompressed 16-bit, packed 12-bit, two-field 12-bit, 12.8 bpp blocks and compressed ORF/ORI sensor data in pure Rust.
 
-The compressed ORF sensor decoding engine is implemented clean-room in `crates/raw/src/vendor/orf_compressed.rs`, adhering strictly to the clean-room requirements in `AGENTS.md` and `CLAUDE.md`.
+The compressed ORF sensor decoding engine is implemented clean-room in `crates/raw/src/orf_compressed.rs`, adhering strictly to the clean-room requirements in `AGENTS.md` and `CLAUDE.md`.
 
 ## Provenance & Clean-Room Documentation
 
 The implementation is accompanied by full clean-room derivation records:
 - **Specification:** [`clean-room/orf/orf-spec.md`](../clean-room/orf/orf-spec.md), derived purely from US Patent US7333035B2 and US Patent US7715639B2 (Takashi Ishikawa, Olympus Corporation), TIFF 6.0, Exif 2.3 specifications, and black-box analysis of public CC0 samples from raw.pixls.us.
 - **Audit Record:** [`clean-room/orf/10-code-audit.md`](../clean-room/orf/10-code-audit.md), certifying independent formulation, zero GPL/LGPL derivation, and absence of external code translation.
-- **Implementation:** [`crates/raw/src/vendor/orf_compressed.rs`](../crates/raw/src/vendor/orf_compressed.rs).
+- **Implementation:** [`crates/raw/src/orf_compressed.rs`](../crates/raw/src/orf_compressed.rs).
 
 ## Verification on Real CC0 Corpus
 

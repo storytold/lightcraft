@@ -5,6 +5,13 @@
 //! (Takashi Ishikawa, Olympus Corp.), TIFF 6.0, and Exif 2.3 MakerNote structures.
 //!
 //! Non-test code forbids unsafe code and panics. All input streams are treated as untrusted and hostile.
+//!
+//! `craft-raw` reads the ORF container and refuses compressed sensor data; [`decode`] (in `container`) recognises a
+//! compressed file and builds its image around the stream decoded here.
+
+mod container;
+
+pub(crate) use container::decode;
 
 use crate::{RawError, Result};
 use craft_tiff::Ifd;
@@ -274,6 +281,8 @@ fn predict_spatial_baseline(west: i32, north: i32, north_west: i32, gradient_thr
                     baseline = north.saturating_add(west.saturating_sub(north_west));
                 }
             } else {
+                // N, not W (spec §6): with W the CC0 E-M1 file's green sites stop following its camera JPEG
+                // (r = 0.448 instead of 0.995, `compressed_olympus_bodies_decode_like_camera_jpeg`).
                 baseline = north;
             }
         } else {
@@ -458,6 +467,7 @@ mod tests {
         let p2 = predict_spatial_baseline(100, 200, 100, 32);
         assert!((100..=200).contains(&p2));
 
+        // Outer condition true, nested directional condition false: N (spec §6, measured on the CC0 corpus).
         let p3 = predict_spatial_baseline(100, 200, 50, 32);
         assert_eq!(p3, 200);
     }

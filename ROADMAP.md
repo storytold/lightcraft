@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~14 points and ~340–600 h away
 
-> **Last reviewed:** 2026-10-10 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
+> **Last reviewed:** 2026-11-15 · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 · **Changes:** [revision history](#revision-history)
 
 One-page summary of how close LightCraft is to Adobe Lightroom. Agents: read this, then pick work
 from [docs/gaps.md](docs/gaps.md). The full assessment, method and evidence are in
@@ -114,7 +114,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 ## Progress log
 
-- 2026-11-07: LR-IMP-FORMATS: clean-room pure-Rust compressed Olympus ORF decoder restored from patent disclosures (US7333035B2, US7715639B2) in `crates/raw/src/vendor/orf_compressed.rs`, verified on CC0 sample corpus. Camera coverage regenerated: 560 verified, 720 unverified, 129 preview-only and 37 unsupported; 97% use-weighted coverage. See [ORF status](docs/orf-compression.md).
+- 2026-11-07: LR-IMP-FORMATS: clean-room pure-Rust compressed Olympus ORF decoder restored from patent disclosures (US7333035B2, US7715639B2) in `crates/raw/src/orf_compressed.rs`, verified on CC0 sample corpus. Camera coverage regenerated: 560 verified, 720 unverified, 129 preview-only and 37 unsupported; 97% use-weighted coverage. See [ORF status](docs/orf-compression.md).
 
 - 2026-11-04: Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available.
 - 2026-10-22: Print page setup and PDF output gain the Japanese photo and postcard papers — L判
@@ -199,6 +199,7 @@ Ranked toward beta; detail in [docs/roadmap.md](docs/roadmap.md), gaps in [docs/
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | Lens Blur with AI subject focus and per-mask bokeh; survey tiles fit the photos' shapes and glide to their new places; direct import of Lightroom backup zips (#2592); legacy shutter repair in virtual copies; the opened-library folder-safety fix; v0.21.0 and v0.21.1 released; craft-libs cutover for TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata and gain maps, plus a security-hardening batch; headline numbers not re-measured |
 | 2026-11-07 | minor | Compressed ORF clean-room decoder restored; camera coverage regenerated: 560 verified, 720 unverified, 129 preview-only, 37 unsupported; 97% use-weighted coverage |
 | 2026-10-24 | minor | Priority 7 (lens profile database) links its tracking issue #329; headline numbers unchanged |
 | 2026-10-24 | patch | Alpha rationale: tests run in CI on Linux x64 (#2667) and FreeBSD nightly, not on macOS or Windows; ranked item 8 now reads "Tests in CI on macOS and Windows, and the GPU tests in CI"; percentages and hours unchanged |

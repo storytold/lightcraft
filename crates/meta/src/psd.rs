@@ -1,10 +1,6 @@
 //! EXIF and XMP image resources in Photoshop PSD and PSB files.
 
-use crate::container::Embedded;
-
-pub(crate) fn embedded(bytes: &[u8]) -> Embedded {
-    parse(bytes).unwrap_or_default()
-}
+use crate::Embedded;
 
 /// The EXIF (1058) and XMP (1060) resources of the head `craft-psd` reads (header, colour mode data, image
 /// resources). `None` for a head that does not parse, a second EXIF or XMP resource, or XMP that is not UTF-8.
@@ -29,8 +25,8 @@ pub(crate) fn parse(bytes: &[u8]) -> Option<Embedded> {
 
 #[cfg(test)]
 mod tests {
-    use super::embedded;
-    use crate::container::Embedded;
+    use crate::Embedded;
+    use crate::embedded;
     use crate::{DateTime, Gps, Metadata};
 
     fn resource(id: u16, name: &[u8], data: &[u8]) -> Vec<u8> {
