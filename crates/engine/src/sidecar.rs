@@ -1073,8 +1073,10 @@ fn global_descriptions(data: &str) -> Vec<(usize, usize)> {
                         continue;
                     }
                     if rest2.starts_with("<rdf:Description") {
-                        depth += 1;
                         if let Some(e2) = tag_end(data, s2) {
+                            if !is_self_closing(data, e2) {
+                                depth += 1;
+                            }
                             k = e2 + 1;
                         } else {
                             break;
@@ -1180,8 +1182,10 @@ fn update_existing_crs(data: &mut String, name: &str, value: &str) -> bool {
                 continue;
             }
             if rest.starts_with("<rdf:Description") {
-                close_depth += 1;
                 if let Some(e) = tag_end(data, s) {
+                    if !is_self_closing(data, e) {
+                        close_depth += 1;
+                    }
                     i = e + 1;
                 } else {
                     break;
@@ -1379,12 +1383,53 @@ fn mask_component_descriptions(data: &str, _corr_start: usize, corr_end: usize) 
         }
         if rest.starts_with("<rdf:li") {
             // A mask component can be stored directly on rdf:li (self-closing,
-            // e.g. <rdf:li crs:What="Mask/CircularGradient" .../>). A non-self-closing
-            // li wraps a nested rdf:Description, which is collected on its own above.
-            if let Some(e) = tag_end(data, s)
-                && is_self_closing(data, e)
-            {
-                out.push((s, e));
+            // e.g. <rdf:li crs:What="Mask/CircularGradient" .../>).
+            // A non-self-closing li wraps a nested rdf:Description, which is
+            // collected on its own above.
+            if let Some(e) = tag_end(data, s) {
+                if is_self_closing(data, e) {
+                    out.push((s, e));
+                } else {
+                    // Non-self-closing <rdf:li>: find its closing tag and
+                    // collect the nested rdf:Description inside it.
+                    let mut li_depth = 1;
+                    let mut k = e + 1;
+                    while k < close && li_depth > 0 {
+                        let Some(rel2) = data[k..close].find('<') else { break };
+                        let s2 = k + rel2;
+                        let rest2 = data.get(s2..close).unwrap_or_default();
+                        if rest2.starts_with("</rdf:li>") {
+                            li_depth -= 1;
+                            if li_depth == 0 {
+                                k = s2 + "</rdf:li>".len();
+                                break;
+                            }
+                            k = s2 + "</rdf:li>".len();
+                            continue;
+                        }
+                        if rest2.starts_with("<rdf:Description") {
+                            if let Some(e2) = tag_end(data, s2) {
+                                if !is_self_closing(data, e2) {
+                                    li_depth += 1;
+                                }
+                                k = e2 + 1;
+                                continue;
+                            }
+                            break;
+                        }
+                        if rest2.starts_with("<rdf:li") {
+                            if let Some(e2) = tag_end(data, s2) {
+                                if !is_self_closing(data, e2) {
+                                    li_depth += 1;
+                                }
+                                k = e2 + 1;
+                                continue;
+                            }
+                            break;
+                        }
+                        k = s2 + 1;
+                    }
+                }
                 i = e + 1;
                 continue;
             }
@@ -1486,6 +1531,8 @@ fn correction_descriptions(data: &str) -> Vec<(usize, usize)> {
         }
         if !is_self_closing(data, end) {
             depth += 1;
+        } else if rest.starts_with("<rdf:Description") {
+            // self-closing rdf:Description: depth unchanged
         }
         i = end + 1;
     }
@@ -1543,10 +1590,45 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
         return;
     }
 
+    // Build a map from MaskId to correction index (in document order).
+    // Corrections without a MaskId are matched by document order to masks
+    // that don't have a MaskId correction pointing to them.
+    let mut mask_id_to_corr_idx: HashMap<u32, usize> = HashMap::new();
+    let mut corr_idx_without_mask_id: Vec<usize> = Vec::new();
+    for (idx, &(tag_start, corr_end)) in corrections.iter().enumerate() {
+        if let Some(mask_id) = correction_mask_id(data, tag_start, corr_end) {
+            mask_id_to_corr_idx.insert(mask_id, idx);
+        } else {
+            corr_idx_without_mask_id.push(idx);
+        }
+    }
+
+    // Determine which masks have a MaskId correction pointing to them.
+    let mut mask_has_correction = vec![false; masks.len()];
+    for (mask_idx, mask) in masks.iter().enumerate() {
+        if mask_id_to_corr_idx.contains_key(&mask.id) {
+            mask_has_correction[mask_idx] = true;
+        }
+    }
+
+    // For corrections without MaskId, match them to masks without a correction
+    // by document order (correction index order matches mask index order).
+    let mut mask_id_for_corr_idx: HashMap<usize, u32> = HashMap::new();
+    let mut mask_idx_iter = masks.iter().enumerate().filter(|(i, _)| !mask_has_correction[*i]).map(|(i, _)| i);
+    for corr_idx in corr_idx_without_mask_id {
+        if let Some(mask_idx) = mask_idx_iter.next() {
+            mask_id_for_corr_idx.insert(corr_idx, masks[mask_idx].id);
+        }
+    }
+
     // Process corrections in reverse document order so that lengthening a
     // correction doesn't move the offsets of corrections we haven't processed yet.
-    for &(tag_start, mut corr_end) in corrections.iter().rev() {
-        let Some(mask_id) = correction_mask_id(data, tag_start, corr_end) else {
+    for (corr_idx, &(tag_start, mut corr_end)) in corrections.iter().enumerate().rev() {
+        let mask_id = if let Some(mask_id) = correction_mask_id(data, tag_start, corr_end) {
+            mask_id
+        } else if let Some(mask_id) = mask_id_for_corr_idx.get(&corr_idx) {
+            *mask_id
+        } else {
             continue;
         };
         let Some(cur_mask) = masks.iter().find(|m| m.id == mask_id) else {
@@ -3004,6 +3086,27 @@ mod tests {
             "crs must resolve to the ancestor's CRS_NS binding, not a comment's declaration\n{data}"
         );
         assert!(!bindings.iter().any(|(p, uri)| p == "crs" && uri == "urn:other"), "crs must not resolve to urn:other from a comment\n{data}");
+    }
+
+    /// A CDATA section before an ancestor that rebinds `crs` must be skipped whole:
+    /// its `>` and any `xmlns` declaration inside must not leak into the scope.
+    #[test]
+    fn ns_bindings_skips_cdata_before_ancestor() {
+        let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <![CDATA[ > some text <fake xmlns:crs="urn:other"> ]]>
+          <rdf:Description xmlns:crs="urn:other">
+            <crs:Exposure2012/>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let start = data.find("<crs:Exposure2012").expect("target element");
+        let end = tag_end(data, start).expect("target element closes");
+        let bindings = ns_bindings(data, start, end);
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the ancestor's urn:other binding, not the RDF's CRS_NS\n{data}"
+        );
     }
 
     /// A `crs:` field on a sibling `rdf:Description` must be found by `crs:` write-back even
