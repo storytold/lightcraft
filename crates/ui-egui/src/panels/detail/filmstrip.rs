@@ -267,12 +267,12 @@ fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog:
     }
 }
 
-/// The placeholder a cell shows while its frame is not ready: a catalogued clip's dark tile, which
-/// has no frame to decode yet and must not read as a failed photo, or a photo's skeleton with the
-/// missing-file mark when its thumbnail failed.
+/// The placeholder a cell shows while its frame is not ready: a catalogued clip's dark tile or a
+/// photo's skeleton, with the mark of a failed thumbnail (a missing file, a clip whose poster
+/// can't be decoded).
 fn paint_missing_frame(p: &egui::Painter, t: &Tokens, img_area: Rect, video: bool, failed: bool) {
     p.rect_filled(img_area, 0.0, if video { Color32::from_gray(30) } else { t.skeleton });
-    if failed && !video {
+    if failed {
         p.text(img_area.center(), Align2::CENTER_CENTER, "!", t.semibold(14.0), t.text);
     }
 }

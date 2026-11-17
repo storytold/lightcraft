@@ -40,7 +40,7 @@ dhat-heap = ["dep:dhat"]
 # Open HEIC/HEIF photos (the optional craft-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it.
 heif = ["lightcraft-codecs/heif"]
-# Video poster frames and playback (H.264 / HEVC, the optional craft-video decoders). Not
+# Video poster frames (H.264 / HEVC, the optional craft-video decoders). Not
 # default for the same reason (H.264 / HEVC patents, issue #3244); build with
 # `--features video-frames` to include it. Without it videos keep their placeholder.
 video-frames = ["lightcraft-codecs/video-frames"]

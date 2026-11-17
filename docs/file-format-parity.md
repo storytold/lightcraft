@@ -30,7 +30,7 @@ import and export formats. Ours come from `crates/codecs/src/sniff.rs`, `crates/
 | HDR gain map JPEG (ISO 21496-1) | ✅ | ✅ | ✅ (gain map read) | ✅ | `crates/codecs/src/gainmap.rs` (JPEG layout), `craft-gainmap` (metadata, compute, apply) |
 | PQ / HLG HDR | ✅ | ✅ AVIF, JXL, TIFF | — | 🟡 PQ AVIF, PQ JPEG XL, float TIFF; no HLG | |
 | Contact sheet / print PDF | — | ✅ (Print module: PDF / JPEG / printer) | — | 🟡 paginated contact-sheet PDF (A4 / Letter, 150 dpi, sRGB) | `crates/engine/src/contact_sheet.rs` |
-| Video (MP4, MOV, AVCHD…) | ✅ playback, trim, edit | ✅ export | 🟡 imported and catalogued (kind, duration, size, dimensions, capture date, camera/GPS); with the non-default `video-frames` feature, H.264 (8-bit 4:2:0) and HEVC (Main, Main 10, 4:2:2) clips in MP4/MOV show a decoded poster frame (other codecs say why they show none); no playback, trim or edits | ⬜ | `crates/meta/src/video.rs`, `crates/engine/src/import.rs`, `crates/codecs/src/video_stream.rs`, `crates/codecs/src/poster.rs` |
+| Video (MP4, MOV, AVCHD…) | ✅ playback, trim, edit | ✅ export | 🟡 imported and catalogued (kind, duration, size, dimensions, capture date, camera/GPS); with the non-default `video-frames` feature, H.264 (8-bit 4:2:0) and HEVC (Main and Main 10, 4:2:0; the colour conversion takes 4:2:2 and 4:4:4 too, checked on synthetic planes only, no real 4:2:2 clip decoded) clips in MP4/MOV show a decoded poster frame (other codecs say why they show none); no playback, trim or edits | ⬜ | `crates/meta/src/video.rs`, `crates/engine/src/import.rs`, `crates/codecs/src/video_stream.rs`, `crates/codecs/src/poster.rs` |
 
 ## Colour spaces and profiles
 

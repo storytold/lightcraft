@@ -301,7 +301,7 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 c.args(["clippy", "-p", "lightcraft-codecs", "--features", "video-frames", "--all-targets", "--", "-D", "warnings"]);
                 run(c, "cargo clippy -p lightcraft-codecs --features video-frames --all-targets -- -D warnings")?;
                 test(tests(&with_test_targets(&["-p", "lightcraft-codecs", "--features", "lightcraft-codecs/video-frames"])), "video")?;
-                // the engine's poster frames and playback, with the decoders (the workspace run
+                // the engine's poster frames, with the decoders (the workspace run
                 // checks what a build without them says)
                 test(tests(&["-p", "lightcraft-engine", "--lib", "--features", "lightcraft-codecs/video-frames", "video"]), "video")
             }),

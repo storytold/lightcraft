@@ -3541,5 +3541,8 @@
   "Reading video frames": "Videobilder werden gelesen",
   "No video frame": "Kein Videobild",
   "No video frame: {reason}": "Kein Videobild: {reason}",
-  "this build has no video decoding (feature video-frames)": "dieser Build dekodiert keine Videos (Funktion video-frames)"
+  "this build has no video decoding (feature video-frames)": "dieser Build dekodiert keine Videos (Funktion video-frames)",
+  "the clip's file is missing": "die Datei des Clips fehlt",
+  "the clip's file can't be read (no permission)": "die Datei des Clips kann nicht gelesen werden (keine Berechtigung)",
+  "the clip's file can't be read": "die Datei des Clips kann nicht gelesen werden"
 }

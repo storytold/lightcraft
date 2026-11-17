@@ -272,6 +272,14 @@ fn the_loupe_shows_a_video_card_instead_of_a_render_error() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(has(&h, "canvas:videoCard"), "the card stands in for the frame");
+    // no video loader: a build without decoding says so on the card itself (no render did)
+    let text = h.view.painted_text().join("\n");
+    if lightcraft_codecs::video_stream::video_decoding_available() {
+        assert!(text.contains(crate::i18n::tr("Video catalogued — playback and trim are coming in a later update")), "{text}");
+    } else {
+        let why = crate::i18n::tr(lightcraft_codecs::video_stream::NO_VIDEO_DECODING);
+        assert!(text.contains(&crate::i18n::tr_format!("No video frame: {reason}", reason = why)), "{text}");
+    }
     assert_eq!(h.app.loupe_shown.map(|l| l.1), Some("video"), "ui.inspect says what the loupe shows");
     assert!(!has(&h, "loupe:renderFailed"), "a catalogued video is not a broken photo");
     assert!(has(&h, "info:duration"), "Info lists the clip's running time");
@@ -351,11 +359,15 @@ fn an_undecodable_clip_keeps_its_card_and_says_why_once() {
     let mut h = video_app_with(ViewMode::PhotoGrid, Some(poster_loader(calls.clone(), Some(WHY))));
     assert!(h.app.renderer.thumb(PhotoId(1)).is_none());
     assert_eq!(h.app.renderer.failure(crate::render::Slot::Thumb(PhotoId(1))), Some(WHY));
+    // the grid marks a failed clip as it marks a failed photo
+    let marks = |h: &Headless| h.view.painted_text().iter().filter(|t| t.as_str() == "!").count();
+    assert_eq!(marks(&h), 4, "the three clips' cells are marked, as the still's (its file is missing too)");
     select(&mut h, PhotoId(1));
     let r = h.request("ui.set", json!({"view": "detail", "right": "info", "filmstrip": true}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(has(&h, "canvas:videoCard"));
+    assert!(marks(&h) >= 4, "and so does the filmstrip");
     assert!(has(&h, "notice:videoFrame:info"), "Info says why the clip shows no frame");
     assert!(!has(&h, "loupe:renderFailed"), "a clip without a frame is not a broken photo");
     let asked = calls.load(std::sync::atomic::Ordering::Relaxed);
@@ -413,4 +425,56 @@ fn a_portrait_poster_keeps_its_running_time_on_the_picture_in_the_filmstrip() {
     let centre = cell.center().x;
     let half = area_h * 9.0 / 32.0;
     assert!(badge.right() <= centre + half + 0.5 && badge.left() >= centre - half - 0.5, "{badge:?} beside the picture in {cell:?}");
+}
+
+/// A poster the activity row's ✕ stopped is no lasting failure: no mark, no warning, and it is
+/// asked for again (and shows) rather than waiting for the catalog to change.
+#[test]
+fn a_stopped_poster_is_asked_for_again() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = calls.clone();
+    let loader: lightcraft_engine::media::FileLoader = std::sync::Arc::new(move |_path: &str, max_edge: usize, _with| {
+        // every clip's first decode is stopped
+        if counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 3 {
+            return Err(lightcraft_engine::files::VIDEO_STOPPED.into());
+        }
+        let (w, h) = (320.min(max_edge), 180.min(max_edge));
+        Ok((lightcraft_raster::Rgb32f { width: w, height: h, data: vec![[0.1, 0.2, 0.45]; w * h] }, Default::default()))
+    });
+    let h = video_app_with(ViewMode::PhotoGrid, Some(loader));
+    assert!(calls.load(std::sync::atomic::Ordering::Relaxed) > 3, "asked for again");
+    for id in [1, 3, 4] {
+        assert!(h.app.renderer.failure(crate::render::Slot::Thumb(PhotoId(id))).is_none(), "clip {id}: no lasting failure");
+        assert!(h.app.renderer.thumb(PhotoId(id)).is_some(), "clip {id} shows its poster after all");
+    }
+    assert!(!h.app.renderer.failure_messages.iter().any(|m| m.contains("Stopped")), "no warning: {:?}", h.app.renderer.failure_messages);
+}
+
+/// While the loupe's own render of a clip fails (or hasn't come), its thumbnail's poster stands
+/// in: no card over a picture that is there.
+#[test]
+fn the_thumbnails_poster_stands_in_for_a_failed_loupe_render() {
+    let loader: lightcraft_engine::media::FileLoader = std::sync::Arc::new(move |_path: &str, max_edge: usize, _with| {
+        // every render bigger than a thumbnail fails: only the grid's poster exists
+        if max_edge > 512 {
+            return Err("the clip's file can't be read".into());
+        }
+        let (w, h) = (320.min(max_edge), 180.min(max_edge));
+        Ok((lightcraft_raster::Rgb32f { width: w, height: h, data: vec![[0.1, 0.2, 0.45]; w * h] }, Default::default()))
+    });
+    let mut h = video_app_with(ViewMode::PhotoGrid, Some(loader));
+    assert!(h.app.renderer.thumb(PhotoId(1)).is_some());
+    select(&mut h, PhotoId(1));
+    let r = h.request("ui.set", json!({"view": "detail", "right": "info", "filmstrip": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(!has(&h, "canvas:videoCard"));
+    // the loupe's own pictures gone (its render failed, its stand-in not back yet): the grid's
+    // poster stands in for one frame, no card flashes up over it
+    h.app.renderer.textures.remove(&crate::render::Slot::Main);
+    h.app.renderer.textures.remove(&crate::render::Slot::Preview);
+    h.step();
+    assert!(h.app.renderer.thumb(PhotoId(1)).is_some());
+    assert!(!has(&h, "canvas:videoCard"), "the thumbnail's poster shows, not the card");
+    assert!(!has(&h, "loupe:renderFailed"));
 }

@@ -2304,5 +2304,8 @@
   "Reading video frames": "Lendo quadros de vídeo",
   "No video frame": "Nenhum quadro de vídeo",
   "No video frame: {reason}": "Nenhum quadro de vídeo: {reason}",
-  "this build has no video decoding (feature video-frames)": "esta versão não decodifica vídeo (recurso video-frames)"
+  "this build has no video decoding (feature video-frames)": "esta versão não decodifica vídeo (recurso video-frames)",
+  "the clip's file is missing": "o arquivo do clipe não foi encontrado",
+  "the clip's file can't be read (no permission)": "não é possível ler o arquivo do clipe (sem permissão)",
+  "the clip's file can't be read": "não é possível ler o arquivo do clipe"
 }

@@ -2417,5 +2417,8 @@
   "Reading video frames": "Luetaan videokuvia",
   "No video frame": "Ei videokuvaa",
   "No video frame: {reason}": "Ei videokuvaa: {reason}",
-  "this build has no video decoding (feature video-frames)": "tämä versio ei pura videota (ominaisuus video-frames)"
+  "this build has no video decoding (feature video-frames)": "tämä versio ei pura videota (ominaisuus video-frames)",
+  "the clip's file is missing": "leikkeen tiedosto puuttuu",
+  "the clip's file can't be read (no permission)": "leikkeen tiedostoa ei voi lukea (ei käyttöoikeutta)",
+  "the clip's file can't be read": "leikkeen tiedostoa ei voi lukea"
 }

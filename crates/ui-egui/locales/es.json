@@ -2460,5 +2460,8 @@
   "Reading video frames": "Leyendo fotogramas de vídeo",
   "No video frame": "Sin fotograma de vídeo",
   "No video frame: {reason}": "Sin fotograma de vídeo: {reason}",
-  "this build has no video decoding (feature video-frames)": "esta compilación no decodifica vídeo (función video-frames)"
+  "this build has no video decoding (feature video-frames)": "esta compilación no decodifica vídeo (función video-frames)",
+  "the clip's file is missing": "falta el archivo del clip",
+  "the clip's file can't be read (no permission)": "no se puede leer el archivo del clip (sin permiso)",
+  "the clip's file can't be read": "no se puede leer el archivo del clip"
 }

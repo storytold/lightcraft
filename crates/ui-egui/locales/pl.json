@@ -2384,5 +2384,8 @@
   "Reading video frames": "Odczytywanie klatek wideo",
   "No video frame": "Brak klatki wideo",
   "No video frame: {reason}": "Brak klatki wideo: {reason}",
-  "this build has no video decoding (feature video-frames)": "ta wersja nie dekoduje wideo (funkcja video-frames)"
+  "this build has no video decoding (feature video-frames)": "ta wersja nie dekoduje wideo (funkcja video-frames)",
+  "the clip's file is missing": "brak pliku klipu",
+  "the clip's file can't be read (no permission)": "nie można odczytać pliku klipu (brak uprawnień)",
+  "the clip's file can't be read": "nie można odczytać pliku klipu"
 }

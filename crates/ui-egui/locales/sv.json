@@ -2521,5 +2521,8 @@
   "Reading video frames": "Läser videobilder",
   "No video frame": "Ingen videobild",
   "No video frame: {reason}": "Ingen videobild: {reason}",
-  "this build has no video decoding (feature video-frames)": "den här versionen avkodar inte video (funktionen video-frames)"
+  "this build has no video decoding (feature video-frames)": "den här versionen avkodar inte video (funktionen video-frames)",
+  "the clip's file is missing": "klippets fil saknas",
+  "the clip's file can't be read (no permission)": "klippets fil kan inte läsas (behörighet saknas)",
+  "the clip's file can't be read": "klippets fil kan inte läsas"
 }

@@ -836,8 +836,9 @@ pub(crate) fn cell_description(app: &LightcraftApp, photo: &lightcraft_catalog::
     spoken
 }
 
-/// A catalogued clip: it has no decoded frame yet (playback and trim come in a later update), so its
-/// cell is a placeholder tile with the container and running time, never a failed image.
+/// A catalogued clip: its cell shows the clip's poster frame once one has rendered, and until then
+/// (or when it can't be decoded) a placeholder tile with the container and running time, never a
+/// broken image.
 fn is_clip(photo: &lightcraft_catalog::Photo) -> bool {
     photo.is_video()
 }
@@ -856,16 +857,18 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
     } else {
         let ph = img_rect.shrink(if square { 20.0 } else { 0.0 });
         p.rect_filled(ph, 0.0, if video { Color32::from_gray(30) } else { t.skeleton });
-        if video {
-            // A catalogued clip: a clean dark tile with its video icon (the thumbnail render is
-            // not an image a decoder can read, so it must not read as a broken photo).
+        let failed = app.renderer.failure(Slot::Thumb(id)).is_some();
+        if video && !failed {
+            // A catalogued clip whose poster frame hasn't arrived (or a build without video
+            // decoding): a clean dark tile with its video icon, not a broken photo.
             let side = ph.width().min(ph.height()).clamp(10.0, 34.0);
             paint(p, Rect::from_center_size(ph.center(), vec2(side, side)), Icon::Video, t.text_dim);
         }
         // not drawn yet (or unreadable): the selection is still visible
         selection_ring(p, t, ph, state);
-        if !video && app.renderer.failure(Slot::Thumb(id)).is_some() {
-            // unreadable / missing file
+        if failed {
+            // unreadable / missing file, or a clip whose poster can't be decoded (the loupe's card
+            // and Info say why)
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
         }
         ph

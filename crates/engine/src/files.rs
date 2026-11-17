@@ -57,6 +57,7 @@ pub use fs::{
     fs_hooks, fs_pair_loader, fs_reduced_loader, is_video_metadata_box, is_video_trailer, looks_like_video_container, video_box_header_len,
     video_box_info,
 };
+pub use lightcraft_codecs::video_stream::{NO_VIDEO_DECODING, video_decoding_available};
 pub(crate) use load::{DngWhite, WbScaleOf, dng_tone_curve};
 pub use load::{load_bytes, load_bytes_decoded, load_bytes_with, load_vec, load_vec_pair, load_vec_reduced};
 #[cfg(test)]
@@ -66,7 +67,7 @@ pub use preview::{PreviewRead, embedded_preview_srgb, fs_preview_loader, load_em
 pub use probe::{embedded_lens, probe_bytes};
 #[cfg(test)]
 use probe::{meta_of, preview_reason};
-pub use video::{VIDEO_FRAMES_KIND, VIDEO_FRAMES_LABEL, VideoFrames};
+pub use video::{VIDEO_FRAMES_KIND, VIDEO_FRAMES_LABEL, VIDEO_STOPPED, VideoFrames};
 
 /// Sensor clip level (normalised) for highlight reconstruction.
 const HIGHLIGHT_CLIP: f32 = 0.99;

@@ -3726,5 +3726,8 @@
   "Reading video frames": "ვიდეოს კადრების წაკითხვა",
   "No video frame": "ვიდეოს კადრი არ არის",
   "No video frame: {reason}": "ვიდეოს კადრი არ არის: {reason}",
-  "this build has no video decoding (feature video-frames)": "ეს ვერსია ვიდეოს ვერ შიფრავს (ფუნქცია video-frames)"
+  "this build has no video decoding (feature video-frames)": "ეს ვერსია ვიდეოს ვერ შიფრავს (ფუნქცია video-frames)",
+  "the clip's file is missing": "კლიპის ფაილი არ არსებობს",
+  "the clip's file can't be read (no permission)": "კლიპის ფაილის წაკითხვა ვერ ხერხდება (წვდომა არ არის)",
+  "the clip's file can't be read": "კლიპის ფაილის წაკითხვა ვერ ხერხდება"
 }

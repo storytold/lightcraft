@@ -263,7 +263,7 @@ pub struct Renderer {
     /// Only jobs actually accepted by an offload: queued replacements retain identity in the job.
     offload_looks: HashMap<u64, (u64, bool)>,
     #[cfg(test)]
-    failure_messages: Vec<String>,
+    pub(crate) failure_messages: Vec<String>,
     /// The render decisions [`Self::decided`] logged.
     #[cfg(test)]
     decisions: Vec<String>,
@@ -1421,7 +1421,11 @@ impl Renderer {
                     x
                 }
                 Err(e) => {
-                    if !matches!(slot, Slot::Prefetch(_) | Slot::QuickAhead(_)) {
+                    if e == lightcraft_engine::files::VIDEO_STOPPED {
+                        // a video poster the activity row's ✕ stopped: no lasting failure (stored,
+                        // it would not be asked for again until the catalog changed), no warning
+                        self.decided(|| format!("{}: stopped", render_subject(slot, r.photo, source.as_ref())));
+                    } else if !matches!(slot, Slot::Prefetch(_) | Slot::QuickAhead(_)) {
                         let message = render_failure_message(slot, r.photo, source.as_ref(), &e);
                         #[cfg(test)]
                         self.failure_messages.push(message.clone());

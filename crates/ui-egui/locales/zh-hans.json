@@ -2459,5 +2459,8 @@
   "Reading video frames": "正在读取视频帧",
   "No video frame": "无视频帧",
   "No video frame: {reason}": "无视频帧：{reason}",
-  "this build has no video decoding (feature video-frames)": "此版本无法解码视频（video-frames 功能）"
+  "this build has no video decoding (feature video-frames)": "此版本无法解码视频（video-frames 功能）",
+  "the clip's file is missing": "找不到片段的文件",
+  "the clip's file can't be read (no permission)": "无法读取片段的文件（没有权限）",
+  "the clip's file can't be read": "无法读取片段的文件"
 }

@@ -2431,5 +2431,8 @@
   "Reading video frames": "Membaca bingkai video",
   "No video frame": "Tidak ada bingkai video",
   "No video frame: {reason}": "Tidak ada bingkai video: {reason}",
-  "this build has no video decoding (feature video-frames)": "build ini tidak dapat mendekode video (fitur video-frames)"
+  "this build has no video decoding (feature video-frames)": "build ini tidak dapat mendekode video (fitur video-frames)",
+  "the clip's file is missing": "berkas klip tidak ada",
+  "the clip's file can't be read (no permission)": "berkas klip tidak dapat dibaca (tidak ada izin)",
+  "the clip's file can't be read": "berkas klip tidak dapat dibaca"
 }

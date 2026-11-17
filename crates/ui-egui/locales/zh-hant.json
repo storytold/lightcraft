@@ -2460,5 +2460,8 @@
   "Reading video frames": "正在讀取影片影格",
   "No video frame": "無影片影格",
   "No video frame: {reason}": "無影片影格：{reason}",
-  "this build has no video decoding (feature video-frames)": "此版本無法解碼影片（video-frames 功能）"
+  "this build has no video decoding (feature video-frames)": "此版本無法解碼影片（video-frames 功能）",
+  "the clip's file is missing": "找不到片段的檔案",
+  "the clip's file can't be read (no permission)": "無法讀取片段的檔案（沒有權限）",
+  "the clip's file can't be read": "無法讀取片段的檔案"
 }

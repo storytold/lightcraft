@@ -450,7 +450,11 @@ impl crate::Session {
         self.media.file_probe = Some(p);
         self.media.preview_loader = Some(fs_preview_loader());
         self.media.denoise.loader = Some(fs_pair_loader());
-        self.media.video_loader = Some(super::VideoFrames::new(self.activity.clone()).loader());
+        // (only where clips can be decoded: without a loader a clip gets no render jobs, so a
+        // build without decoding doesn't count every clip as a failed preview)
+        if lightcraft_codecs::video_stream::video_decoding_available() {
+            self.media.video_loader = Some(super::VideoFrames::new(self.activity.clone()).loader());
+        }
         #[cfg(target_os = "macos")]
         {
             self.apple_photos = Some(crate::apple_photos::osascript());

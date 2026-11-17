@@ -2506,5 +2506,8 @@
   "Reading video frames": "Načítání snímků videa",
   "No video frame": "Žádný snímek videa",
   "No video frame: {reason}": "Žádný snímek videa: {reason}",
-  "this build has no video decoding (feature video-frames)": "tato verze nedekóduje video (funkce video-frames)"
+  "this build has no video decoding (feature video-frames)": "tato verze nedekóduje video (funkce video-frames)",
+  "the clip's file is missing": "soubor klipu chybí",
+  "the clip's file can't be read (no permission)": "soubor klipu nelze přečíst (chybí oprávnění)",
+  "the clip's file can't be read": "soubor klipu nelze přečíst"
 }

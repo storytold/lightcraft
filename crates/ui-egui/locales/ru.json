@@ -2666,5 +2666,8 @@
   "Reading video frames": "Чтение кадров видео",
   "No video frame": "Нет кадра видео",
   "No video frame: {reason}": "Нет кадра видео: {reason}",
-  "this build has no video decoding (feature video-frames)": "эта сборка не декодирует видео (функция video-frames)"
+  "this build has no video decoding (feature video-frames)": "эта сборка не декодирует видео (функция video-frames)",
+  "the clip's file is missing": "файл клипа отсутствует",
+  "the clip's file can't be read (no permission)": "не удаётся прочитать файл клипа (нет доступа)",
+  "the clip's file can't be read": "не удаётся прочитать файл клипа"
 }

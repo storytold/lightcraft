@@ -155,7 +155,10 @@ pub(super) fn video_card(
         let text = crate::widgets::format_duration(d);
         (!text.is_empty()).then(|| p.layout_no_wrap(format!("{} · {text}", crate::i18n::tr("Duration")), t.font(12.0), t.text_label))
     });
-    let message = match problem {
+    // (a build without video decoding installs no video loader, so no render says so: the card
+    // asks itself)
+    let no_decoding = (!lightcraft_engine::files::video_decoding_available()).then_some(lightcraft_engine::files::NO_VIDEO_DECODING);
+    let message = match problem.or(no_decoding) {
         Some(why) => crate::i18n::tr_format!("No video frame: {reason}", reason = crate::i18n::tr(why)),
         None => crate::i18n::tr("Video catalogued — playback and trim are coming in a later update").to_string(),
     };

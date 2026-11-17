@@ -153,15 +153,14 @@ fn the_file_loader_decodes_a_video_poster_with_one_activity_row() {
     std::fs::write(&path, h264_mp4(90)).unwrap();
     let mut s = Session::new().with_fs();
     add_clip(&mut s, 1, &path);
-    let job = s.thumb_job(PhotoId(1), 256).expect("with_fs installs the video loader");
-    let r = job.run();
-    assert!(s.activity.list().is_empty(), "the row goes when the poster is done");
     if !lightcraft_codecs::video_stream::video_decoding_available() {
-        assert_eq!(r.rendered.err().as_deref(), Some(lightcraft_codecs::video_stream::NO_VIDEO_DECODING));
         lightcraft_testkit::skip!(Feature, "lightcraft-codecs is built without video-frames: no poster decoded");
         let _ = std::fs::remove_dir_all(&dir);
         return;
     }
+    let job = s.thumb_job(PhotoId(1), 256).expect("with_fs installs the video loader");
+    let r = job.run();
+    assert!(s.activity.list().is_empty(), "the row goes when the poster is done");
     let img = r.rendered.expect("a poster").image;
     assert_eq!(img.width * 3, img.height * 4, "the clip's 4:3 frame");
     // the picture one second in (frame 30, luma 80): a mid grey, not the first frame's near black
@@ -172,5 +171,73 @@ fn the_file_loader_decodes_a_video_poster_with_one_activity_row() {
     let r = s.render_job(PhotoId(1), 512, 512, false, true).unwrap().run();
     assert!(r.rendered.is_err());
     assert!(s.activity.list().is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A build without video decoding installs no video loader: a clip gets no render jobs, so a
+/// preview build skips it instead of counting it failed (500 clips imported must not read as
+/// "500 couldn't be rendered"), and nothing renders to fail with a warning.
+#[test]
+fn a_build_without_video_decoding_gives_clips_no_jobs() {
+    let dir = temp_dir("nodecode");
+    let path = dir.join("clip.mp4");
+    std::fs::write(&path, h264_mp4(10)).unwrap();
+    let mut s = Session::new().with_fs();
+    add_clip(&mut s, 1, &path);
+    let available = lightcraft_codecs::video_stream::video_decoding_available();
+    assert_eq!(s.media.video_loader.is_some(), available);
+    assert_eq!(s.thumb_job(PhotoId(1), 256).is_some(), available);
+    assert_eq!(s.loupe_job(PhotoId(1), 512, 512, true).is_some(), available);
+    let r = s.execute("library.buildPreviews", &serde_json::json!({"ids": [1], "edge": 300, "wait": true})).unwrap();
+    assert_eq!(r["failed"].as_u64(), Some(0), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A poster the activity row's ✕ stopped is not a failed preview: the photo is just not built.
+#[test]
+fn a_stopped_video_poster_is_not_a_failed_preview() {
+    let mut s = Session::new();
+    s.media.video_loader = Some(fake_loader(Arc::default(), Some(crate::files::VIDEO_STOPPED)));
+    add_clip(&mut s, 1, Path::new("/lc-video-frames-test/clip.mp4"));
+    let r = s.execute("library.buildPreviews", &serde_json::json!({"ids": [1], "edge": 300, "wait": true})).unwrap();
+    assert_eq!(r["failed"].as_u64(), Some(0), "{r}");
+    // a real failure still counts
+    s.media.video_loader = Some(fake_loader(Arc::default(), Some("Apple ProRes video can't be decoded yet")));
+    let r = s.execute("library.buildPreviews", &serde_json::json!({"ids": [1], "edge": 300, "wait": true})).unwrap();
+    assert_eq!(r["failed"].as_u64(), Some(1), "{r}");
+}
+
+/// The real loader puts a decode in the activity row from the start, while it still waits for
+/// memory, and the row's ✕ stops it there: the load fails as stopped, and the next decode gets a
+/// fresh row that is not stopped.
+#[test]
+fn the_video_loader_shows_its_row_and_its_cancel_stops_the_decode() {
+    if !lightcraft_codecs::video_stream::video_decoding_available() {
+        lightcraft_testkit::skip!(Feature, "lightcraft-codecs is built without video-frames: no poster decoded");
+        return;
+    }
+    let dir = temp_dir("row");
+    let path = dir.join("clip.mp4");
+    std::fs::write(&path, h264_mp4(40)).unwrap();
+    let activity = crate::activity::Activity::default();
+    let loader = crate::files::VideoFrames::new(activity.clone()).loader();
+    // all the working memory held: a background decode waits for it
+    let gate = crate::memory::work_gate();
+    let held = gate.acquire_urgent(usize::MAX);
+    let (l, p) = (loader.clone(), path.to_string_lossy().to_string());
+    let decode = std::thread::spawn(move || crate::memory::in_background(|| l(&p, 256, Default::default()).map(|_| ())));
+    let start = std::time::Instant::now();
+    while activity.list().is_empty() && start.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    let rows = activity.list();
+    assert_eq!(rows.len(), 1, "the waiting decode is in the row");
+    assert_eq!((rows[0].kind, rows[0].total), (crate::files::VIDEO_FRAMES_KIND, 1));
+    activity.cancel(rows[0].id).unwrap();
+    drop(held);
+    assert_eq!(decode.join().unwrap().err().as_deref(), Some(crate::files::VIDEO_STOPPED));
+    assert!(activity.list().is_empty());
+    // the next decode is not stopped
+    assert!(loader(&path.to_string_lossy(), 256, Default::default()).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
 }

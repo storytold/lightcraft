@@ -251,7 +251,9 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, forc
             }
             ok = false;
         }
-        ok &= r.rendered.is_ok();
+        // (a video poster the activity row's ✕ stopped is not a failure: the photo is just not
+        // built, and the next build makes it)
+        ok &= r.rendered.as_ref().map_or_else(|e| e == crate::files::VIDEO_STOPPED, |_| true);
         if decoded.is_none() {
             decoded = r.loaded;
         }

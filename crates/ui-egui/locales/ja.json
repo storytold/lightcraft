@@ -2458,5 +2458,8 @@
   "Reading video frames": "動画フレームを読み込み中",
   "No video frame": "動画フレームなし",
   "No video frame: {reason}": "動画フレームなし: {reason}",
-  "this build has no video decoding (feature video-frames)": "このビルドは動画をデコードできません (video-frames 機能)"
+  "this build has no video decoding (feature video-frames)": "このビルドは動画をデコードできません (video-frames 機能)",
+  "the clip's file is missing": "クリップのファイルが見つかりません",
+  "the clip's file can't be read (no permission)": "クリップのファイルを読み込めません (アクセス権がありません)",
+  "the clip's file can't be read": "クリップのファイルを読み込めません"
 }
