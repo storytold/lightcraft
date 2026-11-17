@@ -98,6 +98,12 @@ pub struct LoupePlan {
 /// it, or full-size drafts of this drag went over [`DRAFT_BUDGET_MS`]), against the render at rest.
 pub const CPU_DRAFT_SCALE: f32 = 0.6;
 
+/// The interaction label of a mask edit on the photo (moving, resizing or turning a gradient or
+/// pin). Its drafts are always full size, on the CPU too, and never drop to [`CPU_DRAFT_SCALE`]:
+/// the edit changes part of the photo, and a smaller draft blurred the whole photo for it (#1679).
+/// A slow machine shows fewer drafts instead.
+pub const SHARP_DRAG: &str = "Edit Mask";
+
 /// The slider budget (ms): a drag whose full-size drafts take longer gets smaller drafts next time.
 /// A draft's time is its render plus the frame that shows it (the texture upload is part of it).
 pub const DRAFT_BUDGET_MS: f64 = 16.0;
@@ -185,7 +191,7 @@ impl DragScale {
         }
         let key = (photo, control.to_string());
         let small = matches!(self.verdict(&key), Some(Verdict::Slow { until, .. }) if now < until);
-        let s = if gpu && !small { 1.0 } else { CPU_DRAFT_SCALE };
+        let s = if control == SHARP_DRAG || (gpu && !small) { 1.0 } else { CPU_DRAFT_SCALE };
         self.current = Some((key, s));
         self.seen = shown;
         Some(s)
@@ -209,7 +215,8 @@ impl DragScale {
             }
             if self.samples.len() > GIVE_UP_AFTER
                 && median_after_first(&self.samples).is_some_and(|m| m > DRAFT_BUDGET_MS * GIVE_UP_FACTOR)
-                && let Some((_, s)) = self.current.as_mut()
+                && let Some(((_, control), s)) = self.current.as_mut()
+                && control != SHARP_DRAG
             {
                 *s = CPU_DRAFT_SCALE;
                 return;
