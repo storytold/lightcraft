@@ -78,7 +78,7 @@ from the checklist sections and the deep-dive documents.
 | Merge and HDR | 3% | 85% | 60% | 20–35 h | merge 88% (HDR merge 🟡: AI Denoise on merged DNGs, JPEG response, memory; gap 29), HDR 70% (no HDR display) |
 | Views, compare, zoom, culling | 5% | 90% | 70% | 15–30 h | zoom detail P0 gap |
 | Classic output modules (Map, Book, Slideshow, Print, Web, publish, tethering) | 4% | 15% | 10% | 90–150 h | Classic extras 48% counts many small keys; the modules themselves are mostly ⬜ |
-| Video | 1% | 10% | 10% | 20–40 h | imported and catalogued (kind, duration, dimensions, date, camera/GPS), with format/duration badges and a loupe card; copying catalogued videos unchanged is available; no playback, trim, edits or rendered export |
+| Video | 1% | 10% | 10% | 20–40 h | imported and catalogued (kind, duration, dimensions, date, camera/GPS), with format/duration badges and a loupe card; copying catalogued videos unchanged is available; with the non-default `video-frames` feature H.264 / HEVC clips show a poster frame and play in the loupe without audio; no audio, trim, edits or rendered export |
 | **Weighted** | 100% | **~77%** | **~62%** (62.0%) | **583–1,080 h** | |
 
 ## AI
@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | patch | Video row: H.264 / HEVC clips play in the loupe without audio behind the non-default `video-frames` feature; breadth, readiness and hours unchanged until audio, trim and edits land |
 | 2026-11-15 | minor | Lens Blur renders with AI subject focus and per-mask bokeh (the AI table's 🟡 and the missing depth map are unchanged); survey layout, opened-library folder safety, direct Lightroom backup-zip import, legacy shutter repair and the Highlights/Shadows block fix landed; craft-libs cutover (TIFF/JPEG/JXL/GIF/PSD/HEIF/raw, metadata, gain maps); v0.21.0 and v0.21.1 released. Headline numbers, coverage and estimates were not re-measured. |
 | 2026-11-08 | correction | Feature-work totals reconciled with the area estimates: remaining 600–1,100 h → 583–1,080 h and weighted readiness 62.3% → 62.0%; the Video row now says unchanged Original copies are available, while rendered video export is not. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
