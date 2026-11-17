@@ -779,7 +779,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto Defringe",
             [],
             None,
-            "{} — turn on Remove Chromatic Aberration (red/cyan, blue/yellow edges), then measure the purple and green fringes along high-contrast edges of the active photo and set the Defringe sliders, with Protect Colours, to take them out (one undo step); colour a side of its edge shares is not a fringe, and a colour with none keeps amount 0 → {found, removeCa: whether this turned Remove Chromatic Aberration on, purpleAmount?, purpleHueLo?, purpleHueHi?, greenAmount?, greenHueLo?, greenHueHi?}",
+            "{} — turn on Remove Chromatic Aberration (red/cyan, blue/yellow edges), then measure the purple fringes and halos along bright, high-contrast edges of the active photo and set the purple Defringe sliders, with Protect Colours, to take them out (one undo step); colour a side of its edge shares is not a fringe, the green sliders are left as they are (foliage looks like green fringes) → {found: purple fringes found, removeCa: whether this turned Remove Chromatic Aberration on, purpleAmount?, purpleHueLo?, purpleHueHi?}",
             has_active,
             |s, _p| {
                 const C: &str = "develop.autoDefringe";
@@ -806,9 +806,6 @@ pub fn specs() -> Vec<CommandSpec> {
                     out["purpleAmount"] = json!(f.purple_amount);
                     out["purpleHueLo"] = json!(f.purple_hue_lo);
                     out["purpleHueHi"] = json!(f.purple_hue_hi);
-                    out["greenAmount"] = json!(f.green_amount);
-                    out["greenHueLo"] = json!(f.green_hue_lo);
-                    out["greenHueHi"] = json!(f.green_hue_hi);
                 }
                 Ok(out)
             }

@@ -716,7 +716,8 @@ pub struct DefringeSliders {
 }
 
 impl DefringeSliders {
-    /// Set the Defringe sliders of `s` to these (a colour with no fringe gets amount 0 and its hue range as it was),
+    /// Set the Defringe sliders of `s` to these (purple with no fringe gets amount 0 and its hue range as it was; green
+    /// with none is left as it was),
     /// with Remove Chromatic Aberration and Protect Colours on.
     pub fn apply(&self, s: &mut DevelopSettings) {
         let o = &mut s.optics;
@@ -724,11 +725,12 @@ impl DefringeSliders {
         o.remove_ca = true;
         o.defringe_protect = true;
         o.defringe_purple_amount = self.purple_amount;
-        o.defringe_green_amount = self.green_amount;
         if self.purple_amount > 0.0 {
             (o.defringe_purple_hue_lo, o.defringe_purple_hue_hi) = (self.purple_hue_lo, self.purple_hue_hi);
         }
+        // (green is the user's: Auto Defringe never finds it, so a correction made by hand stays)
         if self.green_amount > 0.0 {
+            o.defringe_green_amount = self.green_amount;
             (o.defringe_green_hue_lo, o.defringe_green_hue_hi) = (self.green_hue_lo, self.green_hue_hi);
         }
     }

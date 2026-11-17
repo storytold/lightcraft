@@ -527,6 +527,16 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
+            // Defringe reads lightness `radius` around each pixel, and Protect Colours the colours `2 × radius` away
+            // on both sides of an edge, through a 3 × 3 mean: keep those reads inside the rendered window too
+            if let Some(dp) = optics::defringe_params(s, px_per_long / optics::DEFRINGE_REF_LONG) {
+                let halo = if s.optics.defringe_protect { 3 * dp.radius + 2 } else { dp.radius };
+                let x = work.x.saturating_sub(halo);
+                let y = work.y.saturating_sub(halo);
+                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            }
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }

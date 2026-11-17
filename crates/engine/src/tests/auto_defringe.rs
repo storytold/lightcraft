@@ -67,3 +67,30 @@ fn auto_defringe_without_fringes_only_removes_chromatic_aberration() {
     assert_eq!(s.execute("develop.autoDefringe", &json!({})).unwrap(), json!({"found": false, "removeCa": false}));
     assert_eq!(s.develop_of(id).unwrap(), again, "nothing changed");
 }
+
+/// Copying the settings of a photo with Protect Colours off onto one with it on turns it off (the stored JSON leaves
+/// the `false` out, so the copy states it).
+#[test]
+fn pasting_settings_with_protect_colours_off_turns_it_off() {
+    let mut s = Session::with_demo();
+    let ids = s.visible_cloned();
+    let (a, b) = (ids[0], ids[1]);
+    let mut d = (*s.develop_of(b).unwrap()).clone();
+    d.optics.defringe_protect = true;
+    s.catalog.apply(lightcraft_catalog::Op::SetDevelop { id: b, settings: std::sync::Arc::new(d), label: "x".into(), edited: None }).unwrap();
+    s.execute("library.select", &json!({"ids": [a.0], "active": a.0})).unwrap();
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [b.0]})).unwrap();
+    assert!(!s.develop_of(b).unwrap().optics.defringe_protect);
+}
+
+/// Auto Defringe sets purple only: a green correction made by hand stays.
+#[test]
+fn auto_defringe_keeps_a_green_correction() {
+    let (mut s, id) = active_demo(true);
+    s.execute("develop.merge", &json!({"settings": {"optics": {"defringe_green_amount": 6.0, "defringe_green_hue_lo": 35.0}}})).unwrap();
+    let r = s.execute("develop.autoDefringe", &json!({})).unwrap();
+    assert_eq!(r["found"], true, "{r}");
+    let o = s.develop_of(id).unwrap().optics;
+    assert_eq!((o.defringe_green_amount, o.defringe_green_hue_lo), (6.0, 35.0), "{o:?}");
+}

@@ -376,7 +376,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             Ok(r) if r["removeCa"] == true => {
                                 app.toast(ui.ctx(), crate::i18n::tr("Chromatic aberration removed; no purple fringes found"))
                             }
-                            Ok(_) => app.toast(ui.ctx(), crate::i18n::tr("No colour fringes found")),
+                            Ok(_) => app.toast(ui.ctx(), crate::i18n::tr("No purple fringes found")),
                             Err(e) => app.toast_error(ui.ctx(), e),
                         }
                     }
