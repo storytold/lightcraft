@@ -413,11 +413,10 @@ fn cr3_file(entry: &[u8], sample: &[u8]) -> Vec<u8> {
     // The track length does not depend on the offset value (always a 64-bit field), so it can be
     // measured with a placeholder before the real offset is known.
     let track_len = track_box(entry, 0, sample.len() as u32).len();
-    let offset = (ftyp.len() + 8 + track_len + 7) & !7;
+    let offset = ftyp.len() + 8 + track_len + 8; // moov and mdat headers
     let mut file = ftyp;
     file.extend(box_bytes(b"moov", &track_box(entry, offset as u64, sample.len() as u32)));
-    file.resize(offset, 0);
-    file.extend_from_slice(sample);
+    file.extend(box_bytes(b"mdat", sample));
     file
 }
 

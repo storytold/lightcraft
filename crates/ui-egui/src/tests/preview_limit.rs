@@ -162,7 +162,7 @@ mod in_the_loupe {
         let mut h = Headless::new(app, size, 1.0);
         let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
         assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
+        h.settle(super::super::ui_settle_timeout());
         let native = {
             let id = h.app.session.active().expect("a photo is open");
             let p = h.app.session.catalog.photo(id).expect("it is in the catalog");
@@ -811,7 +811,7 @@ mod in_the_loupe {
     fn pinch_display_fit_refreshes_main_and_before_after_a_short_pinch() {
         let (mut h, _) = demo_detail_in([1400.0, 900.0]);
         h.app.ui.before_after = crate::state::BeforeAfter::SideBySide;
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(super::super::ui_settle_timeout()));
         let slots = [Slot::Main, Slot::Before];
         let keys = slots.map(|slot| h.app.renderer.wanted(slot).unwrap());
         let initial_fit = drawn_fit(&h);
@@ -848,7 +848,7 @@ mod in_the_loupe {
     #[test]
     fn pinch_display_fit_does_not_follow_the_old_photo() {
         let (mut h, _) = demo_detail_in([1400.0, 900.0]);
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(super::super::ui_settle_timeout()));
         let old = h.app.session.active().unwrap();
         let next = h.app.session.visible_cloned().into_iter().find(|id| *id != old).unwrap();
         let initial_fit = drawn_fit(&h);
@@ -874,7 +874,7 @@ mod in_the_loupe {
     fn pinch_display_fit_is_shared_with_a_hover_during_the_hold() {
         let (mut h, _) = demo_detail_in([1400.0, 900.0]);
         assert_eq!(h.request("engine.execute", json!({"command": "panel.profiles"}), T)["ok"], true);
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(super::super::ui_settle_timeout()));
         let initial_fit = drawn_fit(&h);
         let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
         h.app.renderer.set_offload(Box::new(PinchOffload(work.clone())));
