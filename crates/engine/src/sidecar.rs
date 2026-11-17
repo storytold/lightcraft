@@ -902,6 +902,17 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
             }
             continue;
         }
+        // A processing instruction ends at `?>`, not at the first `>`: its text may contain
+        // `>` (for example `<?p > <fake ...> ?>`), and tag_end would stop there and scan the
+        // PI's inner text as ancestor tags.
+        if rest.starts_with("<?") {
+            if let Some(rel) = data[s..at].find("?>") {
+                i = s + rel + 2;
+            } else {
+                break;
+            }
+            continue;
+        }
         let Some(end) = tag_end(data, s).filter(|end| *end < at) else { break };
         i = end + 1;
         if rest.starts_with("</") {
@@ -917,7 +928,7 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
             }
             continue;
         }
-        if rest.starts_with("<?") || rest.starts_with("<!") {
+        if rest.starts_with("<!") {
             // tag_end already moved i past the closing '>'; advancing again
             // would skip the following tag and its xmlns declarations.
             continue;
@@ -3307,6 +3318,29 @@ mod ns_bindings_comment_before_ancestor_tests {
             bindings.iter().rev().find(|(p, _)| p == "crs"),
             Some(&("crs".to_string(), "urn:other".to_string())),
             "crs must resolve to the ancestor's urn:other binding, not the RDF's CRS_NS\n{data}"
+        );
+    }
+
+    /// A processing instruction whose text contains a `>` before its `?>` terminator is
+    /// skipped whole: `tag_end` stops at the first unquoted `>` inside the PI, so without
+    /// the fix the PI-internal `<fake xmlns:crs="urn:fake">` is scanned as an ancestor and
+    /// its binding shadows the real one.
+    #[test]
+    fn ns_bindings_skips_processing_instruction_through_question_mark() {
+        let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description xmlns:crs="urn:other">
+            <?p > <fake xmlns:crs="urn:fake"> ?>
+            <crs:Exposure2012/>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let start = data.find("<crs:Exposure2012").expect("target element");
+        let end = tag_end(data, start).expect("target element closes");
+        let bindings = ns_bindings(data, start, end);
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the ancestor's urn:other binding, not a declaration inside the processing instruction\n{data}"
         );
     }
 }
