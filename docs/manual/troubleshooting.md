@@ -33,7 +33,7 @@ JSON line for each command says why it failed. If the app does crash, please rep
 Colour for most raw formats is fitted from the camera's own embedded JPEG; a file without one, or a model that has
 not been verified, can look muted. Check the camera's row in [parity-checklist.md](../parity-checklist.md)
 (`LR-IMP-CAMERA-COVERAGE`, `LR-PROF-CAMERACOLOR`) and open an issue with the camera model; a CC0 sample file helps
-most. `<cli> calibrate` can fit a profile for your camera from your own raws and their JPEGs.
+most. `<cli> calibrate` can fit a profile for your camera from your own raws and their JPEGs (ARW, NEF/NRW, CR2/CR3/CRW, RAF, RW2/RWL, ORF, PEF, SRW, MRW, ERF; not DNG).
 
 ## Photos are missing
 

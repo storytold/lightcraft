@@ -2359,6 +2359,21 @@ mod tests_known;
 mod prepared_tests {
     use super::*;
 
+    /// The CLI's `calibrate` collects the extensions the profile fit reads
+    /// ([`crate::camera_profiles::CALIBRATION_EXTENSIONS`]): each must be an import extension too, so
+    /// a format the CLI calibrates can also be imported, and a typo cannot silently drop one (upstream #4284).
+    #[test]
+    fn calibration_extensions_are_import_extensions() {
+        let calibration = crate::camera_profiles::CALIBRATION_EXTENSIONS;
+        for ext in calibration {
+            assert!(EXTENSIONS.contains(ext), "{ext} is not an import extension");
+            assert_eq!(*ext, ext.to_lowercase(), "{ext} must be lower case");
+        }
+        let unique: std::collections::HashSet<_> = calibration.iter().collect();
+        assert_eq!(calibration.len(), unique.len(), "a duplicate extension would be walked twice");
+        assert!(!calibration.contains(&"dng"), "a DNG carries its own matrices and is not fitted to its preview");
+    }
+
     /// Extensions the picker may offer: every one in [`EXTENSIONS`], minus the
     /// files this build cannot import (see [`accept_list`]).
     fn pickable_extensions() -> Vec<&'static str> {
