@@ -170,6 +170,8 @@ const GROUP: i64 = 6;
 const TRASH: i64 = 7;
 const FOLDER: i64 = 8;
 const ALL: i64 = 9;
+const KEYWORD: i64 = 44;
+const SYNONYM: i64 = 45;
 
 fn entities() -> Spec {
     let names = [
@@ -180,6 +182,8 @@ fn entities() -> Spec {
         (TRASH, "TrashCollection"),
         (FOLDER, "CatalogFolderCollection"),
         (ALL, "CatalogAllImagesCollection"),
+        (KEYWORD, "Keyword"),
+        (SYNONYM, "Synonym"),
     ];
     spec("ZENTITIES", &["Z_ENT", "ZNAME"], names.iter().map(|(id, name)| vec![("Z_ENT", V::I(*id)), ("ZNAME", t(name))]).collect())
 }
@@ -419,6 +423,33 @@ fn sample(photos: &Path) -> Vec<Spec> {
             ],
         ),
         spec("ZVARIANTINCOLLECTION", &["Z_ENT", "Z_PK", "ZCOLLECTION", "ZVARIANT"], vec![member(22, "ZVARIANT", 8), member(21, "ZVARIANT", 3)]),
+        spec("ZKEYWORD", KEYWORD_COLUMNS, keyword_rows()),
+    ]
+}
+
+const KEYWORD_COLUMNS: &[&str] = &["Z_ENT", "Z_PK", "ZNAME", "ZPARENT", "ZLEFT", "ZRIGHT", "ZISEXPORTABLE"];
+
+/// `Culture` ⊃ `Buildings`, `Nature` ⊃ `Animals` and the unused `Plants`, a keyword not exported,
+/// and a synonym row, which is not a keyword.
+fn keyword_rows() -> Vec<Vec<(&'static str, V)>> {
+    let keyword = |pk: i64, name: &str, parent: i64, left: i64, exportable: i64| {
+        vec![
+            ("Z_ENT", V::I(KEYWORD)),
+            ("Z_PK", V::I(pk)),
+            ("ZNAME", t(name)),
+            ("ZPARENT", V::I(parent)),
+            ("ZLEFT", V::I(left)),
+            ("ZISEXPORTABLE", V::I(exportable)),
+        ]
+    };
+    vec![
+        keyword(4, "Nature", -1, 5, 1),
+        keyword(1, "Culture", -1, 1, 1),
+        keyword(2, "Buildings", 1, 2, 1),
+        keyword(5, "Animals", 4, 6, 1),
+        keyword(6, "Plants", 4, 8, 1),
+        keyword(7, "Private", -1, 10, 0),
+        vec![("Z_ENT", V::I(SYNONYM)), ("Z_PK", V::I(8)), ("ZNAME", t("Fauna")), ("ZPARENT", V::I(5)), ("ZLEFT", V::I(12))],
     ]
 }
 
@@ -969,6 +1000,75 @@ fn orange_and_pink_are_kept_found_by_a_keyword_and_replaced_by_a_label_set_here(
     // the catalog says orange again when it is imported again
     s.execute("library.importLightroom", &params).unwrap();
     assert_eq!(kept(&s, "referenced.jpg"), (None, "Orange".to_string(), vec!["Capture One|Orange".to_string()]));
+}
+
+#[test]
+fn the_keyword_list_is_read_with_parents_first_and_without_loops_or_synonyms() {
+    let scratch = Scratch::new("keyword-list");
+    let catalog = read(&scratch.catalog(&sample(&scratch.0))).unwrap();
+    let list: Vec<_> = catalog.keywords.iter().map(|k| (k.path.as_str(), k.exportable)).collect();
+    assert_eq!(
+        list,
+        [("Culture", true), ("Culture|Buildings", true), ("Nature", true), ("Nature|Animals", true), ("Nature|Plants", true), ("Private", false)]
+    );
+
+    let rows = vec![
+        vec![("Z_ENT", V::I(KEYWORD)), ("Z_PK", V::I(1)), ("ZNAME", t("A")), ("ZPARENT", V::I(2))],
+        vec![("Z_ENT", V::I(KEYWORD)), ("Z_PK", V::I(2)), ("ZNAME", t("B")), ("ZPARENT", V::I(1))],
+        vec![("Z_ENT", V::I(KEYWORD)), ("Z_PK", V::I(3)), ("ZNAME", t("  ")), ("ZPARENT", V::I(-1))],
+        vec![("Z_ENT", V::I(KEYWORD)), ("Z_PK", V::I(4)), ("ZNAME", t("a|b")), ("ZPARENT", V::I(99))],
+    ];
+    let catalog = read(&scratch.catalog(&with(sample(&scratch.0), spec("ZKEYWORD", KEYWORD_COLUMNS, rows)))).unwrap();
+    let list: Vec<_> = catalog.keywords.iter().map(|k| k.path.as_str()).collect();
+    assert_eq!(list, ["a b"], "a `|` in a name is not a level; an empty name is no keyword");
+    assert!(
+        catalog.warnings.iter().any(|w| w == "2 keyword(s) are nested in a loop and were left out of the keyword list"),
+        "{:?}",
+        catalog.warnings
+    );
+}
+
+#[test]
+fn the_keyword_list_joins_the_library_and_offline_originals_keep_their_camera() {
+    let scratch = Scratch::new("camera-keywords");
+    let package = sample_on_disk(&scratch);
+    let mut s = crate::Session::new().with_fs();
+    // a keyword the library has keeps what the library says about it
+    s.commit(
+        "list",
+        lightcraft_catalog::Op::SetKeyword {
+            path: "Private".into(),
+            info: Some(lightcraft_catalog::keywords::KeywordInfo { include_on_export: true, person: true, ..Default::default() }),
+        },
+    )
+    .unwrap();
+    s.execute("library.importLightroom", &serde_json::json!({ "path": package })).unwrap();
+    let info = |path: &str| s.catalog.keyword_info(path).cloned();
+    assert!(info("Nature|Plants").is_some_and(|i| i.include_on_export), "an unused keyword comes in");
+    assert!(info("Private").is_some_and(|i| i.include_on_export && i.person), "the library's own settings stay");
+    assert!(info("Fauna").is_none() && info("Nature|Animals|Fauna").is_none(), "a synonym is not a keyword");
+
+    // the managed raw is not in the test's catalog folder: the catalog's camera and exposure stay
+    let raw = by_name(&s, "managed.RAF", false);
+    let m = &raw.meta;
+    assert_eq!((m.camera.as_str(), m.make.as_str(), m.lens.as_str()), ("FUJIFILM X-T2", "FUJIFILM", "XF18-55mm"));
+    assert_eq!((m.iso, m.aperture, m.focal_mm, m.exposure_bias, m.gps), (Some(200), Some(8.0), Some(18.0), Some(-0.33), Some((52.5, 13.4))));
+    assert_eq!(m.shutter, lightcraft_meta::format_exposure_time(0.004).unwrap());
+    // its virtual copy has them too
+    assert_eq!(by_name(&s, "managed.RAF", true).meta.camera, "FUJIFILM X-T2");
+}
+
+#[test]
+fn a_file_s_own_camera_data_is_kept_and_only_gaps_are_filled() {
+    let mut meta = lightcraft_catalog::Meta { camera: "From the file".into(), iso: Some(100), ..Default::default() };
+    let camera = serde_json::json!({ "make": "Make", "model": "Model", "lens": "Lens", "iso": 3200, "aperture": f64::NAN, "exposureTime": -1, "focalLength": 1.0e9, "gps": [91, 0] });
+    crate::lightroom_catalog::fill_camera(&mut meta, &camera);
+    assert_eq!((meta.camera.as_str(), meta.make.as_str(), meta.lens.as_str(), meta.iso), ("From the file", "Make", "Lens", Some(100)));
+    assert_eq!((meta.aperture, meta.shutter.as_str(), meta.focal_mm, meta.gps), (None, "", None, None), "implausible values are left out");
+    // a catalog row without the block changes nothing (Lightroom's)
+    let before = meta.clone();
+    crate::lightroom_catalog::fill_camera(&mut meta, &serde_json::json!(null));
+    assert_eq!(meta, before);
 }
 
 /// A library written before the field existed reads as before, and one without a kept colour

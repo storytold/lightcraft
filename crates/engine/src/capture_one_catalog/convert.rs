@@ -110,6 +110,11 @@ pub(crate) fn to_import(catalog: CaptureOneCatalog) -> CatalogImport {
         collection_content: Vec::new(),
         warnings,
         skipped: Vec::new(),
+        keyword_list: catalog
+            .keywords
+            .iter()
+            .map(|k| crate::lightroom_catalog::CatalogKeyword { path: k.path.clone(), include_on_export: k.exportable })
+            .collect(),
     }
 }
 
@@ -142,6 +147,9 @@ fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64) -> ImportPhot
     if !here && let Some(captured) = &photo.captured {
         set("captureTime", json!(captured));
     }
+    // what the file says when it is there; the catalog's camera and exposure fill what it leaves
+    // empty, so an offline original keeps them too
+    set("camera", camera(photo));
     set("captureOne", kept(photo));
     ImportPhoto {
         source_id,
@@ -205,6 +213,22 @@ fn keywords(photo: &CatalogPhoto) -> Vec<String> {
         }
     }
     keywords
+}
+
+/// The camera, lens and exposure the catalog records, as the catalog import's `camera` row field.
+fn camera(photo: &CatalogPhoto) -> Value {
+    json!({
+        "make": photo.camera_make,
+        "model": photo.camera_model,
+        "serial": photo.camera_serial,
+        "lens": photo.lens,
+        "iso": photo.iso,
+        "aperture": photo.aperture,
+        "exposureTime": photo.shutter_seconds,
+        "focalLength": photo.focal_mm,
+        "exposureBias": photo.exposure_bias,
+        "gps": photo.gps.map(|(latitude, longitude)| [latitude, longitude]),
+    })
 }
 
 /// What the import doesn't carry into the library yet, kept with the photo's row.

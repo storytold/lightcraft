@@ -63,10 +63,22 @@ pub struct CaptureOneCatalog {
     /// The user's albums, smart albums, projects and groups. Capture One's own collections (all
     /// images, recent imports and captures, trash, folders) are left out.
     pub collections: Vec<Collection>,
+    /// The catalog's keyword list (`ZKEYWORD`): every keyword it has, also those no photo carries,
+    /// parents before their children.
+    pub keywords: Vec<Keyword>,
     /// Images in Capture One's trash, which are not in [`CaptureOneCatalog::photos`].
     pub trashed: usize,
     /// What was left out or could not be read, in English.
     pub warnings: Vec<String>,
+}
+
+/// A keyword of the catalog's keyword list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Keyword {
+    /// `parent|child`.
+    pub path: String,
+    /// Written into exported files (`ZISEXPORTABLE`; a catalog that doesn't say: yes).
+    pub exportable: bool,
 }
 
 /// One row of `ZVERSIONINFO`: a program that wrote the catalog.
@@ -170,6 +182,7 @@ pub struct CatalogPhoto {
     pub imported: Option<String>,
     pub camera_make: String,
     pub camera_model: String,
+    pub camera_serial: String,
     pub lens: String,
     pub iso: Option<u32>,
     pub aperture: Option<f32>,
@@ -321,6 +334,8 @@ pub fn read_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<CaptureOneCa
     let read = photos::read(&db, &found.database, &mut warnings, &active)?;
     active()?;
     let collections = collections::read(&db, &read, &mut warnings)?;
+    active()?;
+    let keywords = keywords::list(&db, &mut warnings)?;
     db.ensure_unchanged()?;
     if found.in_use {
         warnings.push("Capture One has this catalog open; changes it has not saved yet are not included".into());
@@ -332,6 +347,7 @@ pub fn read_with_cancel(path: &Path, cancel: &AtomicBool) -> Result<CaptureOneCa
         in_use: found.in_use,
         photos: read.photos,
         collections,
+        keywords,
         trashed: read.trashed,
         warnings,
     })

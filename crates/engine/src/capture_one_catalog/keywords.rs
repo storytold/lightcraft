@@ -5,7 +5,10 @@
 //! listed as entries of their own. How a comma or `|` inside a keyword's name is written has not
 //! been observed; such a name is read as the field's syntax says.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use super::tables::Db;
+use super::{Keyword, ReadError};
 
 /// Most keywords kept for one photo.
 pub(super) const MAX_KEYWORDS: usize = 10_000;
@@ -46,4 +49,55 @@ fn entry_path(entry: &str) -> Option<(Option<u64>, String)> {
     };
     let levels: Vec<&str> = path.split('|').map(str::trim).filter(|level| !level.is_empty()).collect();
     (!levels.is_empty()).then(|| (order, levels.join("|")))
+}
+
+/// Deepest keyword nesting followed; a deeper chain is a loop or damage.
+const MAX_DEPTH: usize = 64;
+
+/// The catalog's keyword list (`ZKEYWORD`): each keyword's path through its parents, in the
+/// catalog's order (`ZLEFT`, a nested set), parents before children. Rows of another entity
+/// (`Synonym` is one) are not keywords; how Capture One stores synonyms has not been observed, so
+/// they are left out. A keyword whose parents loop is left out with a warning.
+pub(super) fn list(db: &Db, warnings: &mut Vec<String>) -> Result<Vec<Keyword>, ReadError> {
+    let table = db.optional("ZKEYWORD", warnings)?;
+    let entities = db.optional("ZENTITIES", warnings)?;
+    let keyword_entity = entities.rows().find(|r| r.text("ZNAME") == "Keyword").and_then(|r| r.id("Z_ENT"));
+    let rows: HashMap<i64, _> = table
+        .rows()
+        .filter(|r| keyword_entity.is_none_or(|e| r.int("Z_ENT").is_none_or(|own| own == e)))
+        .filter_map(|r| Some((r.id("Z_PK")?, r)))
+        .collect();
+    let mut ordered: Vec<_> = rows.iter().map(|(id, r)| (r.int("ZLEFT").unwrap_or(i64::MAX), *id)).collect();
+    ordered.sort_unstable();
+    let (mut out, mut seen, mut looped) = (Vec::new(), HashSet::new(), 0usize);
+    for (_, id) in ordered {
+        let mut levels = Vec::new();
+        let (mut at, mut visited) = (Some(id), HashSet::new());
+        while let Some(current) = at {
+            let Some(row) = rows.get(&current) else { break };
+            if !visited.insert(current) || visited.len() > MAX_DEPTH {
+                levels.clear();
+                looped = looped.saturating_add(1);
+                break;
+            }
+            let name = row.text("ZNAME").trim().replace('|', " ");
+            if !name.is_empty() {
+                levels.push(name);
+            }
+            at = row.id("ZPARENT");
+        }
+        if levels.is_empty() {
+            continue;
+        }
+        levels.reverse();
+        let path = levels.join("|");
+        let exportable = rows.get(&id).and_then(|r| r.int("ZISEXPORTABLE")).is_none_or(|n| n != 0);
+        if seen.insert(path.to_lowercase()) {
+            out.push(Keyword { path, exportable });
+        }
+    }
+    if looped > 0 {
+        warnings.push(format!("{looped} keyword(s) are nested in a loop and were left out of the keyword list"));
+    }
+    Ok(out)
 }

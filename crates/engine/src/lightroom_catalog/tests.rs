@@ -38,6 +38,7 @@ fn sample() -> CatalogImport {
         collection_content: Vec::new(),
         warnings: Vec::new(),
         skipped: Vec::new(),
+        keyword_list: Vec::new(),
     }
 }
 /// A crafted `.lrcat` that names a program as a photo's original gets no record for it, so

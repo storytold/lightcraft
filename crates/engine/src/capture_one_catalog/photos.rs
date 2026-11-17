@@ -142,6 +142,7 @@ fn image_fields(image_id: i64, image: Row<'_>, location: Option<Row<'_>>, databa
         imported: time(image.real("ZIMPORTDATE"), "Z"),
         camera_make: image.text("ZCAMERA_MAKE").trim().to_string(),
         camera_model: image.text("ZCAMERA_MODEL").trim().to_string(),
+        camera_serial: image.text("ZCAMERA_SERIAL").trim().to_string(),
         lens: image.text("ZCAMERA_LENS").trim().to_string(),
         iso: image.int("ZISO").filter(|n| *n > 0).and_then(|n| u32::try_from(n).ok()),
         aperture: positive("ZEXP_APERTURE").map(|n| n as f32),

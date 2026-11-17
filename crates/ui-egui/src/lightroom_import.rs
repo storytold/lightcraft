@@ -877,6 +877,7 @@ mod tests {
             collection_content: Vec::new(),
             warnings: vec!["warning".into()],
             skipped: Vec::new(),
+            keyword_list: Vec::new(),
         });
         assert_eq!(report["photos"], 0);
         assert_eq!(report["collections"], 0);
