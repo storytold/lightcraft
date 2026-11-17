@@ -234,11 +234,10 @@ mod cr3 {
         let entry = box_bytes(b"CRAW", &craw);
         let ftyp = box_bytes(b"ftyp", b"crx \0\0\0\x01crx isom");
         let track_len = track(&entry, 0, sample.len() as u32).len();
-        let offset = (ftyp.len() + 8 + track_len + 7) & !7;
+        let offset = ftyp.len() + 8 + track_len + 8; // moov and mdat headers
         let mut out = ftyp;
         out.extend(box_bytes(b"moov", &track(&entry, offset as u64, sample.len() as u32)));
-        out.resize(offset, 0);
-        out.extend_from_slice(sample);
+        out.extend(box_bytes(b"mdat", sample));
         out
     }
 
