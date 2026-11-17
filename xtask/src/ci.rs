@@ -312,18 +312,26 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
                 }
                 let mut failed = Vec::new();
                 for (backend, adapter) in backends {
+                    // the tests run either way; the report says when the pipeline can't use the adapter it picks (issue #4451)
+                    let refusal = match ci_report::pipeline_refusal(probe_pipeline_on(&backend)) {
+                        Ok(refusal) => refusal,
+                        Err(e) => {
+                            eprintln!("can't tell whether the pipeline can use its adapter on {backend}: {e}");
+                            None
+                        }
+                    };
+                    if let Some(why) = &refusal {
+                        // the reason names the adapter the pipeline picked, which may not be the one listed first
+                        eprintln!("the pipeline can't use its adapter on {backend}, so tests on its device skip: {why}");
+                    }
                     let step = format!("gpu-{backend}");
-                    let (mut c, what) = tests(&with_test_targets(&["-p", "lightcraft-gpu", "--features", "denoise"]));
-                    c.env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
-                    let t = std::time::Instant::now();
-                    let ok = run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}")).is_ok();
-                    hardware_runs.borrow_mut().push(serde_json::json!({
-                        "backend": backend,
-                        "adapter": adapter,
-                        "status": if ok { "ok" } else { "fail" },
-                        "seconds": t.elapsed().as_secs_f64(),
-                    }));
-                    if !ok {
+                    let (entry, run_failed) = ci_report::hardware_run(&backend, &adapter, refusal, || {
+                        let (mut c, what) = tests(&with_test_targets(&["-p", "lightcraft-gpu", "--features", "denoise"]));
+                        c.env("LIGHTCRAFT_GPU_BACKEND", &backend).env(ci_report::SKIP_LOG_ENV, ci_report::skip_log(&root, &step));
+                        run(c, &format!("LIGHTCRAFT_GPU_BACKEND={backend} {what}")).is_ok()
+                    });
+                    hardware_runs.borrow_mut().push(entry);
+                    if run_failed {
                         failed.push(backend);
                     }
                 }
@@ -426,9 +434,22 @@ pub(crate) fn cmd_ci(args: &[&str]) -> Result<(), String> {
 /// binary starts; only lightcraft-gpu's has the test). Its stdout, or why
 /// it failed (a driver that crashes while it is enumerated, issue #136, ends up here, not in xtask).
 fn probe_gpu(backend: Option<&str>) -> Result<String, String> {
+    probe_gpu_with(backend, None)
+}
+
+/// The pipeline's device when its compute backend is `backend` (`LIGHTCRAFT_GPU_BACKEND`), as
+/// the `--hardware` run of that backend gets it.
+fn probe_pipeline_on(backend: &str) -> Result<String, String> {
+    probe_gpu_with(None, Some(backend))
+}
+
+fn probe_gpu_with(backend: Option<&str>, compute: Option<&str>) -> Result<String, String> {
     let mut c = cargo();
     c.args(["test", "-q", "--workspace", "--test", "it", "--", "--ignored", "--exact", "gpu_probe::gpu_probe", "--nocapture"]);
     c.env("LIGHTCRAFT_GPU_PROBE", backend.unwrap_or(""));
+    if let Some(compute) = compute {
+        c.env("LIGHTCRAFT_GPU_BACKEND", compute);
+    }
     let out = c.output().map_err(|e| format!("gpu_probe: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);

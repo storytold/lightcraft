@@ -81,7 +81,9 @@ the file `LIGHTCRAFT_SKIP_LOG` names. The run ends with the machine and the skip
 and writes `target/ci/report.json` (commit, dirty flag, machine, capabilities, each step's result and
 time, skips) and `target/ci/summary.md` (Markdown for a PR; `--summary-md` prints it). The report holds
 no host name, user name or absolute path, and nothing is uploaded. `--hardware` adds a step that runs
-the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT_GPU_BACKEND`).
+the `lightcraft-gpu` tests once per backend with a hardware adapter (`LIGHTCRAFT_GPU_BACKEND`); when the
+pipeline can't use the adapter it picks on that backend, the report entry names why (`pipeline`), since
+only the tests that make their own devices (such as denoise and faces) can then run on it.
 
 ## Revision history
 
