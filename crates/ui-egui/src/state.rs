@@ -618,6 +618,8 @@ pub struct AppSettings {
     pub reduce_motion: bool,
     /// When a brush tool is active, the mouse wheel changes its size instead of zooming.
     pub wheel_resizes_brush: bool,
+    /// Turn the wheel or trackpad scroll gesture the other way when resizing a brush (Issue #1257).
+    pub invert_brush_resize: bool,
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
@@ -823,6 +825,7 @@ impl Default for AppSettings {
             mirror_image: false,
             reduce_motion: false,
             wheel_resizes_brush: true,
+            invert_brush_resize: false,
             loupe_messages: true,
             keymap: Default::default(),
             keymap_set: Default::default(),
