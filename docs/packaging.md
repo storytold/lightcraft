@@ -30,6 +30,18 @@ tethering, Edit In, actions and plug-in features. `packaging-lint.yml` validates
 (`desktop-file-validate`, `appstreamcli`, Flatpak manifest parity). `cargo xtask install` installs locally under
 `~/.local` without a package.
 
+### Symbols
+
+The Linux, FreeBSD and macOS packages strip their binaries (`strip` in each platform's `package.sh`). On macOS
+that happens after `lipo` and before signing, since changing a signed binary breaks its signature, and it leaves
+only the symbols dynamic linking needs: about 40 MB less per binary and architecture (measured on 26.47.1 for
+Apple silicon; about 11 MB off the compressed disk image). Nothing looks its own symbols up at run time. Windows
+needs nothing: MSVC builds keep symbols in a separate `.pdb`, which isn't shipped.
+
+What's lost is function names in backtraces taken on users' machines: a `RUST_BACKTRACE=1` run of a packaged
+binary shows none. A panic's message and file:line are compiled into the program, not read from symbols, so the
+app's crash log (`<binary>-panics.log`, written by `lcc_engine::guard::install_hook`) still records them.
+
 ## Gaps
 
 Nothing here is built or tested by this review beyond `cargo xtask package --render-only` and
