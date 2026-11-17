@@ -2348,3 +2348,59 @@ fn the_wheel_over_the_selected_radial_resizes_it_and_elsewhere_zooms() {
     assert_eq!(develop(&h).masks, before.masks);
     assert_ne!(h.app.ui.zoom, crate::state::Zoom::Fit, "off the mask the wheel zooms");
 }
+
+#[test]
+fn two_wheel_notches_in_one_frame_are_two_undo_steps() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.18, "ry": 0.1}));
+    pointer(&mut h, json!([{"kind": "move", "x": 0.52, "y": 0.5}]));
+    let r = h.request("ui.scroll", json!({"source": "wheel", "unit": "line", "dy": 2.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..10 {
+        h.step();
+    }
+    let rx = |h: &Headless| match develop(h).masks[0].components[0].shape {
+        MaskShape::Radial { rx, .. } => rx,
+        _ => panic!("radial"),
+    };
+    assert!((rx(&h) - 0.18 * 1.21).abs() < 1e-9, "{}", rx(&h));
+    exec(&mut h, "edit.undo", json!({}));
+    assert!((rx(&h) - 0.18 * 1.1).abs() < 1e-9, "one notch undone: {}", rx(&h));
+}
+
+#[test]
+fn a_wheel_notch_during_a_mask_drag_changes_nothing_and_keeps_one_undo_step() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.18, "ry": 0.1}));
+    let before = develop(&h);
+    pointer(&mut h, json!([{"kind": "down", "x": 0.52, "y": 0.5}, {"kind": "drag", "x": 0.55, "y": 0.52}]));
+    wheel_notch_at(&mut h, 0.55, 0.52);
+    pointer(&mut h, json!([{"kind": "drag", "x": 0.57, "y": 0.53}, {"kind": "up", "x": 0.57, "y": 0.53}]));
+    let MaskShape::Radial { center, rx, ry, .. } = develop(&h).masks[0].components[0].shape.clone() else { panic!("radial") };
+    assert!((center.x - 0.55).abs() < 0.005 && (center.y - 0.53).abs() < 0.005, "the drag moved it: {center:?}");
+    assert_eq!((rx, ry), (0.18, 0.1), "the notch didn't resize it");
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit, "nor zoom");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).masks, before.masks, "the drag is still one undo step");
+}
+
+#[test]
+fn a_taken_wheel_notch_doesnt_pan_a_zoomed_in_photo_afterwards() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.4, "ry": 0.4}));
+    exec(&mut h, "view.navigate", json!({"zoom": {"percent": 200.0}, "pan": [0.5, 0.5]}));
+    for _ in 0..4 {
+        h.step();
+    }
+    let (zoom, pan) = (h.app.ui.zoom, h.app.ui.pan);
+    assert_ne!(zoom, crate::state::Zoom::Fit);
+    let image = h.app.image_rect.unwrap();
+    let canvas = h.app.canvas_rect.unwrap();
+    // the canvas centre, as a fraction of the (larger) image: on the gradient
+    let (x, y) = (f64::from((canvas.center().x - image.left()) / image.width()), f64::from((canvas.center().y - image.top()) / image.height()));
+    wheel_notch_at(&mut h, x, y);
+    for _ in 0..20 {
+        h.step();
+    }
+    assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "neither zoomed nor panned by the notch's smoothed tail");
+}
