@@ -11,6 +11,7 @@ repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
 craft-webp-header = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "5ef5134ccc28db3a3aaba1e1a0c189340c5d277c" }
+craft-cms-profile = { package = "craft-cms", git = "https://github.com/storytold/craft-libs", rev = "eeb134def2daa7e03512b4946bd59d6b419b9484" }
 craft-plist = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "bea6ed1ff031b81df2d64be470485c1ca808847e" }
 craft-pdf-print = { package = "craft-pdf", git = "https://github.com/storytold/craft-libs", rev = "0fd30aeb3e02207d9d4c7c601540d9da45abf8de", default-features = false, features = ["write-raster"] }
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
@@ -49,8 +50,6 @@ lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 # TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
 craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "c28356d400aed7575b04ec1551b4665107cfe845" }
-# Camera raw files, the format layer: every maker but CR3, ARW, RAF, RW2 and ORF (craft-libs#862 and the maker PRs).
-# On the same commit as craft-tiff: its errors and IFDs are shared.
 craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "c28356d400aed7575b04ec1551b4665107cfe845" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
