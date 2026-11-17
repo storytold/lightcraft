@@ -657,6 +657,14 @@ impl Painter {
             output_frame
         };
 
+        // Patch (device loss): tell the app a frame got its texture (see `on_frame_acquired`).
+        if matches!(
+            output_frame,
+            wgpu::CurrentSurfaceTexture::Success(_) | wgpu::CurrentSurfaceTexture::Suboptimal(_)
+        ) && let Some(acquired) = &self.config.on_frame_acquired
+        {
+            acquired();
+        }
         let output_frame = match output_frame {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {

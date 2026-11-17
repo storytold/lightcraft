@@ -139,6 +139,14 @@ impl eframe::App for App {
         egui::Color32::from_rgb(r, g, b).to_normalized_gamma_f32()
     }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // the window's GPU device is gone for good (issue #1194): nothing can be drawn again, so
+        // save what closing the window saves, tell the user outside the window, and end
+        if let Some(which) = window_gpu::take_device_lost() {
+            eframe::App::on_exit(self, None);
+            let log_file = self.0.services.log_file.clone().map(std::path::PathBuf::from);
+            stopped_while_running(&window_gpu::lost_text(which), log_file.as_deref());
+            std::process::exit(1);
+        }
         #[cfg(target_os = "macos")]
         if let Some(m) = self.3.as_mut()
             && m.update(&mut self.0, ctx)
@@ -1506,6 +1514,7 @@ fn main() -> eframe::Result {
         window_gpu::choose(&win_files, compose_window);
     // HDR display output: an extended-range float surface where the platform and display offer it
     hdr_display::configure(&mut wgpu_options);
+    window_gpu::watch_device_loss(&mut wgpu_options, win_files.clone(), window_renderer);
     win_files.arm(window_renderer);
     let win_files_app = win_files.clone();
     // the window came up: a failure after this is the app stopping, not a start that failed
@@ -1711,6 +1720,7 @@ fn main() -> eframe::Result {
                 // anyway, `0` never.
                 let window_device = offers_window_device(lcc_brand::env("GPU_WINDOW").as_deref(), display.is_hdr(), HDR_WINDOW_GUARD);
                 let window_textures = cc.wgpu_render_state.as_ref().filter(|_| gpu_on && window_device).map(offer_window_device);
+                window_gpu::set_context(&cc.egui_ctx);
                 Ok(Box::new(App(
                     app,
                     writer,
