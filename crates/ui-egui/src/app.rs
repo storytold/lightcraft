@@ -91,6 +91,7 @@ impl LightcraftApp {
             map_drawn: Default::default(),
             map_points: Default::default(),
             mini_map: None,
+            map_tracks: Default::default(),
             widgets: vec![],
             widget_hits: vec![],
             next_widgets: vec![],

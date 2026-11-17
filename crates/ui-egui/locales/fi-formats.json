@@ -327,5 +327,14 @@
   "{n} photos without GPS": "{n} kuvaa ilman GPS:ää",
   "Location {n}": "Sijainti {n}",
   "In private location “{name}”": "Yksityisessä sijainnissa ”{name}”",
-  "within {d} of {lat}, {lon}": "{d} säteellä pisteestä {lat}, {lon}"
+  "within {d} of {lat}, {lon}": "{d} säteellä pisteestä {lat}, {lon}",
+  "All Tracks ({n})": "Kaikki reitit ({n})",
+  "Auto-Tag {n} Selected Photos": "Merkitse {n} valittua kuvaa",
+  "Loading tracklog {name}": "Ladataan reittilokia {name}",
+  "Set Time Zone Offset… (UTC{o})": "Aseta aikavyöhykkeen siirto… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "{n} kuvaa merkitty reittilokista",
+  "Track {n}": "Reitti {n}",
+  "camera time, UTC{o}": "kameran aika, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} niistä osuu reitin aikavälille",
+  "{n} more tracks": "{n} reittiä lisää"
 }

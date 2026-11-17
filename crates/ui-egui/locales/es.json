@@ -2537,5 +2537,22 @@
   "Select Photos in Saved Location": "Seleccionar fotos de la ubicación guardada",
   "New Location…": "Nueva ubicación…",
   "List Saved Locations": "Listar ubicaciones guardadas",
-  "Create Saved Location": "Crear ubicación guardada"
+  "Create Saved Location": "Crear ubicación guardada",
+  "Tracklog": "Registro de ruta",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "Carga un registro GPS (GPX) para verlo en el mapa y etiquetar fotos con él",
+  "Load Tracklog…": "Cargar registro de ruta…",
+  "Load Tracklog": "Cargar registro de ruta",
+  "points": "puntos",
+  "UTC: no time zone offset set": "UTC: sin desfase horario",
+  "Start:": "Inicio:",
+  "End:": "Fin:",
+  "Duration:": "Duración:",
+  "Set Time Zone Offset…": "Establecer desfase horario…",
+  "Auto-Tag Selected Photo": "Etiquetar automáticamente la foto seleccionada",
+  "Fit Map to Tracklog": "Ajustar el mapa al registro de ruta",
+  "Load Another Tracklog…": "Cargar otro registro de ruta…",
+  "Clear Tracklog": "Quitar registro de ruta",
+  "Tagged 1 photo from the tracklog": "1 foto etiquetada con el registro de ruta",
+  "Auto-Tag Photos from Map Tracklog": "Etiquetar fotos con el registro de ruta del mapa",
+  "Map Tracklog": "Registro de ruta del mapa"
 }

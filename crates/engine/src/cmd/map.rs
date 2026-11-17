@@ -425,6 +425,15 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             clear_cache
         ),
+        cmd!(
+            "map.trackLog",
+            "Map Tracklog",
+            [],
+            None,
+            "{path?: GPX file (at most 50 MB, 2 million timed points) | gpx?: GPX text, active?: track index | \"all\", offset?: camera clock's UTC offset (`+02:00`, hours, or null / \"\" for UTC), clear?: true (alone)} — the track log shown on the Map view (session only, never saved): load it (a bad file changes nothing), pick the track tagging uses, set the time zone offset, or clear it; {} reports → {loaded, path, name, points, untimed, tracks: [{index, name, points, segments, start, end, duration}], active (null: all), activePoints, start, end, duration (UTC, of the active track), offset, startLocal, endLocal (camera time), loadMs, generation}. photo.autoTagTracklog {loaded: true} tags from it",
+            always,
+            crate::tracklog::track_log
+        ),
         cmd!(query "map.locations", "Saved Locations", [], None, "{} → the library's saved locations: {locations: [{id, name, lat, lon, radius (metres), private, photos (in the library inside it), inView (of the photos in view)}], count, countMs}", always, locations),
         cmd!(query "map.savedLocations.list", "List Saved Locations", [], None, "{} → the older name of map.locations (same answer)", always, locations),
         cmd!(

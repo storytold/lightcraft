@@ -2537,5 +2537,22 @@
   "Select Photos in Saved Location": "選取已存位置中的照片",
   "New Location…": "新增位置…",
   "List Saved Locations": "列出已存位置",
-  "Create Saved Location": "建立已存位置"
+  "Create Saved Location": "建立已存位置",
+  "Tracklog": "軌跡記錄",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "載入 GPS 軌跡記錄（GPX）以在地圖上顯示並為照片標記位置",
+  "Load Tracklog…": "載入軌跡記錄…",
+  "Load Tracklog": "載入軌跡記錄",
+  "points": "個點",
+  "UTC: no time zone offset set": "UTC：未設定時區偏移",
+  "Start:": "開始：",
+  "End:": "結束：",
+  "Duration:": "時長：",
+  "Set Time Zone Offset…": "設定時區偏移…",
+  "Auto-Tag Selected Photo": "自動標記所選照片",
+  "Fit Map to Tracklog": "使地圖符合軌跡記錄",
+  "Load Another Tracklog…": "載入其他軌跡記錄…",
+  "Clear Tracklog": "清除軌跡記錄",
+  "Tagged 1 photo from the tracklog": "已根據軌跡記錄標記 1 張照片",
+  "Auto-Tag Photos from Map Tracklog": "根據地圖軌跡記錄自動標記照片",
+  "Map Tracklog": "地圖軌跡記錄"
 }

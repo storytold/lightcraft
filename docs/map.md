@@ -2,7 +2,7 @@
 
 The Map view (View ▸ Map, ⌘⌥3 / Ctrl+Alt+3) shows the photos that have a GPS position on a slippy map.
 This page describes the view, geotagging, where the map's tiles come from, what is sent over the network,
-and the commands behind it. Later sections (track logs, keys and menus) are filled in as those parts land.
+and the commands behind it. Later sections (keys and menus) are filled in as those parts land.
 
 ## Map view
 
@@ -170,6 +170,47 @@ active}`), `activeLocation` and `locationDrag`. Widgets: `map:location:new`, `ma
 `button:showPrivateMap`.
 
 The list stays in the navigator panel of this branch's Map view rather than over the map's top-left corner.
+
+## Track logs
+
+A GPS track log (GPX) can be shown on the map and used to place the selected photos by their capture time, as
+Lightroom Classic's Map ▸ Tracklog does.
+
+- **Load.** The Tracklog button in the map's bottom toolbar ▸ Load Tracklog… picks a `.gpx` file. It is read on a
+  worker thread, with a "Loading tracklog <file>" row on the activity stack, so a large file never freezes the
+  window; the map fits the log when it lands. A file that isn't GPX, has no tracks or no timed points, is larger
+  than 50 MB or has more than 2 million timed points (or 10,000 tracks) is refused with a message, and the log
+  loaded before stays. The log is for the session only: it isn't saved with the library.
+- **Drawing.** Each track's segments are projected once when it loads. Every point gets a Douglas–Peucker rank, so
+  the line for a zoom keeps the points above that zoom's tolerance (about 0.6 points of error; the ends are always
+  kept), built once per zoom in chunks that are clipped to the view. Lines are cut where they cross ±180° and
+  never drawn across a gap between segments. Measured on a synthetic 2-million-point track in a release build:
+  370 ms to build, 1–29 ms per zoom level, under 1 ms per frame of clipped lines.
+- **The menu** lists the tracks (up to 40; `map.trackLog {active}` picks any), each with its point count: picking
+  one makes it the active one (drawn on top, the others dimmed) and the one Auto-Tag uses; All Tracks uses every
+  one. It shows the active track's start, end and duration on the camera's clock, Set Time Zone Offset… (the
+  camera's offset from UTC, as `+02:00`; asked for when Auto-Tag runs without one), Auto-Tag N Selected Photos
+  (hovering it says how many fall within the track's time), Fit Map to Tracklog, Load Another Tracklog… and Clear
+  Tracklog.
+- **Before tagging**, the selected photos (up to 5,000) are marked as white dots where their capture times fall on
+  the track, so a wrong offset shows before anything is written.
+- **Auto-Tag** sets the selected photos' positions from the active track by capture time (interpolated between
+  points of a segment, else the nearest point within 10 minutes; never across a segment break), in one undo step,
+  leaving photos that already have a position alone. It is `photo.autoTagTracklog {loaded: true}`.
+
+| Command | Params | Result |
+|---|---|---|
+| `map.trackLog` | `{path?, gpx?, active?: index or "all", offset?: "+02:00" or hours or null, clear?: true (alone)}`; `{}` reports | Load (synchronously), pick the track, set the offset or clear → `{loaded, path, name, points, untimed, tracks: [{index, name, points, segments, start, end, duration}], active, activePoints, start, end, duration, offset, startLocal, endLocal, loadMs, generation}` |
+| `photo.autoTagTracklog` | `{loaded: true, ids?, offset?, maxGap?, replace?, dryRun?}` (or `{path}` / `{gpx}` as before) | Tag from the Map view's log |
+| `map.loadTrackLog` | `{path?}` (without it, a file dialog) | Read a log on a worker thread (app only) → `{loading: path}` |
+| `map.trackLog.autoTag` / `.setOffset` / `.fit` | `{offset?}` / `{offset?}` / — | The menu's Auto-Tag, Set Time Zone Offset… and Fit Map to Tracklog (app only) |
+
+`map.state` → `trackLog` adds `loading` (the file being read), `drawn` (lines, points handed to the painter, the
+level's points, zoom, `levelMs`, `clipMs`), `ticks` (the marks on screen) and `onTrack`. Widgets: `map:tracklog`,
+`map:tracklog:<load|info|offset|autoTag|fit|clear|name>`, `map:tracklog:track:<index|all>`.
+
+The track maths, the loader and the menu are ported from PR #916 (Jason Baldwin); the GPX parser's track indexes,
+names and caps are in the shared craft-metadata library this repository already uses.
 
 ## Tile sources and cache
 

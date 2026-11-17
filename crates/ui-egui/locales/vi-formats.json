@@ -327,5 +327,14 @@
   "{n} photos without GPS": "{n} ảnh không có GPS",
   "Location {n}": "Vị trí {n}",
   "In private location “{name}”": "Trong vị trí riêng tư “{name}”",
-  "within {d} of {lat}, {lon}": "trong vòng {d} quanh {lat}, {lon}"
+  "within {d} of {lat}, {lon}": "trong vòng {d} quanh {lat}, {lon}",
+  "All Tracks ({n})": "Tất cả hành trình ({n})",
+  "Auto-Tag {n} Selected Photos": "Gắn vị trí {n} ảnh đã chọn",
+  "Loading tracklog {name}": "Đang tải nhật ký hành trình {name}",
+  "Set Time Zone Offset… (UTC{o})": "Đặt độ lệch múi giờ… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "Đã gắn vị trí {n} ảnh từ nhật ký hành trình",
+  "Track {n}": "Hành trình {n}",
+  "camera time, UTC{o}": "giờ máy ảnh, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} ảnh nằm trong khoảng thời gian của hành trình",
+  "{n} more tracks": "thêm {n} hành trình"
 }

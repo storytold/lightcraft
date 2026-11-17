@@ -19,6 +19,7 @@ mod http_date;
 pub mod mercator;
 pub mod service;
 pub mod source;
+pub mod track;
 
 #[cfg(test)]
 mod tests_cluster;
@@ -26,6 +27,8 @@ mod tests_cluster;
 mod tests_mercator;
 #[cfg(test)]
 mod tests_service;
+#[cfg(test)]
+mod tests_track;
 
 use std::path::PathBuf;
 
@@ -37,6 +40,7 @@ pub use cluster::{CLUSTER_CELL, Cluster, MapPoint};
 pub use mercator::{Bounds, MAX_LATITUDE, MAX_ZOOM, TILE_SIZE, TileKey, Viewport, VisibleTile, fit_bounds, from_gps};
 pub use service::{HttpResponse, ServiceStats, TileEvent, TileImage, TileService, Transport};
 pub use source::{Crop, OSM_ATTRIBUTION, OSM_TILE_URL, TileSource, USER_AGENT};
+pub use track::TrackShape;
 
 /// What went wrong in the map core.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -127,6 +131,10 @@ pub struct MapState {
     service: Option<TileService>,
     /// The library's saved locations (`locations.json`, see [`crate::locations`]).
     pub locations: crate::locations::SavedLocations,
+    /// The track log loaded into the Map view (session only, see [`crate::tracklog`]).
+    pub track: Option<crate::tracklog::LoadedTrack>,
+    /// Bumped by every change of [`MapState::track`] (load, active track, offset, clear).
+    pub track_generation: u64,
 }
 
 impl Default for MapState {
@@ -140,6 +148,8 @@ impl Default for MapState {
             online: false,
             service: None,
             locations: Default::default(),
+            track: None,
+            track_generation: 0,
         }
     }
 }

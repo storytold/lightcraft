@@ -3617,5 +3617,22 @@
   "Select Photos in Saved Location": "Fotos im gespeicherten Ort auswählen",
   "New Location…": "Neuer Ort…",
   "List Saved Locations": "Gespeicherte Orte auflisten",
-  "Create Saved Location": "Gespeicherten Ort anlegen"
+  "Create Saved Location": "Gespeicherten Ort anlegen",
+  "Tracklog": "Tracklog",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "GPS-Tracklog (GPX) laden, um ihn auf der Karte zu zeigen und Fotos danach zu verorten",
+  "Load Tracklog…": "Tracklog laden…",
+  "Load Tracklog": "Tracklog laden",
+  "points": "Punkte",
+  "UTC: no time zone offset set": "UTC: kein Zeitzonenversatz festgelegt",
+  "Start:": "Beginn:",
+  "End:": "Ende:",
+  "Duration:": "Dauer:",
+  "Set Time Zone Offset…": "Zeitzonenversatz festlegen…",
+  "Auto-Tag Selected Photo": "Ausgewähltes Foto automatisch verorten",
+  "Fit Map to Tracklog": "Karte an Tracklog anpassen",
+  "Load Another Tracklog…": "Anderen Tracklog laden…",
+  "Clear Tracklog": "Tracklog entfernen",
+  "Tagged 1 photo from the tracklog": "1 Foto aus dem Tracklog verortet",
+  "Auto-Tag Photos from Map Tracklog": "Fotos aus dem Karten-Tracklog verorten",
+  "Map Tracklog": "Karten-Tracklog"
 }

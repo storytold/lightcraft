@@ -186,6 +186,8 @@ fn a_single_pin_moves_in_one_undo_step_a_cluster_pans_and_locked_markers_stay() 
     assert_eq!(serde_json::to_value(&h.app.ui).unwrap()["map"]["locked"], true);
     // the toolbar's Lock Markers toggles it back
     let b = widget(&h, "map:lockMarkers").expect("the toolbar has Lock Markers").center();
+    // nothing covers it (the tile credit sits above the toolbar, not in it)
+    assert!(!widget(&h, "map:attribution").unwrap().intersects(widget(&h, "map:lockMarkers").unwrap()));
     press(&mut h, b, true);
     press(&mut h, b, false);
     frames(&mut h, 2);

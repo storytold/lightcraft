@@ -331,5 +331,14 @@
   "{n} photos without GPS": "{n} 张照片没有 GPS",
   "Location {n}": "位置 {n}",
   "In private location “{name}”": "在私密位置“{name}”内",
-  "within {d} of {lat}, {lon}": "距 {lat}, {lon} {d} 以内"
+  "within {d} of {lat}, {lon}": "距 {lat}, {lon} {d} 以内",
+  "All Tracks ({n})": "所有轨迹（{n}）",
+  "Auto-Tag {n} Selected Photos": "自动标记 {n} 张所选照片",
+  "Loading tracklog {name}": "正在载入轨迹记录 {name}",
+  "Set Time Zone Offset… (UTC{o})": "设置时区偏移…（UTC{o}）",
+  "Tagged {n} photos from the tracklog": "已根据轨迹记录标记 {n} 张照片",
+  "Track {n}": "轨迹 {n}",
+  "camera time, UTC{o}": "相机时间，UTC{o}",
+  "{m} of them fall within the track's time range": "其中 {m} 张在轨迹的时间范围内",
+  "{n} more tracks": "还有 {n} 条轨迹"
 }

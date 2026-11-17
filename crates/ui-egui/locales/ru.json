@@ -2742,5 +2742,22 @@
   "Select Photos in Saved Location": "Выбрать фото в сохранённом месте",
   "New Location…": "Новое место…",
   "List Saved Locations": "Список сохранённых мест",
-  "Create Saved Location": "Создать сохранённое место"
+  "Create Saved Location": "Создать сохранённое место",
+  "Tracklog": "Трек",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "Загрузите GPS-трек (GPX), чтобы показать его на карте и привязать по нему фото",
+  "Load Tracklog…": "Загрузить трек…",
+  "Load Tracklog": "Загрузить трек",
+  "points": "точек",
+  "UTC: no time zone offset set": "UTC: смещение часового пояса не задано",
+  "Start:": "Начало:",
+  "End:": "Конец:",
+  "Duration:": "Длительность:",
+  "Set Time Zone Offset…": "Задать смещение часового пояса…",
+  "Auto-Tag Selected Photo": "Автопривязка выбранного фото",
+  "Fit Map to Tracklog": "Подогнать карту под трек",
+  "Load Another Tracklog…": "Загрузить другой трек…",
+  "Clear Tracklog": "Убрать трек",
+  "Tagged 1 photo from the tracklog": "По треку привязано 1 фото",
+  "Auto-Tag Photos from Map Tracklog": "Привязать фото по треку карты",
+  "Map Tracklog": "Трек на карте"
 }

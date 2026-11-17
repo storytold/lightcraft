@@ -2821,5 +2821,22 @@
   "Select Photos in Saved Location": "Chọn ảnh trong vị trí đã lưu",
   "New Location…": "Vị trí mới…",
   "List Saved Locations": "Liệt kê vị trí đã lưu",
-  "Create Saved Location": "Tạo vị trí đã lưu"
+  "Create Saved Location": "Tạo vị trí đã lưu",
+  "Tracklog": "Nhật ký hành trình",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "Tải nhật ký GPS (GPX) để hiện trên bản đồ và gắn vị trí cho ảnh",
+  "Load Tracklog…": "Tải nhật ký hành trình…",
+  "Load Tracklog": "Tải nhật ký hành trình",
+  "points": "điểm",
+  "UTC: no time zone offset set": "UTC: chưa đặt độ lệch múi giờ",
+  "Start:": "Bắt đầu:",
+  "End:": "Kết thúc:",
+  "Duration:": "Thời lượng:",
+  "Set Time Zone Offset…": "Đặt độ lệch múi giờ…",
+  "Auto-Tag Selected Photo": "Tự gắn vị trí cho ảnh đã chọn",
+  "Fit Map to Tracklog": "Vừa bản đồ với nhật ký hành trình",
+  "Load Another Tracklog…": "Tải nhật ký hành trình khác…",
+  "Clear Tracklog": "Xóa nhật ký hành trình",
+  "Tagged 1 photo from the tracklog": "Đã gắn vị trí 1 ảnh từ nhật ký hành trình",
+  "Auto-Tag Photos from Map Tracklog": "Gắn vị trí ảnh từ nhật ký hành trình trên bản đồ",
+  "Map Tracklog": "Nhật ký hành trình trên bản đồ"
 }

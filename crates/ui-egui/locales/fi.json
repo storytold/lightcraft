@@ -2493,5 +2493,22 @@
   "Select Photos in Saved Location": "Valitse tallennetun sijainnin kuvat",
   "New Location…": "Uusi sijainti…",
   "List Saved Locations": "Luettele tallennetut sijainnit",
-  "Create Saved Location": "Luo tallennettu sijainti"
+  "Create Saved Location": "Luo tallennettu sijainti",
+  "Tracklog": "Reittiloki",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "Lataa GPS-reittiloki (GPX) nähdäksesi sen kartalla ja merkitäksesi kuvat sen mukaan",
+  "Load Tracklog…": "Lataa reittiloki…",
+  "Load Tracklog": "Lataa reittiloki",
+  "points": "pistettä",
+  "UTC: no time zone offset set": "UTC: aikavyöhykettä ei ole asetettu",
+  "Start:": "Alku:",
+  "End:": "Loppu:",
+  "Duration:": "Kesto:",
+  "Set Time Zone Offset…": "Aseta aikavyöhykkeen siirto…",
+  "Auto-Tag Selected Photo": "Merkitse valittu kuva automaattisesti",
+  "Fit Map to Tracklog": "Sovita kartta reittilokiin",
+  "Load Another Tracklog…": "Lataa toinen reittiloki…",
+  "Clear Tracklog": "Tyhjennä reittiloki",
+  "Tagged 1 photo from the tracklog": "1 kuva merkitty reittilokista",
+  "Auto-Tag Photos from Map Tracklog": "Merkitse kuvat kartan reittilokista",
+  "Map Tracklog": "Kartan reittiloki"
 }

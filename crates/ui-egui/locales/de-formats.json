@@ -331,5 +331,14 @@
   "{n} photos without GPS": "{n} Fotos ohne GPS",
   "Location {n}": "Ort {n}",
   "In private location “{name}”": "Im privaten Ort „{name}“",
-  "within {d} of {lat}, {lon}": "innerhalb von {d} um {lat}, {lon}"
+  "within {d} of {lat}, {lon}": "innerhalb von {d} um {lat}, {lon}",
+  "All Tracks ({n})": "Alle Tracks ({n})",
+  "Auto-Tag {n} Selected Photos": "{n} ausgewählte Fotos verorten",
+  "Loading tracklog {name}": "Tracklog {name} wird geladen",
+  "Set Time Zone Offset… (UTC{o})": "Zeitzonenversatz festlegen… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "{n} Fotos aus dem Tracklog verortet",
+  "Track {n}": "Track {n}",
+  "camera time, UTC{o}": "Kamerazeit, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} davon liegen im Zeitraum des Tracks",
+  "{n} more tracks": "{n} weitere Tracks"
 }

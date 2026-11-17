@@ -331,5 +331,14 @@
   "{n} photos without GPS": "Фото без GPS: {n}",
   "Location {n}": "Місце {n}",
   "In private location “{name}”": "У приватному місці «{name}»",
-  "within {d} of {lat}, {lon}": "у межах {d} від {lat}, {lon}"
+  "within {d} of {lat}, {lon}": "у межах {d} від {lat}, {lon}",
+  "All Tracks ({n})": "Усі треки ({n})",
+  "Auto-Tag {n} Selected Photos": "Прив'язати вибрані фото ({n})",
+  "Loading tracklog {name}": "Завантаження треку {name}",
+  "Set Time Zone Offset… (UTC{o})": "Задати зсув часового поясу… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "За треком прив'язано фото: {n}",
+  "Track {n}": "Трек {n}",
+  "camera time, UTC{o}": "час камери, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} з них потрапляють у час треку",
+  "{n} more tracks": "ще треків: {n}"
 }

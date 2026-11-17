@@ -333,5 +333,14 @@
   "{n} photos without GPS": "{n} ფოტო GPS-ის გარეშე",
   "Location {n}": "ადგილი {n}",
   "In private location “{name}”": "პირად ადგილზე „{name}“",
-  "within {d} of {lat}, {lon}": "{d}-ის ფარგლებში {lat}, {lon}-დან"
+  "within {d} of {lat}, {lon}": "{d}-ის ფარგლებში {lat}, {lon}-დან",
+  "All Tracks ({n})": "ყველა ტრეკი ({n})",
+  "Auto-Tag {n} Selected Photos": "{n} მონიშნული ფოტოს ავტომონიშვნა",
+  "Loading tracklog {name}": "იტვირთება ტრეკლოგი {name}",
+  "Set Time Zone Offset… (UTC{o})": "დროის სარტყლის წანაცვლების დაყენება… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "ტრეკლოგიდან მონიშნულია {n} ფოტო",
+  "Track {n}": "ტრეკი {n}",
+  "camera time, UTC{o}": "კამერის დრო, UTC{o}",
+  "{m} of them fall within the track's time range": "მათგან {m} ხვდება ტრეკის დროის შუალედში",
+  "{n} more tracks": "კიდევ {n} ტრეკი"
 }

@@ -397,6 +397,8 @@ pub fn show(app: &mut crate::LightcraftApp, ui: &mut egui::Ui) {
     app.mini_map = None;
     // the Map view's location filter narrows the photos only while it is shown
     crate::panels::map::sync_location_filter(app);
+    // a track log read on a worker thread lands here
+    crate::panels::map::tracks::poll(app, ui.ctx());
     let output = DockArea::new(egui::Id::unique("lightcraft-docking")).locked(workspace.locked).show_with_limits(
         ui,
         &workspace.layout,

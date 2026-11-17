@@ -62,6 +62,7 @@ mod slideshow_export;
 mod slow_drive;
 mod spots;
 mod sync;
+mod tracklog;
 mod view_follow;
 pub(super) mod xmp;
 

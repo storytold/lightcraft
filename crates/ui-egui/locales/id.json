@@ -2508,5 +2508,22 @@
   "Select Photos in Saved Location": "Pilih Foto di Lokasi Tersimpan",
   "New Location…": "Lokasi Baru…",
   "List Saved Locations": "Daftar Lokasi Tersimpan",
-  "Create Saved Location": "Buat Lokasi Tersimpan"
+  "Create Saved Location": "Buat Lokasi Tersimpan",
+  "Tracklog": "Log Jejak",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "Muat log jejak GPS (GPX) untuk menampilkannya di peta dan menandai foto",
+  "Load Tracklog…": "Muat Log Jejak…",
+  "Load Tracklog": "Muat Log Jejak",
+  "points": "titik",
+  "UTC: no time zone offset set": "UTC: belum ada selisih zona waktu",
+  "Start:": "Mulai:",
+  "End:": "Selesai:",
+  "Duration:": "Durasi:",
+  "Set Time Zone Offset…": "Atur Selisih Zona Waktu…",
+  "Auto-Tag Selected Photo": "Tandai Otomatis Foto Terpilih",
+  "Fit Map to Tracklog": "Paskan Peta ke Log Jejak",
+  "Load Another Tracklog…": "Muat Log Jejak Lain…",
+  "Clear Tracklog": "Hapus Log Jejak",
+  "Tagged 1 photo from the tracklog": "1 foto ditandai dari log jejak",
+  "Auto-Tag Photos from Map Tracklog": "Tandai Foto dari Log Jejak Peta",
+  "Map Tracklog": "Log Jejak Peta"
 }

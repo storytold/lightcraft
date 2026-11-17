@@ -2533,5 +2533,22 @@
   "Select Photos in Saved Location": "Вибрати фото в збереженому місці",
   "New Location…": "Нове місце…",
   "List Saved Locations": "Список збережених місць",
-  "Create Saved Location": "Створити збережене місце"
+  "Create Saved Location": "Створити збережене місце",
+  "Tracklog": "Трек",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "Завантажте GPS-трек (GPX), щоб показати його на карті й прив'язати за ним фото",
+  "Load Tracklog…": "Завантажити трек…",
+  "Load Tracklog": "Завантажити трек",
+  "points": "точок",
+  "UTC: no time zone offset set": "UTC: зсув часового поясу не задано",
+  "Start:": "Початок:",
+  "End:": "Кінець:",
+  "Duration:": "Тривалість:",
+  "Set Time Zone Offset…": "Задати зсув часового поясу…",
+  "Auto-Tag Selected Photo": "Автоприв'язка вибраного фото",
+  "Fit Map to Tracklog": "Припасувати карту до треку",
+  "Load Another Tracklog…": "Завантажити інший трек…",
+  "Clear Tracklog": "Прибрати трек",
+  "Tagged 1 photo from the tracklog": "За треком прив'язано 1 фото",
+  "Auto-Tag Photos from Map Tracklog": "Прив'язати фото за треком карти",
+  "Map Tracklog": "Трек на карті"
 }

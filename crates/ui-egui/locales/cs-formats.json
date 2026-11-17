@@ -330,5 +330,14 @@
   "{n} photos without GPS": "{n} fotek bez GPS",
   "Location {n}": "Místo {n}",
   "In private location “{name}”": "V soukromém místě „{name}“",
-  "within {d} of {lat}, {lon}": "do {d} od {lat}, {lon}"
+  "within {d} of {lat}, {lon}": "do {d} od {lat}, {lon}",
+  "All Tracks ({n})": "Všechny trasy ({n})",
+  "Auto-Tag {n} Selected Photos": "Automaticky označit vybrané fotky ({n})",
+  "Loading tracklog {name}": "Načítání záznamu trasy {name}",
+  "Set Time Zone Offset… (UTC{o})": "Nastavit posun časového pásma… (UTC{o})",
+  "Tagged {n} photos from the tracklog": "Ze záznamu trasy označeno fotek: {n}",
+  "Track {n}": "Trasa {n}",
+  "camera time, UTC{o}": "čas fotoaparátu, UTC{o}",
+  "{m} of them fall within the track's time range": "{m} z nich spadá do časového rozsahu trasy",
+  "{n} more tracks": "dalších tras: {n}"
 }

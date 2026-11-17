@@ -27,6 +27,7 @@
 
 pub mod locations;
 pub mod tiles;
+pub mod tracks;
 
 use std::collections::HashSet;
 
@@ -54,7 +55,7 @@ const FILTER_BAR_H: f32 = 50.0;
 const PIN_HIT: f64 = 16.0;
 
 /// The deepest zoom Fit to Photos goes (a single photo isn't shown at street level).
-const FIT_MAX_ZOOM: f64 = 16.0;
+pub(super) const FIT_MAX_ZOOM: f64 = 16.0;
 
 /// The lowest zoom the map shows.
 const MIN_ZOOM: f64 = 1.0;
@@ -215,7 +216,7 @@ pub fn state(app: &LightcraftApp) -> Value {
         .take(500)
         .map(|p| json!({"ids": p.ids, "count": p.ids.len(), "selected": p.selected, "x": p.at.x, "y": p.at.y, "lat": p.pos.lat, "lon": p.pos.lon}))
         .collect();
-    json!({
+    let mut out = json!({
         "lat": app.ui.map.center_lat,
         "lon": app.ui.map.center_lon,
         "zoom": app.ui.map.zoom,
@@ -249,7 +250,9 @@ pub fn state(app: &LightcraftApp) -> Value {
             "pin": {"x": m.pin.x, "y": m.pin.y},
             "tiles": {"drawn": m.tiles.tiles, "fromParent": m.tiles.from_parent, "missing": m.tiles.missing, "offline": m.tiles.offline},
         })),
-    })
+    });
+    tracks::state(app, &mut out);
+    out
 }
 
 /// The map's UI commands (`map.fit`, `map.setView`, `map.zoomIn`, `map.zoomOut`,
@@ -273,6 +276,9 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
             m.fitted = true;
             apply_view_area(app);
             Ok(state(app))
+        }
+        "map.trackLog" | "map.loadTrackLog" | "map.trackLog.fit" | "map.trackLog.setOffset" | "map.trackLog.autoTag" => {
+            return tracks::command(app, id, p);
         }
         // {mode?: visible|tagged|untagged|none}: without it, reports
         "map.locationFilter" => {
@@ -354,7 +360,7 @@ fn show_location(app: &mut LightcraftApp, id: u64) -> Result<(), String> {
 }
 
 /// Visible on Map follows a view a command set at once (no wait for it to rest).
-fn apply_view_area(app: &mut LightcraftApp) {
+pub(super) fn apply_view_area(app: &mut LightcraftApp) {
     if app.ui.map.filter == LocationFilter::VisibleOnMap
         && let Some(a) = view_area(&app.ui.map)
     {
@@ -514,8 +520,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
 
-    // 4.5. The saved locations in view (the active one with its handles)
+    // 4.5. The saved locations in view (the active one with its handles) and the track log, under
+    // the pins
     locations::draw(app, &painter, canvas_rect, &vp, &map_ui);
+    tracks::draw(app, &painter, &t, canvas_rect, &vp);
 
     // the hovered pin's thumbnail (not while something is carried)
     if let Some(ids) = hovered.as_ref().filter(|_| !carrying && map_ui.pin_drag.is_none())
@@ -1122,6 +1130,8 @@ fn render_bottom_toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rec
         }
 
         ui.add_space(12.0);
+        tracks::button(app, ui);
+        ui.add_space(6.0);
         let fit = ui.button(crate::i18n::tr("Fit to Photos"));
         crate::widgets::register(ui, "map:fit", fit.rect);
         fit_clicked = fit.clicked();
@@ -1141,20 +1151,25 @@ fn render_bottom_toolbar(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rec
         if lock_btn.on_hover_text(crate::i18n::tr("Pins can't be dragged to move photos")).clicked() {
             map_ui.locked = !map_ui.locked;
         }
-
-        // the tile provider's credit, always visible at the bottom right (tile licences require it)
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add_space(12.0);
-            // the source's credit; an Esri layer's comes from its metadata once fetched
-            let credit = ui.label(egui::RichText::new(app.session.map.attribution()).small().color(Color32::from_white_alpha(170)));
-            crate::widgets::register(ui, "map:attribution", credit.rect);
-        });
     });
+    // the tile provider's credit, always visible at the map's bottom right, just above the toolbar
+    // (tile licences require it; in its own place so a long credit never covers the toolbar's
+    // buttons); an Esri layer's comes from its metadata once fetched
+    let credit = app.session.map.attribution();
+    if !credit.is_empty() {
+        let p = ui.painter();
+        let g = p.layout(credit, FontId::proportional(10.0), Color32::from_gray(35), (canvas.width() - 24.0).max(40.0));
+        let r = Rect::from_min_size(pos2(canvas.right() - g.size().x - 8.0, bar_rect.top() - g.size().y - 6.0), g.size() + vec2(8.0, 4.0));
+        p.rect_filled(r, 2.0, Color32::from_white_alpha(210));
+        p.galley(r.min + vec2(4.0, 2.0), g, Color32::from_gray(35));
+        crate::widgets::register(ui, "map:attribution", r);
+    }
     fit_clicked
 }
 
 fn render_legend_overlay(ui: &mut egui::Ui, canvas: Rect, _map_ui: &mut crate::state::MapUi) {
-    let legend_rect = Rect::from_min_size(pos2(canvas.right() - 210.0, canvas.bottom() - 170.0), vec2(196.0, 124.0));
+    // above the tile credit (which sits just above the toolbar and must stay visible)
+    let legend_rect = Rect::from_min_size(pos2(canvas.right() - 210.0, canvas.bottom() - TOOLBAR_H - 30.0 - 124.0), vec2(196.0, 124.0));
     let p = ui.painter();
 
     p.rect_filled(legend_rect, 6.0, Color32::from_rgba_unmultiplied(20, 24, 28, 230));

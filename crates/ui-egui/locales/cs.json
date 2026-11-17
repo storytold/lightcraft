@@ -2582,5 +2582,22 @@
   "Select Photos in Saved Location": "Vybrat fotky v uloženém místě",
   "New Location…": "Nové místo…",
   "List Saved Locations": "Seznam uložených míst",
-  "Create Saved Location": "Vytvořit uložené místo"
+  "Create Saved Location": "Vytvořit uložené místo",
+  "Tracklog": "Záznam trasy",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "Načtěte záznam trasy GPS (GPX), který se zobrazí na mapě a označí fotky",
+  "Load Tracklog…": "Načíst záznam trasy…",
+  "Load Tracklog": "Načíst záznam trasy",
+  "points": "bodů",
+  "UTC: no time zone offset set": "UTC: posun časového pásma není nastaven",
+  "Start:": "Začátek:",
+  "End:": "Konec:",
+  "Duration:": "Trvání:",
+  "Set Time Zone Offset…": "Nastavit posun časového pásma…",
+  "Auto-Tag Selected Photo": "Automaticky označit vybranou fotku",
+  "Fit Map to Tracklog": "Přizpůsobit mapu záznamu trasy",
+  "Load Another Tracklog…": "Načíst jiný záznam trasy…",
+  "Clear Tracklog": "Vymazat záznam trasy",
+  "Tagged 1 photo from the tracklog": "Z záznamu trasy označena 1 fotka",
+  "Auto-Tag Photos from Map Tracklog": "Automaticky označit fotky ze záznamu trasy na mapě",
+  "Map Tracklog": "Záznam trasy na mapě"
 }

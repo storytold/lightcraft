@@ -2597,5 +2597,22 @@
   "Select Photos in Saved Location": "Markera foton på sparad plats",
   "New Location…": "Ny plats…",
   "List Saved Locations": "Lista sparade platser",
-  "Create Saved Location": "Skapa sparad plats"
+  "Create Saved Location": "Skapa sparad plats",
+  "Tracklog": "Spårlogg",
+  "Load a GPS track log (GPX) to show it on the map and tag photos from it": "Läs in en GPS-spårlogg (GPX) för att visa den på kartan och platsmärka foton",
+  "Load Tracklog…": "Läs in spårlogg…",
+  "Load Tracklog": "Läs in spårlogg",
+  "points": "punkter",
+  "UTC: no time zone offset set": "UTC: ingen tidszonsförskjutning angiven",
+  "Start:": "Start:",
+  "End:": "Slut:",
+  "Duration:": "Längd:",
+  "Set Time Zone Offset…": "Ange tidszonsförskjutning…",
+  "Auto-Tag Selected Photo": "Platsmärk markerat foto automatiskt",
+  "Fit Map to Tracklog": "Anpassa kartan till spårloggen",
+  "Load Another Tracklog…": "Läs in en annan spårlogg…",
+  "Clear Tracklog": "Rensa spårlogg",
+  "Tagged 1 photo from the tracklog": "1 foto platsmärkt från spårloggen",
+  "Auto-Tag Photos from Map Tracklog": "Platsmärk foton från kartans spårlogg",
+  "Map Tracklog": "Kartans spårlogg"
 }
