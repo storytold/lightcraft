@@ -1357,7 +1357,8 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
     let pages = n.div_ceil(options.columns * options.rows);
     ui.label(contact_sheet_summary(n, pages));
     field(ui, "Paper", |ui| {
-        let c = crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
+        let shown = if options.paper == "letter" { crate::i18n::tr("Letter") } else { "A4" };
+        let c = crate::widgets::combo_box("contactSheetPaper").selected_text(shown).show_ui(ui, |ui| {
             ui.selectable_value(&mut options.paper, "a4".into(), "A4");
             ui.selectable_value(&mut options.paper, "letter".into(), crate::i18n::tr("Letter"));
         });
