@@ -149,7 +149,9 @@ Our pipeline renders differently, so **values carry over but the look is approxi
 We read these fields; we never write them. Only fields in the packet are applied: the result is a partial settings
 object that gets merged like a preset, so everything else keeps its current or default value. Packets marked
 `crs:AlreadyApplied="True"` are skipped, because those pixels already contain the edit. Only process-version 2012+ field
-names are read (e.g. `Exposure2012`, not the older `Exposure`). `crs:ProcessVersion` itself numbers the other
+names are read on a packet that has them; a packet with none (a `.lrtemplate` preset) is read through its older names
+instead (`Exposure`, `Contrast`, `HighlightRecovery`, `FillLight`, `Shadows`, `Brightness`, `Clarity`), approximated
+from their defaults. `crs:ProcessVersion` itself numbers the other
 application's renderer and is ignored: the photo keeps LightCraft's own process, the latest for a newly imported photo
 ([process-versions.md](process-versions.md)).
 
@@ -186,7 +188,7 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided; saved `UprightTransform_*` matrices are not imported, so photo import reports that Lightroom geometry was not preserved and the selected mode will be recalculated |
-| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop; other tools' `CropHeight` / `CropWidth` restate the same crop and are consumed with the edges, `CropUnit` / `CropUnits` are unit labels only and are ignored |
+| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop; the output dimensions other tools write beside it (`CropHeight` / `CropWidth` in `CropUnit` units) are ignored while the crop is consumed - the edges carry the rect - and `CropUnit` / `CropUnits` are unit labels only |
 
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
 
@@ -208,8 +210,11 @@ process-version 2010 field names, and AI features. Local adjustments and spot re
 
 **Reported, not applied:** the legacy leftovers (`Defringe`, `Smoothness`, the process-version 2010 channel curves
 `ToneCurveRed/Green/Blue` - the old master `ToneCurve` is read when the packet has no 2012 curve), the ACR HDR display fields (`SDRBlend` and its siblings, `HDRMaxValue`,
-`ToneMapStrength`), `ChromaticAberrationR/B`, `MoireFilter`, `ToggleStyleAmount` / `ToggleStyleDigest` and a stray
-top-level `RangeMask` reach the import report as unmapped adjustments. The packet bookkeeping beside them
+`ToneMapStrength`), `ChromaticAberrationR/B`, `MoireFilter`, `ToggleStyleAmount` / `ToggleStyleDigest`, the
+lens-profile strengths away from their default (`LensProfileDistortionScale`, `LensProfileVignettingScale`,
+`LensProfileChromaticAberrationScale`), a used `PointColors` set, `LookName`, `Highlight2012`,
+`DepthBasedCorrections` / `DepthMapInfo` and a stray top-level `RangeMaskMapInfo` reach the import report as
+unmapped adjustments. The packet bookkeeping beside them
 (auto-defaults, preview cache, file handling, profile match keys, `Converter`, `What`) is ignored silently. The
 coverage test in `crates/engine/src/crs/tests.rs` keeps every field of the Adobe registry in one of those buckets.
 
