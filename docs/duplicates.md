@@ -25,6 +25,12 @@ of each stays. What it finds, and what the window's buttons do:
   purging stays in the Recently Deleted flow). Reject flags them (`photo.reject`). Stack Groups
   collapses each group into a stack (`stack.group`). Nothing is deleted from disk by the finder; the
   system trash stays where it already is (Delete from Disk, Recently Deleted).
+- **Telling copies apart.** Each member is a card with a large thumbnail and, under it, nothing cut
+  short: the whole file name, the whole folder path (wrapped, and the tooltip), the capture date,
+  the size in pixels, the file size and the format. **Compare Group in Survey** (per group, the
+  `library.compareDuplicateGroup` command, `{group?}`) selects the group and shows it in the
+  library's Survey, large and side by side; the window steps aside with its marks kept, and Find
+  Duplicates… brings it back as it was (photos gone meanwhile dropped).
 - A photo whose record has no content hash (an import from before content hashes, a Lightroom
   catalog import) is read from its file during the similar scan; the record itself is not changed.
 
@@ -43,4 +49,4 @@ web build: the similar scan reads the photos' files.
 - **Delete from Disk in the window.** Removing is recoverable; the destructive paths stay where they
   are (Recently Deleted, Delete Rejected, the delete dialog).
 
-*Last updated: 2026-11-12.*
+*Last updated: 2026-11-17.*
