@@ -75,6 +75,7 @@ impl LightcraftApp {
         if self.queued_input_needs_repaint() {
             ctx.request_repaint();
         }
+        self.renderer.follow_view((self.ui.view, self.grid_scroll.map(f32::to_bits), self.film_scroll.map(f32::to_bits), self.session.active()));
         self.renderer.poll(ctx, &mut self.session);
         merge::poll(self, ctx);
         import::poll_scan(self, ctx);

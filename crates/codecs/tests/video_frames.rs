@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicBool;
 use craft_media::isobmff::{
     self, AvcConfig, Brand, ColorInfo, FourCc, HevcConfig, Mp4Writer, PcmConfig, SampleEntry, TrackConfig, WriteSample, WriterOptions,
 };
-use lightcraft_codecs::poster::{PosterOptions, poster_frame};
+use lightcraft_codecs::poster::{PosterOptions, open_poster, poster_frame};
 use lightcraft_codecs::video_stream::{Codec, SeekMode, StreamOptions, VideoError, VideoStream};
 use proptest::prelude::*;
 
@@ -431,6 +431,23 @@ fn a_read_budget_and_cancel_stop_the_work() {
     // a sample over the per-picture limit
     let o = PosterOptions { stream: StreamOptions { max_sample_bytes: 4, ..StreamOptions::default() }, ..opts() };
     assert!(matches!(poster(&bytes, &o), Err(VideoError::TooLarge(_))));
+}
+
+/// Opening a clip for its poster reads its headers through the poster's read budget and gives
+/// its picture size; the decode goes on from there, the budget shared, the headers not read again.
+#[test]
+fn opening_for_the_poster_reads_the_headers_within_the_budget() {
+    let bytes = h264_clip(&Clip::new(64, 48, 90));
+    let clip = open_poster(bytes.clone(), &opts()).unwrap();
+    assert_eq!(clip.picture_size(), (64, 48));
+    let headers = clip.bytes_read();
+    assert!(headers > 0 && headers < bytes.len() as u64, "{headers}");
+    let p = clip.decode(&AtomicBool::new(false)).unwrap();
+    assert_shows_frame(&p.image, 30);
+    assert_eq!(p.bytes_read, poster(&bytes, &opts()).unwrap().bytes_read, "the headers counted once");
+    // headers larger than the budget: refused while opening
+    let tight = PosterOptions { max_read_bytes: headers - 1, ..opts() };
+    assert!(matches!(open_poster(bytes, &tight).err(), Some(VideoError::TooLarge(_))));
 }
 
 #[test]

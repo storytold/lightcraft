@@ -36,6 +36,9 @@ pub struct PreviewBuild {
     pub skipped: AtomicUsize,
     /// Photos left alone because another job was building them at that moment.
     pub shared: AtomicUsize,
+    /// The video loader whose decode the "Reading video frames" row's ✕ stopped (its address; 0:
+    /// none): the user stopped video decoding, so this build decodes no more clips with it.
+    pub videos_stopped: AtomicUsize,
     /// Started by the background preparation ([`crate::prep`]): it yields to the photo on screen,
     /// and a build the user (or an import) asks for replaces it.
     pub background: bool,
@@ -211,13 +214,19 @@ fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
 /// (the grid thumbnail is made from the view's source instead of decoding the file again).
 /// `None` when `cancel` was asked for before a job started: that photo is not counted as done.
 /// `force`: the grid thumbnail is rendered too, not taken from the cache it is written to.
-fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, force: bool) -> Option<bool> {
+fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, force: bool, videos_stopped: Option<&AtomicUsize>) -> Option<bool> {
     let mut decoded: Option<crate::media::DecodedSource> = None;
     let mut ok = true;
     for mut j in jobs {
         // between a photo's own previews too (a cancelled 1:1 view skips its grid thumbnail)
         if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
             return None;
+        }
+        // a clip, after the user stopped video decoding: not decoded again under a fresh row
+        // (its remaining jobs and every later clip's are left; processed, not failed)
+        let loader = file_loader_address(&j);
+        if loader.is_some_and(|l| videos_stopped.is_some_and(|v| v.load(Ordering::Relaxed) == l)) {
+            return Some(ok);
         }
         if let Some(src) = &decoded
             && !matches!(j.source, crate::media::SourceRef::Loaded(_))
@@ -235,6 +244,15 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, forc
         // CodeRabbit on #3577)
         let rewrite = if force { j.cache.take().map(|c| (c, j.cache_generation)) } else { None };
         let r = j.run();
+        if r.rendered.as_ref().err().is_some_and(|e| e == crate::files::VIDEO_STOPPED) {
+            // A video poster only fails with this when the row's ✕ (or quitting) stopped video
+            // decoding: no failure, the photo is just not built (the next build makes it), and
+            // the build leaves the rest of its clips.
+            if let (Some(v), Some(l)) = (videos_stopped, loader) {
+                v.store(l, Ordering::Relaxed);
+            }
+            return Some(ok);
+        }
         if let (Some(((cache, key), generation)), Ok(img)) = (rewrite, r.rendered.as_ref())
             && !cache.put_at(generation, key, Arc::new(img.image.clone()))
         {
@@ -251,9 +269,7 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, forc
             }
             ok = false;
         }
-        // (a video poster the activity row's ✕ stopped is not a failure: the photo is just not
-        // built, and the next build makes it)
-        ok &= r.rendered.as_ref().map_or_else(|e| e == crate::files::VIDEO_STOPPED, |_| true);
+        ok &= r.rendered.is_ok();
         if decoded.is_none() {
             decoded = r.loaded;
         }
@@ -261,10 +277,19 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>, forc
     Some(ok)
 }
 
+/// The address of the file loader `j` reads its source with (`None`: another kind of source),
+/// to recognise the video loader's jobs.
+fn file_loader_address(j: &RenderJob) -> Option<usize> {
+    match &j.source {
+        crate::media::SourceRef::File { loader: Some(l), .. } => Some(Arc::as_ptr(l).cast::<()>() as usize),
+        _ => None,
+    }
+}
+
 /// [`run_photo_cancellable`] for callers that render a photo without a cancel flag.
 #[cfg(test)]
 pub(crate) fn run_photo(jobs: Vec<RenderJob>) -> bool {
-    run_photo_cancellable(jobs, None, false) == Some(true)
+    run_photo_cancellable(jobs, None, false, None) == Some(true)
 }
 
 /// How many photos render side by side: as many as an export batch for standard previews (each
@@ -442,8 +467,10 @@ fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>,
                 if let Some(gate) = &state.gate {
                     gate.enter();
                 }
-                let outcome =
-                    crate::guard::catch("building previews", || run_photo_cancellable(photo_jobs, Some(&state.cancel), force)).unwrap_or(Some(false));
+                let outcome = crate::guard::catch("building previews", || {
+                    run_photo_cancellable(photo_jobs, Some(&state.cancel), force, Some(&state.videos_stopped))
+                })
+                .unwrap_or(Some(false));
                 let Some(ok) = outcome else { break };
                 if !ok {
                     state.failed.fetch_add(1, Ordering::Relaxed);

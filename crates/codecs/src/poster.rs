@@ -112,23 +112,65 @@ impl<S: ClipSource> ClipSource for Budgeted<S> {
 /// The poster frame of the clip in `src`. `cancel` stops the work at the next picture
 /// ([`VideoError::Cancelled`]).
 pub fn poster_frame<S: ClipSource + 'static>(src: S, opts: &PosterOptions, cancel: &AtomicBool) -> Result<PosterFrame, VideoError> {
+    open_poster(src, opts)?.decode(cancel)
+}
+
+/// A clip opened for its poster frame: its headers are read (within
+/// [`PosterOptions::max_read_bytes`], which the decode then shares), no picture yet. What a caller
+/// needs before it commits to the decode (the picture size, to weigh the memory it will take)
+/// comes from here, without reading the headers twice.
+pub struct PosterClip<S> {
+    budget: Arc<Budgeted<S>>,
+    stream: VideoStream,
+    opts: PosterOptions,
+}
+
+/// Open the clip in `src` for [`PosterClip::decode`] (headers only, read through the budget).
+pub fn open_poster<S: ClipSource + 'static>(src: S, opts: &PosterOptions) -> Result<PosterClip<S>, VideoError> {
     let budget =
         Arc::new(Budgeted { inner: src, left: AtomicU64::new(opts.max_read_bytes), used: AtomicU64::new(0), exhausted: AtomicBool::new(false) });
-    let r = decode(budget.clone(), opts, cancel);
-    match r {
-        Err(VideoError::Io(_)) | Err(VideoError::Malformed(_)) if budget.exhausted.load(Ordering::Relaxed) => {
-            Err(VideoError::TooLarge(format!("reading the picture needs more than {} MB of the clip", opts.max_read_bytes >> 20)))
+    match VideoStream::open(budget.clone(), &opts.stream) {
+        Ok(stream) => Ok(PosterClip { budget, stream, opts: *opts }),
+        Err(e) => Err(over_budget(&budget, opts, e)),
+    }
+}
+
+impl<S: ClipSource + 'static> PosterClip<S> {
+    /// The track's picture size, before any rotation (from the headers).
+    pub fn picture_size(&self) -> (u32, u32) {
+        (self.stream.info().width, self.stream.info().height)
+    }
+
+    /// Bytes of the clip read so far (the headers, until [`Self::decode`]).
+    pub fn bytes_read(&self) -> u64 {
+        self.budget.used.load(Ordering::Relaxed)
+    }
+
+    /// Decode the poster frame. `cancel` stops the work at the next picture
+    /// ([`VideoError::Cancelled`]).
+    pub fn decode(self, cancel: &AtomicBool) -> Result<PosterFrame, VideoError> {
+        let PosterClip { budget, stream, opts } = self;
+        match decode(stream, &opts, cancel) {
+            Ok(mut p) => {
+                p.bytes_read = budget.used.load(Ordering::Relaxed);
+                Ok(p)
+            }
+            Err(e) => Err(over_budget(&budget, &opts, e)),
         }
-        Ok(mut p) => {
-            p.bytes_read = budget.used.load(Ordering::Relaxed);
-            Ok(p)
+    }
+}
+
+/// A read or parse failure that came from the spent budget says so.
+fn over_budget<S>(budget: &Budgeted<S>, opts: &PosterOptions, e: VideoError) -> VideoError {
+    match e {
+        VideoError::Io(_) | VideoError::Malformed(_) if budget.exhausted.load(Ordering::Relaxed) => {
+            VideoError::TooLarge(format!("reading the picture needs more than {} MB of the clip", opts.max_read_bytes >> 20))
         }
         e => e,
     }
 }
 
-fn decode<S: ClipSource + 'static>(src: Arc<Budgeted<S>>, opts: &PosterOptions, cancel: &AtomicBool) -> Result<PosterFrame, VideoError> {
-    let mut stream = VideoStream::open(src, &opts.stream)?;
+fn decode(mut stream: VideoStream, opts: &PosterOptions, cancel: &AtomicBool) -> Result<PosterFrame, VideoError> {
     let info = stream.info().clone();
     let at = if info.duration_seconds >= opts.short_clip_seconds { info.start_seconds + opts.target_seconds } else { info.start_seconds };
     let plan = stream.seek_plan(at)?;

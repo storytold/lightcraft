@@ -208,9 +208,37 @@ fn a_stopped_video_poster_is_not_a_failed_preview() {
     assert_eq!(r["failed"].as_u64(), Some(1), "{r}");
 }
 
+/// The row's ✕ during a build stops the build's video decoding: the stopped clip's other job
+/// (its grid thumbnail) and the clips after it aren't decoded again under a fresh row, while the
+/// photos still build.
+#[test]
+fn a_cancel_during_a_build_stops_its_video_decodes() {
+    const CLIPS: u64 = 12;
+    let mut s = Session::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    s.media.video_loader = Some(fake_loader(calls.clone(), Some(crate::files::VIDEO_STOPPED)));
+    let still_calls = Arc::new(AtomicUsize::new(0));
+    s.media.file_loader = Some(fake_loader(still_calls.clone(), None));
+    for id in 1..=CLIPS {
+        add_clip(&mut s, id, Path::new(&format!("/lc-video-frames-test/clip{id}.mp4")));
+    }
+    let still =
+        Photo::new(PhotoId(100), Source::File { path: "/lc-video-frames-test/still.jpg".into() }, "still.jpg", "JPEG", 64, 48, "2026-11-16T10:00:00");
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(still) }).unwrap();
+    let mut ids: Vec<u64> = (1..=CLIPS).collect();
+    ids.push(100);
+    let r = s.execute("library.buildPreviews", &serde_json::json!({"ids": ids, "edge": 300, "wait": true})).unwrap();
+    assert_eq!((r["done"].as_u64(), r["failed"].as_u64()), (Some(CLIPS + 1), Some(0)), "{r}");
+    // one decode per lane at most (up to 4 lanes), not two per clip
+    assert!(calls.load(Ordering::Relaxed) <= 4, "{} decodes after the cancel", calls.load(Ordering::Relaxed));
+    assert!(still_calls.load(Ordering::Relaxed) > 0, "the still is built");
+}
+
 /// The real loader puts a decode in the activity row from the start, while it still waits for
-/// memory, and the row's ✕ stops it there: the load fails as stopped, and the next decode gets a
-/// fresh row that is not stopped.
+/// memory, and the row's ✕ stops it there: the load fails as stopped. A decode that starts while
+/// the stopped one still waits gets a fresh row and is not stopped. The row never makes quitting
+/// ask. (The decodes wait at a gate of their own: holding the process-wide one would stall the
+/// other tests' decodes.)
 #[test]
 fn the_video_loader_shows_its_row_and_its_cancel_stops_the_decode() {
     if !lightcraft_codecs::video_stream::video_decoding_available() {
@@ -221,24 +249,83 @@ fn the_video_loader_shows_its_row_and_its_cancel_stops_the_decode() {
     let path = dir.join("clip.mp4");
     std::fs::write(&path, h264_mp4(40)).unwrap();
     let activity = crate::activity::Activity::default();
-    let loader = crate::files::VideoFrames::new(activity.clone()).loader();
-    // all the working memory held: a background decode waits for it
-    let gate = crate::memory::work_gate();
+    let gate = Arc::new(crate::memory::WorkGate::new(1 << 40));
+    let loader = crate::files::VideoFrames::with_gate(activity.clone(), gate.clone()).loader();
+    // all the gate's memory held: a background decode waits for it
     let held = gate.acquire_urgent(usize::MAX);
-    let (l, p) = (loader.clone(), path.to_string_lossy().to_string());
-    let decode = std::thread::spawn(move || crate::memory::in_background(|| l(&p, 256, Default::default()).map(|_| ())));
-    let start = std::time::Instant::now();
-    while activity.list().is_empty() && start.elapsed() < std::time::Duration::from_secs(10) {
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    let spawn = |loader: FileLoader| {
+        let p = path.to_string_lossy().to_string();
+        std::thread::spawn(move || crate::memory::in_background(|| loader(&p, 256, Default::default()).map(|_| ())))
+    };
+    let wait_for = |what: &str, ok: &dyn Fn(&[crate::activity::TaskInfo]) -> bool| {
+        let start = std::time::Instant::now();
+        while !ok(&activity.list()) {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "{what}: {:?}", activity.list());
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    let first = spawn(loader.clone());
+    wait_for("the waiting decode is in the row", &|rows| rows.len() == 1);
     let rows = activity.list();
-    assert_eq!(rows.len(), 1, "the waiting decode is in the row");
-    assert_eq!((rows[0].kind, rows[0].total), (crate::files::VIDEO_FRAMES_KIND, 1));
-    activity.cancel(rows[0].id).unwrap();
+    assert_eq!((rows[0].kind, rows[0].total, rows[0].cancellable), (crate::files::VIDEO_FRAMES_KIND, 1, true));
+    assert!(activity.running_cancellable().is_empty(), "quitting doesn't ask about posters");
+    let stopped = rows[0].id;
+    activity.cancel(stopped).unwrap();
+    // a second decode while the stopped one still waits: a fresh row in its place, not stopping
+    let second = spawn(loader.clone());
+    wait_for("a fresh row", &|rows| rows.iter().any(|r| r.id != stopped));
+    let rows = activity.list();
+    assert_eq!(rows.len(), 1, "the fresh row replaces the stopped one");
+    assert!(!rows[0].cancelling);
+    assert_eq!(rows[0].total, 1, "the stopped decode is not the fresh row's");
     drop(held);
-    assert_eq!(decode.join().unwrap().err().as_deref(), Some(crate::files::VIDEO_STOPPED));
+    assert_eq!(first.join().unwrap().err().as_deref(), Some(crate::files::VIDEO_STOPPED));
+    assert_eq!(second.join().unwrap(), Ok(()), "the decode after the cancel runs");
     assert!(activity.list().is_empty());
-    // the next decode is not stopped
-    assert!(loader(&path.to_string_lossy(), 256, Default::default()).is_ok());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A clip in memory that counts what is read from it.
+struct Counting {
+    bytes: Vec<u8>,
+    read: Arc<AtomicUsize>,
+    starts: Arc<AtomicUsize>,
+}
+
+impl lightcraft_codecs::video_stream::ClipSource for Counting {
+    fn len(&self) -> u64 {
+        self.bytes.len() as u64
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        self.read.fetch_add(buf.len(), Ordering::Relaxed);
+        if offset == 0 {
+            self.starts.fetch_add(1, Ordering::Relaxed);
+        }
+        lightcraft_codecs::video_stream::ClipSource::read_at(&self.bytes, offset, buf)
+    }
+}
+
+/// The loader reads a clip's headers once, through the poster's read budget, before it waits for
+/// memory: a header bigger than the budget fails there, having read no more than the budget.
+#[test]
+fn a_poster_reads_its_clips_headers_once_within_the_budget() {
+    if !lightcraft_codecs::video_stream::video_decoding_available() {
+        lightcraft_testkit::skip!(Feature, "lightcraft-codecs is built without video-frames: no poster decoded");
+        return;
+    }
+    let gate = Arc::new(crate::memory::WorkGate::new(1 << 40));
+    let frames = crate::files::VideoFrames::with_gate(crate::activity::Activity::default(), gate.clone());
+    let clip = |read: &Arc<AtomicUsize>, starts: &Arc<AtomicUsize>| Counting { bytes: h264_mp4(10), read: read.clone(), starts: starts.clone() };
+    let (read, starts) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let opts = lightcraft_codecs::poster::PosterOptions { max_edge: 64, ..Default::default() };
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    assert!(frames.decode(clip(&read, &starts), &opts, false, &stop).is_ok());
+    assert_eq!(starts.load(Ordering::Relaxed), 1, "the headers are parsed once");
+    // a budget smaller than the headers: refused there, within the budget
+    let (read, starts) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let tight = lightcraft_codecs::poster::PosterOptions { max_read_bytes: 64, ..opts };
+    let e = frames.decode(clip(&read, &starts), &tight, false, &stop).err().unwrap_or_default();
+    assert!(e.contains("MB of the clip"), "{e}");
+    assert!(read.load(Ordering::Relaxed) <= 64, "{} bytes read", read.load(Ordering::Relaxed));
+    assert_eq!(gate.usage().0, 0);
 }

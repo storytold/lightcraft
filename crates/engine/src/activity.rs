@@ -100,6 +100,8 @@ struct Entry {
     detail: Mutex<String>,
     cancel: Option<Arc<AtomicBool>>,
     cancellable: AtomicBool,
+    /// Work that quitting may drop without asking ([`TaskGuard::set_disposable`]).
+    disposable: AtomicBool,
     /// Held while a cancel is decided ([`Activity::cancel`], [`Activity::cancel_all`]) and while
     /// cancelling is switched ([`TaskGuard::set_cancellable`], [`TaskHandle::set_cancellable`]): a
     /// step that turns it off and then reads the cancel flag either sees a cancel that was
@@ -187,6 +189,7 @@ impl Activity {
             unit: AtomicU8::new(Unit::Count.to_u8()),
             detail: Mutex::new(String::new()),
             cancellable: AtomicBool::new(cancel.is_some()),
+            disposable: AtomicBool::new(false),
             cancel,
             gate: Mutex::new(()),
         });
@@ -213,9 +216,14 @@ impl Activity {
         tasks.iter().filter(|e| e.try_cancel()).count()
     }
 
-    /// Tasks that quitting would cut short: cancellable ones not already stopping.
+    /// Tasks that quitting would cut short: cancellable ones not already stopping, other than
+    /// disposable work ([`TaskGuard::set_disposable`]).
     pub fn running_cancellable(&self) -> Vec<TaskInfo> {
-        lock(&self.inner.tasks).iter().filter(|e| e.is_cancellable() && !e.is_cancelled()).map(|e| e.info()).collect()
+        lock(&self.inner.tasks)
+            .iter()
+            .filter(|e| e.is_cancellable() && !e.is_cancelled() && !e.disposable.load(Ordering::Relaxed))
+            .map(|e| e.info())
+            .collect()
     }
 }
 
@@ -247,6 +255,13 @@ impl TaskGuard {
     /// A step that must not be cut short (the Lightroom import's commit) turns cancelling off for its duration.
     pub fn set_cancellable(&self, yes: bool) {
         self.entry.set_cancellable(yes);
+    }
+
+    /// Work whose result is only a convenience, made again when needed (video poster frames, like
+    /// a photo's thumbnail, which has no row at all): quitting doesn't ask about it. It is still
+    /// listed, its ✕ still stops it, and Cancel All still asks it to stop.
+    pub fn set_disposable(&self) {
+        self.entry.disposable.store(true, Ordering::Relaxed);
     }
 
     pub fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
@@ -358,6 +373,20 @@ mod tests {
         let (_x, _y, _z) = (a.start("export", "E", Cancel::Yes), a.start("import", "I", Cancel::Yes), a.start("faces", "F", Cancel::No));
         assert_eq!(a.cancel_all(), 2);
         assert!(a.running_cancellable().is_empty());
+    }
+
+    /// Disposable work (video posters) doesn't make quitting ask, but stays a cancellable row.
+    #[test]
+    fn disposable_work_is_not_asked_about_when_quitting() {
+        let a = Activity::default();
+        let posters = a.start("videoFrames", "Reading video frames", Cancel::Yes);
+        posters.set_disposable();
+        assert!(a.running_cancellable().is_empty(), "nothing to ask about");
+        let export = a.start("export", "E", Cancel::Yes);
+        assert_eq!(a.running_cancellable().iter().map(|t| t.kind).collect::<Vec<_>>(), ["export"]);
+        assert!(a.list().iter().all(|t| t.cancellable), "both listed with their ✕");
+        assert_eq!(a.cancel_all(), 2, "Cancel All stops the posters too");
+        assert!(posters.is_cancelled() && export.is_cancelled());
     }
 
     #[test]

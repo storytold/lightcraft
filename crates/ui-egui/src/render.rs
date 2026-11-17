@@ -254,6 +254,10 @@ fn quick_edge(job: &QuickJob) -> usize {
     job.embedded.as_ref().map_or(0, |e| e.2)
 }
 
+/// What the window shows, as far as asking for stopped posters again goes: the view, the grid's
+/// and the filmstrip's scroll positions (their bits), and the active photo.
+pub type ViewState = (crate::state::ViewMode, Option<u32>, Option<u32>, Option<PhotoId>);
+
 pub struct Renderer {
     #[cfg(test)]
     pub(crate) thumb_jobs_built: usize,
@@ -321,6 +325,12 @@ pub struct Renderer {
     /// The catalog revision seen at the last poll: a failure is retried once the catalog changes
     /// its photo (a relinked or re-imported file), see [`Self::follow_catalog`].
     catalog_rev: u64,
+    /// Video posters the activity row's ✕ stopped, by slot and job key, with the photo: the ✕
+    /// sticks, so they are not asked for again until the view ([`Self::follow_view`]) or the
+    /// catalog changes. (No failure: nothing is wrong with the clip.)
+    stopped: HashMap<Slot, (u64, PhotoId)>,
+    /// What the window showed at the last [`Self::follow_view`].
+    view: Option<ViewState>,
     /// Prefetch slot → key of the last job submitted (each runs once).
     prefetched: HashMap<Slot, u64>,
     /// Variant key → frame it was last asked for (LRU of [`Slot::Variant`] textures).
@@ -430,6 +440,8 @@ impl Renderer {
             quick_edge: HashMap::new(),
             failed: HashMap::new(),
             catalog_rev: 0,
+            stopped: HashMap::new(),
+            view: None,
             prefetched: HashMap::new(),
             variant_used: HashMap::new(),
             variant_want: 0,
@@ -658,7 +670,18 @@ impl Renderer {
         if let Some(&(k, p)) = self.pending.get(&slot) {
             return k != key || (p != priority && self.is_queued(slot));
         }
-        !(self.textures.get(&slot).is_some_and(|t| t.key == key) || self.failed.get(&slot).is_some_and(|f| f.0 == key && f.2 == self.catalog_rev))
+        !(self.textures.get(&slot).is_some_and(|t| t.key == key)
+            || self.failed.get(&slot).is_some_and(|f| f.0 == key && f.2 == self.catalog_rev)
+            || self.stopped.get(&slot).is_some_and(|s| s.0 == key))
+    }
+
+    /// The window shows `view` now: when it differs from the last frame's (another view, a
+    /// scroll, another photo), the posters a ✕ stopped are asked for again.
+    pub fn follow_view(&mut self, view: ViewState) {
+        if self.view != Some(view) {
+            self.view = Some(view);
+            self.stopped.clear();
+        }
     }
     /// Free a view slot's texture and stage cache (the view is no longer shown).
     pub fn release(&mut self, slot: Slot) {
@@ -961,6 +984,7 @@ impl Renderer {
         self.pending.retain(|s, _| !gone(s));
         self.requests.retain(|s, _| !gone(s));
         self.failed.retain(|s, _| !gone(s));
+        self.stopped.retain(|s, _| !gone(s));
         self.slides_live = !keep.is_empty();
     }
 
@@ -979,6 +1003,7 @@ impl Renderer {
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
+        self.stopped.clear();
         self.prefetched.clear();
         self.pending.clear();
         self.queue.clear();
@@ -1101,6 +1126,8 @@ impl Renderer {
         if rev == self.catalog_rev {
             return;
         }
+        // a stopped poster is asked for again once the catalog changes too
+        self.stopped.clear();
         if let Some(touched) = catalog.touched_since(self.catalog_rev) {
             let missing =
                 |id| matches!(catalog.photo(id).map(|p| &p.source), Some(lightcraft_catalog::Source::File { path }) if files.is_offline(path));
@@ -1407,6 +1434,7 @@ impl Renderer {
             let rendered = match r.rendered {
                 Ok(x) => {
                     self.failed.remove(&slot);
+                    self.stopped.remove(&slot);
                     // (a stand-in that comes back after the thumbnail itself is thrown away below)
                     let unused = matches!(slot, Slot::ThumbQuick(id) if self.textures.contains_key(&Slot::Thumb(id)));
                     self.decided(|| {
@@ -1422,8 +1450,9 @@ impl Renderer {
                 }
                 Err(e) => {
                     if e == lightcraft_engine::files::VIDEO_STOPPED {
-                        // a video poster the activity row's ✕ stopped: no lasting failure (stored,
-                        // it would not be asked for again until the catalog changed), no warning
+                        // a video poster the activity row's ✕ stopped: no failure and no warning, but
+                        // the ✕ sticks: not asked for again until the view or the catalog changes
+                        self.stopped.insert(slot, (r.key, r.photo));
                         self.decided(|| format!("{}: stopped", render_subject(slot, r.photo, source.as_ref())));
                     } else if !matches!(slot, Slot::Prefetch(_) | Slot::QuickAhead(_)) {
                         let message = render_failure_message(slot, r.photo, source.as_ref(), &e);
@@ -1627,6 +1656,7 @@ impl Renderer {
         self.textures.retain(|s, _| retained(s));
         self.quick_tried.retain(|s, _| retained(s));
         self.failed.retain(|s, _| retained(s));
+        self.stopped.retain(|s, _| retained(s));
     }
 
     /// Drop thumbnails that aren't in `keep` (bounded memory for huge libraries), and queued

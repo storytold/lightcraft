@@ -272,14 +272,12 @@ fn the_loupe_shows_a_video_card_instead_of_a_render_error() {
     assert_eq!(r["ok"], true, "{r}");
     h.settle(SETTLE);
     assert!(has(&h, "canvas:videoCard"), "the card stands in for the frame");
-    // no video loader: a build without decoding says so on the card itself (no render did)
+    // no video loader (as in a build without decoding): the card reads as it did before poster
+    // frames, in every build, and Info has no reason either
     let text = h.view.painted_text().join("\n");
-    if lightcraft_codecs::video_stream::video_decoding_available() {
-        assert!(text.contains(crate::i18n::tr("Video catalogued — playback and trim are coming in a later update")), "{text}");
-    } else {
-        let why = crate::i18n::tr(lightcraft_codecs::video_stream::NO_VIDEO_DECODING);
-        assert!(text.contains(&crate::i18n::tr_format!("No video frame: {reason}", reason = why)), "{text}");
-    }
+    assert!(text.contains(crate::i18n::tr("Video catalogued — playback and trim are coming in a later update")), "{text}");
+    assert!(!text.contains(crate::i18n::tr("No video frame")), "{text}");
+    assert!(!has(&h, "notice:videoFrame:info"));
     assert_eq!(h.app.loupe_shown.map(|l| l.1), Some("video"), "ui.inspect says what the loupe shows");
     assert!(!has(&h, "loupe:renderFailed"), "a catalogued video is not a broken photo");
     assert!(has(&h, "info:duration"), "Info lists the clip's running time");
@@ -440,10 +438,10 @@ fn a_portrait_poster_keeps_its_running_time_on_the_picture_in_the_filmstrip() {
     assert!(badge.right() <= centre + half + 0.5 && badge.left() >= centre - half - 0.5, "{badge:?} beside the picture in {cell:?}");
 }
 
-/// A poster the activity row's ✕ stopped is no lasting failure: no mark, no warning, and it is
-/// asked for again (and shows) rather than waiting for the catalog to change.
+/// A poster the activity row's ✕ stopped is no failure (no mark, no warning), and the ✕ sticks:
+/// it isn't asked for again frame after frame, only once the view changes, and then it shows.
 #[test]
-fn a_stopped_poster_is_asked_for_again() {
+fn a_stopped_poster_stays_stopped_until_the_view_changes() {
     let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = calls.clone();
     let loader: lightcraft_engine::media::FileLoader = std::sync::Arc::new(move |_path: &str, max_edge: usize, _with| {
@@ -454,13 +452,29 @@ fn a_stopped_poster_is_asked_for_again() {
         let (w, h) = (320.min(max_edge), 180.min(max_edge));
         Ok((lightcraft_raster::Rgb32f { width: w, height: h, data: vec![[0.1, 0.2, 0.45]; w * h] }, Default::default()))
     });
-    let h = video_app_with(ViewMode::PhotoGrid, Some(loader));
-    assert!(calls.load(std::sync::atomic::Ordering::Relaxed) > 3, "asked for again");
+    let mut h = video_app_with(ViewMode::PhotoGrid, Some(loader));
+    let asked = || calls.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(asked(), 3, "each clip asked once");
+    for _ in 0..30 {
+        h.step();
+    }
+    h.settle(SETTLE);
+    assert_eq!(asked(), 3, "the ✕ sticks: no clip is decoded again while the view stays");
     for id in [1, 3, 4] {
-        assert!(h.app.renderer.failure(crate::render::Slot::Thumb(PhotoId(id))).is_none(), "clip {id}: no lasting failure");
-        assert!(h.app.renderer.thumb(PhotoId(id)).is_some(), "clip {id} shows its poster after all");
+        assert!(h.app.renderer.failure(crate::render::Slot::Thumb(PhotoId(id))).is_none(), "clip {id}: no failure");
+        assert!(h.app.renderer.thumb(PhotoId(id)).is_none(), "clip {id}: still no poster");
     }
     assert!(!h.app.renderer.failure_messages.iter().any(|m| m.contains("Stopped")), "no warning: {:?}", h.app.renderer.failure_messages);
+    // the view changes (another photo made active, the same grid and thumbnail size, so the same
+    // render keys): asked for again, and shown
+    let rev = h.app.session.catalog.revision;
+    h.app.run("library.select", json!({"ids": [2], "active": 2})).unwrap();
+    assert_eq!(h.app.session.catalog.revision, rev, "not a catalog change");
+    h.settle(SETTLE);
+    assert!(asked() > 3, "asked for again once the view changed");
+    for id in [1, 3, 4] {
+        assert!(h.app.renderer.thumb(PhotoId(id)).is_some(), "clip {id} shows its poster after all");
+    }
 }
 
 /// While the loupe's own render of a clip fails (or hasn't come), its thumbnail's poster stands

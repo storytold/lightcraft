@@ -14,14 +14,15 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use lightcraft_codecs::poster::{PosterOptions, poster_frame};
+use lightcraft_codecs::poster::{PosterOptions, open_poster};
 #[cfg(not(target_arch = "wasm32"))]
 use lightcraft_codecs::video_stream::FileSource;
-use lightcraft_codecs::video_stream::{StreamOptions, VideoError, VideoStream};
+use lightcraft_codecs::video_stream::{ClipSource, StreamOptions, VideoError};
 use lightcraft_pipeline::SourceInfo;
 
 use crate::activity::{Activity, Cancel, TaskGuard};
 use crate::media::{FileLoader, RawDecode, SourceLevel};
+use crate::memory::WorkGate;
 
 /// The activity row's kind ([`crate::activity`]).
 pub const VIDEO_FRAMES_KIND: &str = "videoFrames";
@@ -65,6 +66,8 @@ struct Row {
 pub struct VideoFrames {
     activity: Activity,
     row: Arc<Mutex<Row>>,
+    /// The memory gate decodes wait at: the process-wide [`crate::memory::work_gate`], or a test's own.
+    gate: Option<Arc<WorkGate>>,
 }
 
 /// One poster decode's place in the row; dropping it counts the decode done.
@@ -75,7 +78,18 @@ struct Ticket {
 
 impl VideoFrames {
     pub fn new(activity: Activity) -> VideoFrames {
-        VideoFrames { activity, row: Arc::default() }
+        VideoFrames { activity, row: Arc::default(), gate: None }
+    }
+
+    /// Decodes that wait at `gate` instead of the process-wide one (a test holding all of its
+    /// memory must not stall the other tests' decodes).
+    #[cfg(test)]
+    pub(crate) fn with_gate(activity: Activity, gate: Arc<WorkGate>) -> VideoFrames {
+        VideoFrames { activity, row: Arc::default(), gate: Some(gate) }
+    }
+
+    fn gate(&self) -> &WorkGate {
+        self.gate.as_deref().unwrap_or_else(|| crate::memory::work_gate())
     }
 
     /// Count a decode in, starting the row when it is the first, or when the row's ✕ was pressed
@@ -88,7 +102,10 @@ impl VideoFrames {
             row.cancel = Arc::new(AtomicBool::new(false));
             row.generation = row.generation.wrapping_add(1);
             (row.running, row.done) = (0, 0);
-            row.guard = Some(self.activity.start(VIDEO_FRAMES_KIND, VIDEO_FRAMES_LABEL, Cancel::Flag(row.cancel.clone())));
+            let guard = self.activity.start(VIDEO_FRAMES_KIND, VIDEO_FRAMES_LABEL, Cancel::Flag(row.cancel.clone()));
+            // thumbnail work: quitting drops it without asking, as it drops a photo's thumbnail
+            guard.set_disposable();
+            row.guard = Some(guard);
         }
         row.running = row.running.saturating_add(1);
         progress(&row);
@@ -111,18 +128,27 @@ impl VideoFrames {
         let (_ticket, cancel) = self.enter();
         let background = crate::memory::is_background();
         let opts = poster_options(max_edge, background);
-        // the clip's picture size weighs the decode (its headers only)
-        let (w, h) = {
-            let s = VideoStream::open(open_clip(path)?, &opts.stream).map_err(|e| reason(&e))?;
-            (s.info().width, s.info().height)
-        };
-        let gate = crate::memory::work_gate();
+        self.decode(open_clip(path)?, &opts, background, &cancel)
+    }
+
+    /// The poster of the clip in `src`: its headers read once, within the poster's read budget,
+    /// before the decode waits for memory, weighed by the picture size they give.
+    pub(crate) fn decode<S: ClipSource + 'static>(
+        &self,
+        src: S,
+        opts: &PosterOptions,
+        background: bool,
+        cancel: &AtomicBool,
+    ) -> Result<(lightcraft_raster::Rgb32f, SourceInfo), String> {
+        let clip = open_poster(src, opts).map_err(|e| reason(&e))?;
+        let (w, h) = clip.picture_size();
+        let gate = self.gate();
         let weight = poster_weight(w, h);
         let _permit = if background { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(VIDEO_STOPPED.into());
         }
-        let r = poster_frame(open_clip(path)?, &opts, &cancel);
+        let r = clip.decode(cancel);
         crate::memory::release();
         let p = r.map_err(|e| reason(&e))?;
         Ok((p.image, SourceInfo::default()))
