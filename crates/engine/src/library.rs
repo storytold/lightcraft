@@ -73,10 +73,11 @@ pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
 /// `prefs.json`), in any letter case. Such a path only names a library when the folder that
 /// holds it already is one.
 fn is_settings_file(path: &Path) -> bool {
-    path.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
-        let name = name.to_ascii_lowercase();
-        name == "presets.json" || name == "view.json" || name == "prefs.json"
-    })
+    path.is_file()
+        && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            name == "presets.json" || name == "view.json" || name == "prefs.json"
+        })
 }
 
 /// Whether `dir` already holds a library (its catalog files).
