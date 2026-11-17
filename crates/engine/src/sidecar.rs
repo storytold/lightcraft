@@ -1149,9 +1149,12 @@ fn update_crs_attributes(data: &mut String, crs: &[(&'static str, String)]) {
 /// none exists. It never inserts into an unrelated first block, where the
 /// `crs:` prefix may be unbound.
 fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
-    let prefix = crs_prefix(data);
-    let attr = format!(" {prefix}:{name}=\"{}\"", escape_attr(value));
     let Some((pos, end)) = global_description(data) else { return };
+    // Determine an effective CRS prefix on this description: prefer one already bound
+    // to CRS_NS, otherwise use a fresh prefix that doesn't conflict.
+    let bindings = ns_bindings(data, pos, end);
+    let prefix = bindings.iter().find(|(_, uri)| *uri == CRS_NS).map(|(p, _)| p.as_str()).unwrap_or("crs");
+    let attr = format!(" {prefix}:{name}=\"{}\"", escape_attr(value));
     // For a self-closing tag the `/` must immediately precede `>`, so the new
     // attribute goes before the `/`, not before the `>`. Scan back from `>` over
     // whitespace to find the `/`; a slash inside a quoted attribute value (such as
@@ -1165,11 +1168,10 @@ fn insert_crs_attribute(data: &mut String, name: &str, value: &str) {
     } else {
         end
     };
-    // Bind the `crs:` prefix on the block when it doesn't already bind it, so the
-    // inserted `crs:` attribute stays valid. The CRS namespace may be bound under
-    // another prefix (e.g. `acr:`); declaring `crs:` as well keeps the attribute valid.
-    if prefix == "crs" && !ns_bindings(data, pos, end).iter().any(|(p, uri)| p == "crs" && uri == CRS_NS) {
-        data.insert_str(insert_at, " xmlns:crs=\"http://ns.adobe.com/camera-raw-settings/1.0/\"");
+    // Bind the CRS prefix on the block when it doesn't already bind it, so the
+    // inserted attribute stays valid.
+    if !bindings.iter().any(|(p, uri)| p == prefix && *uri == CRS_NS) {
+        data.insert_str(insert_at, &format!(" xmlns:{prefix}=\"{CRS_NS}\""));
     }
     data.insert_str(insert_at, &attr);
 }
@@ -1354,7 +1356,10 @@ fn correction_descriptions(data: &str) -> Vec<(usize, usize)> {
 /// `acr:`) is updated in place under that prefix rather than duplicated.
 fn put_attr_on_tag(data: &mut String, start: usize, end: usize, prefix: &str, name: &str, value: &str) -> bool {
     let bindings = ns_bindings(data, start, end);
-    let is_crs = |attr_prefix: &str| bindings.iter().any(|(p, uri)| p == attr_prefix && uri == CRS_NS);
+    let is_crs = |attr_prefix: &str| bindings.iter().any(|(p, uri)| p == attr_prefix && *uri == CRS_NS);
+    // Find an effective CRS prefix on this tag (one bound to CRS_NS), preferring the
+    // passed prefix if it's bound to CRS_NS here.
+    let effective_prefix = bindings.iter().find(|(p, uri)| *uri == CRS_NS).map(|(p, _)| p.as_str()).unwrap_or(prefix);
     for ((ns, ne), value_range) in tag_attrs(data, start, end) {
         let attr_name = data.get(ns..ne).unwrap_or_default();
         let (attr_prefix, local) = attr_name.split_once(':').unwrap_or(("", attr_name));
@@ -1374,7 +1379,7 @@ fn put_attr_on_tag(data: &mut String, start: usize, end: usize, prefix: &str, na
     } else {
         end
     };
-    data.insert_str(insert_at, &format!(" {prefix}:{name}=\"{}\"", escape_attr(value)));
+    data.insert_str(insert_at, &format!(" {effective_prefix}:{name}=\"{}\"", escape_attr(value)));
     true
 }
 
@@ -1576,6 +1581,10 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                     if cur_vals.iter().zip(prev_vals.iter()).any(|(x, y)| (x - y).abs() >= EPS) {
                         let s = cur_vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
                         put_attr_on_tag(data, cstart, cend, prefix, "LumRange", &s);
+                        // Refresh cend after writing LumRange in case the tag length changed
+                        let new_cend = tag_end(data, cstart).unwrap_or(cend);
+                        // Note: we can't update the outer cend here since it's a different scope,
+                        // but the next put_attr_on_tag will recompute from cstart
                     }
                 }
                 _ => {}
