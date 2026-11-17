@@ -1,8 +1,12 @@
 //! Adobe's `crs:` namespace and our import decision for every field of it.
 //!
 //! Registry source: the public exiftool XMP-crs tag table (https://exiftool.org/TagNames/XMP.html#crs,
-//! revised 2026-10-28; Adobe publishes only the namespace URI) plus every field
-//! `docs/xmp-interop.md` names. The list lives here, outside the tests, so every consumer shares
+//! revised 2026-11-17; Adobe publishes only the namespace URI) reconciled against exiftool's own
+//! `XMP.pm` table, plus fields Lightroom packets carry that table still lacks (`AsShotTemperature`,
+//! `AsShotTint`, `CurveRefineSaturation`, `RequiresRGBTables`, `SupportsAmount2`) and the fields
+//! `docs/xmp-interop.md` names. Struct sub-fields and their flat compound names
+//! (`...CorrectionMasks`, `...Dabs`) are not separate properties and are not listed. The list
+//! lives here, outside the tests, so every consumer shares
 //! one definition: the mapping reads what it reads (`to_partial`), and the lists below record the
 //! other decisions — skipped as metadata, reported with a reason — which `tests.rs` checks stay
 //! complete and true (#4435).
@@ -69,6 +73,7 @@ pub const ADOBE_CRS_FIELDS: &[&str] = &[
     "CropUnits",
     "CropWidth",
     "CurveRefineSaturation",
+    "DNGIgnoreSidecars",
     "DefaultAutoGray",
     "DefaultAutoTone",
     "DefaultsSpecificToISO",
@@ -82,6 +87,7 @@ pub const ADOBE_CRS_FIELDS: &[&str] = &[
     "DefringePurpleHueLo",
     "Dehaze",
     "DepthBasedCorrections",
+    "DepthMapInfo",
     "Description",
     "Exposure",
     "Exposure2012",
@@ -106,6 +112,7 @@ pub const ADOBE_CRS_FIELDS: &[&str] = &[
     "HasSettings",
     "HDREditMode",
     "HDRMaxValue",
+    "Highlight2012",
     "HighlightRecovery",
     "Highlights2012",
     "HueAdjustmentAqua",
@@ -139,6 +146,7 @@ pub const ADOBE_CRS_FIELDS: &[&str] = &[
     "LensProfileSetup",
     "LensProfileVignettingScale",
     "Look",
+    "LookName",
     "LuminanceAdjustmentAqua",
     "LuminanceAdjustmentBlue",
     "LuminanceAdjustmentGreen",
@@ -182,7 +190,7 @@ pub const ADOBE_CRS_FIELDS: &[&str] = &[
     "PostCropVignetteStyle",
     "PresetType",
     "ProcessVersion",
-    "RangeMask",
+    "RangeMaskMapInfo",
     "RawFileName",
     "RedEyeInfo",
     "RedHue",
@@ -449,6 +457,16 @@ pub const REPORTED_CRS_FIELDS: &[&str] = &[
     // features LightCraft does not implement, documented as not mapped
     "RedEyeInfo",
     "LensBlur",
+    // written beside something that already carries the value: quiet at its default (100 % or
+    // an empty set), reported as an unmapped strength anywhere else
+    "LensProfileDistortionScale",
+    "LensProfileVignettingScale",
+    "LensProfileChromaticAberrationScale",
+    "PointColors",
+    // a look's name resolves no further than the look itself
+    "LookName",
+    // an ACR field LightCraft does not map
+    "Highlight2012",
     // saved Lightroom geometry: the mode is recalculated, the matrices are reported
     "UprightTransform_0",
     "UprightTransform_1",
@@ -476,9 +494,10 @@ pub const REPORTED_CRS_FIELDS: &[&str] = &[
     "ChromaticAberrationR",
     "Defringe",
     "DepthBasedCorrections",
+    "DepthMapInfo",
     "HDRMaxValue",
     "MoireFilter",
-    "RangeMask",
+    "RangeMaskMapInfo",
     "SDRBlend",
     "SDRBrightness",
     "SDRContrast",

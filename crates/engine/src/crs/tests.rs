@@ -38,23 +38,13 @@ fn props(x: &str) -> Props {
 // The registry and its field decisions live in `super::registry`, beside `NON_ADJUSTMENT`;
 // the tests below check that classification against the mapping and the docs.
 
-/// Fields the report deliberately leaves out (`to_partial_report`'s `quiet`): panel switches and
-/// names that change nothing by themselves; the conditional ones are quiet at their default.
+/// Fields the report deliberately leaves out at any value (`to_partial_report`'s `quiet`):
+/// panel switches and names that change nothing by themselves. The value-conditional fields
+/// report away from their default and live in the reported list with a note.
 fn quietly_ignored(f: &str) -> bool {
     f.starts_with("Enable")
         || f.starts_with("ToneCurveName")
-        || matches!(
-            f,
-            "AutoBrightness"
-                | "AutoContrast"
-                | "AutoExposure"
-                | "AutoShadows"
-                | "AutoTone"
-                | "AutoGrayscaleMix"
-                | "PointColors"
-                | "LensProfileDistortionScale"
-                | "LensProfileVignettingScale"
-        )
+        || matches!(f, "AutoBrightness" | "AutoContrast" | "AutoExposure" | "AutoShadows" | "AutoTone" | "AutoGrayscaleMix")
 }
 
 /// Every Adobe field must have a decision: read, skipped as metadata, ignored as packet
@@ -115,6 +105,28 @@ fn the_classification_lists_are_consistent() {
     for k in NON_ADJUSTMENT {
         assert!(ADOBE_CRS_FIELDS.contains(&k.trim_start_matches("crs:")), "{k} is not in the Adobe registry");
     }
+}
+
+/// The conditional fields report only away from their default: at it, `quiet` keeps them out of
+/// the report; anywhere else they are real gaps (#4435).
+#[test]
+fn conditional_fields_report_away_from_their_default() {
+    let at = |name: &str, value: &str| {
+        let x = format!(
+            r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:{name}="{value}"/>"#
+        );
+        to_partial_report(&props(&x), None, Target::Any, 1.5).1
+    };
+    // the lens-profile strength trio at 100 % is the profile's own bookkeeping (Lightroom
+    // writes DistortionScale at 100 on every sidecar of a real set); any other strength is a
+    // correction LightCraft does not carry over
+    for scale in ["LensProfileDistortionScale", "LensProfileVignettingScale", "LensProfileChromaticAberrationScale"] {
+        assert!(at(scale, "100").is_empty(), "{scale} at its default is quiet");
+        assert_eq!(at(scale, "60"), [scale], "{scale} away from its default is reported");
+    }
+    // an empty Point Colors set is the profile's own bookkeeping; a used slot is a real gap
+    assert!(at("PointColors", "-1.000000, -1.000000, -1.000000, -1.000000").is_empty());
+    assert_eq!(at("PointColors", "0.5, 0.2, 0.1, 10, 0, 0, 0, 0"), ["PointColors"]);
 }
 
 /// The grouped notations `docs/xmp-interop.md` writes instead of every field name on its own,
@@ -216,7 +228,11 @@ fn every_mapped_crs_field_is_documented() {
     let missing: Vec<&str> = MAPPED_CRS_FIELDS
         .iter()
         .copied()
-        .filter(|f| !docs.contains(f) && !DOC_GROUPS.iter().any(|(form, fields)| docs.contains(form) && fields.contains(f)))
+        .filter(|f| {
+            !docs.contains(&format!("`{f}`"))
+                && !docs.contains(&format!("`crs:{f}`"))
+                && !DOC_GROUPS.iter().any(|(form, fields)| docs.contains(&format!("`{form}`")) && fields.contains(f))
+        })
         .collect();
     assert!(missing.is_empty(), "mapped fields missing from docs/xmp-interop.md: {missing:?}");
 }
