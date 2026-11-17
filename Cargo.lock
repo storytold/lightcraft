@@ -4172,6 +4172,7 @@ dependencies = [
 name = "lightcraft-pipeline"
 version = "0.21.1"
 dependencies = [
+ "craft-cms",
  "craft-image-codecs",
  "dhat",
  "lightcraft-color",
