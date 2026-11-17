@@ -321,3 +321,166 @@ fn hlg_shows_its_scene_light_with_highlights_kept() {
     let steps: Vec<f32> = (11..=15).map(|k| at(k as f32 / 15.0)).collect();
     assert!(steps.windows(2).all(|w| w[1] > w[0] + 0.05), "{steps:?}");
 }
+
+/// The per-pixel converter as it was before the row-at-a-time rewrite, kept as the reference the
+/// fast path must match bit for bit.
+fn plane16(s: &[u16], stride: usize) -> Plane<'_> {
+    Plane { samples: Samples::U16(s), stride }
+}
+
+fn plane8(s: &[u8], stride: usize) -> Plane<'_> {
+    Plane { samples: Samples::U8(s), stride }
+}
+
+mod reference {
+    use super::super::*;
+
+    pub fn srgb8(c: &Converter, pic: &Picture<'_>) -> Vec<[u8; 4]> {
+        let enc = srgb_encode_lut();
+        let mut out = vec![[0u8; 4]; pic.width * pic.height];
+        for (y, row) in out.chunks_mut(pic.width).enumerate() {
+            pixels(c, pic, y, Output::Srgb8, |x, rgb| {
+                row[x] = if c.srgb_passthrough {
+                    [unit_u8(rgb[0]), unit_u8(rgb[1]), unit_u8(rgb[2]), 255]
+                } else {
+                    [enc_u8(enc, rgb[0]), enc_u8(enc, rgb[1]), enc_u8(enc, rgb[2]), 255]
+                };
+            });
+        }
+        out
+    }
+
+    pub fn linear(c: &Converter, pic: &Picture<'_>) -> Vec<[f32; 3]> {
+        let mut out = vec![[0f32; 3]; pic.width * pic.height];
+        for (y, row) in out.chunks_mut(pic.width).enumerate() {
+            pixels(c, pic, y, Output::Linear2020, |x, rgb| row[x] = rgb);
+        }
+        out
+    }
+
+    fn pixels(c: &Converter, pic: &Picture<'_>, y: usize, output: Output, mut put: impl FnMut(usize, [f32; 3])) {
+        let w = pic.width;
+        let (mut cb, mut cr) = (vec![0f32; w], vec![0f32; w]);
+        chroma_row(c, pic, &pic.cb, y, &mut cb);
+        chroma_row(c, pic, &pic.cr, y, &mut cr);
+        let ymax = c.y_lut.len() - 1;
+        for x in 0..w {
+            let luma = c.y_lut[pic.y.samples.at(y * pic.y.stride + x).min(ymax)];
+            let s = rgb_signal(c, luma, cb[x], cr[x]);
+            put(x, finish(c, s, output));
+        }
+    }
+
+    fn chroma_row(c: &Converter, pic: &Picture<'_>, plane: &Plane<'_>, y: usize, out: &mut [f32]) {
+        let (sx, sy) = pic.chroma.shifts();
+        let (cw, ch) = pic.chroma.plane_size(pic.width, pic.height);
+        let lut = if c.matrix == Matrix::Identity { &c.y_lut } else { &c.c_lut };
+        let cmax = lut.len() - 1;
+        let at = |cx: usize, cy: usize| lut[plane.samples.at(cy.min(ch - 1) * plane.stride + cx.min(cw - 1)).min(cmax)];
+        let (r0, r1, w1) = if sy == 0 {
+            (y, y, 0.0)
+        } else {
+            let i = y >> 1;
+            if y & 1 == 0 { (i, i.saturating_sub(1), 0.25) } else { (i, i + 1, 0.25) }
+        };
+        let sample = |cx: usize| at(cx, r0) * (1.0 - w1) + at(cx, r1) * w1;
+        for (x, o) in out.iter_mut().enumerate() {
+            *o = if sx == 0 {
+                sample(x)
+            } else if x & 1 == 0 {
+                sample(x >> 1)
+            } else {
+                (sample(x >> 1) + sample((x >> 1) + 1)) * 0.5
+            };
+        }
+    }
+
+    fn rgb_signal(c: &Converter, y: f32, cb: f32, cr: f32) -> [f32; 3] {
+        match c.matrix {
+            Matrix::Kr { kr, kb } => {
+                let kg = 1.0 - kr - kb;
+                let r = y + 2.0 * (1.0 - kr) * cr;
+                let b = y + 2.0 * (1.0 - kb) * cb;
+                let g = if kg.abs() > 1e-6 { (y - kr * r - kb * b) / kg } else { y };
+                [r, g, b]
+            }
+            Matrix::Identity => [cr, y, cb],
+            Matrix::YCgCo => {
+                let t = y - cb;
+                [t + cr, y + cb, t - cr]
+            }
+        }
+    }
+
+    fn finish(c: &Converter, s: [f32; 3], output: Output) -> [f32; 3] {
+        if output == Output::Srgb8 && c.srgb_passthrough {
+            return s;
+        }
+        let lin = c.linearise(s);
+        match output {
+            Output::Srgb8 => apply(&c.to_srgb, lin),
+            Output::Linear2020 => apply(&c.to_2020, lin).map(|v| v.max(0.0)),
+        }
+    }
+}
+
+/// Noise pictures (8 to 16 bits, every chroma layout, padded strides, odd sizes, samples above the
+/// bit depth's range) convert exactly as the per-pixel reference converts them, for every matrix,
+/// transfer and range.
+#[test]
+fn the_row_converter_matches_the_per_pixel_reference_exactly() {
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut checked = 0;
+    for &(w, h) in &[(1, 1), (2, 3), (37, 9), (64, 17)] {
+        for chroma in [Chroma::C420, Chroma::C422, Chroma::C444] {
+            for bits in [8u8, 10, 12, 16] {
+                let (cw, ch) = chroma.plane_size(w, h);
+                let (ys, cs) = (w + 3, cw + 2);
+                let max = (1u64 << bits) - 1;
+                // mostly in range, some above it (hostile streams)
+                let mut sample = |_| {
+                    let v = next();
+                    (if v % 17 == 0 { v >> 40 } else { (v >> 20) % (max + 1) }) as u16
+                };
+                let y16: Vec<u16> = (0..ys * h).map(&mut sample).collect();
+                let cb16: Vec<u16> = (0..cs * ch).map(&mut sample).collect();
+                let cr16: Vec<u16> = (0..cs * ch).map(&mut sample).collect();
+                let narrow = |v: &[u16]| v.iter().map(|&s| s as u8).collect::<Vec<u8>>();
+                let (y8, cb8, cr8) = (narrow(&y16), narrow(&cb16), narrow(&cr16));
+                for eight in [false, true] {
+                    if eight && bits != 8 {
+                        continue;
+                    }
+                    let pic = if eight {
+                        Picture { width: w, height: h, bit_depth: bits, chroma, y: plane8(&y8, ys), cb: plane8(&cb8, cs), cr: plane8(&cr8, cs) }
+                    } else {
+                        Picture { width: w, height: h, bit_depth: bits, chroma, y: plane16(&y16, ys), cb: plane16(&cb16, cs), cr: plane16(&cr16, cs) }
+                    };
+                    for matrix in [0u8, 1, 5, 8, 9, 12] {
+                        for (primaries, transfer) in [(1u8, 1u8), (1, 4), (1, 8), (9, 1), (9, 16), (9, 18), (5, 6)] {
+                            for full_range in [false, true] {
+                                let d = ColourDescription { primaries, transfer, matrix, full_range };
+                                let conv = Converter::new(d, bits, w, h).unwrap();
+                                let mut fast = vec![[0u8; 4]; w * h];
+                                conv.to_srgb8(&pic, &mut fast).unwrap();
+                                assert_eq!(fast, reference::srgb8(&conv, &pic), "sRGB {d:?} {bits}-bit {chroma:?} {w}x{h} u8 {eight}");
+                                let mut lin = vec![[0f32; 3]; w * h];
+                                conv.to_linear_rec2020(&pic, &mut lin).unwrap();
+                                let bits_of = |v: &[[f32; 3]]| v.iter().flatten().map(|f| f.to_bits()).collect::<Vec<_>>();
+                                assert_eq!(bits_of(&lin), bits_of(&reference::linear(&conv, &pic)), "linear {d:?} {bits}-bit {chroma:?} {w}x{h}");
+                                checked += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(checked > 1000, "{checked}");
+}

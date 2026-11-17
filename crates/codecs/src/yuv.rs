@@ -90,7 +90,8 @@ impl Samples<'_> {
         }
     }
 
-    #[inline(always)]
+    /// One sample (0 past the plane); the per-pixel reference in the tests reads with it.
+    #[cfg(test)]
     fn at(&self, i: usize) -> usize {
         match self {
             Samples::U8(s) => s.get(i).map_or(0, |&v| usize::from(v)),
@@ -294,6 +295,7 @@ const REFERENCE_WHITE_NITS: f32 = 203.0;
 const SHOULDER_KNEE: f32 = 0.75;
 
 /// The output a conversion writes.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Output {
     Srgb8,
@@ -385,15 +387,18 @@ impl Converter {
         self.check(pic, out.len())?;
         let enc = srgb_encode_lut();
         for_rows(out, pic.width, |y, row, scratch| {
-            self.row(pic, y, scratch, Output::Srgb8, |x, rgb| {
-                if let Some(px) = row.get_mut(x) {
-                    *px = if self.srgb_passthrough {
-                        [unit_u8(rgb[0]), unit_u8(rgb[1]), unit_u8(rgb[2]), 255]
-                    } else {
-                        [enc_u8(enc, rgb[0]), enc_u8(enc, rgb[1]), enc_u8(enc, rgb[2]), 255]
-                    };
+            self.signal_row(pic, y, scratch);
+            let px = row.iter_mut().zip(scratch.r.iter().zip(scratch.g.iter().zip(scratch.b.iter())));
+            if self.srgb_passthrough {
+                for (o, (&r, (&g, &b))) in px {
+                    *o = [unit_u8(r), unit_u8(g), unit_u8(b), 255];
                 }
-            });
+            } else {
+                for (o, (&r, (&g, &b))) in px {
+                    let c = apply(&self.to_srgb, self.linearise([r, g, b]));
+                    *o = [enc_u8(enc, c[0]), enc_u8(enc, c[1]), enc_u8(enc, c[2]), 255];
+                }
+            }
         });
         Ok(())
     }
@@ -403,11 +408,11 @@ impl Converter {
     pub fn to_linear_rec2020(&self, pic: &Picture<'_>, out: &mut [[f32; 3]]) -> Result<(), YuvError> {
         self.check(pic, out.len())?;
         for_rows(out, pic.width, |y, row, scratch| {
-            self.row(pic, y, scratch, Output::Linear2020, |x, rgb| {
-                if let Some(px) = row.get_mut(x) {
-                    *px = rgb;
-                }
-            });
+            self.signal_row(pic, y, scratch);
+            let px = row.iter_mut().zip(scratch.r.iter().zip(scratch.g.iter().zip(scratch.b.iter())));
+            for (o, (&r, (&g, &b))) in px {
+                *o = apply(&self.to_2020, self.linearise([r, g, b])).map(|v| v.max(0.0));
+            }
         });
         Ok(())
     }
@@ -423,32 +428,60 @@ impl Converter {
         Ok(())
     }
 
-    /// Converts luma row `y`, handing each pixel to `put` as linear sRGB (or, on the sRGB
-    /// pass-through, the signal itself) or linear Rec.2020.
-    fn row(&self, pic: &Picture<'_>, y: usize, scratch: &mut Scratch, output: Output, mut put: impl FnMut(usize, [f32; 3])) {
+    /// Luma row `y` as R′G′B′ signal in `s.r`, `s.g`, `s.b` (each `width` long). Works a row at a
+    /// time, each step a plain loop the compiler can vectorise: no per-pixel dispatch on the sample
+    /// type, the matrix or the output.
+    fn signal_row(&self, pic: &Picture<'_>, y: usize, s: &mut Scratch) {
         let w = pic.width;
-        let Scratch { cb, cr } = scratch;
-        cb.resize(w, 0.0);
-        cr.resize(w, 0.0);
-        self.chroma_row(pic, &pic.cb, y, cb);
-        self.chroma_row(pic, &pic.cr, y, cr);
-        let ybase = y * pic.y.stride;
-        let ymax = self.y_lut.len() - 1;
-        for x in 0..w {
-            let luma = self.y_lut[pic.y.samples.at(ybase + x).min(ymax)];
-            let signal = self.rgb_signal(luma, cb[x], cr[x]);
-            put(x, self.finish(signal, output));
+        let Scratch { y: luma, cb, cr, r, g, b, row0, row1 } = s;
+        for v in [&mut *luma, &mut *cb, &mut *cr, &mut *r, &mut *g, &mut *b] {
+            v.resize(w, 0.0);
+        }
+        load_row(&pic.y.samples, y.saturating_mul(pic.y.stride), &self.y_lut, luma);
+        self.chroma_row(pic, &pic.cb, y, row0, row1, cb);
+        self.chroma_row(pic, &pic.cr, y, row0, row1, cr);
+        let rgb = r.iter_mut().zip(g.iter_mut().zip(b.iter_mut()));
+        let ycc = luma.iter().zip(cb.iter().zip(cr.iter()));
+        match self.matrix {
+            Matrix::Kr { kr, kb } => {
+                let kg = 1.0 - kr - kb;
+                let (r_cr, b_cb) = (2.0 * (1.0 - kr), 2.0 * (1.0 - kb));
+                if kg.abs() > 1e-6 {
+                    for ((r, (g, b)), (&y, (&cb, &cr))) in rgb.zip(ycc) {
+                        *r = y + r_cr * cr;
+                        *b = y + b_cb * cb;
+                        *g = (y - kr * *r - kb * *b) / kg;
+                    }
+                } else {
+                    for ((r, (g, b)), (&y, (&cb, &cr))) in rgb.zip(ycc) {
+                        *r = y + r_cr * cr;
+                        *b = y + b_cb * cb;
+                        *g = y;
+                    }
+                }
+            }
+            // G in the luma plane, B in Cb, R in Cr
+            Matrix::Identity => {
+                for ((r, (g, b)), (&y, (&cb, &cr))) in rgb.zip(ycc) {
+                    (*r, *g, *b) = (cr, y, cb);
+                }
+            }
+            Matrix::YCgCo => {
+                for ((r, (g, b)), (&y, (&cb, &cr))) in rgb.zip(ycc) {
+                    let t = y - cb;
+                    (*r, *g, *b) = (t + cr, y + cb, t - cr);
+                }
+            }
         }
     }
 
-    /// Chroma row for luma row `y`, upsampled to the luma width (in Cb / Cr units).
-    fn chroma_row(&self, pic: &Picture<'_>, plane: &Plane<'_>, y: usize, out: &mut [f32]) {
+    /// Chroma row for luma row `y`, upsampled to the luma width (in Cb / Cr units); `row0` and
+    /// `row1` are scratch for the two chroma rows it blends.
+    fn chroma_row(&self, pic: &Picture<'_>, plane: &Plane<'_>, y: usize, row0: &mut Vec<f32>, row1: &mut Vec<f32>, out: &mut [f32]) {
         let (sx, sy) = pic.chroma.shifts();
         let (cw, ch) = pic.chroma.plane_size(pic.width, pic.height);
         // (GBR stores B and R with luma's offset and scale)
         let lut = if self.matrix == Matrix::Identity { &self.y_lut } else { &self.c_lut };
-        let cmax = lut.len() - 1;
-        let at = |cx: usize, cy: usize| lut[plane.samples.at(cy.min(ch - 1) * plane.stride + cx.min(cw - 1)).min(cmax)];
         // vertical: 4:2:0 chroma sits between luma rows 2i and 2i+1
         let (r0, r1, w1) = if sy == 0 {
             (y, y, 0.0)
@@ -456,48 +489,30 @@ impl Converter {
             let i = y >> 1;
             if y & 1 == 0 { (i, i.saturating_sub(1), 0.25) } else { (i, i + 1, 0.25) }
         };
-        let sample = |cx: usize| at(cx, r0) * (1.0 - w1) + at(cx, r1) * w1;
-        for (x, o) in out.iter_mut().enumerate() {
-            *o = if sx == 0 {
-                sample(x)
-            } else if x & 1 == 0 {
-                sample(x >> 1)
-            } else {
-                // horizontally co-sited with the even luma sample: odd ones sit halfway
-                (sample(x >> 1) + sample((x >> 1) + 1)) * 0.5
-            };
+        let last = ch.saturating_sub(1);
+        row0.resize(cw, 0.0);
+        row1.resize(cw, 0.0);
+        load_row(&plane.samples, r0.min(last).saturating_mul(plane.stride), lut, row0);
+        load_row(&plane.samples, r1.min(last).saturating_mul(plane.stride), lut, row1);
+        for (a, &b) in row0.iter_mut().zip(row1.iter()) {
+            *a = *a * (1.0 - w1) + b * w1;
         }
-    }
-
-    #[inline(always)]
-    fn rgb_signal(&self, y: f32, cb: f32, cr: f32) -> [f32; 3] {
-        match self.matrix {
-            Matrix::Kr { kr, kb } => {
-                let kg = 1.0 - kr - kb;
-                let r = y + 2.0 * (1.0 - kr) * cr;
-                let b = y + 2.0 * (1.0 - kb) * cb;
-                let g = if kg.abs() > 1e-6 { (y - kr * r - kb * b) / kg } else { y };
-                [r, g, b]
+        let blended = &row0[..];
+        if sx == 0 {
+            for (o, &c) in out.iter_mut().zip(blended) {
+                *o = c;
             }
-            // G in the luma plane, B in Cb, R in Cr
-            Matrix::Identity => [cr, y, cb],
-            Matrix::YCgCo => {
-                let t = y - cb;
-                [t + cr, y + cb, t - cr]
+        } else {
+            // horizontally co-sited with the even luma sample: odd ones sit halfway (the last
+            // chroma sample stands in for the one past the edge)
+            let next = blended.iter().skip(1).chain(blended.last());
+            for (pair, (&c, &n)) in out.chunks_mut(2).zip(blended.iter().zip(next)) {
+                if let [even, odd] = pair {
+                    (*even, *odd) = (c, (c + n) * 0.5);
+                } else if let [even] = pair {
+                    *even = c;
+                }
             }
-        }
-    }
-
-    /// Signal R′G′B′ → the output's RGB.
-    #[inline(always)]
-    fn finish(&self, s: [f32; 3], output: Output) -> [f32; 3] {
-        if output == Output::Srgb8 && self.srgb_passthrough {
-            return s;
-        }
-        let lin = self.linearise(s);
-        match output {
-            Output::Srgb8 => apply(&self.to_srgb, lin),
-            Output::Linear2020 => apply(&self.to_2020, lin).map(|v| v.max(0.0)),
         }
     }
 
@@ -607,11 +622,43 @@ fn enc_u8(lut: &[u8], v: f32) -> u8 {
     lut.get((v.min(1.0) * CURVE_STEPS as f32 + 0.5) as usize).copied().unwrap_or(255)
 }
 
-/// Chroma rows upsampled to the luma width, reused across the rows of one band.
+/// One row's buffers, reused across the rows of one band: luma and the chroma upsampled to the
+/// luma width, the R′G′B′ signal, and the two chroma rows a 4:2:0 row blends.
 #[derive(Default)]
 struct Scratch {
+    y: Vec<f32>,
     cb: Vec<f32>,
     cr: Vec<f32>,
+    r: Vec<f32>,
+    g: Vec<f32>,
+    b: Vec<f32>,
+    row0: Vec<f32>,
+    row1: Vec<f32>,
+}
+
+/// The `out.len()` samples of `samples` from `start` through `lut` (a code value above the
+/// table's range reads as its last entry, a sample past the plane as code 0).
+fn load_row(samples: &Samples<'_>, start: usize, lut: &[f32], out: &mut [f32]) {
+    fn load<T: Copy + Into<usize>>(s: &[T], start: usize, lut: &[f32], out: &mut [f32]) {
+        let max = lut.len().saturating_sub(1);
+        let at = |v: usize| lut.get(v.min(max)).copied().unwrap_or(0.0);
+        match start.checked_add(out.len()).and_then(|end| s.get(start..end)) {
+            Some(row) => {
+                for (o, &v) in out.iter_mut().zip(row) {
+                    *o = at(v.into());
+                }
+            }
+            None => {
+                for (i, o) in out.iter_mut().enumerate() {
+                    *o = at(start.checked_add(i).and_then(|j| s.get(j)).map_or(0, |&v| v.into()));
+                }
+            }
+        }
+    }
+    match samples {
+        Samples::U8(s) => load(s, start, lut, out),
+        Samples::U16(s) => load(s, start, lut, out),
+    }
 }
 
 /// Rows per band: each band gets one [`Scratch`] (and, with the `parallel` feature, one task).
