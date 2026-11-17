@@ -73,8 +73,21 @@ fn draw_control(app: &mut LccApp, ui: &mut egui::Ui, d: &DevelopSettings, id: &s
     // Compact: the short name under its group's caption, so the section's name column stays narrow
     let label = label.or_else(|| if crate::theme::compact(ui.ctx()) { short_name(id) } else { None });
     // greyed out inside a disabled scope (a control video can't take)
+    // a double-click on the name resets to this photo's own default (a raw starts with sharpening 40 and colour
+    // noise reduction 25), not to the neutral value of the spec table (issue #1244)
+    let own = photo_default_spec(app, spec);
+    let spec = own.as_ref().unwrap_or(spec);
     let out = slider(ui, spec, v, enabled && ui.is_enabled(), label);
     apply_slider_out(app, spec, out, |app, v| app.run("develop.set", json!({"control": id, "value": v})));
+}
+
+/// `spec` with the active photo's own default for the control, when it starts from another one than the spec table's
+/// ([`lcc_catalog::Photo::camera_defaults`]); `None` when they agree.
+pub(crate) fn photo_default_spec(app: &LccApp, spec: &ControlSpec) -> Option<ControlSpec> {
+    let id = app.session.active()?;
+    let photo = app.session.catalog.photo(id)?;
+    let default = controls::get(&photo.camera_defaults(), spec.id)?;
+    ((default - spec.default).abs() > 1e-9).then(|| ControlSpec { default: default.clamp(spec.min, spec.max), ..*spec })
 }
 
 /// The short name a slider shows in the Compact layout under its group's caption (Grain ▸ Amount,
