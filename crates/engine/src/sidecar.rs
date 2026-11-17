@@ -888,10 +888,7 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
         if rest.starts_with("</") {
             if let Some(frame) = stack.pop() {
                 for (prefix, _, previous) in frame.into_iter().rev() {
-                    if let Some(p) = effective
-                        .iter()
-                        .rposition(|(e, _)| e.as_str() == prefix.as_str())
-                    {
+                    if let Some(p) = effective.iter().rposition(|(e, _)| e.as_str() == prefix.as_str()) {
                         effective.remove(p);
                     }
                     if let Some((p, uri)) = previous {
@@ -912,10 +909,7 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
         let bindings = own_bindings(data, s, end);
         let mut frame = Vec::with_capacity(bindings.len());
         for (prefix, uri) in bindings {
-            let previous = effective
-                .iter()
-                .rposition(|(e, _)| e.as_str() == prefix.as_str())
-                .map(|p| effective.remove(p));
+            let previous = effective.iter().rposition(|(e, _)| e.as_str() == prefix.as_str()).map(|p| effective.remove(p));
             effective.push((prefix.clone(), uri.clone()));
             frame.push((prefix, uri, previous));
         }
@@ -2765,10 +2759,7 @@ mod tests {
         </rdf:RDF></x:xmpmeta>"#;
         let first = data.find("<rdf:Description").expect("outer description");
         let first_end = tag_end(data, first).expect("outer description closes");
-        let second = data[first_end..]
-            .find("<rdf:Description")
-            .map(|o| first_end + o)
-            .expect("inner description");
+        let second = data[first_end..].find("<rdf:Description").map(|o| first_end + o).expect("inner description");
         let second_end = tag_end(data, second).expect("inner description closes");
 
         let bindings = ns_bindings(data, second, second_end);
@@ -2785,10 +2776,7 @@ mod tests {
             "crs must not resolve to CRS_NS through the shadowed outer binding\n{data}"
         );
         // acr is bound to CRS_NS on this element and is the real CRS prefix here.
-        assert!(
-            bindings.iter().any(|(p, uri)| p == "acr" && uri == CRS_NS),
-            "acr must be bound to CRS_NS on this element\n{data}"
-        );
+        assert!(bindings.iter().any(|(p, uri)| p == "acr" && uri == CRS_NS), "acr must be bound to CRS_NS on this element\n{data}");
     }
 }
 
