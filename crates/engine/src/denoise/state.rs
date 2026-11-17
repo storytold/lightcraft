@@ -1,7 +1,7 @@
 use super::model::{Loader, default_loader};
 use super::products::{Active, Progress};
 use super::settings::Settings;
-use super::*;
+use super::{Arc, Downloads, HashMap, Mutex, PathBuf, PhotoId, Serialize, VecDeque};
 
 /// Most photos waiting in the queue.
 pub(super) const MAX_QUEUE: usize = 5000;

@@ -251,7 +251,9 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
         }
         MaskShape::ColorRange { samples, refine } => {
             let tol = color_range_tolerance(*refine);
-            let samples: Vec<[f32; 3]> = samples.iter().map(|s| [s[0] as f32, s[1] as f32, s[2] as f32]).collect();
+            // (a settings value built in code can skip the deserializer's cap: cost is pixels x samples)
+            let samples: Vec<[f32; 3]> =
+                samples.iter().take(lightcraft_develop::MAX_COLOR_RANGE_SAMPLES).map(|s| [s[0] as f32, s[1] as f32, s[2] as f32]).collect();
             for (v, c) in out.data.iter_mut().zip(&img.data) {
                 let lab = lightcraft_color::perceptual::oklab_from_2020(tonemap_for_select(c.map(|v| v * gain)));
                 let d = samples
@@ -281,7 +283,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             // 2 % of the long edge, so previews and exports match)
             let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
             let gain = if e < 0.0 { 1.0 - 7.0 * e } else { 1.0 };
-            sample_seg(seg.as_ref(), detail, gain, frame, w, h, &mut out);
+            sample_seg(seg.as_ref(), detail, gain, frame, w, h, log_l, &mut out);
             if e > 0.0 {
                 smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
             }
@@ -343,13 +345,40 @@ impl SegGrid {
         let bot = at(x0, y0 + 1) * (1.0 - tx) + at(x0 + 1, y0 + 1) * tx;
         top * (1.0 - ty) + bot * ty
     }
+
+    /// Output pixels per grid cell (the longer side of a cell: the grid is square over a
+    /// rectangle).
+    fn cell_px(&self, frame: &Frame, w: usize) -> f64 {
+        let px = frame.px_per_long(w) / frame.ow.max(frame.oh).max(1e-9);
+        ((self.r[2] - self.r[0]) * frame.ow).max((self.r[3] - self.r[1]) * frame.oh) * px / self.side.max(1) as f64
+    }
 }
+
+/// [`sample_seg`]'s window, in grid cells (Gaussian sigma): the width of the band bilinear
+/// enlargement leaves uncertain, about a cell on either side of the contour.
+const SEG_WINDOW: f64 = 1.5;
+/// [`sample_seg`]'s guided-filter regularization (EV² of log luminance): an edge of ~0.1 EV
+/// contrast counts half.
+const SEG_EPS: f32 = 0.01;
 
 /// Stored model segmentations at each output pixel: the zoomed-in `detail` passes inside
 /// their rectangles (the highest of them where they overlap), the whole-photo `seg`
 /// elsewhere; the logit (times `gain`: > 1 is a harder edge) through a sigmoid. Damaged
 /// data selects nothing.
-fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Frame, w: usize, h: usize, out: &mut Plane) {
+///
+/// Issue #3272: a model's grid is much coarser than an export (a 288² grid has ~20 px cells on
+/// 24 MP), and its bilinear contour passes up to a cell from the photo's edge, so the mask spilled
+/// onto the background (a bright outline under a raised Exposure). Where the grid is coarser than
+/// the output, the logits are guided-filtered by the photo's log luminance ([`guided_cross_fast`]; a
+/// window of [`SEG_WINDOW`] cells, so previews and exports draw the same edge): near the contour
+/// the logit follows the photo's tones and its edge lands on the photo's. Filtering logits, not
+/// coverage, makes the confident side win (a strip at 0.3 between 1 and 0 goes to 0, not 0.1),
+/// and leaves a linear ramp of logits, where the photo has no edge, as it was. Pixels whose
+/// window is all inside or all outside (|mean logit| ≥ 7, times `gain`) keep their sample exactly,
+/// as do those where the photo has no edge to follow. Refine Edges
+/// then works on the combined mask ([`evaluate_one`]) and finds these edges already in place.
+#[allow(clippy::too_many_arguments)]
+fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Frame, w: usize, h: usize, log_l: &Plane, out: &mut Plane) {
     let coarse = seg.and_then(SegGrid::new);
     // (capped: a hostile document can hold many)
     let patches: Vec<SegGrid> = detail.iter().take(lightcraft_develop::segmask::MAX_DETAIL).filter_map(SegGrid::new).collect();
@@ -361,10 +390,15 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
         for (x, v) in row.iter_mut().enumerate() {
             let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
             let fine = patches.iter().filter(|p| p.contains(n)).map(|p| p.logit(n)).reduce(f32::max);
-            let l = fine.or_else(|| coarse.as_ref().map(|c| c.logit(n))).unwrap_or(-16.0);
-            *v = 1.0 / (1.0 + (-l * gain).exp());
+            *v = fine.or_else(|| coarse.as_ref().map(|c| c.logit(n))).unwrap_or(-16.0) * gain;
         }
     });
+    // (the coarsest grid sets the window: it leaves the widest uncertain band)
+    let cell = coarse.iter().chain(&patches).map(|g| g.cell_px(frame, w)).fold(0.0, f64::max);
+    if cell >= 1.0 {
+        guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
+    }
+    out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
 }
 
 fn frame_px(frame: &Frame, w: usize) -> f32 {
@@ -524,6 +558,19 @@ pub const MAX_STROKE_DABS: usize = 2_000_000;
 
 /// The dabs of stroke `s` in a `w × h` output.
 pub fn brush_dabs(s: &BrushStroke, frame: &Frame, w: usize, h: usize) -> BrushDabs {
+    brush_dabs_within(s, frame, w, h, MAX_STROKE_DABS)
+}
+
+/// [`brush_dabs`] stopping at `max` dabs instead of [`MAX_STROKE_DABS`].
+///
+/// For a caller that discards a stroke past a threshold of its own: it builds to that threshold
+/// rather than to the stroke budget and throws the difference away. The GPU path rejects a brush
+/// mask past 4096 dabs in total and the Auto Mask spot window past 200,000, both far below the
+/// two million a single stroke may otherwise construct first (#1520).
+///
+/// Ask for one more than the threshold to tell "at it" from "past it": a result shorter than
+/// `max` is the whole stroke.
+pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max: usize) -> BrushDabs {
     let to_out = frame.norm_to_out(w, h);
     let ppl = frame.px_per_long(w);
     let r = (s.size * ppl).max(0.5);
@@ -536,10 +583,14 @@ pub fn brush_dabs(s: &BrushStroke, frame: &Frame, w: usize, h: usize) -> BrushDa
     let with_pressure = !s.pressure.is_empty();
     let mut prev = None;
     let mut prev_p = 1.0;
+    let mut emitted = 0usize;
     for (i, p) in s.points.iter().enumerate() {
+        if emitted >= max {
+            break;
+        }
         let q = to_out.apply(*p);
         let before = dabs.len();
-        if push_dabs(&mut dabs, prev, q, r) {
+        if push_dabs_within(&mut dabs, &mut emitted, prev, q, r, max) {
             let pq = s.pressure_at(i);
             if with_pressure {
                 // the first dab of the stroke has nothing to interpolate from
@@ -585,7 +636,16 @@ pub fn push_dabs(dabs: &mut Vec<Point>, prev: Option<Point>, q: Point, r: f64) -
 /// dabs no longer held in `dabs`. Incremental callers retain `emitted` when clearing their buffer;
 /// it advances only by the number actually appended. Acceptance and spacing match [`push_dabs`].
 pub fn push_dabs_counted(dabs: &mut Vec<Point>, emitted: &mut usize, prev: Option<Point>, q: Point, r: f64) -> bool {
-    let room = MAX_STROKE_DABS.saturating_sub(*emitted);
+    push_dabs_within(dabs, emitted, prev, q, r, MAX_STROKE_DABS)
+}
+
+/// [`push_dabs_counted`] against a caller's own budget rather than [`MAX_STROKE_DABS`].
+///
+/// A caller that will not look at more than `max` dabs should build no more than `max`: a length
+/// check after the vector exists bounds nothing, it only throws away what was already paid for
+/// (#1520).
+pub fn push_dabs_within(dabs: &mut Vec<Point>, emitted: &mut usize, prev: Option<Point>, q: Point, r: f64, max: usize) -> bool {
+    let room = max.min(MAX_STROKE_DABS).saturating_sub(*emitted);
     if room == 0 || !(q.x.is_finite() && q.y.is_finite()) {
         return false;
     }
@@ -598,7 +658,7 @@ pub fn push_dabs_counted(dabs: &mut Vec<Point>, emitted: &mut usize, prev: Optio
         let n = (dist / dab_spacing(r)).ceil();
         // a hostile or degenerate segment (huge) gets no in-between dabs rather than a huge
         // allocation: 1 M dabs is far more than any on-screen stroke needs
-        let n = if n.is_finite() { n.clamp(0.0, 1_000_000.0) as usize } else { 0 };
+        let n = if n.is_finite() && n <= 1_000_000.0 { n.max(0.0) as usize } else { 0 };
         // the in-between dabs and `q` together fit what is left of the stroke's budget
         let n = n.min(room);
         for k in 1..n {
@@ -665,9 +725,20 @@ pub fn auto_refine(r: f64) -> (f32, f32) {
     ((0.25 * r).max(1.0) as f32, 0.02)
 }
 
-/// Guided filter of `p` steered by `guide` (He et al.), clamped to 0..1: `p`'s edges snap to the
-/// guide's.
-pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+/// A guided filter's linear model at each pixel (`q = a · guide + b`, coefficients averaged over
+/// the windows that hold the pixel), the window mean of the filtered plane and, when asked for,
+/// how much of an edge the guide has there (`var / (var + eps)`, averaged like the coefficients:
+/// 0 where the guide is flat and the model is only a blur).
+struct Guided {
+    a: Plane,
+    b: Plane,
+    mean: Plane,
+    edge: Option<Plane>,
+}
+
+/// The guided filter (He, Sun and Tang) of `p` steered by `guide`, both the same size: Gaussian
+/// windows of `sigma` px, `eps` the regularization (in guide units squared).
+fn guided_coeffs(guide: &Plane, p: &Plane, sigma: f32, eps: f32, with_edge: bool) -> Guided {
     use lightcraft_raster::blur::gaussian;
     let mi = gaussian(guide, sigma);
     let mp = gaussian(p, sigma);
@@ -675,18 +746,68 @@ pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
     let cii = gaussian(&guide.map(|a| a * a), sigma);
     let mut a = Plane::new(p.width, p.height);
     let mut b = Plane::new(p.width, p.height);
+    let mut edge = Plane::new(if with_edge { p.width } else { 0 }, if with_edge { p.height } else { 0 });
     for i in 0..p.data.len() {
         let var = (cii.data[i] - mi.data[i] * mi.data[i]).max(0.0);
         let k = (cip.data[i] - mi.data[i] * mp.data[i]) / (var + eps);
         a.data[i] = k;
         b.data[i] = mp.data[i] - k * mi.data[i];
+        if let Some(e) = edge.data.get_mut(i) {
+            *e = var / (var + eps);
+        }
     }
-    let (ma, mb) = (gaussian(&a, sigma), gaussian(&b, sigma));
+    Guided { a: gaussian(&a, sigma), b: gaussian(&b, sigma), mean: mp, edge: with_edge.then(|| gaussian(&edge, sigma)) }
+}
+
+/// Guided filter of `p` steered by `guide` (He et al.), clamped to 0..1: `p`'s edges snap to the
+/// guide's.
+pub fn guided_cross(guide: &Plane, p: &Plane, sigma: f32, eps: f32) -> Plane {
+    let g = guided_coeffs(guide, p, sigma, eps, false);
     let mut q = Plane::new(p.width, p.height);
     for i in 0..q.data.len() {
-        q.data[i] = (ma.data[i] * guide.data[i] + mb.data[i]).clamp(0.0, 1.0);
+        q.data[i] = (g.a.data[i] * guide.data[i] + g.b.data[i]).clamp(0.0, 1.0);
     }
     q
+}
+
+/// [`guided_cross`] in its subsampled form (He and Sun, "Fast Guided Filter", 2015, as
+/// [`crate::local::guided_fast`] is of the self-guided filter, at its step), in place and
+/// unclamped, for a `p` that is smooth at the window's scale (a mask enlarged from a model's grid):
+/// the linear model is fitted on both planes box-reduced to about 3 px of window, sampled
+/// bilinearly and applied to the full-resolution guide, which is where the edge comes from. A
+/// pixel moves to the filtered value by `weight` of its window mean of `p` times how much of an
+/// edge the guide has there (0 keeps it exactly: where the photo is flat the filter could only
+/// blur `p`). Extra memory: the reduced planes only (the coefficients are sampled per pixel, not
+/// enlarged into planes).
+fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight: impl Fn(f32) -> f32 + Sync + Send) {
+    use lightcraft_raster::resample::{Filter, resize};
+    let (w, h) = (p.width, p.height);
+    if guide.width != w || guide.height != h || w == 0 || h == 0 || !sigma.is_finite() {
+        return;
+    }
+    // (a window past the whole frame fits one model to it all)
+    let sigma = sigma.clamp(0.5, w.max(h) as f32);
+    let s = crate::local::guided_fast_step(sigma);
+    let (lw, lh) = (w.div_ceil(s).max(1), h.div_ceil(s).max(1));
+    let g = guided_coeffs(&resize(guide, lw, lh, Filter::Box), &resize(p, lw, lh, Filter::Box), sigma / s as f32, eps, true);
+    let Some(edge) = &g.edge else {
+        return;
+    };
+    // (the reduced planes span the same frame: their pixel per full pixel)
+    let (kx, ky) = (lw as f32 / w as f32, lh as f32 / h as f32);
+    for_rows(&mut p.data, w, |y, row| {
+        let fy = (y as f32 + 0.5) * ky;
+        for (x, (v, i)) in row.iter_mut().zip(guide.row(y)).enumerate() {
+            let fx = (x as f32 + 0.5) * kx;
+            let k = weight(bilinear(&g.mean, fx, fy));
+            // (no edge in the photo: nothing to follow, keep the sample)
+            let k = if k > 0.0 { k * smooth(0.05, 1.0, bilinear(edge, fx, fy)) } else { 0.0 };
+            if k > 0.0 {
+                let q = bilinear(&g.a, fx, fy) * i + bilinear(&g.b, fx, fy);
+                *v += (q - *v) * k;
+            }
+        }
+    });
 }
 
 /// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight

@@ -106,11 +106,16 @@ const PREVIEW_CHROME: f32 = 82.0;
 pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_height: f32) {
     ui.set_width((ui.ctx().content_rect().width() - 64.0).clamp(240.0, PAGE_SIZE.x));
     let top = ui.cursor().top();
+    // The page drawn is the one that was open when the frame began: a tab clicked now opens on
+    // the next frame, so a text box on the page being left is drawn once more and saves what was
+    // typed in it (the click took the focus from it).
+    let shown = tab.clone();
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = egui::vec2(4.0, 4.0);
         for (id, label) in TABS {
-            if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, tab == id).clicked() {
+            if crate::widgets::text_button(ui, &format!("settingsTab-{id}"), label, shown == *id).clicked() {
                 *tab = id.to_string();
+                ui.ctx().request_repaint();
             }
         }
     });
@@ -118,7 +123,7 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
     // (a point less than the room left, so rounding never makes the dialog's own scroll area scroll)
     let room = max_height - (ui.cursor().top() - top) - 1.0;
     if room < PAGE_MIN_HEIGHT {
-        body(app, ui, tab.as_str());
+        body(app, ui, shown.as_str());
         register(ui, "settings:page", ui.min_rect());
         return;
     }
@@ -129,7 +134,7 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
     // (at least the least tall slide); where that leaves less than [`PAGE_MIN_HEIGHT`] for the
     // page, it scrolls with the page instead (as in the short window above).
     let mut pinned = false;
-    if tab == "slideshow" {
+    if shown == "slideshow" {
         let slide_h = (height * PINNED_PREVIEW_SHARE - PREVIEW_CHROME).max(crate::panels::slide_layout::PREVIEW_MIN_H);
         if height - (slide_h + PREVIEW_CHROME) >= PAGE_MIN_HEIGHT {
             let before = ui.cursor().top();
@@ -144,7 +149,7 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
     // or two too long looks cut off, not scrollable.
     ui.spacing_mut().scroll.dormant_handle_opacity = 0.6;
     let page = egui::ScrollArea::vertical()
-        .id_salt(("settings-page", tab.as_str()))
+        .id_salt(("settings-page", shown.as_str()))
         .max_height(height)
         .min_scrolled_height(height)
         .auto_shrink([false, false])
@@ -153,7 +158,7 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
             if pinned {
                 slideshow_tab(app, ui, &Tokens::get(ui.ctx()), false);
             } else {
-                body(app, ui, tab.as_str());
+                body(app, ui, shown.as_str());
             }
             // (what the page took: wider than the room for it would mean a control is cut off)
             register(ui, "settings:page", ui.min_rect());

@@ -1,6 +1,6 @@
 use super::gpu::GPU_SETUP_MARKER;
 use super::model::RunOn;
-use super::*;
+use super::{DenoiserManifest, Deserialize, Duration, Path, PathBuf, Serialize, Value};
 
 /// Extension of a product file.
 pub const EXT: &str = "lcdn";

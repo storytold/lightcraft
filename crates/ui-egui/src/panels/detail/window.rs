@@ -1,4 +1,4 @@
-use super::*;
+use super::{Color32, LightcraftApp, PhotoId, Rect, Slot, pos2, vec2};
 
 /// Whether an overlay can be rendered on a region tile without changing what the tile means. Mask (one or all)
 /// overlays are evaluated from the same mask alpha as the full render; Point Color range and Visualize
@@ -9,6 +9,9 @@ pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> 
     use lightcraft_pipeline::Overlay as O;
     match overlay {
         O::None | O::Mask { .. } | O::AllMasks { .. } | O::PointColorRange(_) | O::HdrRange | O::Spots(_) => true,
+        // clipping and greyscale previews act pixel by pixel on the finished image
+        o if o.per_pixel() => true,
+        _ => false,
     }
 }
 

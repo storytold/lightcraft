@@ -3,17 +3,18 @@ resolver = "3"
 members = ["crates/*", "apps/*", "xtask"]
 
 [workspace.package]
-version = "0.14.0"
+version = "0.17.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 repository = "https://github.com/storytold/lightcraft"
 
 [workspace.dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["serde"] }
-craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }
-craft-window = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0", features = ["egui"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["serde"] }
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
+# craft-update: app-specific pretend versions apply to startup and manual checks.
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
+craft-window = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
 # internal
 lightcraft-denoise-core = { path = "crates/denoise-core" }
 lightcraft-denoise = { path = "crates/denoise", default-features = false }
@@ -122,9 +123,11 @@ web-sys = "0.3"
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
 dbg_macro = "warn"
 todo = "warn"
-too_many_arguments = "allow"
 needless_range_loop = "allow"
 type_complexity = "allow"
 excessive_precision = "allow"
@@ -177,19 +180,21 @@ png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
+# For now the egui family comes from Iito/egui: storytold/egui 6d518fc plus one commit, the iOS
+# surface-size fix (also emilk/egui#8840). Point it back at storytold/egui once that has the fix.
 [patch.crates-io]
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+emath = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+epaint = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+epaint_default_fonts = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui-winit = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui-wgpu = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui_glow = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui_extras = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui_kittest = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui_system_font_provider = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+eframe = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui_demo_lib = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
+egui_inspection = { git = "https://github.com/Iito/egui.git", rev = "c358100acbbf9d9782bf7c2ddbe989db6f995bc1" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

@@ -260,6 +260,53 @@ mod tests {
         assert!(xp > 20.0 && xp >= xb - 0.5, "xtrans directional {xp:.1} bilinear {xb:.1}");
     }
 
+    /// Mean anisotropy of a demosaiced picture's fine luminance detail: per pixel, how much more its 3 × 3 high-pass
+    /// correlates with its horizontal neighbours than with its vertical ones (or the reverse). Noise has none; the
+    /// short horizontal and vertical strokes of a maze pattern have a lot.
+    fn anisotropy(img: &Rgb32f) -> f64 {
+        let (w, h) = (img.width, img.height);
+        let lum: Vec<f32> = img.data.iter().map(|p| 0.25 * p[0] + 0.5 * p[1] + 0.25 * p[2]).collect();
+        let mean3 = |x: usize, y: usize| (0..9).map(|k| lum[(y + k / 3 - 1) * w + x + k % 3 - 1]).sum::<f32>() / 9.0;
+        let hp: Vec<f32> =
+            (0..w * h).map(|i| if i % w == 0 || i % w == w - 1 || i < w || i >= w * (h - 1) { 0.0 } else { lum[i] - mean3(i % w, i / w) }).collect();
+        let (mut sum, mut n) = (0f64, 0f64);
+        for y in 2..h - 2 {
+            for x in 2..w - 2 {
+                let i = y * w + x;
+                sum += f64::from((hp[i] * (hp[i - 1] + hp[i + 1] - hp[i - w] - hp[i + w])).abs());
+                n += 1.0;
+            }
+        }
+        sum / n
+    }
+
+    #[test]
+    fn flat_noise_does_not_turn_into_a_maze() {
+        // a flat grey patch with sensor-like noise: AHD picked horizontal or vertical candidates per pixel by a
+        // homogeneity count that noise alone decides, so the picture became short horizontal and vertical strokes
+        let (w, h) = (192, 160);
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut noise = || {
+            // sum of four uniforms ≈ Gaussian, σ ≈ 0.02
+            (0..4)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (seed >> 40) as f32 / (1u64 << 24) as f32 - 0.5
+                })
+                .sum::<f32>()
+                * 0.035
+        };
+        let cfa = Cfa::bayer("RGGB").unwrap();
+        let data = (0..w * h).map(|_| 0.2 + noise()).collect();
+        let n = Normalized { width: w, height: h, cpp: 1, data, cfa: Some(cfa) };
+        let (ahd, bilinear) = (anisotropy(&demosaic(&n, Method::Ahd)), anisotropy(&demosaic(&n, Method::Bilinear)));
+        eprintln!("anisotropy: ahd {ahd:.3e}, bilinear {bilinear:.3e}");
+        // the hard choice gave about 11 times bilinear's, the blend about 7.5 times
+        assert!(ahd < 9.0 * bilinear, "ahd {ahd:.3e} bilinear {bilinear:.3e}");
+    }
+
     #[test]
     fn tiny_and_degenerate_inputs() {
         let cfa = Cfa::bayer("RGGB").unwrap();
@@ -275,6 +322,20 @@ mod tests {
         assert_eq!(demosaic(&n, Method::Ahd).data, vec![[0.2; 3], [0.4; 3]]);
         let n = Normalized { width: 1, height: 1, cpp: 3, data: vec![0.1, 0.2, 0.3], cfa: None };
         assert_eq!(demosaic(&n, Method::Ahd).data, vec![[0.1, 0.2, 0.3]]);
+    }
+
+    #[test]
+    fn a_nan_sample_spreads_no_further_than_the_chosen_candidate_takes_it() {
+        // vertical stripes: the vertical candidate wins outright beside them, and the horizontal one, which reads two
+        // samples to each side, is the only one that sees a NaN two columns away
+        let img = Rgb32f::from_fn(32, 24, |x, _| if (x / 2) % 2 == 0 { [0.2, 0.3, 0.25] } else { [0.7, 0.8, 0.6] });
+        let cfa = Cfa::bayer("RGGB").unwrap();
+        let mut n = mosaic_from_rgb(&img, &cfa);
+        n.data[12 * 32 + 16] = f32::NAN;
+        let out = demosaic(&n, Method::Ahd);
+        let bad = out.data.iter().filter(|p| p.iter().any(|v| !v.is_finite())).count();
+        // the pixels that read the NaN sample themselves, as many as the outright pick gave; the blend made it 33
+        assert!(bad <= 9, "{bad} pixels not finite");
     }
 
     #[test]

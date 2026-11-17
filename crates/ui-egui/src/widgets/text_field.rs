@@ -74,6 +74,28 @@ pub(crate) fn was_editing(ctx: &egui::Context, widget: &str) -> bool {
     ctx.data(|d| d.get_temp::<Memo>(id(widget).with("memo")).is_some_and(|memo| memo.before.is_some() && memo.pass.checked_add(1) == Some(pass)))
 }
 
+/// The press that focused a select-on-focus field has ended: a plain click selects everything, a
+/// drag keeps what it selected.
+fn select_on_release(ui: &Ui, id: egui::Id, memo: &mut Memo, focused: bool, pressing: bool, text: &str) {
+    if memo.select_on_release && !pressing {
+        memo.select_on_release = false;
+        if focused && !has_selection(ui.ctx(), id) {
+            select_all(ui.ctx(), id, text);
+        }
+    }
+}
+
+/// The menu may take focus on a primary-button release. egui collapses a TextEdit selection when
+/// focus leaves; retain the range our own menu acts on (`selection`, from before this frame's
+/// input) on a right-click in the field and while the menu is open.
+fn keep_menu_selection(ui: &Ui, id: egui::Id, response: &egui::Response, right: bool, menu_open: bool, selection: Option<egui::text::CCursorRange>) {
+    if right && response.contains_pointer() || menu_open && !ui.memory(|m| m.has_focus(id)) {
+        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+        state.cursor.set_char_range(selection);
+        state.store(ui.ctx(), id);
+    }
+}
+
 impl<'a> TextField<'a> {
     /// A one-line field (Return ends the edit) registered as `widget`.
     pub fn singleline(widget: &'a str, text: &'a mut String) -> Self {
@@ -162,14 +184,10 @@ impl<'a> TextField<'a> {
         self
     }
 
-    /// Draw the field and return its response, any ending this frame, and whether an edit is
-    /// under way. Per-frame state keeps the pre-edit text for Esc, the selection across the
-    /// context menu, and select-on-focus; single-line Enter ends the edit, and focus loss ends it
-    /// except when the focus went to the field's own menu (a choice from the menu resumes the
-    /// edit). The menu offers cut/copy/paste/select-all (paste is omitted on the web; egui also
-    /// handles their keyboard shortcuts), and a field not drawn on the previous pass starts clean.
-    pub fn show(self, ui: &mut Ui) -> TextFieldResponse {
-        let id = id(self.widget);
+    /// The field's remembered state at the start of a pass: a field not drawn on the previous pass starts afresh,
+    /// a begun edit or a choice made from the menu last frame is carried out, and a field focused by the previous
+    /// pass selects its text when it asks to.
+    fn prepare(&self, ui: &mut Ui, id: egui::Id) -> Memo {
         let mut memo: Memo = ui.data_mut(|d| d.get_temp(id.with("memo"))).unwrap_or_default();
         // a field not drawn last frame (its dialog or panel closed) starts afresh: an edit, a menu
         // or a choice from it that was under way is gone with it
@@ -207,6 +225,19 @@ impl<'a> TextField<'a> {
             memo.before = Some(self.text.clone());
             select_all(ui.ctx(), id, self.text);
         }
+        memo
+    }
+
+    /// Draw the field and return its response, any ending this frame, and whether an edit is
+    /// under way. Per-frame state keeps the pre-edit text for Esc, the selection across the
+    /// context menu, and select-on-focus; single-line Enter ends the edit, and focus loss ends it
+    /// except when the focus went to the field's own menu (a choice from the menu resumes the
+    /// edit). The menu offers cut/copy/paste/select-all (paste is omitted on the web; egui also
+    /// handles their keyboard shortcuts), and a field not drawn on the previous pass starts clean.
+    pub fn show(self, ui: &mut Ui) -> TextFieldResponse {
+        let id = id(self.widget);
+        let pass = ui.ctx().cumulative_pass_nr();
+        let mut memo = self.prepare(ui, id);
         let name = self.label.clone().or_else(|| self.hint.clone());
         let mut edit = if self.multiline { egui::TextEdit::multiline(self.text) } else { egui::TextEdit::singleline(self.text) };
         edit = edit.id(id);
@@ -245,13 +276,7 @@ impl<'a> TextField<'a> {
         if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
             ui.ctx().accesskit_node_builder(response.id, |node| node.set_label(name));
         }
-        // The menu may take focus on a primary-button release. egui collapses a
-        // TextEdit selection when focus leaves; retain the range our own menu acts on.
-        if right && response.contains_pointer() || memo.menu_open && !ui.memory(|m| m.has_focus(id)) {
-            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
-            state.cursor.set_char_range(selection);
-            state.store(ui.ctx(), id);
-        }
+        keep_menu_selection(ui, id, &response, right, memo.menu_open, selection);
         crate::widgets::register(ui, self.widget, response.rect);
         // egui's own focus: `Response::has_focus` is also false while the window is in the
         // background (another app in front), which neither ends nor restarts an edit
@@ -279,15 +304,11 @@ impl<'a> TextField<'a> {
                 }
             }
         }
-        if memo.select_on_release && !pressing {
-            memo.select_on_release = false;
-            // a plain click selects everything; a drag keeps what it selected
-            if focused && !has_selection(ui.ctx(), id) {
-                select_all(ui.ctx(), id, self.text);
-            }
-        }
+        select_on_release(ui, id, &mut memo, focused, pressing, self.text);
         let menu_was_open = memo.menu_open;
         memo.menu_open = match native_menu(ui.ctx()) {
+            // (while photos are carried a right-click opens no menu: that is not what the person is doing)
+            _ if response.secondary_clicked() && crate::widgets::carrying(ui.ctx()) => false,
             // the system's edit menu: the field keeps the focus, and the host sends what is chosen
             // as clipboard events
             Some(NativeMenu(show)) => {

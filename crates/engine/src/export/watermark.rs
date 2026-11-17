@@ -1,5 +1,5 @@
 use super::encoding::srgb8_in;
-use super::*;
+use super::{DeepImage, DeepSamples, Deserialize, OutputSpace, Rgba8, Serialize};
 
 /// Where a watermark sits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

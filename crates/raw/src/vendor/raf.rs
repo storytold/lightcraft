@@ -118,6 +118,19 @@ pub(crate) fn unpack_row(src: &[u8], bits: u32, words32: bool, out: &mut [u16]) 
     }
 }
 
+/// The Kelvin scale of a body without colour matrices, from tag `0xf00c` (`WB_GRBLevelsStandard`; tag number from
+/// `exiftool -v3` run as a black-box tool on the files): `G R B 17 G R B 21`, the camera's own neutral multipliers
+/// for Illuminant A and D65 (see [`crate::kelvin_presets::KelvinPresets::from_neutral_pair`]).
+fn fuji_kelvin_presets(ifd: &Ifd) -> Option<crate::kelvin_presets::KelvinPresets> {
+    let v = ifd.f64s(0xf00c).filter(|v| v.len() >= 8)?;
+    let grb = |at: usize, code: f64| {
+        (v[at + 3] == code && v[at] > 0.0 && v[at + 1] > 0.0 && v[at + 2] > 0.0)
+            .then(|| [(v[at + 1] / v[at]) as f32, 1.0, (v[at + 2] / v[at]) as f32])
+    };
+    let (a, d65) = (grb(0, 17.0)?, grb(4, 21.0)?);
+    crate::kelvin_presets::KelvinPresets::from_neutral_pair(a, d65)
+}
+
 pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let h = header(bytes)?;
     let raw = h.raw.ok_or_else(|| RawError::Corrupt("RAF without raw data".into()))?;
@@ -191,6 +204,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
     let wb =
         ifd.f64s(0xf00e).filter(|v| v.len() >= 3 && v.iter().take(3).all(|x| *x > 0.0)).map(|v| [(v[1] / v[0]) as f32, 1.0, (v[2] / v[0]) as f32]);
     let white = white_from_data(&data, bits);
+    let kelvin_presets = fuji_kelvin_presets(&ifd);
 
     let mut metadata = h.jpeg.map(lightcraft_meta::extract).unwrap_or_default();
     metadata.width = Some(active.width as u32);
@@ -209,7 +223,7 @@ pub(crate) fn decode(bytes: &[u8], mode: Mode) -> Result<RawImage> {
         active_area: active,
         crop: Rect::new(0, 0, active.width, active.height),
         orientation,
-        color: ColorData::default(),
+        color: ColorData { kelvin_presets, ..Default::default() },
         wb_multipliers: wb,
         linearized: false,
         pixel_aspect: 1.0,

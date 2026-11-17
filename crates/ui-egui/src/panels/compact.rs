@@ -100,10 +100,31 @@ pub fn sheet_open(app: &LightcraftApp) -> bool {
 }
 
 /// The window's chrome in the compact layout; the caller fills the central area as usual.
+///
+/// Laid out like a phone photo editor: the library has a slim top bar (My Photos, Import,
+/// search, Filter, Export, and "…" for every menu) over the grid and the bottom bar; the editor
+/// (Detail) has Back, Show Original, Undo, Redo, Export and "…" on top, the photo, and a row of
+/// labelled tools along the bottom (down the right in landscape). A tool opens its sheet: one
+/// Edit section (Light, Color …), the whole Edit panel, Crop, Masking, Presets and the rest.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    topbar(app, ui);
+    // an Edit section chosen in the tool row applies only while the Edit panel is the one open
+    if app.ui.right != RightPanel::Edit {
+        set_section(ui.ctx(), None);
+    }
+    let detail = app.ui.view == ViewMode::Detail;
+    if detail {
+        editor_bar(app, ui);
+    } else {
+        library_bar(app, ui);
+    }
     super::library_problem::banner(app, ui);
-    bottombar(app, ui);
+    if detail {
+        if app.session.active().is_some() {
+            tool_dock(app, ui);
+        }
+    } else {
+        bottombar(app, ui);
+    }
     if app.ui.left_panel {
         // picking a source (album, folder, date …) closes the drawer onto its photos
         let source = app.session.source;
@@ -115,12 +136,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if app.session.source != source {
             app.ui.left_panel = false;
         }
-    } else if sheet_open(app) {
+    } else if sheet_open(app) && !(detail && beside(ui.ctx())) {
+        // (in landscape the editor's sheet is part of the tool column, drawn by `tool_dock`)
         sheet(app, ui);
     }
 }
 
-fn topbar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+/// A bar along the top with the safe-area and margins of the compact layout.
+fn top_bar(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::top("top_bar")
         .exact_size(t.top_bar_h + 4.0)
@@ -128,42 +151,120 @@ fn topbar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                if icon_button(ui, "sidebar", Icon::Sidebar, BUTTON, app.ui.left_panel, true, "Show/hide My Photos panel").clicked() {
-                    let _ = app.run("view.leftPanel", json!({}));
-                }
-                if icon_button(ui, "back", Icon::Back, BUTTON, false, true, "Back").clicked() {
-                    let _ = app.run("view.back", json!({}));
-                }
-                if !app.native_menu {
-                    ui.add_space(4.0);
-                    crate::menubar::show_in_window(app, ui, 0.0);
-                    ui.add_space(8.0);
-                }
-                // right-to-left from the edge: Export, Filter, then the search field takes the rest
-                let rest = ui.available_rect_before_wrap();
-                let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
-                right.spacing_mut().item_spacing.x = 0.0;
-                if icon_button(&mut right, "share", Icon::Share, BUTTON, false, true, "Export").clicked() {
-                    let _ = app.run("dialog.export", json!({}));
-                }
-                let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
-                if icon_button(&mut right, "filter", Icon::Filter, BUTTON, filtering, true, "Filter bar").clicked() {
-                    let _ = app.run("view.filterBar", json!({}));
-                }
-                // a failing save keeps its warning visible (the desktop's cloud icon)
-                if let Some((n, e)) = app.session.unsaved() {
-                    let (r, resp) = right.allocate_exact_size(BUTTON, Sense::hover());
-                    paint(right.painter(), r.shrink(10.0), Icon::Cloud, t.caution);
-                    register(&right, "indicator:unsaved", r);
-                    resp.on_hover_text(format!("{n} unsaved: {e}"));
-                }
-                right.add_space(4.0);
-                let field = right.available_rect_before_wrap();
-                if field.width() >= 80.0 {
-                    search(app, &mut right, Rect::from_center_size(field.center(), vec2(field.width(), 32.0)));
-                }
+                add(ui);
             });
         });
+}
+
+/// The right end of a top bar, filled right to left: "…" ([`more_menu`]), then `add`.
+fn bar_right(app: &mut LightcraftApp, ui: &mut egui::Ui, editor: bool, add: impl FnOnce(&mut LightcraftApp, &mut egui::Ui)) {
+    let rest = ui.available_rect_before_wrap();
+    let mut right = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    right.spacing_mut().item_spacing.x = 0.0;
+    let more = icon_button(&mut right, "more", Icon::Dots, BUTTON, false, true, "More");
+    more_menu(app, &more, editor);
+    add(app, &mut right);
+}
+
+/// What "…" offers in the editor: the photo's settings and the photo itself.
+const EDITOR_MORE: &[(&str, &str)] = &[
+    ("develop.copy", "Copy Settings"),
+    ("develop.paste", "Paste Settings"),
+    ("develop.reset", "Reset Edits"),
+    ("photo.rotateLeft", "Rotate Left"),
+    ("photo.rotateRight", "Rotate Right"),
+    ("photo.virtualCopy", "Create Virtual Copy"),
+    ("dialog.rename", "Rename…"),
+    ("photo.delete", "Delete Photo"),
+];
+
+/// What "…" offers in the library.
+const LIBRARY_MORE: &[(&str, &str)] = &[
+    ("file.addFolder", "Import from Files…"),
+    ("library.selectAll", "Select All"),
+    ("app.settings", "Settings…"),
+    ("app.about", "About LightCraft"),
+];
+
+/// "…": a short list of what this screen needs, as a phone photo editor has it, then All Menus
+/// (the desktop's menus, for everything else).
+fn more_menu(app: &mut LightcraftApp, more: &egui::Response, editor: bool) {
+    let has_photo = app.session.active().is_some();
+    let mut picked: Option<&str> = None;
+    egui::Popup::menu(more).show(|ui| {
+        ui.set_min_width(210.0);
+        for (id, label) in if editor { EDITOR_MORE } else { LIBRARY_MORE } {
+            let enabled = !editor || has_photo;
+            let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)).frame(false));
+            register(ui, format!("more:{id}"), r.rect);
+            if r.clicked() {
+                picked = Some(id);
+            }
+            // the destructive one apart from the rest
+            if *id == "dialog.rename" {
+                ui.separator();
+            }
+        }
+        if !app.native_menu {
+            ui.separator();
+            let bottom = Some(ui.max_rect().bottom());
+            let r = ui.menu_button(crate::i18n::tr("All Menus"), |ui| crate::menubar::menus_in(app, ui, bottom));
+            register(ui, "more:allMenus", r.response.rect);
+        }
+    });
+    if let Some(id) = picked
+        && let Err(e) = crate::menubar::run_item(app, id, json!({}))
+    {
+        app.toast(&more.ctx, e);
+    }
+}
+
+fn unsaved_indicator(app: &LightcraftApp, ui: &mut egui::Ui) {
+    // a failing save keeps its warning visible (the desktop's cloud icon)
+    if let Some((n, e)) = app.session.unsaved() {
+        let t = Tokens::get(ui.ctx());
+        let (r, resp) = ui.allocate_exact_size(BUTTON, Sense::hover());
+        paint(ui.painter(), r.shrink(10.0), Icon::Cloud, t.caution);
+        register(ui, "indicator:unsaved", r);
+        resp.on_hover_text(format!("{n} unsaved: {e}"));
+    }
+}
+
+/// The library's bar: My Photos, then (from the right) "…", Export, Filter, Import and the
+/// search field in what's left.
+fn library_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    top_bar(ui, |ui| {
+        if icon_button(ui, "sidebar", Icon::Sidebar, BUTTON, app.ui.left_panel, true, "Show/hide My Photos panel").clicked() {
+            let _ = app.run("view.leftPanel", json!({}));
+        }
+        if app.ui.view != ViewMode::PhotoGrid
+            && app.ui.view != ViewMode::SquareGrid
+            && icon_button(ui, "back", Icon::Back, BUTTON, false, true, "Back").clicked()
+        {
+            let _ = app.run("view.back", json!({}));
+        }
+        bar_right(app, ui, false, |app, right| {
+            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Export").clicked() {
+                let _ = app.run("dialog.export", json!({}));
+            }
+            let filtering = app.session.filter != Default::default() || app.ui.filter_bar;
+            if icon_button(right, "filter", Icon::Filter, BUTTON, filtering, true, "Filter bar").clicked() {
+                let _ = app.run("view.filterBar", json!({}));
+            }
+            // the system photo picker (or the Files app's) on a phone; the file dialog elsewhere
+            if icon_button(right, "import", Icon::Plus, BUTTON, false, true, "Import Photos…").clicked()
+                && let Err(e) = crate::menubar::run_item(app, "file.addPhotos", json!({}))
+            {
+                app.toast(right.ctx(), e);
+            }
+            unsaved_indicator(app, right);
+            right.add_space(4.0);
+            let field = right.available_rect_before_wrap();
+            if field.width() >= 80.0 {
+                search(app, right, Rect::from_center_size(field.center(), vec2(field.width(), 32.0)));
+            }
+        });
+    });
 }
 
 /// The search field in `r` (same id and command as the desktop top bar's).
@@ -202,13 +303,90 @@ fn search(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     }
 }
 
+/// The editor's bar: Back to the photos, then (from the right) "…", Export, Redo, Undo and
+/// Show Original (held down: the photo as shot, let go: the edit).
+fn editor_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    top_bar(ui, |ui| {
+        if icon_button(ui, "back", Icon::ChevronLeft, BUTTON, false, true, "Back").clicked() {
+            let _ = app.run("view.back", json!({}));
+        }
+        bar_right(app, ui, true, |app, right| {
+            if icon_button(right, "share", Icon::Share, BUTTON, false, app.session.active().is_some(), "Export").clicked() {
+                let _ = app.run("dialog.export", json!({}));
+            }
+            if undo_button(right, "redo", "Redo", true).clicked() {
+                let _ = app.run("edit.redo", json!({}));
+            }
+            if undo_button(right, "undo", "Undo", false).clicked() {
+                let _ = app.run("edit.undo", json!({}));
+            }
+            let r = icon_button(right, "showOriginal", Icon::BeforeAfter, BUTTON, false, true, "Show Original (hold)");
+            hold_original(app, &r);
+            unsaved_indicator(app, right);
+        });
+    });
+}
+
+/// Show Original held down: the press shows the photo as shot, and the release brings back the
+/// view it replaced. Only the press and release change the view, so View > Show Original and the
+/// Before / After layouts work as usual otherwise. The hold is followed until the pointer lifts,
+/// not by the button's response: egui turns a finger held past `max_click_duration` into a long
+/// press and the button then no longer reports the pointer as down on it.
+fn hold_original(app: &mut LightcraftApp, r: &egui::Response) {
+    let key = egui::Id::unique("compact-hold-original");
+    let was: Option<crate::state::BeforeAfter> = r.ctx.data(|d| d.get_temp(key));
+    match was {
+        None if r.is_pointer_button_down_on() => {
+            r.ctx.data_mut(|d| d.insert_temp(key, app.ui.before_after));
+            app.ui.before_after = crate::state::BeforeAfter::Original;
+        }
+        Some(before) if !r.ctx.input(|i| i.pointer.any_down() || i.any_touches()) => {
+            r.ctx.data_mut(|d| d.remove::<crate::state::BeforeAfter>(key));
+            app.ui.before_after = before;
+        }
+        _ => {}
+    }
+}
+
+/// Undo (a hooked arrow turning back to the left) or Redo (the same, mirrored).
+fn undo_button(ui: &mut egui::Ui, id: &str, tip: &str, redo: bool) -> egui::Response {
+    let r = icon_button(ui, id, Icon::Circle, BUTTON, false, true, tip);
+    // paint over the placeholder glyph: there is no undo icon in the set
+    let t = Tokens::get(ui.ctx());
+    let c = r.rect.center();
+    ui.painter().rect_filled(Rect::from_center_size(c, vec2(26.0, 26.0)), 4.0, if r.hovered() { t.hover } else { t.chrome });
+    let sx = if redo { -1.0 } else { 1.0 };
+    let p = |x: f32, y: f32| pos2(c.x + sx * x, c.y + y);
+    let stroke = Stroke::new(1.6, t.icon);
+    // the hook: from the arrow head, across, round and back down
+    let mut pts = vec![p(-7.0, -3.0)];
+    for i in 0..=8 {
+        let a = std::f32::consts::FRAC_PI_2 * (f32::from(i as u8) / 8.0) * 2.0 - std::f32::consts::FRAC_PI_2;
+        pts.push(p(1.5 + 5.0 * a.cos(), 2.0 + 5.0 * a.sin()));
+    }
+    pts.push(p(-1.0, 7.0));
+    ui.painter().add(egui::Shape::line(pts, stroke));
+    ui.painter().line_segment([p(-7.0, -3.0), p(-3.5, -6.5)], stroke);
+    ui.painter().line_segment([p(-7.0, -3.0), p(-3.5, 0.5)], stroke);
+    r
+}
+
+/// The library's bottom bar: the grid sizes and Detail, Sort and Select (a tap on a photo opens
+/// the editor, so there is no Edit button). In Select mode by finger it is the selection's bar instead
+/// ([`select_bar`]).
 fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    if app.ui.select_mode && crate::widgets::touch_screen(ui.ctx()) {
+        egui::Panel::bottom("bottom_bar")
+            .exact_size(t.bottom_bar_h + 4.0)
+            .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN + 6, right: BAR_MARGIN, top: 0, bottom: 0 }))
+            .show(ui, |ui| select_bar(app, ui));
+        return;
+    }
     egui::Panel::bottom("bottom_bar")
         .exact_size(t.bottom_bar_h + 4.0)
         .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN, right: BAR_MARGIN, top: 0, bottom: 0 }))
         .show(ui, |ui| {
-            let full = ui.max_rect();
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 for (id, icon, mode, tip) in [
@@ -224,32 +402,47 @@ fn bottombar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 egui::Popup::menu(&sort).show(|ui| super::bottombar::sort_menu(app, ui));
                 super::bottombar::select_mode_button(app, ui);
             });
-            let mut right = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(Rect::from_min_max(pos2(full.center().x, full.top()), full.max))
-                    .layout(egui::Layout::right_to_left(egui::Align::Center)),
-            );
-            right.spacing_mut().item_spacing.x = 2.0;
-            let has_photo = app.session.active().is_some();
-            // Edit: open the sheet on the Edit panel (from the grid too), or put it away
-            if icon_button(&mut right, "edit", Icon::Sliders, BUTTON, sheet_open(app), has_photo, "Edit (E)").clicked() {
-                if sheet_open(app) {
-                    close_sheet(app);
-                } else {
-                    if app.ui.view != ViewMode::Detail {
-                        let _ = app.run("view.detail", json!({}));
-                    }
-                    if app.ui.right == RightPanel::None && !app.ui.presets {
-                        let _ = app.run("panel.edit", json!({}));
-                    }
-                }
-            }
-            if app.ui.view == ViewMode::Detail
-                && icon_button(&mut right, "filmstrip", Icon::Filmstrip, BUTTON, app.ui.filmstrip, true, "Filmstrip").clicked()
-            {
-                app.ui.filmstrip = !app.ui.filmstrip;
-            }
         });
+}
+
+/// Select mode's bar: how many photos are selected, then Share (export), Album, Move to Folder,
+/// Delete, and Done (leaves Select mode).
+fn select_bar(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let n = app.session.selection.ids.len();
+    let any = n > 0;
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let count = if any { crate::i18n::tr_format!("{n} selected", n = n) } else { crate::i18n::tr("Select Photos").to_string() };
+        ui.label(egui::RichText::new(count).font(t.semibold(14.0)).color(t.text));
+        let full = ui.max_rect();
+        let mut right = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_min_max(pos2(full.center().x - 60.0, full.top()), full.max))
+                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+        );
+        right.spacing_mut().item_spacing.x = 2.0;
+        let done = right.add(egui::Button::new(egui::RichText::new(crate::i18n::tr("Done")).font(t.semibold(14.0)).color(t.accent)).frame(false));
+        register(&right, "button:selectDone", done.rect);
+        if done.clicked() {
+            let _ = app.run("view.selectMode", json!({"on": false}));
+        }
+        if icon_button(&mut right, "selectDelete", Icon::Trash, BUTTON, false, any, "Delete").clicked() {
+            let _ = crate::menubar::run_item(app, "photo.delete", json!({}));
+        }
+        if crate::panels::grid::can_move_to_folder(app)
+            && icon_button(&mut right, "selectMove", Icon::Folder, BUTTON, false, any, "Move to Folder…").clicked()
+        {
+            crate::panels::grid::move_to_folder(app, right.ctx());
+        }
+        let album = icon_button(&mut right, "selectAlbum", Icon::Album, BUTTON, false, any, "Add to Album");
+        if let Some(id) = app.session.selection.active.or_else(|| app.session.selection.ids.first().copied()) {
+            egui::Popup::menu(&album).show(|ui| crate::panels::grid::context_menu_albums(app, ui, id));
+        }
+        if icon_button(&mut right, "selectShare", Icon::Share, BUTTON, false, any, "Export").clicked() {
+            let _ = app.run("dialog.export", json!({}));
+        }
+    });
 }
 
 fn close_sheet(app: &mut LightcraftApp) {
@@ -257,8 +450,181 @@ fn close_sheet(app: &mut LightcraftApp) {
     app.ui.presets = false;
 }
 
-/// The bottom sheet: a row of tools, then the right panel or Presets at full width. In a wide
-/// window ([`beside`]) it is a column at the right of the photo.
+/// What a tab of the editor's tool row opens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Presets,
+    /// An action, not a sheet: Auto settings.
+    Auto,
+    /// A right panel (Edit shows all of its sections).
+    Panel(RightPanel),
+    /// One section of the Edit panel on its own.
+    Section(&'static str),
+}
+
+/// The editor's tool row, in a phone photo editor's order: (widget id, label, icon, tab).
+const TABS: &[(&str, &str, Icon, Tab)] = &[
+    ("presets", "Presets", Icon::Presets, Tab::Presets),
+    ("auto", "Auto", Icon::Target, Tab::Auto),
+    ("crop", "Crop", Icon::Crop, Tab::Panel(RightPanel::Crop)),
+    ("light", "Light", Icon::Sliders, Tab::Section("light")),
+    ("color", "Color", Icon::Radial, Tab::Section("color")),
+    ("effects", "Effects", Icon::Curve, Tab::Section("effects")),
+    ("detailSection", "Detail", Icon::Picker, Tab::Section("detail")),
+    ("optics", "Optics", Icon::Circle, Tab::Section("optics")),
+    ("masking", "Masking", Icon::Mask, Tab::Panel(RightPanel::Masking)),
+    ("remove", "Remove", Icon::Eraser, Tab::Panel(RightPanel::Remove)),
+    ("edit", "All", Icon::Pencil, Tab::Panel(RightPanel::Edit)),
+    ("calibration", "Calibration", Icon::ProfileGrid, Tab::Section("calibration")),
+    ("redeye", "Red Eye", Icon::Eye, Tab::Panel(RightPanel::RedEye)),
+    ("info", "Info", Icon::Info, Tab::Panel(RightPanel::Info)),
+    ("keywords", "Keywords", Icon::Tag, Tab::Panel(RightPanel::Keywords)),
+    ("versions", "Versions", Icon::Versions, Tab::Panel(RightPanel::Versions)),
+    ("activity", "History", Icon::Activity, Tab::Panel(RightPanel::Activity)),
+];
+
+/// A tab's touch target.
+const TAB: egui::Vec2 = egui::vec2(62.0, 54.0);
+
+fn section_id() -> egui::Id {
+    egui::Id::unique("compact-edit-section")
+}
+
+/// The Edit section the sheet shows on its own (`None`: the whole Edit panel).
+fn section(ctx: &egui::Context) -> Option<&'static str> {
+    ctx.data(|d| d.get_temp::<Option<&'static str>>(section_id())).flatten()
+}
+
+fn set_section(ctx: &egui::Context, s: Option<&'static str>) {
+    ctx.data_mut(|d| d.insert_temp(section_id(), s));
+}
+
+fn tab_on(app: &LightcraftApp, ctx: &egui::Context, tab: Tab) -> bool {
+    match tab {
+        Tab::Presets => app.ui.presets,
+        Tab::Auto => false,
+        Tab::Panel(RightPanel::Edit) => !app.ui.presets && matches!(app.ui.right, RightPanel::Edit | RightPanel::Profiles) && section(ctx).is_none(),
+        Tab::Panel(p) => !app.ui.presets && app.ui.right == p,
+        Tab::Section(k) => !app.ui.presets && app.ui.right == RightPanel::Edit && section(ctx) == Some(k),
+    }
+}
+
+/// A tab pressed: its sheet opens (one thing at a time), or, pressed again, the sheet goes away.
+fn press(app: &mut LightcraftApp, ctx: &egui::Context, tab: Tab) {
+    if tab == Tab::Auto {
+        let _ = app.run("develop.auto", json!({}));
+        app.toast(ctx, crate::i18n::tr("Auto settings applied"));
+        return;
+    }
+    if tab_on(app, ctx, tab) {
+        close_sheet(app);
+        return;
+    }
+    match tab {
+        Tab::Presets => {
+            if !app.ui.presets {
+                let _ = app.run("panel.presets", json!({}));
+            }
+        }
+        Tab::Panel(p) => {
+            app.ui.presets = false;
+            set_section(ctx, None);
+            if app.ui.right != p {
+                let id = TABS.iter().find(|(_, _, _, t)| *t == tab).map_or("edit", |(id, ..)| *id);
+                let _ = app.run(&format!("panel.{id}"), json!({}));
+            }
+        }
+        Tab::Section(k) => {
+            app.ui.presets = false;
+            if app.ui.right != RightPanel::Edit {
+                let _ = app.run("panel.edit", json!({}));
+            }
+            set_section(ctx, Some(k));
+        }
+        Tab::Auto => {}
+    }
+}
+
+/// The tool row (or, `vertical`, column): each tab an icon over its name, the open one lit.
+fn tool_tabs(app: &mut LightcraftApp, ui: &mut egui::Ui, vertical: bool) {
+    let t = Tokens::get(ui.ctx());
+    let ctx = ui.ctx().clone();
+    let mut row = |ui: &mut egui::Ui| {
+        for (id, label, icon, tab) in TABS {
+            let on = tab_on(app, &ctx, *tab);
+            let (r, resp) = ui.allocate_exact_size(TAB, Sense::click());
+            register(ui, format!("icon:{id}"), r);
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, crate::i18n::tr(label)));
+            let color = if on { t.accent } else { t.icon };
+            if on {
+                ui.painter().rect_filled(r.shrink(2.0), 8.0, t.tool_active);
+            }
+            paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.top() + 19.0), vec2(20.0, 20.0)), *icon, color);
+            ui.painter().text(pos2(r.center().x, r.bottom() - 11.0), egui::Align2::CENTER_CENTER, crate::i18n::tr(label), t.font(10.5), color);
+            if resp.clicked() {
+                press(app, &ctx, *tab);
+            }
+        }
+    };
+    let drag = egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() };
+    if vertical {
+        egui::ScrollArea::vertical().id_salt("compact-tools").scroll_source(drag).auto_shrink([false, false]).show(ui, |ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                row(ui);
+            });
+        });
+    } else {
+        egui::ScrollArea::horizontal().id_salt("compact-tools").scroll_source(drag).auto_shrink([false, false]).show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                row(ui);
+            });
+        });
+    }
+}
+
+/// The editor's tools: a row along the bottom, or in landscape a column at the right edge (with
+/// the open sheet beside it, as one column).
+fn tool_dock(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    if beside(ui.ctx()) {
+        let avail = ui.available_rect_before_wrap();
+        if sheet_open(app) && !app.ui.left_panel {
+            let r = egui::Panel::right("compact_sheet_side")
+                .exact_size(side_width(avail.width()))
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.divider)))
+                .show(ui, |ui| {
+                    register(ui, "panel:sheet", ui.max_rect());
+                    egui::Panel::bottom("compact_tools")
+                        .exact_size(TAB.y + 6.0)
+                        .resizable(false)
+                        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: BAR_MARGIN, right: BAR_MARGIN, top: 2, bottom: 2 }))
+                        .show(ui, |ui| tool_tabs(app, ui, false));
+                    sheet_body(app, ui);
+                });
+            register(ui, "panel:tools", r.response.rect);
+        } else {
+            let r = egui::Panel::right("compact_tools_side")
+                .exact_size(TAB.x + 8.0)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: 4, right: 4, top: 0, bottom: 0 }))
+                .show(ui, |ui| tool_tabs(app, ui, true));
+            register(ui, "panel:tools", r.response.rect);
+        }
+    } else {
+        let r = egui::Panel::bottom("compact_tools")
+            .exact_size(TAB.y + 8.0)
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin { left: BAR_MARGIN, right: BAR_MARGIN, top: 3, bottom: 3 }))
+            .show(ui, |ui| tool_tabs(app, ui, false));
+        register(ui, "panel:tools", r.response.rect);
+    }
+}
+
+/// The bottom sheet above the tool row (in landscape, the editor's sheet is part of the tool
+/// column instead; the grid's Info, Keywords … sheet is a column at the right there).
 fn sheet(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let avail = ui.available_rect_before_wrap();
@@ -266,65 +632,80 @@ fn sheet(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         egui::Panel::right("compact_sheet_side").exact_size(side_width(avail.width()))
     } else {
         // the photo keeps the upper part; the sheet gets the rest, within reason
-        let height = (avail.height() * 0.5).clamp(220.0, (avail.height() - 160.0).max(220.0));
+        let height = (avail.height() * 0.5).clamp(200.0, (avail.height() - 160.0).max(200.0));
         egui::Panel::bottom("compact_sheet").exact_size(height)
     };
     panel.resizable(false).frame(egui::Frame::NONE.fill(t.chrome).stroke(Stroke::new(1.0, t.divider))).show(ui, |ui| {
         register(ui, "panel:sheet", ui.max_rect());
-        egui::Panel::top("compact_sheet_tools")
-            .exact_size(BUTTON.y + 4.0)
-            // (inside the sheet's 1 pt border: its icons line up with the bars')
-            .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: BAR_MARGIN - 1, right: BAR_MARGIN - 1, top: 2, bottom: 2 }))
-            .show(ui, |ui| tools(app, ui));
-        if app.ui.presets {
-            super::presets::show(app, ui);
-        } else {
-            register(ui, "panel:right_panel", ui.available_rect_before_wrap());
-            super::right::show(app, ui);
-        }
+        sheet_body(app, ui);
     });
 }
 
-fn tools(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    let has_photo = app.session.active().is_some();
-    let full = ui.max_rect();
-    egui::ScrollArea::horizontal().id_salt("compact-tools").auto_shrink([false, false]).show(ui, |ui| {
-        ui.horizontal_centered(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            if icon_button(ui, "presets", Icon::Presets, BUTTON, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
-                let _ = app.run("panel.presets", json!({}));
-            }
-            for (id, icon, panel, tip) in [
-                ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
-                ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
-                ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
-                ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
-                ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
-                ("info", Icon::Info, RightPanel::Info, "Info (I)"),
-                ("keywords", Icon::Tag, RightPanel::Keywords, "Keywords (K)"),
-                ("versions", Icon::Versions, RightPanel::Versions, "Versions (Shift+V)"),
-                ("activity", Icon::Activity, RightPanel::Activity, "History & Activity (Y)"),
-            ] {
-                let on = !app.ui.presets && (app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles));
-                if icon_button(ui, id, icon, BUTTON, on, has_photo || panel == RightPanel::Activity, tip).clicked() {
-                    // one thing at a time in the sheet: a tool replaces Presets instead of toggling off
-                    app.ui.presets = false;
-                    if !on {
-                        let _ = app.run(&format!("panel.{id}"), json!({}));
-                    }
-                }
-            }
-            // room to scroll the last tool out from under the Hide button
-            ui.add_space(BUTTON.x);
-        });
-    });
-    // put the sheet away (pinned to the row's right end, over the scrolling tools)
-    let r = Rect::from_min_size(pos2(full.right() - BUTTON.x, full.center().y - BUTTON.y / 2.0), BUTTON);
+/// The sheet's title and Hide, then what the open tool shows.
+fn sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.painter().rect_filled(r, 0.0, t.chrome);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r));
-    if icon_button(&mut child, "sheetClose", Icon::ChevronDown, BUTTON, false, true, "Hide").clicked() {
-        close_sheet(app);
+    let ctx = ui.ctx().clone();
+    let title = TABS.iter().find(|(.., tab)| tab_on(app, &ctx, *tab)).map_or("Edit", |(_, label, ..)| *label);
+    // one Edit section: its eye (on / off), as on the section's header in the full panel
+    let eye = section(&ctx)
+        .filter(|_| app.ui.right == RightPanel::Edit && !app.ui.presets)
+        .zip(app.session.active())
+        .map(|(key, id)| (key, super::edit::shown_settings(app, id).0.section_enabled(key)));
+    egui::Panel::top("compact_sheet_head")
+        .exact_size(36.0)
+        .resizable(false)
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: BAR_MARGIN - 1, top: 0, bottom: 0 }))
+        .show(ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.label(egui::RichText::new(crate::i18n::tr(title)).font(t.semibold(14.0)).color(t.text));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if icon_button(ui, "sheetClose", Icon::ChevronDown, vec2(36.0, 36.0), false, true, "Hide").clicked() {
+                        close_sheet(app);
+                    }
+                    if let Some((key, on)) = eye {
+                        section_eye(app, ui, key, on);
+                    }
+                });
+            });
+        });
+    if app.ui.presets {
+        super::presets::show(app, ui);
+        return;
+    }
+    let one = section(&ctx).filter(|_| app.ui.right == RightPanel::Edit);
+    match (one, app.session.active()) {
+        (Some(key), Some(id)) => {
+            register(ui, "panel:right_panel", ui.available_rect_before_wrap());
+            let drag = egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Always, ..Default::default() };
+            egui::ScrollArea::vertical().id_salt("compact-section").scroll_source(drag).auto_shrink([false, false]).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.add_space(6.0);
+                super::edit::notices(app, ui, id);
+                let (d, raw) = super::edit::shown_settings(app, id);
+                super::edit::section_body(app, ui, &d, id, raw, key);
+                ui.add_space(24.0);
+                keep_focus_visible(ui);
+            });
+        }
+        _ => {
+            register(ui, "panel:right_panel", ui.available_rect_before_wrap());
+            super::right::show(app, ui);
+        }
+    }
+}
+
+/// The sheet's eye for its Edit section: off, the section contributes nothing to the photo.
+fn section_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, key: &str, on: bool) {
+    let t = Tokens::get(ui.ctx());
+    let tip = if on { "Hide this section's edits" } else { "Show this section's edits" };
+    let r = icon_button(ui, "sheetEye", Icon::Eye, vec2(36.0, 36.0), false, true, tip);
+    crate::widgets::announce_selected(&r, crate::i18n::tr("Show / hide"), on);
+    if !on {
+        let e = Rect::from_center_size(r.rect.center(), vec2(18.0, 18.0));
+        ui.painter().line_segment([e.left_bottom(), e.right_top()], Stroke::new(1.5, t.text_disabled));
+    }
+    if r.clicked() {
+        let _ = app.run("develop.sectionEnabled", json!({"section": key, "enabled": !on}));
     }
 }
 

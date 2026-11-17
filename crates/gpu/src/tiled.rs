@@ -9,7 +9,7 @@
 use std::borrow::Cow;
 
 use lightcraft_develop::DevelopSettings;
-use lightcraft_pipeline::finish::FinishParams;
+use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput};
 use lightcraft_pipeline::tiled::{GridView, Rect, TileOptions, TilePlan};
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::{Histogram, Rgb32f, Rgba8};
@@ -247,7 +247,15 @@ pub(crate) fn render_tiled(
             let lin = region_linear(&mut cx, img, info, &rp, &mut host);
             let prep = region_prepare(&mut cx, &tp, &grids, &lin, r);
             let (masks, terms) = masks(&mut cx, &lin, &prep, &rp, &mut host);
-            let mut fp = FinishParams::new(s, &rp.frame, info, gw, gh, rp.px_per_long, prep.air, req.space);
+            let mut fp = FinishParams::new(FinishParamsInput {
+                settings: s,
+                frame: &rp.frame,
+                info,
+                image_size: (gw, gh),
+                px_per_long: rp.px_per_long,
+                air_pre: prep.air,
+                space: req.space,
+            });
             (fp.x0, fp.y0) = (r.x0, r.y0);
             let present = Present {
                 clarity: prep.clarity.is_some(),

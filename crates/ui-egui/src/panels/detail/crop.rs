@@ -1,5 +1,7 @@
 use super::geometry::CanvasMap;
-use super::*;
+use super::{
+    Affine, Color32, DevelopSettings, Frame, Gesture, LightcraftApp, PhotoId, Point, Pos2, Rect, Stroke, Tokens, json, pos2, register, vec2,
+};
 
 // ------------------------------------------------------------------------ crop
 
@@ -34,6 +36,15 @@ pub(super) fn crop_overlay(
     if resp.hovered() && ui.input(|i| i.modifiers.command) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
+    // an untouched photo shows the remembered ratio's box, which the first drag (or Return) applies
+    let preview;
+    let d = match app.crop_tool_preview() {
+        Some(geometry) => {
+            preview = DevelopSettings { crop: lightcraft_develop::Crop { geometry, ..d.crop }, ..d.clone() };
+            &preview
+        }
+        None => d,
+    };
     let quad = frame_crop_quad(d, frame);
     let pts: Vec<Pos2> = quad.iter().map(|q| map.screen(*q)).collect();
     let p = ui.painter();
@@ -169,7 +180,11 @@ pub(super) fn crop_overlay(
             Some(Gesture::CropRotate { start_angle, a0 }) => {
                 let c = map.screen(Point::new(0.5, 0.5));
                 let a = (q - c).angle();
-                let ang = (start_angle + (a - a0).to_degrees() as f64).clamp(-45.0, 45.0);
+                // by finger the photo turns the way the finger goes round, like turning the print
+                // itself; a mouse keeps the desktop's direction
+                let turned = (a - a0).to_degrees() as f64;
+                let turned = if crate::widgets::finger(ui.ctx()) { -turned } else { turned };
+                let ang = (start_angle + turned).clamp(-45.0, 45.0);
                 shown_angle = (ang * 100.0).round() / 100.0;
                 let _ = app.run("crop.straighten", json!({"angle": shown_angle}));
             }

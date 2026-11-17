@@ -1,6 +1,6 @@
 use super::geometry::CanvasMap;
 use super::masks::{pin, pins_live};
-use super::*;
+use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect, Stroke, ToolOverlay, json, register, stroke_start, vec2};
 
 // ------------------------------------------------------------------------ remove
 

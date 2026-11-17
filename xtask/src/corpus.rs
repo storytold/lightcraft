@@ -1,5 +1,5 @@
 use super::raw_samples::RAW_SAMPLES;
-use super::*;
+use super::{Command, Path, root, run};
 
 pub(crate) fn cmd_corpus(download: bool) -> Result<(), String> {
     let corpus = root().join("corpus");

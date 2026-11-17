@@ -52,7 +52,8 @@ lightcraft-cli run --library "LightCraft Library" library.importLightroom path="
 The import itself (`library.importLightroom`, `lightcraft-cli run`) adds records to the currently open LightCraft
 library; only the desktop window above can make a new library for it first. The desktop result stays open until dismissed and
 shows the destination library, the number of records added, missing originals and warnings.
-**Show in Library** opens All Photos, clears filters and selects an imported record. Errors stay
+**Show in Library** opens All Photos, clears filters and selects an imported record (not one left in Recently
+Deleted; the button is left out when every record is there). Errors stay
 readable in the same result window. If another dialog is open, the result waits until that dialog closes. The result
 is also available through `library.importLightroom {"status":true}` during that session.
 
@@ -72,6 +73,11 @@ records already exist. Existing LightCraft
 edits are preserved by default; `updateExisting=true` explicitly replaces them. Persistent import
 identity prevents reimport from duplicating virtual copies and collections. One undo step reverses
 catalog changes; any saved recovery archives remain available.
+
+Records marked `VIDEO` in the source catalog appear in the **Videos** type filter, including
+offline originals. Reimport also repairs the classification of videos imported as images by
+older builds, preserving their IDs, edits and album/stack membership. This does not add video
+playback, frame previews or video discovery through folder synchronization.
 
 Before changing records, the importer attempts to save source image records, decoded XMP,
 verbatim develop settings, history, snapshots and collection content to compressed

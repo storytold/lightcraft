@@ -320,9 +320,13 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
+/// So do preview-only raws: their proxy is the embedded JPEG, read in the colour space the raw
+/// declares, which a look version bump can change too (#2654).
 #[cfg(not(target_arch = "wasm32"))]
 fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
-    photo.fitted_look() || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
+    photo.fitted_look()
+        || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
+        || (photo.kind == lightcraft_catalog::MediaKind::Raw && photo.preview_only.is_some())
 }
 
 /// Held while one proxy is checked and (re)written, so Build Smart Previews and the opening look
@@ -690,6 +694,22 @@ mod tests {
     use super::{jobs_for, run_photo};
     use crate::Session;
     use crate::media::SourceRef;
+
+    // Given a preview-only raw, its proxy goes stale with the look version: the embedded JPEG's colour
+    // space can change with it (#2654); a rendered photo's proxy does not
+    #[test]
+    fn preview_only_raws_follow_the_look_version() {
+        use lightcraft_catalog::{MediaKind, Photo, PhotoId, Source};
+        let mut ph = Photo::new(PhotoId(1), Source::File { path: "/x.cr3".into() }, "x.cr3", "CR3", 6000, 4000, "2026-10-23T00:00:00");
+        ph.kind = MediaKind::Raw;
+        assert!(super::preview_fitted_look(&ph), "a developed CR3");
+        ph.set_preview_only(Some("unsupported".into()));
+        assert!(super::preview_fitted_look(&ph), "a preview-only CR3");
+        ph.kind = MediaKind::Image;
+        ph.format = "JPG".into();
+        ph.set_preview_only(None);
+        assert!(!super::preview_fitted_look(&ph), "a JPEG");
+    }
 
     // Given a photo's preview jobs, the grid thumbnail is made from the source the view decoded, not
     // by reading the file again (here: a thumbnail job pointing at a file that is not there)

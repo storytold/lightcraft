@@ -164,12 +164,17 @@ orientation, iPad Split View and phone browsers:
   reach at least 22 pt, a lifted finger still "clicks" menu items, and new linear / radial
   gradients are drawn by dragging on the photo.
 - **What the desktop does with hover, modifiers, drags and keys** has a touch way in:
+  - **The photo grid on a phone** works like a phone's photo library: a tap opens the photo, a
+    long press starts Select mode with that photo chosen, and a sideways slide chooses (or, from
+    a chosen photo, takes out) a run of photos; up or down the grid scrolls. Select mode's bar
+    has Share, Album, Move and Delete. In the full layout (an iPad, a touch laptop) a tap selects,
+    a double tap opens and a long press opens the photo's menu.
   - **Selecting several photos:** Select in the bottom bar (or Edit ▸ Select Several, or
-    "Select Several" in a photo's long-press menu): taps add photos to the selection and take
-    them out, as ⌘-click does, with a tick on each; Done ends it.
-  - **Double taps** do what double clicks do (open a photo, reset a slider, delete a curve
-    point, reset a colour wheel, rename a mask or version …): two taps on the same control
-    within half a second, wherever on it they land.
+    "Select Several" in a photo's long-press menu in the full layout): taps add photos to the
+    selection and take them out, as ⌘-click does, with a tick on each; Done ends it.
+  - **Double taps** do what double clicks do (reset a slider, delete a curve point, reset a
+    colour wheel, rename a mask or version, open a photo in the full layout …): two taps on the
+    same control within half a second, wherever on it they land.
   - **Controls shown on hover** are always there on a touch screen: a section's on/off eye, a
     mask's eye, face boxes' handles, × and "Add name", Survey's ×, a person's "More" tiles, the
     Profile Browser's stars, the Keyword List's arrow.

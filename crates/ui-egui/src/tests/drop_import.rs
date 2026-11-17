@@ -131,7 +131,10 @@ fn app_with_library(dir: &Scratch) -> Headless {
 }
 
 /// Draw the launch list (`over_open_library`: Alt-at-launch over the library that opened, else the
-/// list with no library behind it).
+/// list with no library behind it), then wait until it holds still. Each recent library's row says
+/// "Checking…" until a worker answers; the answer drops that line, so the centred window shrinks and
+/// its buttons move. A click aimed before then can find its button gone from under the pointer by
+/// the release, and `ui.clickWidget` refuses it.
 fn draw_launch_list(h: &mut Headless, over_open_library: bool) {
     let mut problem = crate::panels::library_problem::LibraryProblem::choose_later(&h.app.ui.settings);
     if over_open_library && let Some(c) = problem.chooser.as_mut() {
@@ -139,6 +142,26 @@ fn draw_launch_list(h: &mut Headless, over_open_library: bool) {
     }
     h.app.library_problem = Some(problem);
     assert!(h.step_until(T, |h| h.app.widgets.iter().any(|(w, _)| w == "button:libraryOpen")), "the launch list is drawn");
+    let answered =
+        |h: &Headless| h.app.library_problem.as_ref().and_then(|p| p.chooser.as_ref()).is_some_and(|c| c.libraries.iter().all(|l| !l.checking));
+    assert!(h.step_until(T, answered), "every recent library is checked");
+    wait_until_still(h, "button:libraryOpen");
+}
+
+/// Run frames until widget `id` keeps its rect from one frame to the next (an anchored window
+/// takes a frame to move to its new size).
+fn wait_until_still(h: &mut Headless, id: &str) {
+    let rect = |h: &Headless| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r);
+    let mut last = rect(h);
+    for _ in 0..60 {
+        h.step();
+        let now = rect(h);
+        if now.is_some() && now == last {
+            return;
+        }
+        last = now;
+    }
+    panic!("{id} never held still");
 }
 
 /// The launch list as Alt-at-launch shows it over the library that opened.
@@ -1106,4 +1129,80 @@ fn public_drop_take_preserves_reentered_barrier_order_and_clears_protection() {
         assert!(h.app.ui.dialog.is_none());
         assert_eq!(photos(&h), 0, "neither taken handles nor refused arrivals replay");
     }
+}
+
+/// A watched folder that can't be listed (removed, unmounted, not allowed) is noted with the reason, for
+/// Settings ▸ Import to show, and the note goes once the folder can be read again.
+#[test]
+fn auto_import_notes_a_watched_folder_it_cannot_read() {
+    let dir = Scratch::new("auto-unreadable");
+    let mut h = app(&dir);
+    let watch = dir.path("watch");
+    h.app.session.import_defaults.auto_folder = Some(watch.clone());
+    assert!(h.step_until(T, |h| h.app.ui.auto_import_error.is_some()), "the missing folder is noted");
+    let (folder, e) = h.app.ui.auto_import_error.clone().unwrap();
+    assert_eq!(folder, watch);
+    assert!(e.starts_with(&watch) && e.len() > watch.len() + 2, "the error says why: {e}");
+    // another folder watched: the note was about the old one, so it goes, and a listing of the old one
+    // still under way doesn't bring it back
+    h.app.session.import_defaults.auto_folder = Some(dir.path("trip"));
+    h.step();
+    assert!(h.app.ui.auto_import_error.is_none(), "{:?}", h.app.ui.auto_import_error);
+    h.app.session.import_defaults.auto_folder = Some(watch.clone());
+    assert!(h.step_until(T, |h| h.app.ui.auto_import_error.is_some()), "back to the missing folder: noted again");
+    write_png(&dir.path("watch/w.png"), 3);
+    assert!(h.step_until(T, |h| h.app.ui.auto_import_error.is_none()), "readable again: the note goes");
+    assert!(h.step_until(T, |h| photos(h) == 1), "and the photo arrives");
+}
+
+/// Auto Import's second listing of `watch/w.png` on its worker thread (the first notes the file's size; the
+/// second, size unchanged, imports it).
+fn second_auto_import_listing(h: &mut Headless, dir: &Scratch) {
+    write_png(&dir.path("watch/w.png"), 3);
+    h.app.session.import_defaults.auto_folder = Some(dir.path("watch"));
+    assert!(h.step_until(T, |h| h.app.tasks.is_running("Auto Import")), "the watched folder is listed");
+    assert!(h.step_until(T, |h| !h.app.tasks.is_running("Auto Import")));
+    assert_eq!(photos(h), 0);
+    assert!(h.step_until(T, |h| h.app.tasks.is_running("Auto Import")), "and listed again");
+}
+
+/// Apply Auto Import's listing now, before another frame can change what runs.
+fn apply_auto_import_listing(h: &mut Headless) {
+    let ctx = h.view.ctx.clone();
+    assert!(crate::tasks::wait_for(&mut h.app, &ctx, "Auto Import", T), "the listing ends");
+}
+
+/// An import that starts while Auto Import lists its watched folder: the new photo isn't marked as
+/// tried and skipped, the next listing imports it once the other import is done.
+#[test]
+fn auto_import_waits_for_an_import_that_starts_during_its_listing() {
+    let dir = Scratch::new("auto-race");
+    let mut h = app(&dir);
+    second_auto_import_listing(&mut h, &dir);
+    h.app.import = Some(crate::import::ImportTask::new(vec![dir.path("trip")], json!({"mode": "add"}), 0, false));
+    apply_auto_import_listing(&mut h);
+    assert!(h.step_until(T, |h| photos(h) == 3), "the trip's two photos and the watched one arrive: {}", photos(&h));
+    h.app.session.import_defaults.auto_folder = None;
+}
+
+/// The same with a Local folder browse: a browse that finishes replaces `app.import` with its own, so
+/// Auto Import doesn't start one beside it.
+#[test]
+fn auto_import_waits_for_a_browse_that_starts_during_its_listing() {
+    use lightcraft_engine::import::{ImportCandidate, ScanOutput};
+    let dir = Scratch::new("auto-browse");
+    let mut h = app(&dir);
+    second_auto_import_listing(&mut h, &dir);
+    let scan = crate::import::stall_scan_of(&mut h.app, true);
+    apply_auto_import_listing(&mut h);
+    assert!(h.app.import.is_none(), "no Auto Import for the browse to replace");
+    // the browse finds one photo of its own and imports it
+    let Ok(tx) = scan.downcast::<std::sync::mpsc::Sender<ScanOutput>>() else { panic!("the stalled scan's sender") };
+    let found = ImportCandidate { path: dir.path("trip/a.png"), ..Default::default() };
+    tx.send(ScanOutput { candidates: vec![found], probes: Default::default() }).unwrap();
+    drop(tx);
+    assert!(h.step_until(T, |h| h.app.import.is_some()), "the browse starts its import");
+    assert!(h.step_until(T, |h| h.app.import.is_none()), "and it ends");
+    assert!(h.step_until(T, |h| photos(h) == 2), "the browsed photo and the watched one arrive: {}", photos(&h));
+    h.app.session.import_defaults.auto_folder = None;
 }

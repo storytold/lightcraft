@@ -817,6 +817,13 @@ static PER_CONV: AtomicBool = AtomicBool::new(false);
 mod tests {
     use super::*;
 
+    /// The face detector's kernels validate without a GPU.
+    #[test]
+    fn the_face_kernels_validate_without_a_gpu() {
+        assert_eq!(crate::validate_wgsl("faces_conv", include_str!("wgsl/faces_conv.wgsl")), Ok(()));
+        assert_eq!(crate::validate_wgsl("faces_ops", include_str!("wgsl/faces_ops.wgsl")), Ok(()));
+    }
+
     fn gpu() -> Option<Arc<FaceGpu>> {
         match accelerator() {
             Ok(a) => Some(a),

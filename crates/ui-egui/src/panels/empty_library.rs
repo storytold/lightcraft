@@ -49,6 +49,18 @@ pub fn hint(keymap: &Keymap, mac: bool) -> String {
     }
 }
 
+/// The grid's second line when a view with no photos is not the empty library (an empty album, say):
+/// the way in is File → Import Photos…, with the shortcut that command is bound to now, written as
+/// menus write it. With no shortcut the sentence leaves it out.
+pub fn no_photos_body(keymap: &Keymap, mac: bool) -> String {
+    match crate::shortcuts::shortcut_of(keymap, "file.addPhotos") {
+        Some(sc) => {
+            crate::i18n::tr_format!("Import photos with File → Import Photos… ({}), or drop them here", crate::menubar::shortcut_text(sc, mac))
+        }
+        None => crate::i18n::tr("Import photos with File → Import Photos…, or drop them here").to_string(),
+    }
+}
+
 const IMPORT_PHOTOS: EmptyAction = EmptyAction { command: "file.addPhotos", label: "Import Photos…", widget: "button:emptyImportPhotos" };
 const IMPORT_LIGHTROOM: EmptyAction =
     EmptyAction { command: "file.importLightroom", label: "Import Lightroom Catalog…", widget: "button:emptyImportLightroom" };

@@ -23,7 +23,7 @@
 //!   crop and reads only inside it: the largest `S(ρ/z)/ρ` over the crop border radii `ρ` is 1. 0.596 px over the 34
 //!   measurable corrected photos (budget 0.75 px; corners and edge midpoints 0.570 px).
 //! - `WarpRectilinear`'s 4-term odd polynomial fits that map within 2.35·10⁻⁴ of the DNG radius (0.220 px) on every
-//!   photo, at its 65 fit samples. A table it fits worse than 0.25 px at the samples the crop shows is refused (the
+//!   photo, at its 65 fit samples. A table it fits worse than 0.25 px (0.5 px on an APS-C body) at the samples the crop shows is refused (the
 //!   photo stays uncorrected rather than wrongly warped). Between samples the error is somewhat larger: 0.071 against
 //!   0.049 px for the full-frame 16–35 mm example in the tests.
 //! - vignetting: read but never applied. The camera JPEGs keep the uncorrected render's radial falloff (median
@@ -37,10 +37,12 @@
 //!   them on in code, pass `true` there. When on, a CA value beyond [`CA_MAX_RELATIVE`] or a colour plane that fails
 //!   the fit gate above drops both colour planes, and G alone is applied to all three channels.
 //!
-//! The correction is produced whatever the in-camera flag says. Only bodies listed in [`FULL_FRAME_CROP`] get it: the
-//! unit and the knot spacing are verified on the ILCE-7RM6 alone. Another body is added by repeating the measurement
-//! on its photos shot with distortion correction on and listing its full-frame default crop. The method and the
-//! numbers: docs/sony-ilce7rm6-lens-corrections.md.
+//! The correction is produced whatever the in-camera flag says. Only bodies listed in [`FULL_FRAME_CROP`] or
+//! [`APSC_BODIES`] get it: the unit and the knot spacing are verified on the ILCE-7RM6 and, for distortion, on the
+//! ILCE-6700 (APS-C, 11 knots spanning its own crop, the same unit 15000: 0.73 px worst over 27 photos with three
+//! lenses as rendered, 1.38 px at the 10–18 mm's 10 mm end). Another body is added by repeating the measurement on its photos shot
+//! with distortion correction on and listing its full-frame default crop (or, for an APS-C body, its model). The method
+//! and the numbers: docs/sony-ilce7rm6-lens-corrections.md.
 
 use super::fit_radial_warp;
 use crate::opcodes::max_radius;
@@ -57,6 +59,9 @@ pub(crate) const CA_FLAG: u16 = 0x7034;
 
 /// The bodies whose tables are verified (Exif `Model`), with their full-frame default crop (width, height) in px.
 const FULL_FRAME_CROP: &[(&str, (f64, f64))] = &[("ILCE-7RM6", (9984.0, 6656.0))];
+/// The verified APS-C bodies (Exif `Model`): their knots span the file's own default crop, the last knot at its corner.
+/// Measured on the ILCE-6700 (docs/sony-ilce7rm6-lens-corrections.md → ILCE-6700).
+const APSC_BODIES: &[&str] = &["ILCE-6700"];
 /// The distortion table's value of 1 (relative radius); a global least-squares fit over the 34 photos gives 15000.7.
 const DISTORTION_UNIT: f64 = 15000.0;
 /// The CA table's value of 1 (relative to the green source radius). Provisional: the median best unit of the 20
@@ -70,6 +75,10 @@ const CA_MAX_RELATIVE: f64 = 2e-3;
 const ZOOM_SCAN: usize = 4096;
 /// Largest polynomial fit error accepted at the fit samples the crop shows, px at a 1440 px long edge.
 const FIT_ERROR_PX_AT_1440: f64 = 0.25;
+/// The fit gate of [`APSC_BODIES`]: their 11 knots over a smaller crop bend more sharply than the polynomial follows
+/// (worst 0.44 px over the 30 measured ILCE-6700 tables; 13 of them exceed 0.25 px), while the fitted polynomial
+/// matches the camera JPEG as well as the exact table (p95 0.22–0.73 px against 0.23–0.68 px, 10 mm aside).
+const APSC_FIT_ERROR_PX_AT_1440: f64 = 0.5;
 
 /// A file's lens tables: the first `count` values of each (CA: red, blue); `None` when absent or malformed.
 /// `vignetting` and `flags` are parsed for the tests and the docs only: don't build an opcode from them (the camera
@@ -106,10 +115,19 @@ pub(crate) fn read_tables(raw: &Ifd) -> LensTables {
     }
 }
 
-/// The knot spacing (px) of a verified body: its full-frame default-crop half diagonal / 15.
-fn knot_spacing(model: &str) -> Option<f64> {
+/// The knot spacing (px) of a verified body: a full-frame body's full-frame default-crop half diagonal / 15 (fixed on
+/// the sensor, so in its APS-C crop mode too); an APS-C body's default-crop `crop` half diagonal / (`knots` − 1). Both
+/// put the last knot at the corner of the crop the table was written for (the ILCE-7RM6's APS-C mode, 11 knots, gives
+/// 392 px that way, which fits its files as well as the sensor-fixed 400 px). `None` for an unverified body, or an
+/// APS-C body with fewer than two knots or a crop that isn't 3:2 (the only shape measured; empty crops included).
+fn knot_spacing(model: &str, knots: usize, crop: Rect) -> Option<f64> {
     let model = model.trim();
-    FULL_FRAME_CROP.iter().find(|(m, _)| *m == model).map(|&(_, (w, h))| w.hypot(h) / 30.0)
+    if let Some(&(_, (w, h))) = FULL_FRAME_CROP.iter().find(|(m, _)| *m == model) {
+        return Some(w.hypot(h) / 30.0);
+    }
+    let gaps = knots.checked_sub(1).filter(|&n| n > 0)?;
+    let half_diagonal = (crop.width as f64).hypot(crop.height as f64) / 2.0;
+    (APSC_BODIES.contains(&model) && super::arw_lens::is_3_2(crop)).then(|| half_diagonal / gaps as f64)
 }
 
 /// The knot table at radius `r` px: knot `i` at `i · spacing`, linear in between, the last segment extended beyond
@@ -161,6 +179,11 @@ fn fill_zoom(source: &dyn Fn(f64) -> f64, x: f64, y: f64) -> Option<f64> {
 /// worse than 0.25 px at a 1440 px long edge at one of the fit samples within the crop (a padded active area, as in
 /// lossless files, reaches radii that are never shown).
 pub(crate) fn warp_opcode(t: &LensTables, knot_spacing: f64, active: Rect, crop: Rect, lateral_ca: bool) -> Option<Opcode> {
+    gated_warp_opcode(t, knot_spacing, active, crop, lateral_ca, FIT_ERROR_PX_AT_1440)
+}
+
+/// [`warp_opcode`] with the fit gate `fit_error_px` (px at a 1440 px long edge) instead of 0.25 px.
+fn gated_warp_opcode(t: &LensTables, knot_spacing: f64, active: Rect, crop: Rect, lateral_ca: bool, fit_error_px: f64) -> Option<Opcode> {
     let v = t.distortion.as_deref().filter(|v| v.iter().any(|&x| x != 0.0))?;
     let (aw, ah) = (active.width as f64, active.height as f64);
     if aw < 2.0 || ah < 2.0 || crop.width == 0 || crop.height == 0 {
@@ -172,7 +195,7 @@ pub(crate) fn warp_opcode(t: &LensTables, knot_spacing: f64, active: Rect, crop:
     // DNG's normalisation: pixel-index units, radius 1 = the farthest active-area corner
     let (cx, cy) = (crop.x as f64 + (cw - 1.0) / 2.0, crop.y as f64 + (ch - 1.0) / 2.0);
     let m = max_radius(cx, cy, aw - 1.0, ah - 1.0);
-    let max_fit_error = FIT_ERROR_PX_AT_1440 * (cw.max(ch) / 1440.0) / m;
+    let max_fit_error = fit_error_px * (cw.max(ch) / 1440.0) / m;
     let shown = (cw / 2.0).hypot(ch / 2.0) / m;
     // output radius (px) → green source radius
     let green = |r: f64| source(r / z);
@@ -204,8 +227,15 @@ pub(crate) fn warp_opcode(t: &LensTables, knot_spacing: f64, active: Rect, crop:
 /// CA went from rms 0.032 / max 0.125 px (off) to 0.052 / 0.219 px (on) at a 1440 px long edge; only the 16–35 mm
 /// improved. Follow-up: warp the CFA colour planes before demosaic, then turn the planes on here.
 pub(crate) fn lens_opcodes(raw: &Ifd, model: &str, active: Rect, crop: Rect) -> Vec<Opcode> {
-    let Some(spacing) = knot_spacing(model) else { return Vec::new() };
-    warp_opcode(&read_tables(raw), spacing, active, crop, false).into_iter().collect()
+    let tables = read_tables(raw);
+    let knots = tables.distortion.as_ref().map_or(0, Vec::len);
+    let Some(spacing) = knot_spacing(model, knots, crop) else { return Vec::new() };
+    let op = if APSC_BODIES.contains(&model.trim()) {
+        gated_warp_opcode(&tables, spacing, active, crop, false, APSC_FIT_ERROR_PX_AT_1440)
+    } else {
+        warp_opcode(&tables, spacing, active, crop, false)
+    };
+    op.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -253,7 +283,7 @@ mod tests {
     const APSC_B: [f64; 4] = [1.016155702, -0.06162477627, 0.02753315326, -0.005554915901];
 
     fn knots() -> f64 {
-        knot_spacing("ILCE-7RM6").unwrap()
+        knot_spacing("ILCE-7RM6", 16, FF_CROP).unwrap()
     }
 
     fn ifd(tags: Vec<(u16, Value)>) -> Ifd {
@@ -523,6 +553,49 @@ mod tests {
         let padded = Rect { x: 0, y: 0, width: 10240, height: 7168 };
         let op = warp_opcode(&tables_with_distortion(&strong), knots(), padded, FF_CROP, false);
         assert!(matches!(op, Some(Opcode::WarpRectilinear { .. })), "{op:?}");
+    }
+
+    /// An ILCE-6700 file (Sigma 10–18 mm at 10 mm): 11 knots, the strongest table of the measured set.
+    const A6700_DISTORTION: [i16; 17] = [11, 90, 11, -90, -205, -345, -500, -676, -852, -1031, -1190, -1333, -1333, -1333, -1333, -1333, -1333];
+    const A6700_CROP: Rect = Rect { x: 0, y: 0, width: 6192, height: 4128 };
+    /// An ILCE-6700 file (Tamron 17–70 mm at 32 mm), on the decoded geometry: the polynomial fits it within 0.44 px.
+    const A6700_32MM_DISTORTION: [i16; 17] = [11, 7, 0, 7, 29, 58, 101, 158, 230, 323, 446, 611, 611, 611, 611, 611, 611];
+    const A6700_ACTIVE: Rect = Rect { x: 0, y: 0, width: 6656, height: 4608 };
+    const A6700_DECODED_CROP: Rect = Rect { x: 26, y: 20, width: 6192, height: 4128 };
+
+    #[test]
+    fn apsc_body_knots_span_its_own_crop() {
+        // half diagonal 3720.9 px / 10
+        let s = knot_spacing("ILCE-6700", 11, A6700_CROP).unwrap();
+        assert!((s - 372.0929).abs() < 1e-3, "{s}");
+        // the full-frame body keeps its sensor-fixed spacing whatever the crop and count
+        assert_eq!(knot_spacing("ILCE-7RM6", 11, APSC_CROP), knot_spacing("ILCE-7RM6", 16, FF_CROP));
+        // degenerate counts and crops give no spacing instead of a division by zero
+        assert_eq!(knot_spacing("ILCE-6700", 1, A6700_CROP), None);
+        assert_eq!(knot_spacing("ILCE-6700", 0, A6700_CROP), None);
+        assert_eq!(knot_spacing("ILCE-6700", 11, Rect { x: 0, y: 0, width: 0, height: 0 }), None);
+        // the spacing comes from the crop, so a crop of another shape than the measured 3:2 gets no correction
+        let square = Rect { width: A6700_CROP.height, ..A6700_CROP };
+        assert_eq!(knot_spacing("ILCE-6700", 11, square), None);
+        let ifd = sony_lens_ifd(&A6700_DISTORTION, &APSC_VIGNETTING, &APSC_CA, [1, 2, 1]);
+        let ops = lens_opcodes(&ifd, "ILCE-6700", A6700_CROP, A6700_CROP);
+        let gated = gated_warp_opcode(&read_tables(&ifd), s, A6700_CROP, A6700_CROP, false, APSC_FIT_ERROR_PX_AT_1440);
+        assert_eq!(ops, gated.into_iter().collect::<Vec<_>>());
+        assert_eq!(ops.len(), 1);
+        // other APS-C bodies stay unverified
+        assert!(lens_opcodes(&ifd, "ILCE-6600", A6700_CROP, A6700_CROP).is_empty());
+    }
+
+    /// The APS-C fit gate: a table the polynomial fits within 0.44 px is applied on the ILCE-6700, while the
+    /// full-frame 0.25 px gate refuses it.
+    #[test]
+    fn apsc_body_uses_its_wider_fit_gate() {
+        let ifd = sony_lens_ifd(&A6700_32MM_DISTORTION, &APSC_VIGNETTING, &APSC_CA, [1, 2, 1]);
+        let t = read_tables(&ifd);
+        let s = knot_spacing("ILCE-6700", 11, A6700_DECODED_CROP).unwrap();
+        assert_eq!(warp_opcode(&t, s, A6700_ACTIVE, A6700_DECODED_CROP, false), None);
+        let ops = lens_opcodes(&ifd, "ILCE-6700", A6700_ACTIVE, A6700_DECODED_CROP);
+        assert!(matches!(ops.as_slice(), [Opcode::WarpRectilinear { planes, .. }] if planes.len() == 1), "{ops:?}");
     }
 
     #[test]

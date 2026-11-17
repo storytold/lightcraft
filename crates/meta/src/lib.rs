@@ -1,4 +1,4 @@
-//! Photo metadata for LightCraft: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`), XMP packets
+//! Photo metadata for LightCraft: EXIF (TIFF/raw files, JPEG APP1, PNG `eXIf`, WebP `EXIF`, HEIF items), XMP packets
 //! (read + write, standard namespaces plus our own `lc:` namespace) and basic IPTC-IIM.
 //!
 //! Entry points:
@@ -7,8 +7,10 @@
 //! - [`parse_xmp`] / [`write_xmp`] — XMP packets (interchange fields + the opaque `lc:settings` JSON).
 //! - [`parse_iptc`] — IPTC-IIM record 2 datasets.
 //! - [`parse_gpx`] — GPS track logs (GPX) for geotagging by capture time.
-//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, PSD/PSB, Canon CR3).
+//! - [`extract`] — all of the above for a whole file (JPEG, PNG, WebP, TIFF/DNG/raw, PSD/PSB, Canon CR3,
+//!   HEIF/HEIC/AVIF).
 //! - [`cr3`] — the Canon CR3 container (metadata blocks, XMP, the JPEG and raw tracks).
+//! - [`heif`] — the HEIF/HEIC/AVIF container's Exif and XMP items (no HEVC decoder needed).
 #![forbid(unsafe_code)]
 
 mod container;
@@ -18,6 +20,7 @@ mod exif;
 pub mod focus;
 mod focus_read;
 mod gpx;
+pub mod heif;
 mod iptc;
 pub mod mrw;
 mod psd;
@@ -187,7 +190,16 @@ impl Metadata {
             orientation,
             gps,
             width,
-            height,
+            height
+        );
+        self.fill_missing_descriptive(other);
+    }
+
+    /// Fill descriptive metadata separately from the camera and image properties.
+    fn fill_missing_descriptive(&mut self, other: &Metadata) {
+        fill!(
+            self,
+            other,
             artist,
             copyright,
             copyright_marked,
@@ -405,11 +417,22 @@ mod tests {
 
     #[test]
     fn merge_rules() {
-        let mut a = Metadata { make: Some("A".into()), rating: Some(1), ..Default::default() };
-        let b = Metadata { make: Some("B".into()), model: Some("M".into()), rating: Some(4), keywords: vec!["k".into()], ..Default::default() };
+        let mut a = Metadata { make: Some("A".into()), title: Some("Original".into()), rating: Some(1), ..Default::default() };
+        let b = Metadata {
+            make: Some("B".into()),
+            model: Some("M".into()),
+            title: Some("Replacement".into()),
+            caption: Some("Caption".into()),
+            rating: Some(4),
+            keywords: vec!["k".into()],
+            ..Default::default()
+        };
         a.fill_missing(&b);
         assert_eq!(a.make.as_deref(), Some("A"));
         assert_eq!(a.model.as_deref(), Some("M"));
+        assert_eq!(a.title.as_deref(), Some("Original"));
+        assert_eq!(a.caption.as_deref(), Some("Caption"));
+        assert_eq!(a.keywords, vec!["k".to_string()]);
         assert_eq!(a.rating, Some(1));
         a.overlay_user_fields(&b);
         assert_eq!(a.rating, Some(4));

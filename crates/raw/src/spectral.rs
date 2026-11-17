@@ -43,15 +43,17 @@ impl Camera {
 
 /// `(make, model as sold, table model)`: bodies sharing a table camera's sensor that rawtoaces-data's alias list
 /// doesn't name, kept here because the table is generated. Fujifilm's 26.1 MP X-Trans CMOS 4 bodies use the X-T3's
-/// sensor (X-T30 issue: a black-and-white Acros camera JPEG gives no colour to fit, and without matrices the photo
+/// or X-T4's sensor (X-T30 issue: a black-and-white Acros camera JPEG gives no colour to fit, and without matrices the photo
 /// opened in the muted neutral fallback).
 const SAME_SENSOR: &[(&str, &str, &str)] = &[
     ("Fujifilm", "X-T30", "X-T3"),
     ("Fujifilm", "X-T30 II", "X-T3"),
     ("Fujifilm", "X-Pro3", "X-T3"),
     ("Fujifilm", "X100V", "X-T3"),
-    ("Fujifilm", "X-S10", "X-T3"),
+    ("Fujifilm", "X-S10", "X-T4"),
     ("Fujifilm", "X-E4", "X-T3"),
+    ("Fujifilm", "X-S20", "X-T4"),
+    ("Fujifilm", "X-M5", "X-T3"),
 ];
 
 /// Model names compared without case, the brand, a leading `EOS` or a trailing `DIGITAL`
@@ -164,6 +166,7 @@ mod tests {
             ("FUJIFILM", "X-T30", "X-T3"),
             ("FUJIFILM", "X-T30 II", "X-T3"),
             ("FUJIFILM", "X100V", "X-T3"),
+            ("FUJIFILM", "X-S20", "X-T4"),
         ] {
             assert_eq!(find(Some(make), model).map(|c| c.model), Some(row), "{make} {model}");
         }

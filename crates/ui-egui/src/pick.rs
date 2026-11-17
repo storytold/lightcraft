@@ -162,17 +162,21 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     for (p, paths) in answered {
         let params = with_answer(&p.params, p.key, p.kind, &paths);
         match app.run(&p.command, params) {
-            Err(e) => app.toast_error(ctx, e),
-            // a file saved where the host said (a background export shares its own when it ends)
-            Ok(_) if p.kind == PickKind::Save => {
-                let saved: Vec<String> = paths.into_iter().take(1).filter(|f| std::path::Path::new(f).is_file()).collect();
-                if !saved.is_empty()
-                    && let Some(share) = app.services.share.as_mut()
-                {
-                    share(&saved);
+            Ok(r) => {
+                if let Some(text) = answered_message(&p.command, &r) {
+                    app.toast(ctx, text);
+                }
+                // a file saved where the host said (a background export shares its own when it ends)
+                if p.kind == PickKind::Save {
+                    let saved: Vec<String> = paths.into_iter().take(1).filter(|f| std::path::Path::new(f).is_file()).collect();
+                    if !saved.is_empty()
+                        && let Some(share) = app.services.share.as_mut()
+                    {
+                        share(&saved);
+                    }
                 }
             }
-            Ok(_) => {}
+            Err(e) => app.toast_error(ctx, e),
         }
     }
 }
@@ -229,6 +233,15 @@ pub fn field_answer(app: &mut LightcraftApp, ctx: &egui::Context, key: &str) -> 
             app.field_picks.remove(i);
             None
         }
+    }
+}
+
+/// What `command`, run with a dialog's answer, says when it worked (`None`: its result shows
+/// for itself). The same words whether the dialog answered at once or later.
+pub fn answered_message(command: &str, result: &Value) -> Option<String> {
+    match command {
+        "folder.move" => Some(crate::i18n::tr_format!("Moved; {} photo(s) relinked", result["relinked"])),
+        _ => None,
     }
 }
 

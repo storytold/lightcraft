@@ -188,7 +188,10 @@ mod download {
 
     use lightcraft_geocode::{GEONAMES_BASE, GEONAMES_ZIP};
 
-    use super::*;
+    use super::{
+        Cancel, DownloadOutcome, GEONAMES_ATTRIBUTION, GEONAMES_FILES, GeoNames, PoisonError, Result, Session, Value, bad, dataset_dir, json,
+        str_param,
+    };
     use crate::activity::Unit;
 
     const MAX_ZIP: u64 = 64 * 1024 * 1024;

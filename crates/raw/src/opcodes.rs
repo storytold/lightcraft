@@ -253,6 +253,9 @@ impl Rd<'_> {
         self.p += 8;
         Some(v)
     }
+    fn finite_f64(&mut self) -> Option<f64> {
+        self.f64().filter(|v| v.is_finite())
+    }
     fn f32(&mut self) -> Option<f32> {
         let v = f32::from_be_bytes(self.d.get(self.p..self.p + 4)?.try_into().ok()?);
         self.p += 4;
@@ -276,109 +279,126 @@ impl Rd<'_> {
 }
 
 fn parse_one(id: u32, flags: u32, params: &[u8]) -> Option<Opcode> {
-    let mut r = Rd { d: params, p: 0 };
-    let f = |r: &mut Rd| r.f64().filter(|v| v.is_finite());
-    Some(match id {
+    let mut reader = Rd { d: params, p: 0 };
+    let parsed = match id {
+        1 | 2 | 3 | 14 => parse_warp(id, flags, &mut reader)?,
+        4 => Opcode::FixBadPixelsConstant { constant: reader.u32()?, bayer_phase: reader.u32()? },
+        5 => parse_bad_pixel_list(&mut reader)?,
+        6 => Opcode::TrimBounds { top: reader.u32()?, left: reader.u32()?, bottom: reader.u32()?, right: reader.u32()? },
+        7..=13 => parse_area_opcode(id, &mut reader)?,
+        _ => Opcode::Unknown { id, flags, params: params.to_vec() },
+    };
+    Some(parsed)
+}
+
+fn parse_warp(id: u32, flags: u32, reader: &mut Rd<'_>) -> Option<Opcode> {
+    match id {
         1 => {
-            let n = r.u32()? as usize;
-            if n == 0 || n > 4 {
-                return None;
-            }
-            let mut planes = Vec::with_capacity(n);
-            for _ in 0..n {
-                planes.push([f(&mut r)?, f(&mut r)?, f(&mut r)?, f(&mut r)?, f(&mut r)?, f(&mut r)?]);
-            }
-            Opcode::WarpRectilinear { planes, center: [f(&mut r)?, f(&mut r)?] }
+            let planes = parse_planes(reader, 4, |r| {
+                Some([r.finite_f64()?, r.finite_f64()?, r.finite_f64()?, r.finite_f64()?, r.finite_f64()?, r.finite_f64()?])
+            })?;
+            Some(Opcode::WarpRectilinear { planes, center: [reader.finite_f64()?, reader.finite_f64()?] })
         }
         2 => {
-            let n = r.u32()? as usize;
-            if n == 0 || n > 4 {
-                return None;
-            }
-            let mut planes = Vec::with_capacity(n);
-            for _ in 0..n {
-                planes.push([f(&mut r)?, f(&mut r)?, f(&mut r)?, f(&mut r)?]);
-            }
-            Opcode::WarpFisheye { planes, center: [f(&mut r)?, f(&mut r)?] }
+            let planes = parse_planes(reader, 4, |r| Some([r.finite_f64()?, r.finite_f64()?, r.finite_f64()?, r.finite_f64()?]))?;
+            Some(Opcode::WarpFisheye { planes, center: [reader.finite_f64()?, reader.finite_f64()?] })
         }
-        14 => {
-            let n = r.u32()? as usize;
-            // N sets of 19 doubles, then the centre (2 doubles) and reciprocalRadial (LONG); nothing else
-            if n == 0 || n > WR2_MAX_PLANES || params.len() != 4 + n * WR2_LEN * 8 + 16 + 4 {
-                return None;
-            }
-            let mut planes = Vec::with_capacity(n);
-            for _ in 0..n {
-                let mut k = [0.0; WR2_LEN];
-                for v in k.iter_mut() {
-                    *v = f(&mut r).filter(|v| v.abs() <= WR2_MAX_COEF)?;
-                }
-                // the spec requires 0 <= min_valid_radius < max_valid_radius <= 1
-                if !(k[17] >= 0.0 && k[17] < k[18] && k[18] <= 1.0) {
-                    return None;
-                }
-                planes.push(k);
-            }
-            let center = [f(&mut r).filter(|v| v.abs() <= 4.0)?, f(&mut r).filter(|v| v.abs() <= 4.0)?];
-            Opcode::WarpRectilinear2 { planes, center, reciprocal: r.u32()? != 0, optional: flags & 1 != 0 }
+        3 => Some(Opcode::FixVignetteRadial {
+            k: [reader.finite_f64()?, reader.finite_f64()?, reader.finite_f64()?, reader.finite_f64()?, reader.finite_f64()?],
+            center: [reader.finite_f64()?, reader.finite_f64()?],
+        }),
+        14 => parse_warp_rectilinear2(flags, reader),
+        _ => None,
+    }
+}
+
+fn parse_planes<const N: usize>(reader: &mut Rd<'_>, max: usize, mut parse: impl FnMut(&mut Rd<'_>) -> Option<[f64; N]>) -> Option<Vec<[f64; N]>> {
+    let count = reader.u32()? as usize;
+    if count == 0 || count > max {
+        return None;
+    }
+    (0..count).map(|_| parse(reader)).collect()
+}
+
+fn parse_warp_rectilinear2(flags: u32, reader: &mut Rd<'_>) -> Option<Opcode> {
+    let count = reader.u32()? as usize;
+    // N sets of 19 doubles, then the centre (2 doubles) and reciprocalRadial (LONG); nothing else.
+    if count == 0 || count > WR2_MAX_PLANES || reader.remaining() != count * WR2_LEN * 8 + 16 + 4 {
+        return None;
+    }
+    let mut planes = Vec::with_capacity(count);
+    for _ in 0..count {
+        let mut coefficients = [0.0; WR2_LEN];
+        for value in &mut coefficients {
+            *value = reader.finite_f64().filter(|value| value.abs() <= WR2_MAX_COEF)?;
         }
-        3 => Opcode::FixVignetteRadial { k: [f(&mut r)?, f(&mut r)?, f(&mut r)?, f(&mut r)?, f(&mut r)?], center: [f(&mut r)?, f(&mut r)?] },
-        4 => Opcode::FixBadPixelsConstant { constant: r.u32()?, bayer_phase: r.u32()? },
-        5 => {
-            let bayer_phase = r.u32()?;
-            let (np, nr) = (r.u32()? as usize, r.u32()? as usize);
-            if np.saturating_mul(8).saturating_add(nr.saturating_mul(16)) > r.remaining() {
-                return None;
-            }
-            let points = (0..np).map(|_| Some((r.u32()?, r.u32()?))).collect::<Option<_>>()?;
-            let rects = (0..nr).map(|_| Some([r.u32()?, r.u32()?, r.u32()?, r.u32()?])).collect::<Option<_>>()?;
-            Opcode::FixBadPixelsList { bayer_phase, points, rects }
+        if !(coefficients[17] >= 0.0 && coefficients[17] < coefficients[18] && coefficients[18] <= 1.0) {
+            return None;
         }
-        6 => Opcode::TrimBounds { top: r.u32()?, left: r.u32()?, bottom: r.u32()?, right: r.u32()? },
+        planes.push(coefficients);
+    }
+    let center = [reader.finite_f64().filter(|value| value.abs() <= 4.0)?, reader.finite_f64().filter(|value| value.abs() <= 4.0)?];
+    Some(Opcode::WarpRectilinear2 { planes, center, reciprocal: reader.u32()? != 0, optional: flags & 1 != 0 })
+}
+
+fn parse_bad_pixel_list(reader: &mut Rd<'_>) -> Option<Opcode> {
+    let bayer_phase = reader.u32()?;
+    let (point_count, rect_count) = (reader.u32()? as usize, reader.u32()? as usize);
+    if point_count.saturating_mul(8).saturating_add(rect_count.saturating_mul(16)) > reader.remaining() {
+        return None;
+    }
+    let points = (0..point_count).map(|_| Some((reader.u32()?, reader.u32()?))).collect::<Option<_>>()?;
+    let rects = (0..rect_count).map(|_| Some([reader.u32()?, reader.u32()?, reader.u32()?, reader.u32()?])).collect::<Option<_>>()?;
+    Some(Opcode::FixBadPixelsList { bayer_phase, points, rects })
+}
+
+fn parse_area_opcode(id: u32, reader: &mut Rd<'_>) -> Option<Opcode> {
+    let area = reader.area()?;
+    match id {
         7 => {
-            let area = r.area()?;
-            let n = r.u32()? as usize;
-            if n == 0 || n > 65536 || n * 2 > r.remaining() {
+            let count = reader.u32()? as usize;
+            if count == 0 || count > 65536 || count * 2 > reader.remaining() {
                 return None;
             }
-            Opcode::MapTable { area, table: (0..n).map(|_| r.u16()).collect::<Option<_>>()? }
+            Some(Opcode::MapTable { area, table: (0..count).map(|_| reader.u16()).collect::<Option<_>>()? })
         }
         8 => {
-            let area = r.area()?;
-            let deg = r.u32()? as usize;
-            if deg > 8 {
+            let degree = reader.u32()? as usize;
+            if degree > 8 {
                 return None;
             }
-            Opcode::MapPolynomial { area, coefficients: (0..=deg).map(|_| f(&mut r)).collect::<Option<_>>()? }
+            Some(Opcode::MapPolynomial { area, coefficients: (0..=degree).map(|_| reader.finite_f64()).collect::<Option<_>>()? })
         }
-        9 => {
-            let area = r.area()?;
-            let (pv, ph) = (r.u32()?, r.u32()?);
-            let spacing = [f(&mut r)?, f(&mut r)?];
-            let origin = [f(&mut r)?, f(&mut r)?];
-            let mp = r.u32()?;
-            let n = (pv as usize).checked_mul(ph as usize)?.checked_mul(mp as usize)?;
-            if n == 0 || n * 4 > r.remaining() {
-                return None;
-            }
-            let gains = (0..n).map(|_| r.f32()).collect::<Option<_>>()?;
-            Opcode::GainMap { area, points_v: pv, points_h: ph, spacing, origin, map_planes: mp, gains }
-        }
-        10..=13 => {
-            let area = r.area()?;
-            let n = r.u32()? as usize;
-            if n * 4 > r.remaining() {
-                return None;
-            }
-            let v: Vec<f32> = (0..n).map(|_| r.f32()).collect::<Option<_>>()?;
-            match id {
-                10 => Opcode::DeltaPerRow { area, deltas: v },
-                11 => Opcode::DeltaPerColumn { area, deltas: v },
-                12 => Opcode::ScalePerRow { area, scales: v },
-                _ => Opcode::ScalePerColumn { area, scales: v },
-            }
-        }
-        _ => Opcode::Unknown { id, flags, params: params.to_vec() },
+        9 => parse_gain_map(area, reader),
+        10..=13 => parse_delta_scale(id, area, reader),
+        _ => None,
+    }
+}
+
+fn parse_gain_map(area: Area, reader: &mut Rd<'_>) -> Option<Opcode> {
+    let (points_v, points_h) = (reader.u32()?, reader.u32()?);
+    let spacing = [reader.finite_f64()?, reader.finite_f64()?];
+    let origin = [reader.finite_f64()?, reader.finite_f64()?];
+    let map_planes = reader.u32()?;
+    let count = (points_v as usize).checked_mul(points_h as usize)?.checked_mul(map_planes as usize)?;
+    if count == 0 || count > reader.remaining() / 4 {
+        return None;
+    }
+    let gains = (0..count).map(|_| reader.f32()).collect::<Option<_>>()?;
+    Some(Opcode::GainMap { area, points_v, points_h, spacing, origin, map_planes, gains })
+}
+
+fn parse_delta_scale(id: u32, area: Area, reader: &mut Rd<'_>) -> Option<Opcode> {
+    let count = reader.u32()? as usize;
+    if count > reader.remaining() / 4 {
+        return None;
+    }
+    let values: Vec<f32> = (0..count).map(|_| reader.f32()).collect::<Option<_>>()?;
+    Some(match id {
+        10 => Opcode::DeltaPerRow { area, deltas: values },
+        11 => Opcode::DeltaPerColumn { area, deltas: values },
+        12 => Opcode::ScalePerRow { area, scales: values },
+        _ => Opcode::ScalePerColumn { area, scales: values },
     })
 }
 
@@ -508,19 +528,29 @@ fn area_iter(a: &Area, w: usize, h: usize, cpp: usize) -> impl Iterator<Item = (
         .flat_map(move |y| (l..r.max(l)).step_by(a.col_pitch.max(1) as usize).flat_map(move |x| (p0..p1.max(p0)).map(move |p| (x, y, p))))
 }
 
-fn gain_at(points_v: u32, points_h: u32, spacing: [f64; 2], origin: [f64; 2], map_planes: u32, gains: &[f32], rv: f64, rh: f64, plane: usize) -> f32 {
-    let (pv, ph) = (points_v as usize, points_h as usize);
-    let mp = map_planes as usize;
-    let p = plane.min(mp - 1);
-    let fy = if spacing[0] > 0.0 { ((rv - origin[0]) / spacing[0]).clamp(0.0, (pv - 1) as f64) } else { 0.0 };
-    let fx = if spacing[1] > 0.0 { ((rh - origin[1]) / spacing[1]).clamp(0.0, (ph - 1) as f64) } else { 0.0 };
-    let (y0, x0) = (fy.floor() as usize, fx.floor() as usize);
-    let (y1, x1) = ((y0 + 1).min(pv - 1), (x0 + 1).min(ph - 1));
-    let (ty, tx) = ((fy - y0 as f64) as f32, (fx - x0 as f64) as f32);
-    let g = |y: usize, x: usize| gains[(y * ph + x) * mp + p];
-    let top = g(y0, x0) + (g(y0, x1) - g(y0, x0)) * tx;
-    let bot = g(y1, x0) + (g(y1, x1) - g(y1, x0)) * tx;
-    top + (bot - top) * ty
+struct GainMapGrid<'a> {
+    points: [usize; 2],
+    spacing: [f64; 2],
+    origin: [f64; 2],
+    planes: usize,
+    gains: &'a [f32],
+}
+
+impl GainMapGrid<'_> {
+    fn sample_at(&self, position: [f64; 2], plane: usize) -> f32 {
+        let [pv, ph] = self.points;
+        let mp = self.planes;
+        let p = plane.min(mp - 1);
+        let fy = if self.spacing[0] > 0.0 { ((position[0] - self.origin[0]) / self.spacing[0]).clamp(0.0, (pv - 1) as f64) } else { 0.0 };
+        let fx = if self.spacing[1] > 0.0 { ((position[1] - self.origin[1]) / self.spacing[1]).clamp(0.0, (ph - 1) as f64) } else { 0.0 };
+        let (y0, x0) = (fy.floor() as usize, fx.floor() as usize);
+        let (y1, x1) = ((y0 + 1).min(pv - 1), (x0 + 1).min(ph - 1));
+        let (ty, tx) = ((fy - y0 as f64) as f32, (fx - x0 as f64) as f32);
+        let g = |y: usize, x: usize| self.gains[(y * ph + x) * mp + p];
+        let top = g(y0, x0) + (g(y0, x1) - g(y0, x0)) * tx;
+        let bot = g(y1, x0) + (g(y1, x1) - g(y1, x0)) * tx;
+        top + (bot - top) * ty
+    }
 }
 
 /// Radius normaliser: distance from the centre to the farthest image corner.
@@ -556,10 +586,17 @@ pub fn apply_list(list: &[Opcode], buf: &mut [f32], w: usize, h: usize, cpp: usi
                 }
             }
             Opcode::GainMap { area, points_v, points_h, spacing, origin, map_planes, gains } => {
+                let grid = GainMapGrid {
+                    points: [*points_v as usize, *points_h as usize],
+                    spacing: *spacing,
+                    origin: *origin,
+                    planes: *map_planes as usize,
+                    gains,
+                };
                 for (x, y, p) in area_iter(area, w, h, cpp) {
                     let rv = y as f64 / h as f64;
                     let rh = x as f64 / w as f64;
-                    let g = gain_at(*points_v, *points_h, *spacing, *origin, *map_planes, gains, rv, rh, p - area.plane as usize);
+                    let g = grid.sample_at([rv, rh], p - area.plane as usize);
                     buf[(y * w + x) * cpp + p] *= g;
                 }
             }

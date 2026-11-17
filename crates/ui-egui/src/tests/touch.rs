@@ -558,8 +558,9 @@ fn a_double_tap_on_a_grid_photo_opens_it() {
     assert_eq!(h.app.session.active().map(|p| p.0), Some(id));
 }
 
-/// On an iPhone a long press on a library photo opens its menu, which is taller than the screen:
-/// it stays on screen and a finger scrolls it to its last row, like the menu bar's menus.
+/// On an iPhone the photo menu (a right-click: a mouse or trackpad; a long press starts Select
+/// mode instead) is taller than the screen: it stays on screen and a finger scrolls it to its last
+/// row, like the menu bar's menus.
 #[test]
 fn a_photo_menu_taller_than_an_iphone_scrolls_with_a_finger() {
     let services = Services { png: None, ..Default::default() };
@@ -576,15 +577,14 @@ fn a_photo_menu_taller_than_an_iphone_scrolls_with_a_finger() {
     }]);
     h.settle(SETTLE);
     let (_, r) = h.app.widgets.iter().find(|(w, r)| w.starts_with("thumb:") && r.top() > 100.0).cloned().expect("a photo on screen");
-    // a long press: the finger rests on the photo
+    // a right-click on the photo (a long press would start Select mode)
     let at = r.center();
-    let t = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
-    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
-    h.input([t(egui::TouchPhase::Start), egui::Event::PointerMoved(at), button(true)]);
-    wait(&mut h, 1.0);
-    h.input([t(egui::TouchPhase::End), button(false), egui::Event::PointerGone]);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+    h.input([egui::Event::PointerMoved(at), button(true)]);
     h.step();
-    h.step();
+    h.input([button(false)]);
+    // (a menu measures its rows on its first frame and fits the window from the next)
+    wait(&mut h, 0.3);
     assert!(egui::Popup::is_any_open(&h.view.ctx), "the photo's menu opened");
     let list = widget(&mut h, "menu-level:1");
     assert!(list.top() >= 0.0 && list.bottom() <= hgt, "the menu stays on screen: {list:?}");

@@ -72,6 +72,8 @@ pub struct UiState {
     pub thumb_size: f32,
     /// Thumbnails across the compact (phone) grid, which has no size slider: a pinch changes it.
     pub grid_columns: u8,
+    /// Import review thumbnail size in points, independent of the library grid.
+    pub import_thumb_size: f32,
     /// Open Edit sections by id.
     pub open_sections: Vec<String>,
     /// Open flyouts (curve, mixer, grading…).
@@ -168,6 +170,10 @@ pub struct UiState {
     /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
+    /// The watched folder that couldn't be listed and why, as the last listing found it: logged once when it
+    /// starts and once when the folder can be read again, and shown in Settings ▸ Import.
+    #[serde(skip)]
+    pub auto_import_error: Option<(String, String)>,
     /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
     /// many were waiting then.
     #[serde(skip)]
@@ -181,6 +187,10 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// Alt (Option on macOS) is held this frame: a dragged Edit slider shows its temporary
+    /// preview ([`lightcraft_pipeline::Overlay::for_control`]).
+    #[serde(skip)]
+    pub alt_held: bool,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
@@ -302,6 +312,9 @@ pub struct UiState {
     /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
     #[serde(skip)]
     pub keyword_painter: Option<String>,
+    /// The text of the Keywords panel's painter box: the keyword Enable Painting paints.
+    #[serde(skip)]
+    pub keyword_painter_text: String,
     /// What the Keywording box shows (Lightroom Classic's Keyword Tags views).
     pub keywording_view: KeywordingView,
     /// The Keywording box, grouped: every keyword of this selection (its hash) is shown, however
@@ -370,6 +383,7 @@ pub struct UiState {
 }
 
 impl Default for UiState {
+    /// Initialize the library and import review sizes as independent app preferences.
     fn default() -> Self {
         UiState {
             window: None,
@@ -396,6 +410,7 @@ impl Default for UiState {
             before_after: BeforeAfter::Off,
             thumb_size: 220.0,
             grid_columns: 3,
+            import_thumb_size: crate::import::THUMB_SIZE_DEFAULT,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
             single_panel: false,
@@ -434,9 +449,11 @@ impl Default for UiState {
             unnamed_focus: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
+            alt_held: false,
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
+            auto_import_error: None,
             sidecar_retry_at: 0.0,
             sidecars_waiting: 0,
             known_cards: None,
@@ -487,6 +504,7 @@ impl Default for UiState {
             slideshow: None,
             second_window: false,
             keyword_painter: None,
+            keyword_painter_text: String::new(),
             keywording_view: KeywordingView::default(),
             keyword_chips_all: None,
             folded_sections: Vec::new(),
@@ -590,6 +608,7 @@ impl UiState {
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
         self.grid_columns = self.grid_columns.clamp(GRID_COLUMNS.0, GRID_COLUMNS.1);
+        self.import_thumb_size = crate::import::thumb_size(self.import_thumb_size);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);

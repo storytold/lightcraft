@@ -499,3 +499,37 @@ fn auto_straighten_says_when_it_finds_nothing() {
     assert_eq!(angle(&h), 0.0);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// The same drag outside the box turns the crop one way with a mouse and the other way by
+/// finger, which turns the photo the way the finger goes round, like turning the print itself.
+#[test]
+fn a_finger_rotates_the_other_way_from_a_mouse() {
+    let mut h = crop_tool();
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [{"kind": "down", "x": -0.05, "y": 0.2}, {"kind": "drag", "x": -0.05, "y": 0.25}, {"kind": "drag", "x": -0.05, "y": 0.3}, {"kind": "up", "x": -0.05, "y": 0.3}]}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let by_mouse = angle(&h);
+    assert!(by_mouse != 0.0, "the mouse rotated the crop");
+    let r = h.request("engine.execute", json!({"command": "crop.straighten", "params": {"angle": 0.0}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let img = h.app.image_rect.expect("the photo on screen");
+    let at = |y: f32| egui::pos2(img.left() - 0.05 * img.width(), img.top() + y * img.height());
+    let touch = |phase, pos| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: None };
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    h.input([touch(egui::TouchPhase::Start, at(0.2)), egui::Event::PointerMoved(at(0.2)), button(at(0.2), true)]);
+    h.step();
+    for y in [0.22, 0.25, 0.28, 0.3] {
+        h.input([touch(egui::TouchPhase::Move, at(y)), egui::Event::PointerMoved(at(y))]);
+        h.step();
+    }
+    h.input([touch(egui::TouchPhase::End, at(0.3)), button(at(0.3), false), egui::Event::PointerGone]);
+    h.settle(SETTLE);
+    let by_finger = angle(&h);
+    assert!(by_finger != 0.0, "the finger rotated the crop");
+    assert!(by_mouse.signum() != by_finger.signum(), "opposite ways: mouse {by_mouse}, finger {by_finger}");
+}
