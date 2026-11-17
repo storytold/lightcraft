@@ -18,13 +18,12 @@ Toward **beta** (~340–600 Opus 5.5 agent hours; ranked, each a gap in [gaps.md
    clean-room from prose descriptions (decided 2026-10-05; compressed NEF is the template).
 3. **Render-fidelity suite** (gap 3, 30–60 h): score our output against Lightroom's on the same CC0
    raws (references local in `plan/`), then tune; a retune ships as a new process version.
-4. **Full-resolution zoom** (gap 4, 8–15 h): visible-region rendering so 100% shows original pixels.
-5. **AI masks** (gap 5, 40–70 h): Subject / Sky / People on licensable weights; configure the SAM 3
+4. **AI masks** (gap 5, 40–70 h): Subject / Sky / People on licensable weights; configure the SAM 3
    mirror. Needs the maintainer's model decision.
-6. **Compressed ORF** (gap 6 reopened; estimate pending provenance review) and **HE NEF** (gap 7, 20–40 h).
-7. **Lens profiles of our own** (gap 8, 40–80 h).
-8. **Tests in CI on macOS and Windows, and the GPU tests in CI** (gap 9, 6–12 h).
-9. **Per-model verification** (gap 10, 20–35 h).
+5. **Compressed ORF** (gap 6 reopened; estimate pending provenance review) and **HE NEF** (gap 7, 20–40 h).
+6. **Lens profiles of our own** (gap 8, 40–80 h).
+7. **Tests in CI on macOS and Windows, and the GPU tests in CI** (gap 9, 6–12 h).
+8. **Per-model verification** (gap 10, 20–35 h).
 
 ## Alpha gate
 
@@ -35,7 +34,7 @@ against the code, tests, issues and [gaps.md](gaps.md).
 | Workflow | Works end to end? | Evidence | Hours to pass |
 |---|---|---|---:|
 | 1. Import a shoot (raw + JPEG) from a card or folder into the library | yes | Add / Copy / Move import with templates, duplicates, devices with DCIM, background import with cancel (`crates/engine/src/import.rs`, `tests_import.rs`, `tests_import_move.rs`); checklist A 83% | 0 |
-| 2. Cull: rate, flag, label, compare / survey, filter, check focus | yes (partial: focus check) | ratings / flags / labels with advance, Compare, Survey ≤ 48, filter bar, smart albums (checklist B–D 88–92%); 100% zoom is capped by the preview size (2,560 px default, adjustable in Settings), gap 4 — degrades focus checks on large files but does not block culling | 0 (8–15 h to close gap 4, beta) |
+| 2. Cull: rate, flag, label, compare / survey, filter, check focus | yes | ratings / flags / labels with advance, Compare, Survey ≤ 48, filter bar, smart albums (checklist B–D 88–92%). At 100% zoom the visible region is rendered at original resolution for focus checks | 0 |
 | 3. Develop raws non-destructively (global sliders, crop, masks, heal) | yes for most cameras (partial: Canon CR3 outside the verified variants, compressed ORF, HE NEF open as embedded previews) | Sony, Nikon (except HE), Fujifilm, Panasonic, Pentax, CR2, DNG decode from sensor data (raw-parity.md); every Edit slider, crop / Upright, brush / gradient / range masks, heal / clone (checklist F, H, K); colour estimated per file rather than measured, gaps 1–3 | 0 (coverage and colour gaps are beta blockers 1–3, 6–7) |
 | 4. Save, quit and reopen the work | yes | crash-safe journal + snapshots, torn-append and crash tests (`crates/catalog/src/journal.rs`, `tests_journal.rs`, `tests_torn_append.rs`); XMP sidecars read / write; failed saves reported | 0 |
 | 5. Batch-apply a look: presets, copy / paste / sync settings | yes | presets (incl. `.xmp` / `.lrtemplate` import), copy / paste / sync, auto sync (checklist L 86%, N 100%) | 0 |
@@ -102,12 +101,13 @@ calibration: M0–M13 took ≈ 25 active hours against an estimate of ≈ 110–
   Location" for a renamed drive, journal growth on large moves), the next step is the Classic model:
   photos point to a folder id (root + relative path).
 - **Zoom:** native pinch zoom and two-finger pan work in Detail, Compare and Reference views; the
-  whole-image preview still has a configurable cap (2,560 px default), see gap 4.
+  visible region renders from original pixels at 1:1 and higher. The upper limit is 800% ([#2652](https://github.com/storytold/lightcraft/issues/2652)).
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | patch | Update current focus and the culling workflow for shipped full-resolution zoom (#4461) |
 | 2026-11-17 | patch | M11 records 26 verified CR3 camera bodies and the remaining CRX limits (#4465) |
 | 2026-11-17 | patch | M10 records native JPEG XL export and the web limitation (#4464) |
 | 2026-10-24 | patch | Item 8 (gap 9): Linux dropped from "Tests in CI" and "the GPU tests in CI" added, because the CI gate has run the tests there since #2667; hours unchanged |
