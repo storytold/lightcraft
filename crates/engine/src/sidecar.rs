@@ -899,6 +899,27 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
             continue;
         }
         if rest.starts_with("<?") || rest.starts_with("<!") {
+            if rest.starts_with("<!--") {
+                // A comment's `>` does not close a tag: skip to its end.
+                if let Some(rel) = data[i..].find("-->") {
+                    i += rel + 3;
+                } else {
+                    break;
+                }
+            } else if rest.starts_with("<![CDATA[") {
+                // A CDATA section's `>` does not close a tag: skip to its end.
+                if let Some(rel) = data[i..].find("]]>") {
+                    i += rel + 3;
+                } else {
+                    break;
+                }
+            } else {
+                if let Some(rel) = rest[2..].find('>') {
+                    i += 2 + rel + 1;
+                } else {
+                    break;
+                }
+            }
             continue;
         }
         // A self-closing tag's declarations apply only inside the tag itself, so they do not
@@ -983,10 +1004,26 @@ fn global_description(data: &str) -> Option<(usize, usize)> {
             break;
         }
         if rest.starts_with("<?") || rest.starts_with("<!") {
-            if let Some(rel) = rest[2..].find('>') {
-                i += 2 + rel + 1;
+            if rest.starts_with("<!--") {
+                // A comment's `>` does not close a tag: skip to its end.
+                if let Some(rel) = data[i..].find("-->") {
+                    i += rel + 3;
+                } else {
+                    break;
+                }
+            } else if rest.starts_with("<![CDATA[") {
+                // A CDATA section's `>` does not close a tag: skip to its end.
+                if let Some(rel) = data[i..].find("]]>") {
+                    i += rel + 3;
+                } else {
+                    break;
+                }
             } else {
-                break;
+                if let Some(rel) = rest[2..].find('>') {
+                    i += 2 + rel + 1;
+                } else {
+                    break;
+                }
             }
             continue;
         }
@@ -998,7 +1035,58 @@ fn global_description(data: &str) -> Option<(usize, usize)> {
                 if is_crs_description(data, i, e) {
                     return Some((i, e));
                 }
-                i = e + 1;
+                // Not the CRS description: skip past its whole element so
+                // sibling descriptions are still considered.
+                let mut depth = 0usize;
+                let mut k = e + 1;
+                while k < data.len() {
+                    let Some(rel) = data[k..].find('<') else { k = data.len(); break };
+                    let s2 = k + rel;
+                    let rest2 = data.get(s2..).unwrap_or_default();
+                    if rest2.starts_with("</rdf:Description>") {
+                        if depth == 0 {
+                            k = s2 + "</rdf:Description>".len();
+                            break;
+                        }
+                        depth = depth.saturating_sub(1);
+                        k = s2 + "</rdf:Description>".len();
+                        continue;
+                    }
+                    if rest2.starts_with("<rdf:Description") {
+                        depth += 1;
+                        if let Some(e2) = tag_end(data, s2) {
+                            k = e2 + 1;
+                        } else {
+                            break;
+                        }
+                        continue;
+                    }
+                    if rest2.starts_with("<?") || rest2.starts_with("<!") {
+                        if rest2.starts_with("<!--") {
+                            if let Some(rel2) = data[s2..].find("-->") {
+                                k = s2 + rel2 + 3;
+                            } else {
+                                k = data.len();
+                                break;
+                            }
+                        } else if rest2.starts_with("<![CDATA[") {
+                            if let Some(rel2) = data[s2..].find("]]>") {
+                                k = s2 + rel2 + 3;
+                            } else {
+                                k = data.len();
+                                break;
+                            }
+                        } else if let Some(rel2) = rest2[2..].find('>') {
+                            k = s2 + 2 + rel2 + 1;
+                        } else {
+                            k = data.len();
+                            break;
+                        }
+                        continue;
+                    }
+                    k = s2 + 1;
+                }
+                i = k;
                 continue;
             }
             break;
@@ -2826,6 +2914,55 @@ mod tests {
         );
         // acr is bound to CRS_NS on this element and is the real CRS prefix here.
         assert!(bindings.iter().any(|(p, uri)| p == "acr" && uri == CRS_NS), "acr must be bound to CRS_NS on this element\n{data}");
+    }
+
+    /// Comments and CDATA sections are skipped whole when resolving in-scope namespace bindings:
+    /// a `>` or an `xmlns` declaration inside them must not leak into the scope of a later
+    /// element, or a later `crs:` prefix could appear to bind to the wrong URI.
+    #[test]
+    fn ns_bindings_skips_comments_and_cdata() {
+        let data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <!-- > some text <fake xmlns:crs="urn:other"> -->
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#;
+        let first = data.find("<rdf:Description").expect("outer description");
+        let first_end = tag_end(data, first).expect("outer description closes");
+        let inner = data[first_end..].find("<crs:Exposure2012").map(|o| first_end + o).expect("inner element");
+        let inner_end = tag_end(data, inner).expect("inner element closes");
+
+        let bindings = ns_bindings(data, inner, inner_end);
+        assert!(
+            bindings.iter().any(|(p, uri)| p == "crs" && uri == CRS_NS),
+            "crs must resolve to the ancestor's CRS_NS binding, not a comment's declaration\n{data}"
+        );
+        assert!(
+            !bindings.iter().any(|(p, uri)| p == "crs" && uri == "urn:other"),
+            "crs must not resolve to urn:other from a comment\n{data}"
+        );
+    }
+
+    /// A `crs:` field on a sibling `rdf:Description` must be found by `crs:` write-back even
+    /// when the first description is a non-CRS one with child elements. `global_description`
+    /// must keep looking past sibling descriptions instead of stopping at the first
+    /// description's first child element, otherwise the field is duplicated onto the wrong
+    /// description.
+    #[test]
+    fn crs_write_finds_field_in_sibling_description() {
+        let mut data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>Some title</dc:title>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#
+            .to_string();
+
+        update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+        assert!(data.contains(r#"crs:Exposure2012="0.9""#), "the field on the sibling description is updated:\n{data}");
+        assert_eq!(data.matches("crs:Exposure2012").count(), 1, "the field is not duplicated onto the first description:\n{data}");
+        assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
     }
 }
 
