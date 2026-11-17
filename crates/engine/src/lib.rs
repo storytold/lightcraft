@@ -1964,9 +1964,14 @@ impl Session {
             return Some(op);
         }
         let step = lcc_catalog::HistoryStep { label: label.into(), settings: settings.clone(), batch: None };
-        Some(Op::Batch {
-            ops: vec![Op::SetDevelop { id, settings, label: label.into(), edited: Some((self.clock)()) }, Op::PushHistory { id, step }],
-        })
+        let first = p.history.is_empty();
+        let mut ops = vec![Op::SetDevelop { id, settings, label: label.into(), edited: Some((self.clock)()) }];
+        // a photo's first edit also lists where it started, as Lightroom's "Import" step: there to go back to
+        if let Some(start) = before.filter(|_| first) {
+            ops.push(Op::PushHistory { id, step: lcc_catalog::HistoryStep { label: "Import".into(), settings: start, batch: None } });
+        }
+        ops.push(Op::PushHistory { id, step });
+        Some(Op::Batch { ops })
     }
 
     /// The op that records `settings` (labelled `label`) as an edit made at History step `at` of

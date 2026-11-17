@@ -2150,7 +2150,8 @@ mod tests {
         // click applies (one history step); the star toggles the favourite
         h.request("ui.clickWidget", json!({"id": "profileCell:lc.vivid"}), t);
         assert_eq!(photo(&h).develop.profile.id, "lc.vivid");
-        assert_eq!(photo(&h).history.len(), before.history.len() + 1);
+        // (one history step, under an Import step on a photo's first edit)
+        assert_eq!(photo(&h).history.len(), before.history.len() + if before.history.is_empty() { 2 } else { 1 });
         h.request("ui.clickWidget", json!({"id": "profileStar:lc.portrait"}), t);
         assert_eq!(h.app.session.profile_favorites, ["lc.portrait"]);
         assert_eq!(photo(&h).develop.profile.id, "lc.vivid", "the star doesn't apply");
