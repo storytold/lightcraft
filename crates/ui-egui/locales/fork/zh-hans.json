@@ -1362,6 +1362,7 @@
   "Intersect Mask with": "与蒙版相交，使用",
   "Into": "导入到",
   "Invert Selection": "反选",
+  "Invert brush resize direction": "反转画笔大小调整方向",
   "Iris and Pupil": "虹膜和瞳孔",
   "It asks for no permissions: it can only keep its own data.": "它不请求任何权限：只能保存自己的数据。",
   "It asks for these permissions. Tick the ones you allow:": "它请求以下权限。勾选您允许的权限：",

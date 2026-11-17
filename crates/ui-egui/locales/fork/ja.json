@@ -1395,6 +1395,7 @@
   "Intersect Mask with": "次のツールでマスクと交差",
   "Into": "保存先",
   "Invert Selection": "選択を反転",
+  "Invert brush resize direction": "ブラシサイズ変更のスクロール方向を反転",
   "Iris and Pupil": "虹彩と瞳孔",
   "It asks for no permissions: it can only keep its own data.": "権限を要求していません：自分のデータのみ保存できます。",
   "It asks for these permissions. Tick the ones you allow:": "次の権限を要求しています。許可するものにチェックを入れてください：",

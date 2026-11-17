@@ -1398,6 +1398,7 @@
   "Intersect Mask with": "Leikkaa maski käyttäen",
   "Into": "Kohteeseen",
   "Invert Selection": "Käännä valinta",
+  "Invert brush resize direction": "Käännä siveltimen koon muutossuunta",
   "Iris and Pupil": "Iiris ja pupilli",
   "It asks for no permissions: it can only keep its own data.": "Se ei pyydä käyttöoikeuksia: se voi säilyttää vain omia tietojaan.",
   "It asks for these permissions. Tick the ones you allow:": "Se pyytää näitä käyttöoikeuksia. Valitse ne, jotka sallit:",

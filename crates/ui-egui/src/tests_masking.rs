@@ -2105,11 +2105,11 @@ fn trackpad_scroll_resizes_brush_and_space_pans() {
     };
 
     let (size0, zoom0) = (h.app.ui.brush_size, h.app.ui.zoom);
-    scroll_trackpad(&mut h, 50.0);
+    scroll_trackpad(&mut h, -50.0);
     assert!(h.app.ui.brush_size > size0, "scrolling up on trackpad grows the brush: {size0} -> {}", h.app.ui.brush_size);
     assert_eq!(h.app.ui.zoom, zoom0, "and does not zoom");
     let size1 = h.app.ui.brush_size;
-    scroll_trackpad(&mut h, -50.0);
+    scroll_trackpad(&mut h, 50.0);
     assert!(h.app.ui.brush_size < size1, "scrolling down shrinks it: {size1} -> {}", h.app.ui.brush_size);
 
     // Zoom in so panning is possible
@@ -2159,10 +2159,10 @@ fn trackpad_scroll_resizes_remove_brush() {
     };
 
     let size0 = h.app.ui.remove_size;
-    scroll_trackpad(&mut h, 50.0);
+    scroll_trackpad(&mut h, -50.0);
     assert!(h.app.ui.remove_size > size0, "trackpad scroll up grows remove brush: {size0} -> {}", h.app.ui.remove_size);
     let size1 = h.app.ui.remove_size;
-    scroll_trackpad(&mut h, -50.0);
+    scroll_trackpad(&mut h, 50.0);
     assert!(h.app.ui.remove_size < size1, "trackpad scroll down shrinks remove brush: {size1} -> {}", h.app.ui.remove_size);
 }
 
@@ -2913,7 +2913,7 @@ fn trackpad_brush_resize_keeps_cursor_and_is_quick() {
     for _ in 0..5 {
         h.events.push(egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Point,
-            delta: egui::vec2(0.0, 20.0),
+            delta: egui::vec2(0.0, -20.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
         });
@@ -3193,4 +3193,78 @@ fn brush_release_requests_mask_overlay_immediately() {
     h.step();
     assert!(!h.app.renderer.is_pending(Slot::Main));
     assert!(h.app.brush_live.is_none(), "live stroke clears once Slot::Main settles");
+}
+
+/// Issue #1257: the Settings ▸ Interface `Invert brush resize direction` preference toggles cleanly
+/// and reverses both trackpad two-finger scroll and mouse wheel brush resizing for Masking and Remove.
+#[test]
+fn invert_brush_resize_setting_reverses_trackpad_and_wheel_direction() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    assert!(!h.app.ui.settings.invert_brush_resize, "invert_brush_resize defaults to false");
+
+    // Toggle the checkbox in Settings ▸ Interface
+    exec(&mut h, "app.settings", json!({"tab": "interface"}));
+    h.settle(SETTLE);
+    crate::settings_screen::reveal(&mut h, "check:settings.invertBrushResize");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "check:settings.invertBrushResize"}), T)["ok"], true);
+    h.step();
+    assert!(h.app.ui.settings.invert_brush_resize, "clicking the checkbox enables invert_brush_resize");
+    h.app.ui.dialog = None;
+    h.settle(SETTLE);
+
+    // Masking brush: with invert_brush_resize = true, trackpad scroll up (dy < 0) shrinks, down grows
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    pointer(&mut h, json!([{"kind": "move", "x": 0.5, "y": 0.5}]));
+    h.settle(SETTLE);
+
+    let scroll_trackpad = |h: &mut Headless, dy: f32| {
+        h.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        for _ in 0..10 {
+            h.step();
+        }
+    };
+    let notch = |h: &mut Headless, dy: f32| {
+        h.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Line,
+            delta: egui::vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        for _ in 0..30 {
+            h.step();
+        }
+    };
+
+    let s0 = h.app.ui.brush_size;
+    scroll_trackpad(&mut h, -50.0);
+    assert!(h.app.ui.brush_size < s0, "inverted trackpad scroll up shrinks brush: {s0} -> {}", h.app.ui.brush_size);
+    let s1 = h.app.ui.brush_size;
+    scroll_trackpad(&mut h, 50.0);
+    assert!(h.app.ui.brush_size > s1, "inverted trackpad scroll down grows brush: {s1} -> {}", h.app.ui.brush_size);
+
+    // Mouse wheel with invert_brush_resize = true
+    let w0 = h.app.ui.brush_size;
+    notch(&mut h, 1.0);
+    assert!(h.app.ui.brush_size < w0, "inverted wheel notch up shrinks brush: {w0} -> {}", h.app.ui.brush_size);
+    let w1 = h.app.ui.brush_size;
+    notch(&mut h, -1.0);
+    assert!(h.app.ui.brush_size > w1, "inverted wheel notch down grows brush: {w1} -> {}", h.app.ui.brush_size);
+
+    // Remove brush with invert_brush_resize = true
+    exec(&mut h, "panel.remove", json!({}));
+    h.settle(SETTLE);
+    pointer(&mut h, json!([{"kind": "move", "x": 0.5, "y": 0.5}]));
+    h.settle(SETTLE);
+    let r0 = h.app.ui.remove_size;
+    scroll_trackpad(&mut h, -50.0);
+    assert!(h.app.ui.remove_size < r0, "inverted trackpad scroll up shrinks remove brush: {r0} -> {}", h.app.ui.remove_size);
+    let r1 = h.app.ui.remove_size;
+    scroll_trackpad(&mut h, 50.0);
+    assert!(h.app.ui.remove_size > r1, "inverted trackpad scroll down grows remove brush: {r1} -> {}", h.app.ui.remove_size);
 }
