@@ -817,3 +817,32 @@ fn the_state_never_shows_an_error_with_playback_still_running() {
     let v = p.state();
     assert_eq!((v["playing"].clone(), v["error"].clone()), (serde_json::json!(false), serde_json::json!("damaged frame")), "{v}");
 }
+
+/// A buffer the decoder is filling is not counted until its frame is queued. When the player
+/// keeps a buffer in the meantime (the frame that left the screen, the queue a step cleared),
+/// queuing the decoded frame must not take the frames and the kept buffers past the budget:
+/// kept buffers give way. Found by the 4K queue test failing under load.
+#[test]
+fn a_frame_decoded_while_buffers_were_kept_never_takes_the_queue_past_its_budget() {
+    let f = 3840 * 2160 * 4;
+    let frame = |pts: f64, rgba: Vec<u8>| VideoFrame { pts, width: 3840, height: 2160, rgba, draft: false };
+    let mut s = Shared { frame_bytes: f, ..Shared::default() };
+    for i in 0..4 {
+        s.push(1, frame(f64::from(i), vec![0; f]));
+    }
+    s.keep(vec![0; f]);
+    assert_eq!(s.queued_bytes + s.pool_bytes, 5 * f);
+    // the decoder takes the kept buffer and decodes into it
+    let filling = s.buffer();
+    assert_eq!(s.pool_bytes, 0);
+    // meanwhile the frame on screen is replaced: its buffer is kept (the budget looks free)
+    s.keep(vec![0; f]);
+    assert_eq!(s.pool.len(), 1);
+    // the decoded frame is queued
+    s.push(1, frame(4.0, filling));
+    let held = s.queued_bytes + s.pool_bytes;
+    let real: usize = s.queue.iter().map(|(_, f)| f.rgba.capacity()).sum::<usize>() + s.pool.iter().map(Vec::capacity).sum::<usize>();
+    assert_eq!(held, real, "the bytes counted are the bytes held");
+    assert!(held <= QUEUE_BYTES, "{held} bytes held, budget {QUEUE_BYTES}");
+    assert_eq!(s.queue.len(), 5, "the frames stay; the kept buffer gives way");
+}

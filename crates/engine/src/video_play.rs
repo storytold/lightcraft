@@ -258,6 +258,12 @@ impl Shared {
         self.frame_bytes = f.rgba.len().max(1);
         self.queued_bytes = self.queued_bytes.saturating_add(f.bytes());
         self.queue.push_back((generation, Arc::new(f)));
+        // the frame's buffer was not counted while it was filled: buffers kept meanwhile give
+        // way, so the frames and the kept buffers stay within the budget
+        while self.queued_bytes.saturating_add(self.pool_bytes) > QUEUE_BYTES {
+            let Some(b) = self.pool.pop() else { break };
+            self.pool_bytes = self.pool_bytes.saturating_sub(b.capacity());
+        }
     }
 
     fn pop(&mut self) -> Option<(u64, Arc<VideoFrame>)> {
