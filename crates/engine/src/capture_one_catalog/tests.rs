@@ -840,6 +840,41 @@ fn times_are_calendar_times_within_four_digit_years() {
     assert_eq!((captured(-62_135_596_800.0), captured(-1.0e18), captured(0.0)), (None, None, None));
 }
 
+/// As a catalog written by Capture One 16.3 has them: a file without a camera, a lens Capture One
+/// describes from what it knows, and GPS as degrees and decimal minutes.
+#[test]
+fn stand_ins_for_a_missing_camera_or_lens_are_left_out_and_gps_text_is_read() {
+    let scratch = Scratch::new("stand-ins");
+    let mut tables = sample(&scratch.0);
+    let rows = &mut table(&mut tables, "ZIMAGE").rows;
+    rows[0].retain(|(name, _)| !["ZCAMERA_MAKE", "ZCAMERA_MODEL", "ZCAMERA_LENS", "ZGPSLATITUDE", "ZGPSLONGITUDE"].contains(name));
+    rows[0].extend([
+        ("ZCAMERA_MAKE", t("Joint Photographic Experts Group")),
+        ("ZCAMERA_MODEL", t("Jpeg File")),
+        ("ZCAMERA_LENS", t("-- mm f/--")),
+        ("ZGPSLATITUDE", t("47,30.6N")),
+        ("ZGPSLONGITUDE", t("8,15.45W")),
+    ]);
+    rows[1].extend([("ZCAMERA_MAKE", t("Maker")), ("ZCAMERA_MODEL", t("Maker M1")), ("ZCAMERA_LENS", t("70 mm f/--"))]);
+    let catalog = read(&scratch.catalog(&tables)).unwrap();
+    let first = &catalog.photos[0];
+    assert_eq!((first.camera_make.as_str(), first.camera_model.as_str(), first.lens.as_str()), ("", "", ""));
+    let (lat, lon) = first.gps.unwrap();
+    assert!((lat - 47.51).abs() < 1e-9 && (lon + 8.2575).abs() < 1e-9, "{lat}, {lon}");
+    let named = catalog.photos.iter().find(|p| p.image_id == 2).unwrap();
+    assert_eq!((named.camera_make.as_str(), named.camera_model.as_str(), named.lens.as_str()), ("Maker", "Maker M1", ""));
+}
+
+#[test]
+fn coordinates_in_degrees_minutes_and_seconds() {
+    assert_eq!(photos::coordinate("12,30N", 'N', 'S'), Some(12.5));
+    assert_eq!(photos::coordinate(" 12,30,36S ", 'N', 'S'), Some(-12.51));
+    assert_eq!(photos::coordinate("7E", 'E', 'W'), Some(7.0));
+    for bad in ["", "N", "12,30", "12,61N", "12,30,60N", "1,2,3,4N", "x,30N", "-12,30N", "12,30E", "inf,0N", "12,,N", "ñ"] {
+        assert_eq!(photos::coordinate(bad, 'N', 'S'), None, "{bad:?}");
+    }
+}
+
 #[test]
 fn colour_tags_follow_capture_ones_order() {
     let names: Vec<_> = (0..8).map(|i| ColorTag::from_index(i).and_then(ColorTag::name)).collect();
@@ -1157,10 +1192,14 @@ fn a_real_catalog_reads() {
     };
     let catalog = read(Path::new(&path)).unwrap();
     eprintln!(
-        "{} photo(s), {} trashed, {} collection(s), written by {:?}, warnings: {:?}",
+        "{} photo(s) ({} with a camera, {} with a lens, {} with GPS), {} trashed, {} collection(s), {} keyword(s), written by {:?}, warnings: {:?}",
         catalog.photos.len(),
+        catalog.photos.iter().filter(|p| !p.camera_model.is_empty()).count(),
+        catalog.photos.iter().filter(|p| !p.lens.is_empty()).count(),
+        catalog.photos.iter().filter(|p| p.gps.is_some()).count(),
         catalog.trashed,
         catalog.collections.len(),
+        catalog.keywords.len(),
         catalog.versions.last(),
         catalog.warnings
     );

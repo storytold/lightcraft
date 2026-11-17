@@ -122,6 +122,7 @@ fn image_fields(image_id: i64, image: Row<'_>, location: Option<Row<'_>>, databa
     let file_name = image.text("ZIMAGEFILENAME").to_string();
     let place = paths::original(location, &file_name, database);
     let positive = |column: &str| image.real(column).filter(|n| *n > 0.0);
+    let camera = camera(image.text("ZCAMERA_MAKE"), image.text("ZCAMERA_MODEL"));
     CatalogPhoto {
         image_id,
         image_uuid: image.text("ZIMAGEUUID").trim().to_string(),
@@ -140,10 +141,10 @@ fn image_fields(image_id: i64, image: Row<'_>, location: Option<Row<'_>>, databa
         file_size: image.int("ZFILE_SIZE").and_then(|n| u64::try_from(n).ok()).unwrap_or(0),
         captured: time(image.real("ZEXP_DATE"), ""),
         imported: time(image.real("ZIMPORTDATE"), "Z"),
-        camera_make: image.text("ZCAMERA_MAKE").trim().to_string(),
-        camera_model: image.text("ZCAMERA_MODEL").trim().to_string(),
+        camera_make: camera.0,
+        camera_model: camera.1,
         camera_serial: image.text("ZCAMERA_SERIAL").trim().to_string(),
-        lens: image.text("ZCAMERA_LENS").trim().to_string(),
+        lens: lens(image.text("ZCAMERA_LENS")),
         iso: image.int("ZISO").filter(|n| *n > 0).and_then(|n| u32::try_from(n).ok()),
         aperture: positive("ZEXP_APERTURE").map(|n| n as f32),
         shutter_seconds: positive("ZEXP_SHUTTERSPEED"),
@@ -177,11 +178,51 @@ fn fraction(text: &str) -> Option<f32> {
     value.is_finite().then_some(value as f32)
 }
 
+/// The camera's make and model; none for what Capture One writes for a file without one (make
+/// `Joint Photographic Experts Group`, model `Jpeg File`: the file format's, not a camera).
+fn camera(make: &str, model: &str) -> (String, String) {
+    let (make, model) = (make.trim(), model.trim());
+    let format_stand_in = model.len() > " File".len() && model.to_ascii_lowercase().ends_with(" file");
+    if format_stand_in { (String::new(), String::new()) } else { (make.to_string(), model.to_string()) }
+}
+
+/// The lens's name; none for what Capture One makes up when the file names no lens (`-- mm f/--`,
+/// `70 mm f/--`: the focal length and aperture it knows, with `--` for the rest).
+fn lens(text: &str) -> String {
+    let text = text.trim();
+    if text.contains("--") { String::new() } else { text.to_string() }
+}
+
+/// Latitude and longitude in degrees. Capture One writes them as text, in degrees and decimal
+/// minutes with the hemisphere (`47,30.6N`, `8,15.45E`); a plain number is read too.
 fn gps(image: Row<'_>) -> Option<(f64, f64)> {
-    let latitude = image.real("ZGPSLATITUDE")?;
-    let longitude = image.real("ZGPSLONGITUDE")?;
+    let latitude = coordinate(image.text("ZGPSLATITUDE"), 'N', 'S').or_else(|| image.real("ZGPSLATITUDE"))?;
+    let longitude = coordinate(image.text("ZGPSLONGITUDE"), 'E', 'W').or_else(|| image.real("ZGPSLONGITUDE"))?;
     let on_earth = (-90.0..=90.0).contains(&latitude) && (-180.0..=180.0).contains(&longitude);
     (on_earth && (latitude != 0.0 || longitude != 0.0)).then_some((latitude, longitude))
+}
+
+/// `degrees,minutes[,seconds]` followed by the hemisphere letter (`positive` or `negative`), in
+/// signed degrees; `None` for anything else.
+pub(super) fn coordinate(text: &str, positive: char, negative: char) -> Option<f64> {
+    let text = text.trim();
+    let hemisphere = text.chars().last()?.to_ascii_uppercase();
+    let sign = if hemisphere == positive {
+        1.0
+    } else if hemisphere == negative {
+        -1.0
+    } else {
+        return None;
+    };
+    let body = text.get(..text.len().checked_sub(1)?)?;
+    let mut parts = body.split(',').map(|p| p.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v >= 0.0));
+    let degrees = parts.next()??;
+    let minutes = parts.next().unwrap_or(Some(0.0))?;
+    let seconds = parts.next().unwrap_or(Some(0.0))?;
+    if parts.next().is_some() || minutes >= 60.0 || seconds >= 60.0 {
+        return None;
+    }
+    Some(sign * (degrees + minutes / 60.0 + seconds / 3600.0))
 }
 
 fn variant_metadata(photo: &mut CatalogPhoto, row: Row<'_>, table: &Table, notes: &mut Notes) {
