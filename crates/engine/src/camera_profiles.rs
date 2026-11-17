@@ -198,52 +198,43 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
     if let Some(hit) = cache.get(&key) {
         return hit.clone();
     }
-    let path = directory.as_ref().map(|d| d.join(file_name(model)));
-    let profile = match path {
-        Some(path) if path.is_file() => match load(&path) {
-            Ok(p) if normalize_for_local_match(&p.model) == normalize_for_local_match(model) => Some(Arc::new(p)),
-            Ok(p) => {
-                eprintln!("lightcraft: ignoring camera profile {}: it is for {:?}, not {model:?}", path.display(), p.model);
-                None
+    // Scan the directory for a local profile. Candidates are regular .json files
+    // ranked so a normalized stem match (case, whitespace and separator folding)
+    // beats a model-name match; within a rank the sorted path order decides.
+    // Selection therefore never depends on read_dir iteration order, and only
+    // regular files are loaded, so a FIFO or directory named like a profile
+    // cannot block while the cache mutex is held.
+    let profile = {
+        let needle = normalize_for_local_match(model);
+        directory.and_then(|d| {
+            let mut entries: Vec<_> = std::fs::read_dir(d).ok()?.flatten().collect();
+            entries.sort_by_key(|e| e.path());
+            let mut ranked: Vec<(u8, PathBuf)> = Vec::new();
+            for e in &entries {
+                let path = e.path();
+                if !path.extension().is_some_and(|x| x == "json") || !path.is_file() {
+                    continue;
+                }
+                let rank = if path.file_stem().map_or(false, |s| {
+                    normalize_for_local_match(&s.to_string_lossy()) == needle
+                }) {
+                    1
+                } else {
+                    2
+                };
+                ranked.push((rank, path));
             }
-            Err(e) => {
-                eprintln!("lightcraft: ignoring camera profile {e}");
-                None
+            ranked.sort();
+            for (_, path) in ranked {
+                if let Some(p) = load(&path).ok()
+                    .filter(|p| normalize_for_local_match(&p.model) == needle)
+                {
+                    return Some(Arc::new(p));
+                }
             }
-        },
-        _ => None,
+            None
+        })
     };
-    // If direct lookup failed, try a targeted scan for a file whose stem matches the
-    // normalized model name (case-insensitive). This handles EXIF spelling variants
-    // (e.g. "Nikon Z 6-2" vs saved "NIKON_Z_6_2.json") without a full directory scan.
-    let profile = profile.or_else(|| {
-        let needle = normalize_for_local_match(model);
-        directory.and_then(|d| {
-            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
-                let path = e.path();
-                if path.extension().is_some_and(|x| x == "json") {
-                    let stem = normalize_for_local_match(&path.file_stem()?.to_string_lossy());
-                    if stem == needle { load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new) } else { None }
-                } else {
-                    None
-                }
-            })
-        })
-    });
-    // Also try to find a local profile using normalized model name matching (full scan)
-    let profile = profile.or_else(|| {
-        let needle = normalize_for_local_match(model);
-        directory.and_then(|d| {
-            std::fs::read_dir(d).ok()?.flatten().find_map(|e| {
-                let path = e.path();
-                if path.extension().is_some_and(|x| x == "json") {
-                    load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle).map(Arc::new)
-                } else {
-                    None
-                }
-            })
-        })
-    });
     let profile = profile.or_else(|| bundled(model).map(Arc::new));
     cache.insert(key, profile.clone());
     profile
@@ -556,5 +547,40 @@ mod tests {
         assert!(pool.add(b"not a raw file").is_err());
         assert!(pool.fit(1).is_empty());
         assert!(pool.files().is_empty());
+    }
+
+    #[test]
+    fn local_profile_lookup_uses_normalized_matching_review_regression_2() {
+        let dir = std::env::temp_dir().join(format!("lc-local-profile-review-2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A non-regular file whose name normalizes to the lookup key. The scan must
+        // skip it instead of calling `load` on it (a FIFO would block; a directory is
+        // not a profile). The name contains a space so it cannot collide with the real
+        // profile files on a case-insensitive file system.
+        std::fs::create_dir(dir.join("NIKON D5300.json")).unwrap();
+
+        // Two profiles whose names normalize to the same lookup key. The file names
+        // differ by separator (not only case) so they stay distinct on case-insensitive
+        // file systems; sorted, `nikon-d5300.json` precedes `nikon_d5300.json`.
+        let first = CameraProfile::new("nikon d5300", 1, 100, Mat3::IDENTITY, None);
+        save(&first, &dir).unwrap();
+        let second = CameraProfile::new("nikon-d5300", 2, 100, Mat3::IDENTITY, None);
+        save(&second, &dir).unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir_for_lookup = dir.clone();
+        std::thread::spawn(move || {
+            let found = get_from("NIKON D5300", Some(&dir_for_lookup));
+            let _ = tx.send(found.map(|profile| profile.files));
+        });
+
+        let files = rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("local profile lookup blocked on a special file");
+        assert_eq!(files, Some(2), "local profile selection must not depend on filesystem iteration order");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
