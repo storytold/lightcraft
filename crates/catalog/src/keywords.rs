@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Catalog, CatalogError, Meta, Op, Result};
+use crate::{Catalog, CatalogError, Meta, Op, PhotoId, Result};
 
 /// Separator of hierarchical keyword levels.
 pub const SEP: char = '|';
@@ -876,48 +876,104 @@ impl Catalog {
     /// Keyword suggestions for a photo that has `current` keywords: with a typed `prefix`, the
     /// library's keywords containing it (those starting with it first); otherwise keywords that
     /// appear together with `current` on other photos, then the most used ones. Most frequent
-    /// first, at most `n`, never one of `current`.
+    /// first, at most `n`, never one of `current`; spellings that differ only in case are one
+    /// suggestion, the one the library writes most.
     pub fn keyword_suggestions(&self, current: &[String], prefix: &str, n: usize) -> Vec<String> {
-        // the photos' keywords with their counts, and those only the list has (none)
-        let mut all = self.keywords();
-        for l in self.keyword_list.values() {
-            if !all.iter().any(|(k, _)| same(k, &l.path)) {
-                all.push((l.path.clone(), 0));
+        let index = self.keyword_index();
+        // asked on every selection change: the only strings copied in here are a keyword that
+        // changes under lowercasing and the names offered out of the vocabulary
+        // the keywords `current` already has, by their group
+        let mut excluded = vec![false; index.entries().len()];
+        for c in current {
+            if let Some(group) = index.group_of(c)
+                && let Some(x) = excluded.get_mut(group)
+            {
+                *x = true;
             }
         }
-        let has = |k: &str| current.iter().any(|c| same(c, k));
         let q = prefix.trim().to_lowercase();
-        let mut scored: Vec<(i64, String)> = if !q.is_empty() {
-            all.into_iter()
-                .filter(|(k, _)| !has(k))
-                .filter_map(|(k, c)| {
-                    let l = k.to_lowercase();
-                    let leaf = l.rsplit(SEP).next().unwrap_or(&l).to_string();
-                    let rank = if l.starts_with(&q) || leaf.starts_with(&q) {
+        // a keyword's photos are every spelling's together: rank it by that total, and within
+        // its spellings by the count of the one that carries it
+        let mut total = vec![0usize; index.entries().len()];
+        for e in index.entries() {
+            if let Some(t) = total.get_mut(e.group) {
+                *t += e.count;
+            }
+        }
+        let mut scored: Vec<(usize, usize, usize, usize)> = if !q.is_empty() {
+            index
+                .entries()
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| {
+                    if excluded[e.group] {
+                        return None;
+                    }
+                    let leaf = e.lower.rsplit(SEP).next().unwrap_or(&e.lower);
+                    let rank = if e.lower.starts_with(&q) || leaf.starts_with(&q) {
                         2
-                    } else if l.contains(&q) {
+                    } else if e.lower.contains(&q) {
                         1
                     } else {
                         return None;
                     };
-                    Some((rank * 1_000_000 + c as i64, k))
+                    Some((rank, total.get(e.group).copied().unwrap_or(0), e.count, i))
                 })
                 .collect()
         } else {
-            let mut co: std::collections::HashMap<String, i64> = Default::default();
+            // the photos that have one of `current`, each read once: their other
+            // keywords are what `current` appears together with, counted by group row
+            let mut co = vec![0usize; index.entries().len()];
             if !current.is_empty() {
-                for p in self.photos().filter(|p| p.in_library()) {
-                    if p.meta.keywords.iter().any(|k| has(k)) {
-                        for k in p.meta.keywords.iter().filter(|k| !has(k)) {
-                            *co.entry(k.clone()).or_default() += 1;
+                let mut seen: std::collections::HashSet<PhotoId> = Default::default();
+                let mut walked: std::collections::HashSet<usize> = Default::default();
+                for c in current {
+                    if let Some(group) = index.group_of(c)
+                        && walked.insert(group)
+                    {
+                        for id in index.photos_of(c) {
+                            if seen.insert(*id)
+                                && let Some(p) = self.photo(*id)
+                            {
+                                for k in &p.meta.keywords {
+                                    if let Some(row) = index.row_of(k)
+                                        && let Some(e) = index.entries().get(row)
+                                        && !excluded[e.group]
+                                        && let Some(count) = co.get_mut(e.group)
+                                    {
+                                        *count += 1;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-            all.into_iter().filter(|(k, _)| !has(k)).map(|(k, c)| (co.get(&k).copied().unwrap_or(0) * 1_000_000 + c as i64, k)).collect()
+            index
+                .entries()
+                .iter()
+                .enumerate()
+                .filter_map(|(i, e)| {
+                    // a row carries the count its whole spelling group collected
+                    let co_count = co.get(e.group).copied().unwrap_or(0);
+                    (!excluded[e.group]).then_some((co_count, total.get(e.group).copied().unwrap_or(0), e.count, i))
+                })
+                .collect()
         };
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
-        scored.into_iter().take(n).map(|(_, k)| k).collect()
+        scored.sort_by(|a, b| {
+            (b.0, b.1, b.2).cmp(&(a.0, a.1, a.2)).then_with(|| {
+                index.entries().get(a.3).map_or("", |e| e.lower.as_str()).cmp(index.entries().get(b.3).map_or("", |e| e.lower.as_str()))
+            })
+        });
+        // one offer per keyword: within a group the spelling with the most applications comes first
+        let mut offered: std::collections::HashSet<usize> = Default::default();
+        scored
+            .into_iter()
+            .filter(|(_, _, _, i)| offered.insert(index.entries()[*i].group))
+            .take(n)
+            .filter_map(|(_, _, _, i)| index.entries().get(i).map(|e| e.name.as_str()))
+            .map(str::to_string)
+            .collect()
     }
 }
 
