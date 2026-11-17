@@ -256,3 +256,25 @@ fn files_sharing_a_stem_share_it_whatever_the_separators() {
     assert_eq!(namings(&StemOwners::among(&c, &ids[1..2]), &c, &ids[1..2]), [SidecarNaming::Full], "the JPEG alone");
     assert_eq!(namings(&StemOwners::among(&c, &ids), &c, &ids), expected);
 }
+
+/// Given a raw the library holds under one spelling of its folder, when the same file arrives in an
+/// import under the other spelling (a trashed photo imported again), then it owns the stem sidecar
+/// as it would arriving under its own spelling: its own record is no rival, and a JPEG of its stem
+/// in the library still isn't one (issue #4466).
+#[test]
+fn an_arriving_file_is_no_rival_of_its_own_record_spelled_with_other_separators() {
+    let mut c = Catalog::new();
+    for (path, kind) in [("S:/Photos/2025/P6650.DNG", MediaKind::Raw), ("S:/Photos/2025/P6650.JPG", MediaKind::Image)] {
+        let id = c.alloc_photo_id();
+        let mut p = Photo::new(id, Source::File { path: path.to_string() }, "P", "X", 6, 4, "2026-01-01");
+        p.kind = kind;
+        c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    for arriving in ["S:/Photos/2025/P6650.DNG", "S:\\Photos\\2025\\P6650.DNG", "S:/Photos\\2025\\P6650.DNG"] {
+        let stems = ImportStems::for_import(Some(&c), [(arriving, MediaKind::Raw)].into_iter());
+        assert!(stems.owns(arriving), "{arriving:?}");
+    }
+    // the JPEG of that stem, arriving under another spelling, still gives way to the library's raw
+    let jpeg = "S:\\Photos\\2025\\P6650.JPG";
+    assert!(!ImportStems::for_import(Some(&c), [(jpeg, MediaKind::Image)].into_iter()).owns(jpeg));
+}

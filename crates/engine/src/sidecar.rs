@@ -1049,9 +1049,10 @@ impl ImportStems {
     pub(crate) fn for_import<'a>(cat: Option<&lightcraft_catalog::Catalog>, incoming: impl Iterator<Item = (&'a str, MediaKind)>) -> ImportStems {
         // per stem: the best of the library's files, and the best arriving file with its path
         let mut best: HashMap<String, (Option<Rank>, Option<(Rank, &'a str)>)> = HashMap::new();
-        let mut arriving_paths = HashSet::new();
+        // (the arriving paths with `/` for every separator: a file's own record may spell them otherwise)
+        let mut arriving_paths: HashSet<String> = HashSet::new();
         for (arriving, (path, kind)) in incoming.enumerate() {
-            arriving_paths.insert(path);
+            arriving_paths.insert(path.replace('\\', "/"));
             let e = best.entry(stem_key(path)).or_default();
             let rank = rank_of(path, kind, arriving as u64);
             if e.1.as_ref().is_none_or(|(b, _)| rank < *b) {
@@ -1059,12 +1060,18 @@ impl ImportStems {
             }
         }
         if let Some(cat) = cat {
-            let mut key = String::new();
+            let (mut key, mut spelled) = (String::new(), String::new());
             for p in cat.photos().filter(|p| p.copy_of.is_none()) {
-                // the arriving file's own record (a trashed photo imported again) is not a rival
-                let Some(path) = file_path(p).filter(|path| !arriving_paths.contains(*path)) else { continue };
+                let Some(path) = file_path(p) else { continue };
                 stem_key_into(&mut key, path);
                 let Some(e) = best.get_mut(key.as_str()) else { continue };
+                // the arriving file's own record (a trashed photo imported again) is not a rival,
+                // whichever separators the record and the arriving path are spelled with
+                spelled.clear();
+                spelled.extend(path.chars().map(|c| if c == '\\' { '/' } else { c }));
+                if arriving_paths.contains(spelled.as_str()) {
+                    continue;
+                }
                 let rank = rank_of(path, p.kind, p.id.0);
                 if e.0.as_ref().is_none_or(|b| rank < *b) {
                     e.0 = Some(rank);
