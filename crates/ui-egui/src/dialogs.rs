@@ -473,7 +473,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
-        Dialog::ConfirmDelete { .. } => "Delete Photos",
+        Dialog::ConfirmDelete { .. } | Dialog::ConfirmDeletePermanently { .. } => "Delete Photos",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
@@ -579,6 +579,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::ConfirmDeletePermanently { .. } => "Delete Permanently",
         Dialog::SaveEffect { .. }
         | Dialog::NewAlbum { .. }
         | Dialog::NewSmartAlbum { .. }
@@ -763,7 +764,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
             }
             closed = true;
         }
-        Err(e) if matches!(dlg, Dialog::MovePhotos { .. }) => {
+        Err(e) if matches!(dlg, Dialog::MovePhotos { .. } | Dialog::ConfirmDeletePermanently { .. }) => {
             app.toast(ctx, e);
             closed = true;
         }
@@ -2146,6 +2147,13 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
                 if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
             ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+        }
+        Dialog::ConfirmDeletePermanently { ids, .. } => {
+            let count = ids.len();
+            let what =
+                if count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
+            ui.label(crate::i18n::tr_format!("Delete {what} permanently?", what = what));
+            ui.label(egui::RichText::new(crate::i18n::tr("They leave the library. Their files on disk stay.")).color(t.text_dim));
         }
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),

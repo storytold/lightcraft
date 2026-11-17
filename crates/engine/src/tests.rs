@@ -387,6 +387,22 @@ fn permanently_deleting_explicit_targets_keeps_the_surviving_selection() {
     assert_eq!(s.catalog.to_snapshot(), snapshot);
 }
 
+/// Named `ids` need no selection (the Delete key's question confirmed after the selection was
+/// cleared, #4425); an empty list deletes nothing and adds no undo step.
+#[test]
+fn permanently_deleting_named_photos_needs_no_selection() {
+    let mut s = demo();
+    let visible = s.visible_cloned();
+    s.selection = Selection::default();
+    let undo_len = s.undo.len();
+    assert_eq!(s.execute("photo.deletePermanently", &json!({"ids": []})).unwrap()["deleted"], 0);
+    assert_eq!(s.undo.len(), undo_len, "nothing deleted, no undo step");
+    assert_eq!(s.execute("photo.deletePermanently", &json!({"ids": [visible[3]]})).unwrap()["deleted"], 1);
+    assert!(s.catalog.photo(visible[3]).is_none());
+    assert_eq!(s.undo.len(), undo_len + 1);
+    assert!(s.execute("photo.deletePermanently", &json!({})).is_err(), "without ids the selection is still needed");
+}
+
 /// `lensBlur.brushStroke` adds a stroke to the Focus or the Blur brush (clamped, undoable); hostile
 /// input is an error; `lensBlur.brushReset` clears one brush or both.
 #[test]

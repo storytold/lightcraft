@@ -314,6 +314,12 @@ pub enum Dialog {
     ConfirmDelete {
         count: usize,
     },
+    /// Confirm deleting these photos in Recently Deleted for good (the Delete key there, #4425).
+    ConfirmDeletePermanently {
+        ids: Vec<u64>,
+        /// The library they are in (`Session::library_generation`): ids are numbered per library.
+        library: u64,
+    },
     /// Confirm moving photos dropped on a Folders row into that folder on disk
     /// (`photo.moveToFolder`). `name`: the folder's name, as the question says it.
     MovePhotos {

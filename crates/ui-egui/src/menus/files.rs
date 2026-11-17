@@ -40,6 +40,24 @@ pub fn confirm_delete(app: &mut LightcraftApp) -> bool {
     true
 }
 
+/// The Delete key on photos in Recently Deleted: ask to remove them from the library, as Photo ▸
+/// Delete Permanently does; `photo.delete` would only mark them deleted again and change nothing
+/// (#4425). It always asks: "Confirm before moving photos to Recently Deleted" covers moving them
+/// there, where they can still be restored; this removes them from the library, and only Undo brings
+/// them back. Only the selected photos that are in Recently Deleted go (a photo restored by an undo
+/// can still be selected). True when the key was handled here.
+pub fn delete_permanently_key(app: &mut LightcraftApp) -> bool {
+    if !super::menubar::selection_deleted(app) {
+        return false;
+    }
+    let s = &app.session;
+    let ids: Vec<u64> = s.selected().into_iter().filter(|id| s.catalog.photo(*id).is_some_and(|p| p.deleted)).map(|id| id.0).collect();
+    if !ids.is_empty() {
+        app.ui.dialog = Some(Dialog::ConfirmDeletePermanently { ids, library: s.library_generation() });
+    }
+    true
+}
+
 /// Platform-appropriate label for revealing a file in the system file manager.
 pub fn reveal_label() -> &'static str {
     if cfg!(target_os = "macos") {

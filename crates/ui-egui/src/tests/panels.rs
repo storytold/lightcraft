@@ -2765,6 +2765,82 @@ fn deleting_a_photo_asks_first_from_the_key_the_menu_and_the_right_click_menu() 
     assert!(deleted(&h));
 }
 
+/// In Recently Deleted, Delete asks to remove the selected photos from the library, as Photo ▸
+/// Delete Permanently does, instead of asking to move them to Recently Deleted again and changing
+/// nothing (#4425). It asks even with "Confirm before moving photos to Recently Deleted" off, and
+/// removes only the selected photos that are in Recently Deleted: one an undo restored stays.
+#[test]
+fn delete_in_recently_deleted_deletes_permanently() {
+    use crate::state::Dialog;
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let photos: Vec<_> = h.app.session.visible_cloned().into_iter().take(3).collect();
+    exec(&mut h, "photo.delete", json!({"ids": [photos[0].0, photos[1].0]}));
+    exec(&mut h, "library.source", json!({"kind": "recentlyDeleted"}));
+    let in_library = |h: &Headless, i: usize| h.app.session.catalog.photo(photos[i]).is_some();
+    let library = h.app.session.library_generation();
+
+    exec(&mut h, "library.select", json!({"ids": [photos[0].0]}));
+    h.request("ui.key", json!({"key": "delete"}), T);
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDeletePermanently { ids: vec![photos[0].0], library }), "the key asks to delete permanently");
+    h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(h.app.ui.dialog, None, "Esc closes the question");
+    assert!(in_library(&h, 0), "and keeps the photo");
+    h.request("ui.key", json!({"key": "delete"}), T);
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!in_library(&h, 0), "OK removes it from the library");
+    assert!(in_library(&h, 1), "and nothing else");
+
+    // the setting covers moving to Recently Deleted, not this: the key still asks; a selected
+    // photo that is not in Recently Deleted (here photos[2]) is left alone
+    h.app.ui.settings.confirm_delete = false;
+    h.app.session.selection = lightcraft_engine::Selection { ids: vec![photos[1], photos[2]], active: Some(photos[1]) };
+    h.request("ui.key", json!({"key": "delete"}), T);
+    assert_eq!(h.app.ui.dialog, Some(Dialog::ConfirmDeletePermanently { ids: vec![photos[1].0], library }));
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!in_library(&h, 1));
+    assert!(in_library(&h, 2), "a photo outside Recently Deleted stays in the library");
+}
+
+/// The question names the photos it asked about. Confirmed later, it deletes only those still in Recently Deleted
+/// (an agent may have restored one meanwhile), and nothing once another library was opened (ids name other photos
+/// there), and with the selection cleared meanwhile it still deletes the named ones (#4425).
+#[test]
+fn delete_permanently_confirmed_late_rechecks_the_photos() {
+    use crate::state::Dialog;
+    let mut h = demo([1400.0, 900.0], json!({"view": "photoGrid"}));
+    let photos: Vec<_> = h.app.session.visible_cloned().into_iter().take(2).collect();
+    exec(&mut h, "photo.delete", json!({"ids": [photos[0].0, photos[1].0]}));
+    exec(&mut h, "library.source", json!({"kind": "recentlyDeleted"}));
+    let in_library = |h: &Headless, i: usize| h.app.session.catalog.photo(photos[i]).is_some();
+    let library = h.app.session.library_generation();
+
+    exec(&mut h, "library.select", json!({"ids": [photos[0].0, photos[1].0]}));
+    h.request("ui.key", json!({"key": "delete"}), T);
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::ConfirmDeletePermanently { ref ids, .. }) if ids.len() == 2), "{:?}", h.app.ui.dialog);
+    exec(&mut h, "photo.restore", json!({"ids": [photos[1].0]}));
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!((&r["ok"], &r["result"]["deleted"]), (&json!(true), &json!(1)), "{r}");
+    assert!(!in_library(&h, 0), "the photo still in Recently Deleted goes");
+    assert!(in_library(&h, 1), "the one restored meanwhile stays");
+
+    // a question left from the library before: nothing is deleted
+    h.app.session.selection = lightcraft_engine::Selection { ids: vec![photos[1]], active: Some(photos[1]) };
+    exec(&mut h, "photo.delete", json!({"ids": [photos[1].0]}));
+    h.app.ui.dialog = Some(Dialog::ConfirmDeletePermanently { ids: vec![photos[1].0], library: library + 1 });
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!(r["ok"], false, "the confirmation says why: {r}");
+    assert!(in_library(&h, 1), "ids from another library delete nothing");
+
+    // the question names its photos: confirmed after the selection was cleared, it still deletes them
+    h.app.ui.dialog = Some(Dialog::ConfirmDeletePermanently { ids: vec![photos[1].0], library });
+    h.app.session.selection = lightcraft_engine::Selection::default();
+    let r = h.request("ui.dialog.confirm", json!({}), T);
+    assert_eq!((&r["ok"], &r["result"]["deleted"]), (&json!(true), &json!(1)), "{r}");
+    assert!(!in_library(&h, 1), "without a selection the named photo goes");
+}
+
 /// New Album's "Include selected photos" (as in Lightroom): on by default; unticked, the new album
 /// starts empty; with nothing selected the option isn't shown, and a folder never has it.
 #[test]

@@ -219,6 +219,20 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
+        Dialog::ConfirmDeletePermanently { ids, library } => {
+            // another library opened meanwhile (from the menu bar, an agent): these numbers are other photos there
+            if *library != app.session.library_generation() {
+                return Err(crate::i18n::tr("Another library was opened since the question was asked: nothing was deleted").to_string());
+            }
+            // only what is still in Recently Deleted (an agent may have restored a photo meanwhile)
+            let s = &app.session;
+            let ids: Vec<u64> =
+                ids.iter().copied().filter(|id| s.catalog.photo(lightcraft_catalog::PhotoId(*id)).is_some_and(|p| p.deleted)).collect();
+            if ids.is_empty() {
+                return Ok(json!({"deleted": 0}));
+            }
+            app.run("photo.deletePermanently", json!({"ids": ids}))
+        }
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {
             // another library opened meanwhile (from the menu bar, an agent): these numbers are
             // other photos there
