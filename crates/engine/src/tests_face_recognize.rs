@@ -657,6 +657,14 @@ fn suggested_faces_are_confirmed_or_rejected_and_a_rejection_sticks() {
     assert_eq!(suggestions(&mut s).iter().find(|(_, i, _)| *i == 0).and_then(|s| s.2.clone()), Some("Ann".to_string()), "the suggestion is back");
     s.execute("faces.rejectSuggestions", &json!({"faces": [face(0)]})).unwrap();
     assert_eq!(s.people_store().decisions.len(), 1);
+    // a stale confirmation (the list the user looked at still showed Ann) does not name a face rejected as Ann, and
+    // rejecting it again records nothing new
+    let r = s.execute("faces.confirmSuggestions", &json!({"faces": [face(0)]})).unwrap();
+    assert_eq!((r["confirmed"].clone(), r["kept"].clone()), (json!(0), json!(0)), "{r}");
+    assert_eq!(face_names(&s, b), vec![None, None], "the rejected face stays unnamed");
+    let r = s.execute("faces.rejectSuggestions", &json!({"faces": [face(0)]})).unwrap();
+    assert_eq!(r["rejected"].clone(), json!(0), "{r}");
+    assert_eq!(s.people_store().decisions.first().map(|d| d.verdict), Some(crate::people_store::Verdict::Rejected));
     // undoing the decision brings it back
     let r = s.execute("faces.undoSuggestionDecision", &json!({"faces": [face(0)]})).unwrap();
     assert_eq!(r["removed"].clone(), json!(1), "{r}");

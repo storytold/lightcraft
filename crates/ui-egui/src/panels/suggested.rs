@@ -276,7 +276,7 @@ pub fn show(app: &mut LccApp, ui: &mut egui::Ui) {
                     top + people::SECTION_H + row as f32 * (tile + people::TILE_GAP),
                 );
                 shown += 1;
-                if let Some(verdict) = tile(app, ui, group, face, Rect::from_min_size(min, vec2(tile, tile)), ppp) {
+                if let Some(verdict) = self::tile(app, ui, group, face, Rect::from_min_size(min, vec2(tile, tile)), ppp) {
                     decisions.push(Decision { verdict, person: group.name.clone(), faces: vec![face.clone()] });
                 }
             }

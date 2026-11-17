@@ -219,15 +219,21 @@ fn confirm_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
     let n = current.len();
     let arranged = imp::arrange_unnamed(s, &mut current, n);
     let mut by_photo: std::collections::BTreeMap<u64, Vec<(usize, String)>> = std::collections::BTreeMap::new();
-    let mut decisions: Vec<(u64, usize, String)> = Vec::new();
-    for (photo, index, _) in &chosen {
-        let Some((name, _)) = arranged.suggestions.get(&(*photo, *index)) else { continue };
-        let name = name.trim();
-        if name.is_empty() {
-            continue;
+    let mut decisions: Vec<(u64, usize, lcc_geom::Rect, String)> = Vec::new();
+    {
+        // a face the user rejected as this person is not suggested as them, so it is not confirmed as them either
+        let store = s.people_store();
+        for (photo, index, rect) in &chosen {
+            let Some((name, _)) = arranged.suggestions.get(&(*photo, *index)) else { continue };
+            let name = name.trim();
+            if name.is_empty() || store.rejected_as(*photo, *index, *rect, name) {
+                continue;
+            }
+            decisions.push((*photo, *index, *rect, name.to_string()));
         }
-        by_photo.entry(*photo).or_default().push((*index, name.to_string()));
-        decisions.push((*photo, *index, name.to_string()));
+    }
+    for (photo, index, _, name) in &decisions {
+        by_photo.entry(*photo).or_default().push((*index, name.clone()));
     }
     let mut named = 0usize;
     let mut ops = Vec::new();
@@ -252,14 +258,14 @@ fn confirm_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
     let kept = s
         .with_people(|store| {
             let mut kept = 0usize;
-            for (photo, index, name) in &decisions {
-                if store.decide(*photo, *index, name, crate::people_store::Verdict::Confirmed, &day).is_ok() {
+            for (photo, index, rect, name) in &decisions {
+                if store.decide(*photo, *index, *rect, name, crate::people_store::Verdict::Confirmed, &day).is_ok() {
                     kept += 1;
                 }
             }
             kept
         })
-        .unwrap_or(0);
+        .map_err(crate::EngineError::Other)?;
     Ok(json!({"confirmed": named, "suggested": chosen.len(), "kept": kept}))
 }
 
@@ -276,13 +282,22 @@ fn reject_suggestions(s: &mut Session, p: &Value) -> Result<Value> {
     let n = current.len();
     let arranged = imp::arrange_unnamed(s, &mut current, n);
     let day = today();
-    let decisions: Vec<(u64, usize, String)> =
-        chosen.iter().filter_map(|(photo, index, _)| Some((*photo, *index, arranged.suggestions.get(&(*photo, *index))?.0.clone()))).collect();
+    // a face already rejected as the person it is suggested as is not suggested as them: there is nothing to reject
+    let decisions: Vec<(u64, usize, lcc_geom::Rect, String)> = {
+        let store = s.people_store();
+        chosen
+            .iter()
+            .filter_map(|(photo, index, rect)| {
+                let name = arranged.suggestions.get(&(*photo, *index))?.0.clone();
+                (!store.rejected_as(*photo, *index, *rect, &name)).then_some((*photo, *index, *rect, name))
+            })
+            .collect()
+    };
     let kept = s
         .with_people(|store| {
             let mut kept = 0usize;
-            for (photo, index, name) in &decisions {
-                if store.decide(*photo, *index, name, crate::people_store::Verdict::Rejected, &day).is_ok() {
+            for (photo, index, rect, name) in &decisions {
+                if store.decide(*photo, *index, *rect, name, crate::people_store::Verdict::Rejected, &day).is_ok() {
                     kept += 1;
                 }
             }
@@ -576,7 +591,7 @@ fn unnamed(s: &mut Session, p: &Value) -> Result<Value> {
     let decided: Vec<bool> = {
         let store = s.people_store();
         all.iter()
-            .map(|(photo, index, _)| suggestions.get(&(*photo, *index)).is_some_and(|(name, _)| store.rejected_as(*photo, *index, name)))
+            .map(|(photo, index, rect)| suggestions.get(&(*photo, *index)).is_some_and(|(name, _)| store.rejected_as(*photo, *index, *rect, name)))
             .collect()
     };
     for ((photo, index, _), (face, was_rejected)) in all.iter().zip(faces.iter_mut().zip(decided)) {
