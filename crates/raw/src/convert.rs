@@ -120,7 +120,7 @@ fn orientation(o: craft_raw::Orientation) -> Orientation {
     Orientation::from_exif(o.to_exif())
 }
 
-fn color(c: craft_raw::ColorData) -> ColorData {
+pub(crate) fn color(c: craft_raw::ColorData) -> ColorData {
     let m = |p: [Option<craft_raw::Matrix3>; 2]| p.map(|m| m.map(Mat3));
     ColorData {
         illuminant: c.illuminant,
