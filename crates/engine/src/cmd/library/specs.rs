@@ -975,7 +975,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reorder Album",
             [],
             None,
-            "{id, parent?: folderId|null, before?: albumId|null} — places the album (or folder) in `parent` (default: where it is; null: the top level) before the sibling `before` of the same kind, or last of its kind; the folder is then ordered by hand. One undo step. → {changed}: how many edits it took (0: already there)",
+            "{id, parent?: folderId|null, before?: albumId|null} — places the album (or folder) in `parent` (default: where it is; null: the top level) before the sibling `before` (folders and albums mix: either can go before the other), or last; the folder is then ordered by hand. One undo step. → {changed}: how many edits it took (0: already there)",
             always,
             |s, p| {
                 let id = album_param(p, "id", "album.reorder")?;
@@ -988,14 +988,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let mut order: Vec<AlbumId> = s.catalog.album_children(parent).into_iter().filter(|a| a.id != id).map(|a| a.id).collect();
                 let at = match before {
-                    Some(b) => {
-                        let at = order.iter().position(|x| *x == b).ok_or_else(|| bad("album.reorder", "`before` is not inside that folder"))?;
-                        if s.catalog.album(b).is_none_or(|x| x.folder != me.folder) {
-                            return Err(bad("album.reorder", "folders are placed among folders and albums among albums"));
-                        }
-                        at
-                    }
-                    None if me.folder => order.iter().take_while(|x| s.catalog.album(**x).is_some_and(|a| a.folder)).count(),
+                    Some(b) => order.iter().position(|x| *x == b).ok_or_else(|| bad("album.reorder", "`before` is not inside that folder"))?,
                     None => order.len(),
                 };
                 order.insert(at.min(order.len()), id);

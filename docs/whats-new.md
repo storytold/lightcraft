@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Albums above folders
+- In the Albums panel, folders and albums can now be dragged into any order, mixed together: drop an album on the
+  top edge of a folder to put it above it, or a folder on the top or bottom half of an album to put it among the
+  albums. A list you never ordered still shows its folders first; Sort Contents A–Z goes back to that.
+  `album.reorder` takes a `before` of either kind.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

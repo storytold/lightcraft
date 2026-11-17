@@ -1,5 +1,6 @@
 //! Album order: the children of a folder (or of the top level) are listed folders first, then
-//! alphabetically, until some of them are given a place of their own (`Album.order`); moving an
+//! alphabetically, until some of them are given a place of their own (`Album.order`), which mixes
+//! folders and albums as they were put; moving an
 //! album to another folder drops its place, and undoing the move brings it back.
 
 use crate::*;
@@ -31,8 +32,8 @@ fn children_are_folders_first_then_alphabetical() {
     assert!(!c.album_children_are_ordered(None));
 }
 
-/// Given some children with a place of their own, then they follow it; the others come after, by
-/// name; folders stay ahead of albums.
+/// Given some children with a place of their own, then they follow it; the others come after,
+/// folders first, by name.
 #[test]
 fn ordered_children_follow_their_order() {
     let mut c = Catalog::new();
@@ -43,11 +44,11 @@ fn ordered_children_follow_their_order() {
     let f = add(&mut c, "F", None, true);
     place(&mut c, cc, Some(0));
     place(&mut c, a, Some(1));
-    assert_eq!(names(&c, None), ["F", "C", "A", "B", "D"]);
+    assert_eq!(names(&c, None), ["C", "A", "F", "B", "D"]);
     assert!(c.album_children_are_ordered(None));
     // equal places fall back to the name, so a damaged catalog still lists deterministically
     place(&mut c, b, Some(1));
-    assert_eq!(names(&c, None), ["F", "C", "A", "B", "D"]);
+    assert_eq!(names(&c, None), ["C", "A", "B", "F", "D"]);
     // another container is unaffected
     let inner = add(&mut c, "Z", Some(f), false);
     add(&mut c, "Y", Some(f), false);
@@ -55,6 +56,24 @@ fn ordered_children_follow_their_order() {
     assert!(!c.album_children_are_ordered(Some(f)));
     place(&mut c, inner, Some(0));
     assert_eq!(names(&c, Some(f)), ["Z", "Y"]);
+}
+
+/// Given folders and albums with places of their own, then they are listed by them, mixed: an
+/// album can come before a folder.
+#[test]
+fn placed_albums_and_folders_mix() {
+    let mut c = Catalog::new();
+    let f = add(&mut c, "Folder", None, true);
+    let g = add(&mut c, "Gallery", None, true);
+    let a = add(&mut c, "Album", None, false);
+    let b = add(&mut c, "Best", None, false);
+    for (i, id) in [a, f, b, g].into_iter().enumerate() {
+        place(&mut c, id, Some(u32::try_from(i).unwrap()));
+    }
+    assert_eq!(names(&c, None), ["Album", "Folder", "Best", "Gallery"]);
+    let map = c.album_children_by_parent();
+    let from_map: Vec<&str> = map[&None].iter().map(|a| a.name.as_str()).collect();
+    assert_eq!(from_map, ["Album", "Folder", "Best", "Gallery"]);
 }
 
 /// The one-pass map lists every folder's children exactly as `album_children` does.

@@ -1,5 +1,5 @@
-//! Ordering albums by hand: `album.reorder` puts an album (or folder) before a sibling, or last of
-//! its kind, in one undo step, also when it changes folder; `album.sort` goes back to by name.
+//! Ordering albums by hand: `album.reorder` puts an album (or folder) before a sibling of either
+//! kind, or last, in one undo step, also when it changes folder; `album.sort` goes back to by name.
 
 use lightcraft_catalog::AlbumId;
 use serde_json::{Value, json};
@@ -41,19 +41,27 @@ fn an_album_is_placed_before_a_sibling_or_last() {
     assert_eq!(names(&s, None), ["B", "C", "A"]);
 }
 
-/// Folders stay ahead of albums: a folder is placed among folders, an album among albums.
+/// Folders and albums mix: an album can be put above the folders, a folder after the albums, and
+/// one undo puts them back.
 #[test]
-fn folders_and_albums_keep_to_their_own_group() {
+fn folders_and_albums_can_be_placed_among_each_other() {
     let mut s = Session::new();
     let (f1, f2) = (make(&mut s, "F1", None, true), make(&mut s, "F2", None, true));
     let (a1, a2) = (make(&mut s, "A1", None, false), make(&mut s, "A2", None, false));
-    reorder(&mut s, f2, json!({"before": f1})).unwrap();
-    reorder(&mut s, a2, json!({"before": a1})).unwrap();
-    assert_eq!(names(&s, None), ["F2", "F1", "A2", "A1"]);
-    reorder(&mut s, f1, json!({"before": a1})).expect_err("a folder is not placed among albums");
-    reorder(&mut s, a1, json!({"before": f1})).expect_err("an album is not placed among folders");
-    reorder(&mut s, f2, json!({"before": null})).unwrap();
-    assert_eq!(names(&s, None), ["F1", "F2", "A2", "A1"], "last of the folders");
+    assert_eq!(names(&s, None), ["F1", "F2", "A1", "A2"], "never ordered: folders first");
+    reorder(&mut s, a1, json!({"before": f1})).unwrap();
+    assert_eq!(names(&s, None), ["A1", "F1", "F2", "A2"], "an album above the folders");
+    reorder(&mut s, f1, json!({"before": null})).unwrap();
+    assert_eq!(names(&s, None), ["A1", "F2", "A2", "F1"], "a folder last, after the albums");
+    reorder(&mut s, a2, json!({"before": f2})).unwrap();
+    assert_eq!(names(&s, None), ["A1", "A2", "F2", "F1"], "albums above folders");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(names(&s, None), ["A1", "F2", "A2", "F1"]);
+    // a folder placed among albums keeps what it holds
+    let inner = make(&mut s, "Inner", Some(f1), false);
+    reorder(&mut s, f1, json!({"before": a1})).unwrap();
+    assert_eq!(names(&s, None)[0], "F1");
+    assert_eq!(s.catalog.album(AlbumId(inner)).unwrap().parent, Some(AlbumId(f1)));
 }
 
 /// Placing an album in another folder moves it there, and one undo undoes both.
@@ -95,7 +103,8 @@ fn placing_and_sorting_undo_and_redo() {
     s.execute("album.sort", &json!({})).unwrap();
     assert_eq!(names(&s, None), ["Other", "A", "B"]);
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(names(&s, None), ["Other", "B", "A"], "the hand order is back");
+    // Other was made after the order was: it has no place, so it comes after the placed ones
+    assert_eq!(names(&s, None), ["B", "A", "Other"], "the hand order is back");
     s.execute("edit.redo", &json!({})).unwrap();
     assert_eq!(names(&s, None), ["Other", "A", "B"]);
     assert_eq!(s.catalog.album(AlbumId(child)).unwrap().parent, Some(AlbumId(top)));
