@@ -186,7 +186,7 @@ application's renderer and is ignored: the photo keeps LightCraft's own process,
 | `ShadowTint`, `RedHue/Saturation`, `GreenHue/Saturation`, `BlueHue/Saturation` | `calibration.shadows_tint`, `calibration.red_hue/red_sat`, … | Calibration panel, 1:1 |
 | `PerspectiveVertical/Horizontal/Rotate/Scale/Aspect/X/Y` | `geometry.vertical/horizontal/rotate/scale/aspect/offset_x/offset_y` | |
 | `PerspectiveUpright` | `geometry.upright` | 0 off, 1 auto, 2 level, 3 vertical, 4 full, 5 guided; saved `UprightTransform_*` matrices are not imported, so photo import reports that Lightroom geometry was not preserved and the selected mode will be recalculated |
-| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop |
+| `HasCrop`, `CropLeft/Top/Right/Bottom`, `CropAngle` | `crop.geometry` | normalized edges → rect; angle in degrees; `HasCrop="False"` → no crop; other tools' `CropHeight` / `CropWidth` restate the same crop and are consumed with the edges, `CropUnit` / `CropUnits` are unit labels only and are ignored |
 
 Values pass through our control specs, so anything outside our slider ranges gets clamped.
 
@@ -205,6 +205,13 @@ either order. The look's embedded `Parameters` are not read.
 
 **Not mapped:** camera profiles (`CameraProfile`; we have our own profile set), red eye, lens blur,
 process-version 2010 field names, and AI features. Local adjustments and spot removal are read as described below.
+
+**Reported, not applied:** the legacy leftovers (`Defringe`, `Smoothness`, the process-version 2010 channel curves
+`ToneCurveRed/Green/Blue` - the old master `ToneCurve` is read when the packet has no 2012 curve), the ACR HDR display fields (`SDRBlend` and its siblings, `HDRMaxValue`,
+`ToneMapStrength`), `ChromaticAberrationR/B`, `MoireFilter`, `ToggleStyleAmount` / `ToggleStyleDigest` and a stray
+top-level `RangeMask` reach the import report as unmapped adjustments. The packet bookkeeping beside them
+(auto-defaults, preview cache, file handling, profile match keys, `Converter`, `What`) is ignored silently. The
+coverage test in `crates/engine/src/crs/tests.rs` keeps every field of the Adobe registry in one of those buckets.
 
 ## Spot removal
 
