@@ -69,6 +69,18 @@ pub fn resolve_dir(path: &Path) -> Result<PathBuf> {
     })
 }
 
+/// Whether `path` names one of a library's settings files (`presets.json`, `view.json`,
+/// `prefs.json`), in any letter case. Such a path only names a library when the folder that
+/// holds it already is one.
+fn is_settings_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            name == "presets.json" || name == "view.json" || name == "prefs.json"
+        })
+}
+
 /// Whether `dir` already holds a library (its catalog files).
 pub fn is_library(dir: &Path) -> bool {
     dir.join(lightcraft_catalog::journal::SNAPSHOT).is_file() || dir.join(lightcraft_catalog::journal::LOG).is_file()
@@ -488,11 +500,17 @@ impl Session {
     /// Nothing is created; a library folder that exists gets its lock taken and released again.
     /// Opening can still fail afterwards (a damaged catalog, a disk going away).
     pub fn check_library(&self, dir: impl AsRef<Path>) -> Result<PathBuf> {
-        let dir = dir.as_ref().to_path_buf();
-        if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
-            return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
+        let input = dir.as_ref().to_path_buf();
+        if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&input) {
+            return Err(EngineError::LightroomCatalog { path: input.clone(), catalog: place.catalog });
         }
-        let dir = resolve_dir(&dir)?;
+        let dir = resolve_dir(&input)?;
+        if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
+            return Err(EngineError::LightroomCatalog { path: dir.clone(), catalog: place.catalog });
+        }
+        if is_settings_file(&input) && !is_library(&dir) {
+            return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
+        }
         if !dir.exists() {
             return Ok(dir);
         }
@@ -526,9 +544,16 @@ impl Session {
     /// created ([`crate::lightroom_folder`]); a LightCraft library always opens, whatever else
     /// its folder holds.
     pub fn open_library(&mut self, dir: impl AsRef<Path>, seed_demo: bool) -> Result<&LoadReport> {
-        let dir = dir.as_ref().to_path_buf();
+        let input = dir.as_ref().to_path_buf();
+        if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&input) {
+            return Err(EngineError::LightroomCatalog { path: input.clone(), catalog: place.catalog });
+        }
+        let dir = resolve_dir(&input)?;
         if let Some(place) = crate::lightroom_folder::lightroom_catalog_at(&dir) {
-            return Err(EngineError::LightroomCatalog { path: dir, catalog: place.catalog });
+            return Err(EngineError::LightroomCatalog { path: dir.clone(), catalog: place.catalog });
+        }
+        if is_settings_file(&input) && !is_library(&dir) {
+            return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
         }
         let dir = resolve_dir(&dir)?;
         let catalog = FsStore::open(&dir).map_err(|e| EngineError::Other(format!("can't open library {}: {e}", dir.display())))?;
@@ -1203,6 +1228,19 @@ mod resolve_tests {
         assert!(matches!(s.check_library(dir.join("Cat.lrcat")), Err(EngineError::LightroomCatalog { .. })));
         assert!(s.library.as_ref().is_some_and(|l| l.dir == a));
         drop(s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_standalone_settings_file_is_not_opened_as_a_library() {
+        let dir = std::env::temp_dir().join(format!("lc-standalone-settings-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("prefs.json");
+        std::fs::write(&file, b"{}").unwrap();
+        let mut s = Session::new().with_fs();
+        let res = s.open_library(&file, false);
+        assert!(res.is_err(), "a standalone settings file must not be adopted as a library: {res:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
