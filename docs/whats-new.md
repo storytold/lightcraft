@@ -85,6 +85,8 @@
 - A raw that would have more than 0.2 % of its photosites replaced is left unchanged: such a photo doesn't look like
   hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
   loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
+- Before / After of a raw imported before the box existed no longer removes hot pixels on the Before side only,
+  and Copy Before to After and Swap no longer switch the box on (issue #4256).
 
 ### Raising Exposure keeps raw highlights (process 5)
 - Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
