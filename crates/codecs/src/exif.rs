@@ -57,6 +57,7 @@ impl<'a> Tiff<'a> {
         Some((v, next))
     }
     /// First value of a SHORT/LONG entry.
+    #[cfg(test)]
     pub fn uint(&self, e: &Entry) -> Option<u32> {
         match e.typ {
             3 => self.u16_at(e.value_pos).map(u32::from),
