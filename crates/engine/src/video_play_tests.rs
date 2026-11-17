@@ -792,3 +792,27 @@ fn a_frame_bigger_than_the_gpu_allows_is_decoded_again_within_it() {
     tick_until(&mut p, |p| p.frame().is_some());
     assert_eq!(p.frame().unwrap().0.width, 2);
 }
+
+#[test]
+fn the_state_never_shows_an_error_with_playback_still_running() {
+    let (mut p, _clock, _) = player(500, 500);
+    tick_until(&mut p, |p| p.frame().is_some());
+    p.play();
+    p.tick();
+    // (the decoder idle on a full queue, so nothing arrives behind the error)
+    settle(&mut p);
+    // the decode thread records an error between two ticks (here: by hand, at a known moment)
+    {
+        let mut s = p.channel.lock();
+        s.clear_queue();
+        s.error = Some("damaged frame".into());
+    }
+    // until a tick has stopped playback for it, the state reports neither
+    let v = p.state();
+    assert_eq!((v["playing"].clone(), v["error"].clone()), (serde_json::json!(true), serde_json::Value::Null), "{v}");
+    assert_eq!(p.error(), None);
+    // the tick stops playback and the state reports the reason with it
+    p.tick();
+    let v = p.state();
+    assert_eq!((v["playing"].clone(), v["error"].clone()), (serde_json::json!(false), serde_json::json!("damaged frame")), "{v}");
+}

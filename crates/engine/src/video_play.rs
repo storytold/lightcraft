@@ -308,6 +308,10 @@ pub struct VideoPlayer {
     /// The time the latest request asked for: where a step starts while its frame is on its way
     /// (the anchor may differ, as at the end, where an exact frame is decoded again).
     target: f64,
+    /// The decode thread's error as the latest tick saw it: what [`VideoPlayer::state`] and
+    /// [`VideoPlayer::error`] report, so they never show an error with playback the tick has not
+    /// stopped for yet (the thread may record it any moment).
+    error: Option<String>,
     ended: bool,
     current: Option<Arc<VideoFrame>>,
     /// Bumped whenever `current` changes, so the UI uploads a texture only for a new frame.
@@ -374,6 +378,7 @@ impl VideoPlayer {
             generation: 0,
             awaiting: true,
             target: 0.0,
+            error: None,
             ended: false,
             current: None,
             serial: 0,
@@ -409,7 +414,7 @@ impl VideoPlayer {
 
     /// The decoder's error, if it stopped on one.
     pub fn error(&self) -> Option<String> {
-        self.channel.lock().error.clone()
+        self.error.clone()
     }
 
     /// The decode thread has ended (the clip could not be opened, or the decoder failed): nothing
@@ -444,6 +449,7 @@ impl VideoPlayer {
         // decode thread is gone: then the reason stays)
         if !refresh && !s.finished {
             s.error = None;
+            self.error = None;
         }
         s.draft = self.playing;
         s.clear_queue();
@@ -608,6 +614,9 @@ impl VideoPlayer {
             let end = s.generation == cur && s.end && s.queue.is_empty();
             // (the frames decoded before the error still play)
             let failed = s.error.is_some() && s.queue.is_empty();
+            if self.error != s.error {
+                self.error.clone_from(&s.error);
+            }
             (end, failed, s.finished, s.served == cur, s.queue.front().map(|(_, f)| f.pts))
         };
         self.channel.wake.notify_all();
@@ -698,7 +707,7 @@ impl VideoPlayer {
             "playing": self.playing,
             "ended": self.ended,
             "position": self.position(),
-            "opening": !self.opened && s.error.is_none(),
+            "opening": !self.opened && self.error.is_none(),
             "duration": self.opened.then_some(self.info.duration),
             "frameRate": if self.info.frame_duration > 0.0 { 1.0 / self.info.frame_duration } else { 0.0 },
             "width": self.info.width,
@@ -713,7 +722,7 @@ impl VideoPlayer {
             "queued": s.queue.len(),
             "queuedBytes": s.queued_bytes,
             "audio": self.info.audio.as_ref().map(|a| json!({"track": a, "played": false})),
-            "error": s.error,
+            "error": self.error,
         })
     }
 }
