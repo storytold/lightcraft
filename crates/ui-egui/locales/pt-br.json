@@ -2332,5 +2332,18 @@
   "the file has no video track": "o arquivo não tem faixa de vídeo",
   "an old QuickTime movie with a compressed header can't be read yet": "um filme QuickTime antigo com cabeçalho compactado ainda não pode ser lido",
   "this clip's MP4 or QuickTime structure can't be read yet": "a estrutura MP4 ou QuickTime deste clipe ainda não pode ser lida",
-  "this clip's ICtCp colour encoding can't be shown yet": "a codificação de cor ICtCp deste clipe ainda não pode ser exibida"
+  "this clip's ICtCp colour encoding can't be shown yet": "a codificação de cor ICtCp deste clipe ainda não pode ser exibida",
+  "Previous frame": "Quadro anterior",
+  "Next frame": "Próximo quadro",
+  "Play": "Reproduzir",
+  "Pause": "Pausar",
+  "Playhead": "Indicador de reprodução",
+  "Audio not played": "Áudio não reproduzido",
+  "Play/Pause Video": "Reproduzir/pausar vídeo",
+  "Play Video": "Reproduzir vídeo",
+  "Pause Video": "Pausar vídeo",
+  "Seek Video": "Ir para um ponto do vídeo",
+  "Step Video Frame": "Mover o vídeo um quadro",
+  "Stop Video": "Parar vídeo",
+  "Video Playback State": "Estado de reprodução do vídeo"
 }

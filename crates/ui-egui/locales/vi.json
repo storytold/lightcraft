@@ -2773,5 +2773,18 @@
   "the file has no video track": "tệp không có rãnh video",
   "an old QuickTime movie with a compressed header can't be read yet": "chưa thể đọc phim QuickTime cũ có phần đầu được nén",
   "this clip's MP4 or QuickTime structure can't be read yet": "chưa thể đọc cấu trúc MP4 hay QuickTime của clip này",
-  "this clip's ICtCp colour encoding can't be shown yet": "chưa thể hiển thị mã hóa màu ICtCp của clip này"
+  "this clip's ICtCp colour encoding can't be shown yet": "chưa thể hiển thị mã hóa màu ICtCp của clip này",
+  "Previous frame": "Khung hình trước",
+  "Next frame": "Khung hình sau",
+  "Play": "Phát",
+  "Pause": "Tạm dừng",
+  "Playhead": "Đầu phát",
+  "Audio not played": "Không phát âm thanh",
+  "Play/Pause Video": "Phát/tạm dừng video",
+  "Play Video": "Phát video",
+  "Pause Video": "Tạm dừng video",
+  "Seek Video": "Tua video",
+  "Step Video Frame": "Chuyển video từng khung hình",
+  "Stop Video": "Dừng video",
+  "Video Playback State": "Trạng thái phát video"
 }

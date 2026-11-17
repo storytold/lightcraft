@@ -326,5 +326,7 @@
   "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
+  "This clip's audio ({track}) is not played: LightCraft has no audio output yet": "Звук цього кліпу ({track}) не відтворюється: у LightCraft поки немає виведення звуку",
+  "Can't play this clip: {reason}": "Не вдається відтворити цей кліп: {reason}"
 }

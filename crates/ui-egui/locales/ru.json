@@ -2694,5 +2694,18 @@
   "the file has no video track": "в файле нет видеодорожки",
   "an old QuickTime movie with a compressed header can't be read yet": "старый фильм QuickTime со сжатым заголовком пока не удаётся прочитать",
   "this clip's MP4 or QuickTime structure can't be read yet": "структуру MP4 или QuickTime этого клипа пока не удаётся прочитать",
-  "this clip's ICtCp colour encoding can't be shown yet": "цветовую кодировку ICtCp этого клипа пока не удаётся показать"
+  "this clip's ICtCp colour encoding can't be shown yet": "цветовую кодировку ICtCp этого клипа пока не удаётся показать",
+  "Previous frame": "Предыдущий кадр",
+  "Next frame": "Следующий кадр",
+  "Play": "Воспроизвести",
+  "Pause": "Пауза",
+  "Playhead": "Точка воспроизведения",
+  "Audio not played": "Звук не воспроизводится",
+  "Play/Pause Video": "Воспроизвести/приостановить видео",
+  "Play Video": "Воспроизвести видео",
+  "Pause Video": "Приостановить видео",
+  "Seek Video": "Перейти в видео",
+  "Step Video Frame": "Сдвинуть видео на кадр",
+  "Stop Video": "Остановить видео",
+  "Video Playback State": "Состояние воспроизведения видео"
 }

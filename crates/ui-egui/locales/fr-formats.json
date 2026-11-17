@@ -326,5 +326,7 @@
   "{name} is installed and in use: face recognition is on": "{name} est installé et utilisé : la reconnaissance des visages est activée",
   "Bring photos in with File › Import Photos… ({keys}).": "Importez des photos avec Fichier › Importer des photos… ({keys}).",
   "View › Detail View ({keys}).": "Affichage › Vue de détail ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Fichier › Exporter… · Fichier › Imprimer… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Fichier › Exporter… · Fichier › Imprimer… ({keys}).",
+  "This clip's audio ({track}) is not played: LightCraft has no audio output yet": "Le son de ce clip ({track}) n'est pas lu : LightCraft n'a pas encore de sortie audio",
+  "Can't play this clip: {reason}": "Impossible de lire ce clip : {reason}"
 }

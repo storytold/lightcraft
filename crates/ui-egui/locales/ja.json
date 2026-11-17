@@ -2486,5 +2486,18 @@
   "the file has no video track": "ファイルにビデオトラックがありません",
   "an old QuickTime movie with a compressed header can't be read yet": "ヘッダーが圧縮された古い QuickTime ムービーはまだ読み込めません",
   "this clip's MP4 or QuickTime structure can't be read yet": "このクリップの MP4 または QuickTime の構造はまだ読み込めません",
-  "this clip's ICtCp colour encoding can't be shown yet": "このクリップの ICtCp カラーエンコードはまだ表示できません"
+  "this clip's ICtCp colour encoding can't be shown yet": "このクリップの ICtCp カラーエンコードはまだ表示できません",
+  "Previous frame": "前のフレーム",
+  "Next frame": "次のフレーム",
+  "Play": "再生",
+  "Pause": "一時停止",
+  "Playhead": "再生位置",
+  "Audio not played": "音声は再生されません",
+  "Play/Pause Video": "動画を再生/一時停止",
+  "Play Video": "動画を再生",
+  "Pause Video": "動画を一時停止",
+  "Seek Video": "動画内を移動",
+  "Step Video Frame": "動画をコマ送り",
+  "Stop Video": "動画を停止",
+  "Video Playback State": "動画の再生状態"
 }

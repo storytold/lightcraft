@@ -2487,5 +2487,18 @@
   "the file has no video track": "文件没有视频轨道",
   "an old QuickTime movie with a compressed header can't be read yet": "暂时无法读取头部经过压缩的旧版 QuickTime 影片",
   "this clip's MP4 or QuickTime structure can't be read yet": "暂时无法读取此剪辑的 MP4 或 QuickTime 结构",
-  "this clip's ICtCp colour encoding can't be shown yet": "暂时无法显示此剪辑的 ICtCp 色彩编码"
+  "this clip's ICtCp colour encoding can't be shown yet": "暂时无法显示此剪辑的 ICtCp 色彩编码",
+  "Previous frame": "上一帧",
+  "Next frame": "下一帧",
+  "Play": "播放",
+  "Pause": "暂停",
+  "Playhead": "播放头",
+  "Audio not played": "不播放音频",
+  "Play/Pause Video": "播放/暂停视频",
+  "Play Video": "播放视频",
+  "Pause Video": "暂停视频",
+  "Seek Video": "定位视频",
+  "Step Video Frame": "逐帧移动视频",
+  "Stop Video": "停止视频",
+  "Video Playback State": "视频播放状态"
 }

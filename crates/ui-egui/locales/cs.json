@@ -2534,5 +2534,18 @@
   "the file has no video track": "soubor nemá žádnou video stopu",
   "an old QuickTime movie with a compressed header can't be read yet": "starý film QuickTime s komprimovanou hlavičkou zatím nelze načíst",
   "this clip's MP4 or QuickTime structure can't be read yet": "strukturu MP4 nebo QuickTime tohoto klipu zatím nelze načíst",
-  "this clip's ICtCp colour encoding can't be shown yet": "barevné kódování ICtCp tohoto klipu zatím nelze zobrazit"
+  "this clip's ICtCp colour encoding can't be shown yet": "barevné kódování ICtCp tohoto klipu zatím nelze zobrazit",
+  "Previous frame": "Předchozí snímek",
+  "Next frame": "Další snímek",
+  "Play": "Přehrát",
+  "Pause": "Pozastavit",
+  "Playhead": "Pozice přehrávání",
+  "Audio not played": "Zvuk se nepřehrává",
+  "Play/Pause Video": "Přehrát/pozastavit video",
+  "Play Video": "Přehrát video",
+  "Pause Video": "Pozastavit video",
+  "Seek Video": "Přejít ve videu",
+  "Step Video Frame": "Posunout video o snímek",
+  "Stop Video": "Zastavit video",
+  "Video Playback State": "Stav přehrávání videa"
 }

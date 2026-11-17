@@ -3754,5 +3754,18 @@
   "the file has no video track": "ფაილს ვიდეოტრეკი არ აქვს",
   "an old QuickTime movie with a compressed header can't be read yet": "შეკუმშული სათაურის მქონე ძველი QuickTime ფილმის წაკითხვა ჯერ შეუძლებელია",
   "this clip's MP4 or QuickTime structure can't be read yet": "ამ კლიპის MP4 ან QuickTime სტრუქტურის წაკითხვა ჯერ შეუძლებელია",
-  "this clip's ICtCp colour encoding can't be shown yet": "ამ კლიპის ICtCp ფერთა კოდირების ჩვენება ჯერ შეუძლებელია"
+  "this clip's ICtCp colour encoding can't be shown yet": "ამ კლიპის ICtCp ფერთა კოდირების ჩვენება ჯერ შეუძლებელია",
+  "Previous frame": "წინა კადრი",
+  "Next frame": "შემდეგი კადრი",
+  "Play": "დაკვრა",
+  "Pause": "პაუზა",
+  "Playhead": "დაკვრის პოზიცია",
+  "Audio not played": "ხმა არ ჟღერს",
+  "Play/Pause Video": "ვიდეოს დაკვრა/პაუზა",
+  "Play Video": "ვიდეოს დაკვრა",
+  "Pause Video": "ვიდეოს პაუზა",
+  "Seek Video": "ვიდეოში გადასვლა",
+  "Step Video Frame": "ვიდეოს კადრით გადაწევა",
+  "Stop Video": "ვიდეოს შეწყვეტა",
+  "Video Playback State": "ვიდეოს დაკვრის მდგომარეობა"
 }

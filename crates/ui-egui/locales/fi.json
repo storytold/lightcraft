@@ -2445,5 +2445,18 @@
   "the file has no video track": "tiedostossa ei ole videoraitaa",
   "an old QuickTime movie with a compressed header can't be read yet": "vanhaa QuickTime-elokuvaa, jonka otsake on pakattu, ei voi vielä lukea",
   "this clip's MP4 or QuickTime structure can't be read yet": "tämän leikkeen MP4- tai QuickTime-rakennetta ei voi vielä lukea",
-  "this clip's ICtCp colour encoding can't be shown yet": "tämän leikkeen ICtCp-värikoodausta ei voi vielä näyttää"
+  "this clip's ICtCp colour encoding can't be shown yet": "tämän leikkeen ICtCp-värikoodausta ei voi vielä näyttää",
+  "Previous frame": "Edellinen ruutu",
+  "Next frame": "Seuraava ruutu",
+  "Play": "Toista",
+  "Pause": "Tauko",
+  "Playhead": "Toistokohta",
+  "Audio not played": "Ääntä ei toisteta",
+  "Play/Pause Video": "Toista/keskeytä video",
+  "Play Video": "Toista video",
+  "Pause Video": "Keskeytä video",
+  "Seek Video": "Siirry videossa",
+  "Step Video Frame": "Siirrä videota ruudun verran",
+  "Stop Video": "Pysäytä video",
+  "Video Playback State": "Videon toiston tila"
 }

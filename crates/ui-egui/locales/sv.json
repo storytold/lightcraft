@@ -2549,5 +2549,18 @@
   "the file has no video track": "filen har inget videospår",
   "an old QuickTime movie with a compressed header can't be read yet": "en gammal QuickTime-film med komprimerat huvud kan inte läsas än",
   "this clip's MP4 or QuickTime structure can't be read yet": "klippets MP4- eller QuickTime-struktur kan inte läsas än",
-  "this clip's ICtCp colour encoding can't be shown yet": "klippets ICtCp-färgkodning kan inte visas än"
+  "this clip's ICtCp colour encoding can't be shown yet": "klippets ICtCp-färgkodning kan inte visas än",
+  "Previous frame": "Föregående bildruta",
+  "Next frame": "Nästa bildruta",
+  "Play": "Spela upp",
+  "Pause": "Pausa",
+  "Playhead": "Uppspelningsposition",
+  "Audio not played": "Ljudet spelas inte upp",
+  "Play/Pause Video": "Spela upp/pausa video",
+  "Play Video": "Spela upp video",
+  "Pause Video": "Pausa video",
+  "Seek Video": "Gå till en punkt i videon",
+  "Step Video Frame": "Flytta videon en bildruta",
+  "Stop Video": "Stoppa video",
+  "Video Playback State": "Videouppspelningens status"
 }

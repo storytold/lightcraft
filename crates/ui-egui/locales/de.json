@@ -3572,8 +3572,15 @@
   "this clip's ICtCp colour encoding can't be shown yet": "die ICtCp-Farbkodierung dieses Clips kann noch nicht angezeigt werden",
   "Previous frame": "Vorheriges Bild",
   "Next frame": "Nächstes Bild",
-  "Play (Space)": "Abspielen (Leertaste)",
-  "Pause (Space)": "Pause (Leertaste)",
   "Playhead": "Abspielposition",
-  "Audio not played": "Ton wird nicht abgespielt"
+  "Audio not played": "Ton wird nicht abgespielt",
+  "Play": "Abspielen",
+  "Pause": "Pause",
+  "Play/Pause Video": "Video abspielen/anhalten",
+  "Play Video": "Video abspielen",
+  "Pause Video": "Video anhalten",
+  "Seek Video": "Im Video springen",
+  "Step Video Frame": "Video um ein Bild bewegen",
+  "Stop Video": "Video beenden",
+  "Video Playback State": "Wiedergabestatus des Videos"
 }

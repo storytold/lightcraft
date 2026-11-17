@@ -2459,5 +2459,18 @@
   "the file has no video track": "file tidak memiliki trek video",
   "an old QuickTime movie with a compressed header can't be read yet": "film QuickTime lama dengan header terkompresi belum dapat dibaca",
   "this clip's MP4 or QuickTime structure can't be read yet": "struktur MP4 atau QuickTime klip ini belum dapat dibaca",
-  "this clip's ICtCp colour encoding can't be shown yet": "pengodean warna ICtCp klip ini belum dapat ditampilkan"
+  "this clip's ICtCp colour encoding can't be shown yet": "pengodean warna ICtCp klip ini belum dapat ditampilkan",
+  "Previous frame": "Bingkai sebelumnya",
+  "Next frame": "Bingkai berikutnya",
+  "Play": "Putar",
+  "Pause": "Jeda",
+  "Playhead": "Posisi putar",
+  "Audio not played": "Audio tidak diputar",
+  "Play/Pause Video": "Putar/Jeda Video",
+  "Play Video": "Putar Video",
+  "Pause Video": "Jeda Video",
+  "Seek Video": "Pindah dalam Video",
+  "Step Video Frame": "Geser Video per Bingkai",
+  "Stop Video": "Hentikan Video",
+  "Video Playback State": "Status Pemutaran Video"
 }

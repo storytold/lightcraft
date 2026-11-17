@@ -326,5 +326,7 @@
   "{name} is installed and in use: face recognition is on": "{name} 已安装并在使用：人脸识别已开启",
   "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。",
+  "This clip's audio ({track}) is not played: LightCraft has no audio output yet": "此剪辑的音频（{track}）不会播放：LightCraft 暂无音频输出",
+  "Can't play this clip: {reason}": "无法播放此剪辑：{reason}"
 }
