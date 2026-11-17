@@ -212,12 +212,13 @@ pub fn probe_bytes(name: &str, bytes: &[u8]) -> Result<ProbeInfo, String> {
     {
         let stored = (header.width, header.height);
         let mut regions = xmp.metadata.regions.clone();
+        // (always replaced: `extract` may have turned them by an Exif size the pixels don't have)
         if o.swaps_axes() {
             lightcraft_meta::upright_regions(&mut regions, drawn_on, o, stored);
-            meta.regions = regions;
-        } else if lightcraft_meta::regions_onto_turned_pixels(&mut regions, drawn_on, stored, xmp.regions_turn()) {
-            meta.regions = regions;
+        } else {
+            lightcraft_meta::regions_onto_turned_pixels(&mut regions, drawn_on, stored, xmp.regions_turn());
         }
+        meta.regions = regions;
     }
     let format = match ext_upper(name).as_str() {
         "JPG" | "JPEG" => "JPEG".to_string(),
