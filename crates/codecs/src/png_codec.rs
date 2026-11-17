@@ -106,6 +106,30 @@ fn rgb_to_xyz_d50_checked(space: &RgbSpace) -> Option<Mat3> {
 mod tests {
     use crate::DecodeOptions;
 
+    /// An IFD0 with two Orientation entries (1, then 6): `read_header` and `decode` read it with
+    /// the same reader, so they agree on the orientation.
+    #[test]
+    fn header_and_decode_agree_on_conflicting_orientation_entries() {
+        let image = craft_image_codecs::Image::from_u8(2, 3, craft_image_codecs::ChannelLayout::Gray, vec![0; 6]).unwrap();
+        let base = craft_image_codecs::encode(&image, craft_image_codecs::Format::Png, &craft_image_codecs::EncodeOptions::default()).unwrap();
+        let mut exif = b"II*\0\x08\0\0\0\x02\0".to_vec();
+        for value in [1u16, 6] {
+            exif.extend_from_slice(&0x0112u16.to_le_bytes());
+            exif.extend_from_slice(&3u16.to_le_bytes());
+            exif.extend_from_slice(&1u32.to_le_bytes());
+            exif.extend_from_slice(&value.to_le_bytes());
+            exif.extend_from_slice(&[0, 0]);
+        }
+        exif.extend_from_slice(&0u32.to_le_bytes());
+        let mut png = base.clone();
+        let iend = png.len() - 12;
+        png.splice(iend..iend, png_chunk(*b"eXIf", &exif));
+        let header = crate::read_header(&png).unwrap();
+        let decoded = crate::decode(&png, DecodeOptions::default()).unwrap();
+        assert_eq!((header.width, header.height), (2, 3));
+        assert_eq!(header.orientation, decoded.orientation);
+    }
+
     #[test]
     fn exif_orientation_mutation_parity() {
         let image = craft_image_codecs::Image::from_u8(1, 1, craft_image_codecs::ChannelLayout::Gray, vec![0]).unwrap();
