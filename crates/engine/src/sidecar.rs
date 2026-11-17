@@ -1235,10 +1235,11 @@ fn is_correction(data: &str, start: usize, end: usize) -> bool {
     false
 }
 
-/// The start-tag ranges of the `crs:` corrections in `data`, in document order. Only
-/// corrections that are direct children of `rdf:RDF` are returned, so nested structured
-/// property descriptions are never mistaken for corrections. Corrections are matched to the
-/// photo's masks by order, so their identity, count and order are preserved.
+/// The start-tag ranges of the `crs:` corrections in `data`, in document order. Corrections
+/// are matched anywhere under `rdf:RDF` (they are normally nested inside
+/// `crs:MaskGroupBasedCorrections` > `rdf:Seq` > `rdf:li`), not only as direct children of
+/// `rdf:RDF`. Corrections are matched to the photo's masks by order, so their identity, count
+/// and order are preserved.
 fn correction_descriptions(data: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let Some(rdf) = data.find("<rdf:RDF") else { return out };
@@ -1387,6 +1388,7 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
             .and_then(|v| v.as_array().cloned())
             .unwrap_or_default();
         let ncomp = cur_comps.len().min(prev_comps.len()).min(comp_tags.len());
+        let mut length_delta: usize = 0;
         for j in 0..ncomp {
             let cur = &cur_comps[j];
             let prev = &prev_comps[j];
@@ -1395,7 +1397,10 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
             if cur_kind.is_empty() || cur_kind != prev_kind {
                 continue;
             }
-            let (cstart, mut cend) = comp_tags[j];
+            let len_before = data.len();
+            let (mut cstart, mut cend) = comp_tags[j];
+            cstart = cstart.saturating_add(length_delta);
+            cend = cend.saturating_add(length_delta);
             let scale = |a: f64| if a >= 1.0 { (1.0, 1.0 / a) } else { (a, 1.0) };
             let (sx, sy) = scale(aspect);
             let inv = |r: f64| {
@@ -1446,7 +1451,7 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                         }
                     }
                     if cur_shape_invert != prev_shape_invert {
-                        put_attr_on_tag(data, cstart, cend, prefix, "Flipped", if !cur_shape_invert { "true" } else { "false" });
+                        put_attr_on_tag(data, cstart, cend, prefix, "Flipped", if cur_shape_invert { "true" } else { "false" });
                         cend = tag_end(data, cstart).unwrap_or(cend);
                     }
                     if cur_comp_invert != prev_comp_invert {
@@ -1503,6 +1508,7 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                 }
                 _ => {}
             }
+            length_delta = length_delta.saturating_add(data.len().saturating_sub(len_before));
         }
     }
 }
