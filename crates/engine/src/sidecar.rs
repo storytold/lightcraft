@@ -808,9 +808,11 @@ fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<
     Ok((fresh, false, Some(b)))
 }
 
-/// Key of the stem sidecar a file maps to (case-insensitive).
+/// Key of the stem sidecar a file maps to: case-insensitive, and `\` and `/` are one separator, as a
+/// library can hold one folder spelled both ways (a Windows import and a folder synchronization;
+/// issue #4466), and files that share a stem must share a key whatever their spelling.
 fn stem_key(original: &str) -> String {
-    sidecar_path(original, SidecarNaming::Stem).to_string_lossy().to_lowercase()
+    sidecar_path(&original.replace('\\', "/"), SidecarNaming::Stem).to_string_lossy().to_lowercase()
 }
 
 /// Where a plain path is cut to make its [`stem_key`]: at the dot of its extension, which is
@@ -827,16 +829,20 @@ fn plain_cut(original: &str) -> Option<usize> {
 }
 
 /// [`stem_key`] written into `key`, which is reused: nothing is allocated for a plain path
-/// ([`plain_cut`]). Any other shape goes the long way.
+/// ([`plain_cut`], of the path with its separators made `/`). Any other shape goes the long way.
 fn stem_key_into(key: &mut String, original: &str) {
     key.clear();
-    match plain_cut(original) {
+    key.extend(original.chars().map(|c| if c == '\\' { '/' } else { c }));
+    match plain_cut(key) {
         Some(cut) => {
-            key.push_str(original.get(..cut).unwrap_or_default());
+            key.truncate(cut);
             key.make_ascii_lowercase();
             key.push_str(".xmp");
         }
-        None => key.push_str(&stem_key(original)),
+        None => {
+            key.clear();
+            key.push_str(&stem_key(original));
+        }
     }
 }
 

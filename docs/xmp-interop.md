@@ -112,6 +112,10 @@ An import ranks the files it is adding the same way, before they are catalogued:
 raw of its stem reads its own `<file>.xmp` and takes nothing from the raw's `IMG_0001.xmp`, whether it arrives
 with the raw or after it (issue #1905).
 
+Files share a stem whatever the case of their paths and whichever separator spells them: a Windows library can
+hold `S:\Photos\2025\P6650.DNG` beside `S:/Photos\2025\P6650.JPG` (one from an import, one from a folder
+synchronization), and the two are still a pair, so the JPEG writes `P6650.JPG.xmp` (issue #4466).
+
 ## Face regions (MWG)
 
 LightCraft reads face, pet, focus and barcode regions in the Metadata Working Group's region schema
