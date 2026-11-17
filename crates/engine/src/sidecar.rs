@@ -1040,7 +1040,10 @@ fn global_description(data: &str) -> Option<(usize, usize)> {
                 let mut depth = 0usize;
                 let mut k = e + 1;
                 while k < data.len() {
-                    let Some(rel) = data[k..].find('<') else { k = data.len(); break };
+                    let Some(rel) = data[k..].find('<') else {
+                        k = data.len();
+                        break;
+                    };
                     let s2 = k + rel;
                     let rest2 = data.get(s2..).unwrap_or_default();
                     if rest2.starts_with("</rdf:Description>") {
@@ -2937,10 +2940,7 @@ mod tests {
             bindings.iter().any(|(p, uri)| p == "crs" && uri == CRS_NS),
             "crs must resolve to the ancestor's CRS_NS binding, not a comment's declaration\n{data}"
         );
-        assert!(
-            !bindings.iter().any(|(p, uri)| p == "crs" && uri == "urn:other"),
-            "crs must not resolve to urn:other from a comment\n{data}"
-        );
+        assert!(!bindings.iter().any(|(p, uri)| p == "crs" && uri == "urn:other"), "crs must not resolve to urn:other from a comment\n{data}");
     }
 
     /// A `crs:` field on a sibling `rdf:Description` must be found by `crs:` write-back even
