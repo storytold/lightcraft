@@ -1036,6 +1036,12 @@ fn global_descriptions(data: &str) -> Vec<(usize, usize)> {
         if rest.starts_with("<rdf:Description") {
             if let Some(e) = tag_end(data, i) {
                 out.push((i, e));
+                // A self-closing description has no children and no close tag, so it
+                // cannot consume following siblings: move past it and keep scanning.
+                if is_self_closing(data, e) {
+                    i = e + 1;
+                    continue;
+                }
                 // Skip past this description's whole element so siblings are still considered.
                 let mut depth = 0usize;
                 let mut k = e + 1;
@@ -1360,6 +1366,18 @@ fn mask_component_descriptions(data: &str, _corr_start: usize, corr_end: usize) 
             }
             break;
         }
+        if rest.starts_with("<rdf:li") {
+            // A mask component can be stored directly on rdf:li (self-closing,
+            // e.g. <rdf:li crs:What="Mask/CircularGradient" .../>). A non-self-closing
+            // li wraps a nested rdf:Description, which is collected on its own above.
+            if let Some(e) = tag_end(data, s)
+                && is_self_closing(data, e)
+            {
+                out.push((s, e));
+                i = e + 1;
+                continue;
+            }
+        }
         i = s + 1;
     }
     out
@@ -1514,26 +1532,18 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
         return;
     }
 
-    // Build a map from Mask.id to correction index for the current XMP corrections.
-    // We process from last to first so that lengthening a correction doesn't move
-    // the offsets of corrections we haven't processed yet.
-    let mut corr_by_id: HashMap<u32, usize> = HashMap::new();
-    for (idx, (tag_start, corr_end)) in corrections.iter().enumerate() {
-        if let Some(mask_id) = correction_mask_id(data, *tag_start, *corr_end) {
-            corr_by_id.insert(mask_id, idx);
-        }
-    }
-
-    // For each current mask, find its corresponding previous mask by id,
-    // then find the XMP correction by that id.
-    for cur_mask in masks {
-        let Some(prev_mask) = prev_masks.iter().find(|m| m.id == cur_mask.id) else {
+    // Process corrections in reverse document order so that lengthening a
+    // correction doesn't move the offsets of corrections we haven't processed yet.
+    for &(tag_start, mut corr_end) in corrections.iter().rev() {
+        let Some(mask_id) = correction_mask_id(data, tag_start, corr_end) else {
             continue;
         };
-        let Some(&corr_idx) = corr_by_id.get(&cur_mask.id) else {
+        let Some(cur_mask) = masks.iter().find(|m| m.id == mask_id) else {
             continue;
         };
-        let (tag_start, mut corr_end) = corrections[corr_idx];
+        let Some(prev_mask) = prev_masks.iter().find(|m| m.id == mask_id) else {
+            continue;
+        };
 
         let a = &cur_mask.adjust;
         let b = &prev_mask.adjust;
