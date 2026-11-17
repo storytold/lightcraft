@@ -588,7 +588,9 @@ impl Session {
             }
         }
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
-        // Photo ids belong to one library; denoise work must not carry into the next.
+        // Photo ids belong to one library; denoise work must not carry into the next, and neither
+        // may a playing clip (the new library's photo with the same id is another file).
+        self.video_stop();
         self.denoise.library_changed();
         self.media.denoise.clear();
         // what was learned about the old library's faces is saved, and none of it carries over (photo ids are per library)
@@ -873,6 +875,8 @@ impl Session {
     /// holding everything in memory, so it saves those ops too (the log handle may be the only
     /// thing that's broken). Fails only if nothing could be saved; the ops then stay queued.
     pub fn close_library(&mut self) -> Result<()> {
+        // (its clip and decoder belong to this library)
+        self.video_stop();
         if self.library.is_none() {
             return Ok(());
         }

@@ -31,15 +31,29 @@ impl Session {
         self.video.player.take().is_some()
     }
 
+    /// Stop the player when its clip is no longer the active photo. Runs after every command, so
+    /// a frontend that never ticks (MCP, the CLI) doesn't keep a decoder and its frames.
+    pub(crate) fn video_reap(&mut self) {
+        let active = self.active();
+        if self.video.player.as_ref().is_some_and(|p| Some(p.photo()) != active) {
+            self.video_stop();
+        }
+    }
+
     /// The player of the active photo, opened (paused on its first frame) when it is not yet.
     fn video_player(&mut self, cmd: &str) -> Result<&mut VideoPlayer> {
         let id = self.active().ok_or_else(|| bad(cmd, "no photo selected"))?;
-        if self.video.player.as_ref().is_none_or(|p| p.photo() != id) {
+        // a player whose decode thread ended (the clip could not be opened, the decoder failed)
+        // is opened again: the drive may be awake now
+        if self.video.player.as_ref().is_none_or(|p| p.photo() != id || p.finished()) {
             self.video_stop();
             let path = video_path(self, id).map_err(|e| bad(cmd, e))?;
+            if !self.video.available() {
+                return Err(bad(cmd, crate::video_source::NO_VIDEO_DECODING));
+            }
             let opener = self.video.opener;
             let open = Box::new(move || opener(&path));
-            let player = VideoPlayer::open(id, open, self.video.clock.clone()).map_err(|e| bad(cmd, e))?;
+            let player = VideoPlayer::open_limited(id, open, self.video.clock.clone(), self.video.max_side).map_err(|e| bad(cmd, e))?;
             self.video.player = Some(player);
         }
         let player = self.video.player.as_mut().ok_or_else(|| bad(cmd, "no video is open"))?;
@@ -48,7 +62,7 @@ impl Session {
     }
 
     fn video_state(&mut self) -> Value {
-        let available = crate::video_source::available();
+        let available = self.video.available();
         match self.video.player.as_mut() {
             Some(p) => {
                 p.tick();
@@ -205,7 +219,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Video Playback State",
             [],
             None,
-            "{} → {open, available (this build decodes video), opening, playing, ended, position, duration (seconds), frameRate, width, height, orientation (EXIF 1 to 8), codec, frame: {pts, draft}|null, shown, dropped (late frames skipped), decoded, queued, queuedBytes, audio: {track, played: false}|null (audio is not played yet), error|null}",
+            "{} → {open, available (this build decodes video), opening, playing, ended, position, duration (seconds), frameRate, width, height, orientation (EXIF 1 to 8), codec, frame: {pts, draft, width, height (the frame's own size: half while playback falls behind)}|null, behind (playback is dropping late frames), shown, dropped (late frames skipped), decoded, queued, queuedBytes, audio: {track, played: false}|null (audio is not played yet), error|null}",
             always,
             state
         ),

@@ -67,6 +67,7 @@ fn add(s: &mut Session, name: &str, kind: MediaKind) -> PhotoId {
 fn session() -> (Session, PhotoId, PhotoId) {
     let mut s = Session::new();
     s.video.opener = fake_opener;
+    s.video.decodes = || true;
     let clip = add(&mut s, "clip.mp4", MediaKind::Video);
     let still = add(&mut s, "still.jpg", MediaKind::Image);
     s.selection.active = Some(clip);
@@ -94,7 +95,8 @@ fn nothing_plays_until_asked() {
     let (mut s, _, _) = session();
     let v = s.execute("video.state", &json!({})).unwrap();
     assert_eq!(v["open"], false);
-    assert_eq!(v["available"], crate::video_source::available());
+    // (the session decides: this one plays fakes, so it can play in any build)
+    assert_eq!(v["available"], true);
     assert_eq!(s.execute("video.stop", &json!({})).unwrap()["stopped"], false);
     // pausing nothing is fine
     s.execute("video.pause", &json!({})).unwrap();
@@ -200,4 +202,70 @@ fn playback_commands_stay_out_of_the_journal_and_undo() {
         let spec = crate::cmd::find_command(id).unwrap();
         assert!(!spec.journal, "{id} is journalled");
     }
+}
+
+#[test]
+fn another_photo_by_any_command_stops_playback_without_a_tick() {
+    // MCP and the CLI never tick: the next command that makes another photo active ends it
+    let (mut s, clip, still) = session();
+    s.execute("video.play", &json!({})).unwrap();
+    assert!(s.video.player.is_some());
+    s.execute("library.select", &json!({"ids": [still.0]})).unwrap();
+    assert!(s.video.player.is_none(), "the decoder kept running for a clip no longer shown");
+    // commands that leave the clip active keep it
+    s.execute("library.select", &json!({"ids": [clip.0]})).unwrap();
+    s.execute("video.play", &json!({})).unwrap();
+    s.execute("video.state", &json!({})).unwrap();
+    assert!(s.video.player.is_some());
+}
+
+#[test]
+fn opening_or_closing_a_library_stops_playback() {
+    let dir = std::env::temp_dir().join(format!("lc-video-library-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let (s, _, _) = session();
+    let mut s = s.with_fs();
+    s.execute("video.play", &json!({})).unwrap();
+    assert!(s.video.player.is_some());
+    // the new library's photo with the same id is another file: the old clip must not play on
+    s.open_library(&dir, false).unwrap();
+    assert!(s.video.player.is_none(), "the old library's clip kept playing");
+    let clip = add(&mut s, "clip.mp4", MediaKind::Video);
+    s.selection.active = Some(clip);
+    s.execute("video.play", &json!({})).unwrap();
+    assert!(s.video.player.is_some());
+    s.close_library().unwrap();
+    assert!(s.video.player.is_none(), "closing the library left its clip playing");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_clip_that_could_not_be_opened_is_tried_again() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static AWAKE: AtomicBool = AtomicBool::new(false);
+    fn drive(path: &str) -> Result<Box<dyn FrameSource>, String> {
+        if AWAKE.load(Ordering::SeqCst) { fake_opener(path) } else { Err("The clip could not be opened: the drive is asleep".into()) }
+    }
+    let (mut s, _, _) = session();
+    s.video.opener = drive;
+    s.execute("video.playPause", &json!({})).unwrap();
+    let v = state_until(&mut s, |v| v["error"].is_string());
+    assert!(v["error"].as_str().unwrap().contains("asleep"), "{v}");
+    // the drive woke up: Play opens the clip again instead of keeping the failed one
+    AWAKE.store(true, Ordering::SeqCst);
+    s.execute("video.playPause", &json!({})).unwrap();
+    let v = state_until(&mut s, |v| v["error"].is_null() && v["frame"].is_object());
+    assert_eq!(v["playing"], true, "{v}");
+}
+
+#[test]
+fn a_build_without_video_decoding_says_so_before_starting_anything() {
+    let (mut s, _, _) = session();
+    s.video.decodes = || false;
+    let e = s.execute("video.playPause", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("no video decoding"), "{e}");
+    assert!(s.video.player.is_none(), "no decode thread for a build that can't decode");
+    let v = s.execute("video.state", &json!({})).unwrap();
+    assert_eq!((v["open"].clone(), v["available"].clone()), (json!(false), json!(false)));
 }

@@ -633,6 +633,7 @@ impl Session {
             }
         }
         if self.depth == 0 {
+            self.video_reap();
             let skip = std::mem::take(&mut self.skip_auto_write);
             if r.is_ok() && !skip && self.xmp.auto_write && self.interaction.is_none() && self.pending_log.len() > log_start {
                 self.auto_write_sidecars_since(log_start);
