@@ -347,3 +347,22 @@ fn the_first_showing_fits_the_photos_and_counts_those_without_gps() {
     assert!(widget(&e, "map:withoutGps").is_none());
     e.app.run("map.fit", json!({})).unwrap();
 }
+
+/// With the Untagged filter no pin is drawn, so none can be dragged: a drag where a pin was pans
+/// the map and moves no photo (hit testing used to ignore the filter).
+#[test]
+fn a_pin_hidden_by_the_untagged_filter_cant_be_dragged() {
+    let (mut h, ids) = demo();
+    view(&mut h, 48.857, 2.32, 14.0);
+    let s = state(&mut h);
+    let from = xy(&pin_of(&s, ids[0]));
+    h.app.run("map.locationFilter", json!({"mode": "untagged"})).unwrap();
+    frames(&mut h, 2);
+    let s = state(&mut h);
+    assert!(pins(&s).is_empty(), "{s}");
+    let before_view = (s["lat"].clone(), s["lon"].clone());
+    drag(&mut h, from, from + egui::vec2(90.0, 50.0));
+    let s = state(&mut h);
+    assert_eq!(gps(&h, ids[0]), Some(PLACES[0]), "the photo didn't move");
+    assert_ne!((s["lat"].clone(), s["lon"].clone()), before_view, "the drag panned");
+}

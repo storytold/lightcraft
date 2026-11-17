@@ -55,9 +55,10 @@ As in Lightroom Classic's Map module:
   wrapped into −180…180. Type a position closer to a pole in the Info panel's GPS field.
 - **Sidecars.** Positions are written to XMP sidecars as EXIF GPS (`exif:GPSLatitude`, `exif:GPSLongitude`)
   when sidecars are written (Photo ▸ Save Metadata to File, or at once with automatic XMP writing on). For a
-  photo whose position you set or cleared in LightCraft this session (a drop, a pin move, Remove GPS
-  Coordinates, the Info panel's GPS field), the sidecar takes LightCraft's position as it is: clearing it,
-  or undoing a geotag, removes the GPS from the sidecar. A photo whose position you never touched here keeps
+  photo whose position you set or cleared in LightCraft (a drop, a pin move, Remove GPS Coordinates, the Info
+  panel's GPS field), the sidecar takes LightCraft's position as it is: clearing it, or undoing a geotag,
+  removes the GPS from the sidecar. The library remembers these photos (`prefs.json` `gpsOwned`), so a
+  position cleared before you close it still leaves the sidecar when it is written later. A photo whose position you never touched here keeps
   whatever GPS another app put in its sidecar, since LightCraft doesn't read GPS from sidecars.
 
 `map.state` reports the view (`lat`, `lon`, `zoom`, `maxZoom`, `source`, `offline`, `attribution`), the map

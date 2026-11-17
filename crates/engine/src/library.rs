@@ -357,6 +357,12 @@ struct PrefsFile {
     /// dropped on its own, never taking the other preferences with it.
     #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "lenient_tile_source")]
     map_source: Option<crate::map::TileSource>,
+    /// Photos whose position was set or cleared in LightCraft ([`Session::gps_edited`]), so a
+    /// position cleared before the library closed still leaves the sidecar when it is written after
+    /// a reopen (with automatic XMP writing off, that can be much later). Read leniently: an entry
+    /// that isn't a photo id is skipped, never taking the other preferences with it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    gps_owned: Vec<serde_json::Value>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -433,7 +439,15 @@ impl SettingsLoad {
     fn set_aside(&mut self, store: &mut dyn Store, name: &'static str, why: &str) {
         let bytes = match store.read(name) {
             Ok(Some(b)) => b,
-            _ => return,
+            // gone since it was read: nothing left to lose
+            Ok(None) => return,
+            // no copy can be made, so the file must not be written with less in it
+            Err(e) => {
+                log::error!("library: {name}: {why}, and it couldn't be read again: {e}");
+                self.blocked.push(name);
+                self.warnings.push(format!("{name}: {why}, and it couldn't be set aside ({e}). LightCraft won't overwrite the file."));
+                return;
+            }
         };
         let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         let keep = format!("{name}.corrupt-{secs}");
@@ -781,6 +795,14 @@ impl Session {
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
         self.load_locations(files.as_mut(), &mut settings, prefs.saved_locations);
+        // (only ids of this library's photos: the file may be older than the catalog)
+        self.gps_edited = prefs
+            .gps_owned
+            .iter()
+            .filter_map(serde_json::Value::as_u64)
+            .map(lightcraft_catalog::PhotoId)
+            .filter(|id| self.catalog.photo(*id).is_some())
+            .collect();
         if let Some(notice) = self.map.load_source(prefs.map_source) {
             settings.warnings.push(notice);
         }
@@ -1076,6 +1098,17 @@ impl Session {
         }
     }
 
+    /// After a command added photos to [`Session::gps_edited`] (`before` = its size then): save
+    /// the preferences that keep it across a reopen. A failure is logged, not the command's: the
+    /// position is set, and the set stays for this session.
+    pub(crate) fn gps_owned_grew(&mut self, before: usize) {
+        if self.gps_edited.len() != before
+            && let Err(e) = self.save_prefs()
+        {
+            log::warn!("library: the photos' GPS ownership wasn't saved: {e}");
+        }
+    }
+
     /// Save the library preferences (no-op for in-memory sessions).
     pub fn save_prefs(&mut self) -> Result<()> {
         let v = serde_json::to_vec_pretty(&PrefsFile {
@@ -1107,6 +1140,11 @@ impl Session {
             hold_view: self.hold_view,
             saved_locations: self.legacy_locations.clone(),
             map_source: Some(self.map.source().clone()),
+            gps_owned: {
+                let mut ids: Vec<u64> = self.gps_edited.iter().filter(|id| self.catalog.photo(**id).is_some()).map(|id| id.0).collect();
+                ids.sort_unstable();
+                ids.into_iter().map(serde_json::Value::from).collect()
+            },
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };

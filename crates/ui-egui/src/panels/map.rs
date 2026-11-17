@@ -161,6 +161,13 @@ fn choose_location(m: &mut crate::state::MapUi, mode: LocationFilter) {
     m.seen_area = None;
 }
 
+/// The pins on the map: none with the Untagged filter (the filmstrip holds the photos without a
+/// position) or with Hide Pins. Drawing and the drag that moves a pin both use this, so a pin that
+/// isn't drawn can't be clicked, hovered or dragged.
+fn shown_points<'a>(points: &'a [MapPoint], map_ui: &crate::state::MapUi) -> &'a [MapPoint] {
+    if map_ui.filter == LocationFilter::Untagged || !map_ui.show_pins { &[] } else { points }
+}
+
 /// The location filter's choices as the menus list them: (mode, label).
 pub struct LocationFilterChoice;
 
@@ -523,9 +530,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 
     // 2. Cluster the pins of the view (world-anchored cells: panning never regroups them)
     let started = web_time::Instant::now();
-    // Untagged: the filmstrip holds the photos without a position, so no pins
-    // (and Hide Pins: none at all, so none can be clicked, hovered or dragged)
-    let shown: &[MapPoint] = if map_ui.filter == LocationFilter::Untagged || !map_ui.show_pins { &[] } else { &app.map_points.points };
+    let shown = shown_points(&app.map_points.points, &map_ui);
     let clusters = lightcraft_engine::map::cluster::cluster(shown, &vp, CLUSTER_CELL);
     app.map_drawn.cluster_ms = started.elapsed().as_secs_f64() * 1e3;
     app.map_drawn.with_gps = app.map_points.points.len();
@@ -630,7 +635,7 @@ fn navigate(
     // the active saved location's handles come first; then a drag that starts on a single photo's
     // pin moves it (unless markers are locked); any other drag (the empty map, a cluster) pans
     let busy = drag_location(app, ui, canvas_response, &vp, (canvas_rect, zone), map_ui);
-    let pins: &[MapPoint] = if map_ui.show_pins { &app.map_points.points } else { &[] };
+    let pins = shown_points(&app.map_points.points, map_ui);
     let before = lightcraft_engine::map::cluster::cluster(pins, &vp, CLUSTER_CELL);
     if canvas_response.drag_started() {
         map_ui.pin_drag = None;

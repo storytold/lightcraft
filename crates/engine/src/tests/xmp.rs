@@ -1551,6 +1551,47 @@ fn map_geotag_writes_gps_to_the_sidecar_and_removing_or_undoing_takes_it_out() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// A position cleared with automatic writing off still leaves the sidecar when it is saved after
+/// the library was closed and opened again: which photos' GPS is LightCraft's is kept with the
+/// library (`prefs.json` `gpsOwned`), not only for the session.
+#[test]
+fn a_cleared_position_leaves_the_sidecar_after_a_reopen() {
+    let src = temp_dir("geotag-reopen");
+    let lib = temp_dir("geotag-reopen-lib");
+    write_png(&src.join("g.png"), 9);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = only(&s);
+    let sidecar = src.join("g.xmp");
+    let gps_in = |p: &Path| std::fs::read_to_string(p).ok().and_then(|x| lightcraft_meta::parse_xmp(&x).ok()).and_then(|m| m.metadata.gps);
+    s.execute("photo.setGps", &json!({"ids": [id.0], "lat": 45.0, "lon": 6.0})).unwrap();
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(gps_in(&sidecar).is_some());
+    // cleared, not written (automatic writing is off), and the library closed
+    s.execute("photo.removeGps", &json!({"ids": [id.0]})).unwrap();
+    assert!(gps_in(&sidecar).is_some(), "not written yet");
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.gps_edited.contains(&id), "kept with the library");
+    s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+    assert!(gps_in(&sidecar).is_none(), "the cleared position leaves the sidecar");
+    drop(s);
+    // a damaged entry costs only itself
+    let prefs = lib.join("prefs.json");
+    let mut v: serde_json::Value = serde_json::from_slice(&std::fs::read(&prefs).unwrap()).unwrap();
+    v["gpsOwned"] = json!(["x", -1, 1e300, id.0, 987_654_321]);
+    std::fs::write(&prefs, serde_json::to_vec(&v).unwrap()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(s.gps_edited.iter().copied().collect::<Vec<_>>(), vec![id], "only this library's photos");
+    assert!(s.take_library_warnings().is_empty());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// A photo whose position LightCraft never touched keeps another app's sidecar GPS when its
 /// sidecar is rewritten; and photo ids are per library, so a geotag in one library doesn't make
 /// the same id's photo in the next one claim its sidecar's GPS. Ported from PR #810.

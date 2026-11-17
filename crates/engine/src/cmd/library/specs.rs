@@ -729,6 +729,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => None,
                 };
                 let mut ops = Vec::new();
+                let owned_before = s.gps_edited.len();
                 for id in targets {
                     let Some(ph) = s.catalog.photo(id) else { continue };
                     let mut m = ph.meta.clone();
@@ -786,6 +787,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
                 let n = ops.len();
+                s.gps_owned_grew(owned_before);
                 s.commit("Edit Info", Op::Batch { ops })?;
                 // keywords just added become the Recent Keywords set
                 let added: Vec<String> = strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();

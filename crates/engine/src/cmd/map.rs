@@ -72,7 +72,9 @@ fn commit_gps(s: &mut Session, targets: &[lightcraft_catalog::PhotoId], gps: Opt
     let count = ops.len();
     if count > 0 {
         // before the commit: the sidecar written when it lands already follows LightCraft's position
+        let before = s.gps_edited.len();
         s.gps_edited.extend(targets.iter().copied());
+        s.gps_owned_grew(before);
         s.commit(label, Op::Batch { ops })?;
     }
     Ok(count)

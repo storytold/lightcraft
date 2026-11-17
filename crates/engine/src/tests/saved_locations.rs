@@ -375,3 +375,58 @@ fn a_corrupt_locations_json_is_kept_aside_even_with_old_prefs() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `locations.json` reads well twice (the open's check and parse), then fails: the copy kept aside
+/// before writing back the valid entries can't be made.
+#[derive(Clone, Default)]
+struct ReadsTwice {
+    files: lightcraft_catalog::MemStore,
+    reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl lightcraft_catalog::Store for ReadsTwice {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        if name == "locations.json" && self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 2 {
+            return Err(std::io::Error::other("locked by another process"));
+        }
+        self.files.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.files.truncate(name, len)
+    }
+    fn describe(&self) -> String {
+        "reads-twice".into()
+    }
+}
+
+#[test]
+fn hostile_entries_are_never_dropped_without_a_copy() {
+    let files = ReadsTwice::default();
+    let text = serde_json::to_vec(&json!({"version": 1, "locations": [
+        {"id": 1, "name": "Good", "lat": 48.0, "lon": 2.0, "radius": 100.0},
+        {"id": 2, "name": "Bad", "lat": 1e308, "lon": 2.0, "radius": 100.0},
+    ]}))
+    .unwrap();
+    files.files.set("locations.json", text.clone());
+    let mut s = Session::new();
+    let stores = crate::library::LibraryStores {
+        dir: "reads-twice".into(),
+        catalog: Box::new(lightcraft_catalog::MemStore::new()),
+        files: Box::new(files.clone()),
+        on_disk: false,
+    };
+    s.open_library_in(stores, true).unwrap();
+    assert_eq!(listed(&mut s).len(), 1);
+    let w = s.take_library_warnings();
+    assert!(w.iter().any(|w| w.contains("couldn't be set aside") && w.contains("won't overwrite")), "{w:?}");
+    assert_eq!(files.files.get("locations.json"), Some(text), "the file with the rejected entry is left as it was");
+    // and a later save says why it doesn't write
+    let l = add(&mut s, json!({"name": "Home", "lat": 1.0, "lon": 1.0}));
+    assert!(l["notSaved"].is_string(), "{l}");
+}

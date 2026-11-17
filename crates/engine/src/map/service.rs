@@ -96,18 +96,22 @@ pub trait Transport: Send + Sync {
     fn get(&self, url: &str, headers: &[(&'static str, String)], max_body: usize, cancel: &AtomicBool) -> Result<HttpResponse, String>;
 }
 
-/// HTTPS through `lightcraft-fetch` (pure Rust, rustls), with connect and stall timeouts.
+/// HTTPS through `lightcraft-fetch` (pure Rust, rustls), with connect and stall timeouts, and a
+/// limit on the whole body: the stall timeout restarts with each read, so a server sending a few
+/// bytes now and then would otherwise hold one of the two network slots until the size cap.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug)]
 pub struct HttpTransport {
     pub connect_timeout: Duration,
     pub stall_timeout: Duration,
+    /// Longest time spent receiving one body, however often bytes arrive.
+    pub body_timeout: Duration,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Default for HttpTransport {
     fn default() -> Self {
-        HttpTransport { connect_timeout: Duration::from_secs(10), stall_timeout: Duration::from_secs(15) }
+        HttpTransport { connect_timeout: Duration::from_secs(10), stall_timeout: Duration::from_secs(15), body_timeout: Duration::from_secs(60) }
     }
 }
 
@@ -124,7 +128,11 @@ impl Transport for HttpTransport {
         }
         let mut body = Vec::new();
         let mut buf = [0u8; 16 * 1024];
+        let started = Instant::now();
         loop {
+            if started.elapsed() >= self.body_timeout {
+                return Err(format!("tile not received within {} s", self.body_timeout.as_secs()));
+            }
             let n = r.read(&mut buf, &limits).map_err(|e| e.to_string())?;
             if n == 0 {
                 break;

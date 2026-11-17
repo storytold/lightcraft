@@ -300,13 +300,8 @@ fn write_key_file(path: &std::path::Path, file: &KeyFile) -> std::io::Result<()>
         std::fs::create_dir_all(dir)?;
     }
     let data = serde_json::to_vec_pretty(file).map_err(std::io::Error::other)?;
-    lightcraft_catalog::safe_file::write_atomic(path, &data)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(())
+    // owner-only from its creation, not after the key is on disk
+    lightcraft_catalog::safe_file::write_atomic_private(path, &data)
 }
 
 impl Session {

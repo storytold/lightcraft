@@ -402,7 +402,8 @@ pub struct Session {
     /// moved, Remove GPS Coordinates, the Info panel's GPS field): their sidecars take LightCraft's
     /// position as it is ([`sidecar::GPS_OWNED`]), so a cleared one (or an undone geotag) is removed
     /// from the sidecar too. Other photos' sidecar GPS is never removed (LightCraft doesn't read GPS
-    /// from sidecars). Cleared when another library opens: photo ids are per library.
+    /// from sidecars). Kept with the library's preferences (`prefs.json` `gpsOwned`), so it
+    /// survives a reopen; another library brings its own (photo ids are per library).
     pub gps_edited: std::collections::HashSet<PhotoId>,
     /// Auto import: files seen in the watched folder and their size then (a file is imported once
     /// its size held between two scans).

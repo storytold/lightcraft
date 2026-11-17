@@ -503,6 +503,36 @@ fn a_huge_announced_tile_length_is_an_error_not_an_allocation() {
     server.join().unwrap();
 }
 
+/// A server that sends a byte now and then never trips the stall timeout, but the whole body has
+/// a deadline: the network slot is freed.
+#[test]
+fn a_trickling_tile_body_gives_up_at_its_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/6/25/31.png", listener.local_addr().unwrap());
+    let server = std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        let mut r = BufReader::new(s.try_clone().unwrap());
+        let mut line = String::new();
+        while r.read_line(&mut line).unwrap_or(0) > 0 && !line.trim().is_empty() {
+            line.clear();
+        }
+        let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n");
+        for _ in 0..200 {
+            if s.write_all(b"x").and_then(|()| s.flush()).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    });
+    let t = HttpTransport { body_timeout: Duration::from_millis(600), ..HttpTransport::default() };
+    let ua = vec![("User-Agent", USER_AGENT.to_string())];
+    let start = std::time::Instant::now();
+    let err = t.get(&url, &ua, MAX_TILE_BYTES, &AtomicBool::new(false)).unwrap_err();
+    assert!(err.contains("not received within"), "{err}");
+    assert!(start.elapsed() < Duration::from_secs(5), "{:?}", start.elapsed());
+    server.join().unwrap();
+}
+
 const KEY: &str = "AAPK0123456789abcdef_TEST-key.x";
 
 fn esri_service(fake: Arc<Fake>, cache: Option<TileCache>) -> TileService {
