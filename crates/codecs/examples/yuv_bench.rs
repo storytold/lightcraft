@@ -1,5 +1,6 @@
 //! Times `yuv::Converter::to_srgb8` and `to_linear_rec2020` on synthetic 3840×2160 4:2:0 pictures:
-//! 8-bit BT.709 (the sRGB fast path) and 10-bit BT.2020 HLG.
+//! 8-bit BT.709 (the sRGB fast path), 10-bit BT.709 (the fast path with 16-bit samples, HEVC Main
+//! 10 SDR) and 10-bit BT.2020 HLG.
 //!
 //! `cargo run --release -p lightcraft-codecs --example yuv_bench [-- RUNS [FILTER]]`, FILTER a
 //! part of a case's name ("8-bit BT.709 to_srgb8") to time only matching cases; `RAYON_NUM_THREADS=1`
@@ -78,6 +79,9 @@ fn main() {
         cb: Plane { samples: Samples::U16(&cb10), stride: cw },
         cr: Plane { samples: Samples::U16(&cr10), stride: cw },
     };
+    // HEVC Main 10 SDR: BT.709 in 10 bits, the sRGB fast path with 16-bit samples
+    let c709_10 = Converter::new(ColourDescription::BT709, 10, W, H).unwrap();
+    time("10-bit BT.709 to_srgb8", runs, || c709_10.to_srgb8(&pic10, &mut out8).unwrap());
     let hlg = ColourDescription { primaries: 9, transfer: 18, matrix: 9, full_range: false };
     let chlg = Converter::new(hlg, 10, W, H).unwrap();
     time("10-bit HLG to_srgb8", runs, || chlg.to_srgb8(&pic10, &mut out8).unwrap());
