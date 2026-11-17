@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### People masks pick one person
+- Masking ▸ People selects parts of one person, picked by their face: Entire Person, Face Skin, Body Skin, Hair and
+  Clothes, in any combination, with SAM 3 (the optional AI mask model). Pick the face from the list (names from the
+  People view, else Person 1, 2…), tick the parts, Create Mask; + / − ▸ People… adds or takes away. Another person's
+  hair, clothes or hand stay out even where they overlap. Agents and scripts use `mask.add {kind: "people", person,
+  parts}`; `photo.faces` lists a photo's faces (see `docs/ai-masks.md`).
+- The catalog format is now version 14 (a People mask's selection). Once this version has opened a library, older
+  LightCraft versions refuse it ("written by a newer version") instead of dropping the selection.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks
@@ -900,15 +909,6 @@
   photos matched; about 6 ms of that is only reading the paths. Paths and rule text with letters beyond A–Z are
   compared as before.
 ## 2026-10-19
-
-### People masks pick one person
-- Masking ▸ People selects parts of one person, picked by their face: Entire Person, Face Skin, Body Skin, Hair and
-  Clothes, in any combination, with SAM 3 (the optional AI mask model). Pick the face from the list (names from the
-  People view, else Person 1, 2…), tick the parts, Create Mask; + / − ▸ People… adds or takes away. Another person's
-  hair, clothes or hand stay out even where they overlap. Agents and scripts use `mask.add {kind: "people", person,
-  parts}`; `photo.faces` lists a photo's faces (see `docs/ai-masks.md`).
-- The catalog format is now version 14 (a People mask's selection). Once this version has opened a library, older
-  LightCraft versions refuse it ("written by a newer version") instead of dropping the selection.
 
 ### AI Denoise on DirectX 12 with NVIDIA GTX 10-series cards
 - AI Denoise on the GPU under DirectX 12 (the Windows default) gives the same result as on the CPU again on an NVIDIA
