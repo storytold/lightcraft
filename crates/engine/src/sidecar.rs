@@ -853,19 +853,31 @@ fn tag_attrs(data: &str, start: usize, end: usize) -> Vec<((usize, usize), Optio
 }
 
 /// The `xmlns` bindings in scope at the tag at `start..=end` (prefix → URI; the empty prefix is
-/// a default `xmlns="..."` declaration): what the start tags opened before it declare, then its
-/// own. Sidecars often bind `crs:` once, on the global `rdf:Description`, and leave the nested
-/// descriptions (corrections, components) without a declaration of their own.
+/// a default `xmlns="..."` declaration): the bindings of still-open ancestor elements, then the
+/// tag's own. An inner declaration shadows an outer one for the same prefix, so each prefix
+/// resolves to exactly one effective in-scope URI.
 fn ns_bindings(data: &str, start: usize, end: usize) -> Vec<(String, String)> {
     let mut out = outer_bindings(data, start);
-    out.extend(own_bindings(data, start, end));
+    for (prefix, uri) in own_bindings(data, start, end) {
+        if let Some(p) = out.iter().rposition(|(e, _)| e.as_str() == prefix.as_str()) {
+            out.remove(p);
+        }
+        out.push((prefix, uri));
+    }
     out
 }
 
-/// The `xmlns` declarations written on the start tags before `at`, in document order: end tags,
-/// comments, CDATA sections and processing instructions are passed over.
+/// The `xmlns` declarations of the elements still open at `at`, in document order: a start tag's
+/// declarations are added when it opens and removed when its matching end tag is passed, so
+/// declarations from closed elements do not leak into later scope. End tags, comments, CDATA
+/// sections and processing instructions are passed over; self-closing tags bind only within
+/// themselves.
 fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
-    let mut out = Vec::new();
+    // One frame per still-open element: the bindings it declared, each paired with the binding
+    // that was in effect for the same prefix when it opened (`None` when the prefix was
+    // undeclared), so closing the element restores the previous binding.
+    let mut stack: Vec<Vec<(String, String, Option<(String, String)>)>> = Vec::new();
+    let mut effective: Vec<(String, String)> = Vec::new();
     let mut i = 0;
     while i < at {
         let Some(rel) = data.get(i..at).and_then(|s| s.find('<')) else { break };
@@ -873,12 +885,43 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
         let rest = data.get(s..).unwrap_or_default();
         let Some(end) = tag_end(data, s).filter(|end| *end < at) else { break };
         i = end + 1;
-        if rest.starts_with("</") || rest.starts_with("<?") || rest.starts_with("<!") {
+        if rest.starts_with("</") {
+            if let Some(frame) = stack.pop() {
+                for (prefix, _, previous) in frame.into_iter().rev() {
+                    if let Some(p) = effective
+                        .iter()
+                        .rposition(|(e, _)| e.as_str() == prefix.as_str())
+                    {
+                        effective.remove(p);
+                    }
+                    if let Some((p, uri)) = previous {
+                        effective.push((p, uri));
+                    }
+                }
+            }
             continue;
         }
-        out.extend(own_bindings(data, s, end));
+        if rest.starts_with("<?") || rest.starts_with("<!") {
+            continue;
+        }
+        // A self-closing tag's declarations apply only inside the tag itself, so they do not
+        // persist past its `>`.
+        if is_self_closing(data, end) {
+            continue;
+        }
+        let bindings = own_bindings(data, s, end);
+        let mut frame = Vec::with_capacity(bindings.len());
+        for (prefix, uri) in bindings {
+            let previous = effective
+                .iter()
+                .rposition(|(e, _)| e.as_str() == prefix.as_str())
+                .map(|p| effective.remove(p));
+            effective.push((prefix.clone(), uri.clone()));
+            frame.push((prefix, uri, previous));
+        }
+        stack.push(frame);
     }
-    out
+    effective
 }
 
 /// The `xmlns` bindings the tag at `start..=end` declares itself (prefix → URI; the empty prefix
@@ -2703,6 +2746,49 @@ mod tests {
         assert_eq!(text.matches("<crs:Exposure2012").count(), 1, "updated in place, not duplicated:\n{text}");
         assert!(text.contains(r#"xmp:CreatorTool="Other App""#), "the rest of the packet is kept:\n{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A descendant element that rebinds `crs` away from the CRS namespace shadows the
+    /// ancestor's binding: `crs:` attributes on it are not CRS attributes, even though an
+    /// ancestor still declares `xmlns:crs="CRS_NS"`. `ns_bindings` must resolve each prefix
+    /// to its effective in-scope binding, not match any declaration from an outer scope.
+    #[test]
+    fn ns_bindings_respects_prefix_shadowing() {
+        let data = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+            <crs:MaskGroupBasedCorrections>
+              <rdf:Seq><rdf:li><rdf:Description xmlns:crs="urn:other" xmlns:acr="http://ns.adobe.com/camera-raw-settings/1.0/"
+                crs:Exposure2012="7" acr:Exposure2012="0.5" crs:What="Correction"/></rdf:li></rdf:Seq>
+            </crs:MaskGroupBasedCorrections>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#;
+        let first = data.find("<rdf:Description").expect("outer description");
+        let first_end = tag_end(data, first).expect("outer description closes");
+        let second = data[first_end..]
+            .find("<rdf:Description")
+            .map(|o| first_end + o)
+            .expect("inner description");
+        let second_end = tag_end(data, second).expect("inner description closes");
+
+        let bindings = ns_bindings(data, second, second_end);
+        // The innermost declaration wins: crs is bound to urn:other on this element.
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the in-scope urn:other binding, not the ancestor's CRS_NS\n{data}"
+        );
+        // The shadowed ancestor CRS_NS binding must not be matched as in-scope for crs,
+        // otherwise is_crs would treat crs:Exposure2012="7" as a CRS field.
+        assert!(
+            !bindings.iter().any(|(p, uri)| p == "crs" && uri == CRS_NS),
+            "crs must not resolve to CRS_NS through the shadowed outer binding\n{data}"
+        );
+        // acr is bound to CRS_NS on this element and is the real CRS prefix here.
+        assert!(
+            bindings.iter().any(|(p, uri)| p == "acr" && uri == CRS_NS),
+            "acr must be bound to CRS_NS on this element\n{data}"
+        );
     }
 }
 
