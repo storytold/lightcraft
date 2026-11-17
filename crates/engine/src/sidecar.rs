@@ -1582,7 +1582,7 @@ fn write_corrections(data: &mut String, settings: &DevelopSettings, previous: &D
                         let s = cur_vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(" ");
                         put_attr_on_tag(data, cstart, cend, prefix, "LumRange", &s);
                         // Refresh cend after writing LumRange in case the tag length changed
-                        let new_cend = tag_end(data, cstart).unwrap_or(cend);
+                        let _new_cend = tag_end(data, cstart).unwrap_or(cend);
                         // Note: we can't update the outer cend here since it's a different scope,
                         // but the next put_attr_on_tag will recompute from cstart
                     }
