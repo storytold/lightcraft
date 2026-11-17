@@ -166,7 +166,7 @@ pub(super) fn middle_pan(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Re
 }
 
 /// Net vertical notches (up is positive) of unmodified line/page-unit wheel events: a real mouse wheel, not a trackpad.
-fn wheel_notches(events: &[egui::Event]) -> f32 {
+pub(super) fn wheel_notches(events: &[egui::Event]) -> f32 {
     events
         .iter()
         .filter_map(|e| match e {

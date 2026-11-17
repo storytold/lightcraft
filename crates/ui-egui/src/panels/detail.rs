@@ -53,7 +53,7 @@ use lens_blur::{lens_blur_brush_overlay, lens_blur_shape_overlay};
 use look_ahead::BEHIND;
 pub use look_ahead::LookAhead;
 pub(crate) use look_ahead::{Prepare, look_ahead};
-use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};
+use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, mask_wheel, region_overlay};
 use retouch::{eye_overlay, remove_overlay};
 pub(crate) use window::overlay_supports_window;
 use window::{WindowCtx, WindowView, draw_window, request_window};
@@ -181,6 +181,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
+    // in the Masking panel the wheel resizes the brush or the radial gradient under the pointer
+    // instead of zooming (it takes the wheel's events)
+    mask_wheel(app, ui, &resp, right, &frame, img_rect, &d);
     let navigating = areas.iter().any(|&view_area| {
         let view_img = in_pane(view_area, img_rect);
         navigate_gesture(app, ui, &resp, view_area, view_img, native) || middle_pan(app, ui, &resp, view_area, view_img)

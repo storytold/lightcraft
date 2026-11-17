@@ -2309,3 +2309,42 @@ fn a_masks_lens_blur_block_picks_the_side_and_switches_off() {
     assert!(!h.app.ui.section_folded("maskLensBlur"));
     h.settle(SETTLE);
 }
+
+/// One notch of a real mouse wheel (up) over image point (`x`, `y`), then a few frames for egui's
+/// smoothed wheel delta to play out.
+fn wheel_notch_at(h: &mut Headless, x: f64, y: f64) {
+    pointer(h, json!([{"kind": "move", "x": x, "y": y}]));
+    let r = h.request("ui.scroll", json!({"source": "wheel", "unit": "line", "dy": 1.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..10 {
+        h.step();
+    }
+}
+
+#[test]
+fn the_wheel_resizes_the_masking_brush_instead_of_zooming() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let size = h.app.ui.brush_size;
+    wheel_notch_at(&mut h, 0.5, 0.5);
+    assert!((h.app.ui.brush_size - size * 1.1).abs() < 1e-6, "{} → {}", size, h.app.ui.brush_size);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit, "the photo doesn't zoom as well");
+}
+
+#[test]
+fn the_wheel_over_the_selected_radial_resizes_it_and_elsewhere_zooms() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.18, "ry": 0.1, "angle": 30}));
+    let before = develop(&h);
+    wheel_notch_at(&mut h, 0.52, 0.5);
+    let MaskShape::Radial { center, rx, ry, angle, .. } = develop(&h).masks[0].components[0].shape.clone() else { panic!("radial") };
+    assert!((rx - 0.198).abs() < 1e-9 && (ry - 0.11).abs() < 1e-9, "both radii grow: {rx} {ry}");
+    assert_eq!((center, angle), (lightcraft_geom::Point::new(0.5, 0.5), 30.0), "only the size changes");
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit, "the photo doesn't zoom as well");
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(develop(&h).masks, before.masks, "one undo step a notch");
+    // off the gradient the wheel zooms as before
+    wheel_notch_at(&mut h, 0.1, 0.1);
+    assert_eq!(develop(&h).masks, before.masks);
+    assert_ne!(h.app.ui.zoom, crate::state::Zoom::Fit, "off the mask the wheel zooms");
+}
