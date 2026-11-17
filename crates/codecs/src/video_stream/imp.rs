@@ -5,7 +5,9 @@ use std::collections::VecDeque;
 use craft_media::isobmff::{self, ByteSource, CodecConfig, ColorInfo, Mp4File, TrackKind};
 use craft_video::{h264, hevc};
 
-use super::{AudioTrackInfo, ClipSource, Codec, Frame, FramePlanes, SeekMode, SeekPlan, StreamInfo, StreamOptions, VideoError, matrix_orientation};
+use super::{
+    AudioTrackInfo, ClipSource, Codec, Frame, FramePlanes, SeekMode, SeekPlan, StreamInfo, StreamOptions, VideoError, matrix_orientation, reason,
+};
 use crate::yuv::{self, Chroma, ColourDescription};
 
 /// A [`ClipSource`] as the demuxer reads it.
@@ -23,7 +25,8 @@ impl ByteSource for Src {
 fn demux_error(e: isobmff::Error) -> VideoError {
     match e {
         isobmff::Error::Io(e) => VideoError::Io(e.to_string()),
-        isobmff::Error::Unsupported(m) => VideoError::Unsupported(format!("this clip's container: {m}")),
+        isobmff::Error::Unsupported(m) if m.contains("cmov") => VideoError::Unsupported(reason::COMPRESSED_HEADER.into()),
+        isobmff::Error::Unsupported(_) => VideoError::Unsupported(reason::OTHER_CONTAINER.into()),
         isobmff::Error::TooLarge(m) => VideoError::TooLarge(m.to_string()),
         isobmff::Error::NoMoov => VideoError::Malformed("no movie header (moov box)".into()),
         e => VideoError::Malformed(e.to_string()),
@@ -42,10 +45,10 @@ fn not_a_movie(src: &Src) -> VideoError {
         let head = &head[..n];
         let sync = |at: usize, stride: usize| head.get(at) == Some(&0x47) && head.get(at + stride) == Some(&0x47);
         if sync(0, 188) || sync(4, 192) {
-            return VideoError::Unsupported("MPEG transport stream video (AVCHD .mts / .m2ts) can't be read yet".into());
+            return VideoError::Unsupported(reason::TRANSPORT_STREAM.into());
         }
         if head.starts_with(&[0, 0, 1]) || head.starts_with(&[0, 0, 0, 1]) {
-            return VideoError::Unsupported("a bare H.264 / HEVC stream without an MP4 or QuickTime container can't be read yet".into());
+            return VideoError::Unsupported(reason::BARE_STREAM.into());
         }
     }
     demux_error(isobmff::Error::NoMoov)
@@ -81,33 +84,125 @@ enum Decoder {
     Hevc(Box<hevc::decode::Decoder>),
 }
 
+/// A decoder refusing pictures over its memory budget (craft-video says so in an `Invalid` error,
+/// or as unsupported picture dimensions): the clip is valid, only too large.
+fn over_memory(m: &str) -> bool {
+    m.contains("memory budget") || m.contains("memory limit")
+}
+
 fn h264_error(e: h264::decode::Error) -> VideoError {
+    use h264::decode::Error;
     match e {
-        h264::decode::Error::Unsupported(m) => VideoError::Unsupported(format!("this H.264 video can't be decoded yet ({m})")),
+        Error::Unsupported(m) | Error::Invalid(m) if over_memory(&m) => VideoError::Unsupported(reason::TOO_LARGE_TO_DECODE.into()),
+        Error::Unsupported(m) => VideoError::Unsupported(h264_unsupported(&m).into()),
         e => VideoError::Malformed(format!("H.264: {e}")),
     }
 }
 
 fn hevc_error(e: hevc::decode::Error) -> VideoError {
+    use hevc::decode::Error;
     match e {
-        hevc::decode::Error::Unsupported(m) => VideoError::Unsupported(format!("this HEVC video can't be decoded yet ({m})")),
+        Error::Unsupported(m) | Error::Invalid(m) if over_memory(&m) => VideoError::Unsupported(reason::TOO_LARGE_TO_DECODE.into()),
+        Error::Unsupported(m) => VideoError::Unsupported(hevc_unsupported(&m).into()),
         e => VideoError::Malformed(format!("HEVC: {e}")),
     }
 }
 
+/// The plain reason for what the H.264 decoder doesn't do (its own words are the bitstream's:
+/// `chroma_format_idc 2`, `MBAFF`, `FMO`).
+fn h264_unsupported(m: &str) -> &'static str {
+    if m.contains("chroma_format_idc 2") {
+        reason::H264_422
+    } else if m.contains("bit depth") {
+        reason::H264_DEEP
+    } else if m.contains("interlaced") || m.contains("field") {
+        reason::H264_INTERLACED
+    } else {
+        reason::H264_OTHER
+    }
+}
+
+/// The plain reason for what the HEVC decoder doesn't do.
+fn hevc_unsupported(m: &str) -> &'static str {
+    if m.starts_with("4:4:4") || m.contains("chroma_format_idc 3") {
+        reason::HEVC_444
+    } else if m.contains("bit depth") {
+        reason::HEVC_DEEP
+    } else {
+        reason::HEVC_OTHER
+    }
+}
+
+/// The decoder's memory budget for a clip whose pictures need `store` bytes: that, within the
+/// ceiling [`StreamOptions::memory_budget`] (over it, the clip is too large to decode). A header
+/// this doesn't read leaves the decoder the whole ceiling, and its own check.
+fn decoder_budget(store: Option<u64>, opts: &StreamOptions) -> Result<u64, VideoError> {
+    let bytes = store.unwrap_or(opts.memory_budget);
+    if bytes > opts.memory_budget {
+        return Err(VideoError::Unsupported(reason::TOO_LARGE_TO_DECODE.into()));
+    }
+    Ok(bytes)
+}
+
+/// Decoded pictures the decoders hold at once beyond their reference pictures, per thread
+/// setting: craft-video 5c91598 decodes `threads + 2` pictures in flight, plus the one it starts.
+fn in_flight(threads: usize) -> u64 {
+    threads.max(1) as u64 + 2
+}
+
+/// Bytes of decoded pictures the decoder for `codec` needs, as the clip's first sequence header
+/// sizes them (the decoders check the same: the reference pictures the header asks for, the one
+/// being decoded and those in flight), with as many again in flight for output waiting to be
+/// taken. `None` when the record has no sequence header this reads (the decoder then says why).
+fn picture_store(codec: &CodecConfig, threads: usize) -> Option<u64> {
+    use craft_media::bitstream::unescape_rbsp;
+    let (shape, dpb) = match codec {
+        CodecConfig::Avc(c) => {
+            let sps = h264::decode::params::Sps::parse(&unescape_rbsp(c.sps.first()?.get(1..)?)).ok()?;
+            let chroma = sps.chroma_array_type();
+            let shape = craft_video::budget::PictureShape {
+                width: u64::from(sps.width()),
+                height: u64::from(sps.height()),
+                shift_x: u32::from(chroma != 3),
+                shift_y: u32::from(chroma == 1),
+                chroma_planes: if chroma == 0 { 0 } else { 2 },
+                bytes_per_sample: 1,
+            };
+            (shape, sps.max_dpb_frames() as u64)
+        }
+        CodecConfig::Hevc(c) => {
+            let nal = c.arrays.iter().filter(|a| a.nal_type == 33).flat_map(|a| a.nalus.iter()).next()?;
+            let sps = hevc::decode::params::Sps::parse(&unescape_rbsp(nal.get(2..)?)).ok()?;
+            let chroma = sps.chroma_array_type();
+            let shape = craft_video::budget::PictureShape {
+                width: u64::from(sps.width),
+                height: u64::from(sps.height),
+                shift_x: u32::from(sps.sub_width_c() == 2),
+                shift_y: u32::from(sps.sub_height_c() == 2),
+                chroma_planes: if chroma == 0 { 0 } else { 2 },
+                bytes_per_sample: 2,
+            };
+            (shape, u64::from(sps.max_dec_pic_buffering))
+        }
+        _ => return None,
+    };
+    shape.store_bytes(dpb.saturating_add(1).saturating_add(in_flight(threads).saturating_mul(2)))
+}
+
 impl Decoder {
-    fn new(codec: Codec, config: &[u8], opts: &StreamOptions) -> Result<Decoder, VideoError> {
-        let threads = opts.threads.max(1);
+    /// A decoder for `codec` on `threads` threads whose pictures may take `budget` bytes.
+    fn new(codec: Codec, config: &[u8], threads: usize, budget: u64) -> Result<Decoder, VideoError> {
+        let threads = threads.max(1);
         Ok(match codec {
             Codec::H264 => {
                 let mut d = h264::decode::Decoder::with_threads(threads);
-                d.set_memory_budget(opts.memory_budget);
+                d.set_memory_budget(budget);
                 d.configure_avcc(config).map_err(h264_error)?;
                 Decoder::H264(Box::new(d))
             }
             Codec::Hevc => {
                 let mut d = hevc::decode::Decoder::with_threads(threads);
-                d.set_memory_budget(opts.memory_budget);
+                d.set_memory_budget(budget);
                 d.configure_hvcc(config).map_err(hevc_error)?;
                 Decoder::Hevc(Box::new(d))
             }
@@ -270,31 +365,33 @@ fn container_colour(c: &ColorInfo) -> Option<ContainerColour> {
 
 /// The reason a sample entry's codec isn't decoded.
 fn unsupported_codec(codec: &CodecConfig, format: [u8; 4]) -> VideoError {
-    let name = match codec {
-        CodecConfig::Av1(_) => "AV1".to_string(),
-        CodecConfig::Vp9(_) => "VP9".to_string(),
-        CodecConfig::ProRes { .. } => "Apple ProRes".to_string(),
-        CodecConfig::Jpeg { .. } => "Motion JPEG".to_string(),
-        CodecConfig::Dnx { .. } => "Avid DNxHD / DNxHR".to_string(),
-        CodecConfig::Apv(_) => "APV".to_string(),
-        _ => {
-            let tag: String = format.iter().map(|&b| if b.is_ascii_graphic() || b == b' ' { char::from(b) } else { '?' }).collect();
-            format!("'{}'", tag.trim_end())
-        }
+    let why = match codec {
+        CodecConfig::Av1(_) => reason::AV1,
+        CodecConfig::Vp9(_) => reason::VP9,
+        CodecConfig::ProRes { .. } => reason::PRORES,
+        CodecConfig::Jpeg { .. } => reason::MOTION_JPEG,
+        CodecConfig::Dnx { .. } => reason::DNX,
+        CodecConfig::Apv(_) => reason::APV,
+        _ => match &format {
+            b"CFHD" => reason::CINEFORM,
+            b"rle " => reason::ANIMATION,
+            _ => reason::OTHER_CODEC,
+        },
     };
-    VideoError::Unsupported(format!("{name} video can't be decoded yet"))
+    VideoError::Unsupported(why.into())
 }
 
 /// The decoder for sample entry `index` (1-based): its codec and configuration record.
-fn entry_codec(track: &isobmff::Track, index: u32) -> Result<(Codec, Vec<u8>, Option<ContainerColour>), VideoError> {
+/// Also the bytes of pictures its decoder needs on `threads` threads ([`picture_store`]).
+fn entry_codec(track: &isobmff::Track, index: u32, threads: usize) -> Result<(Codec, Vec<u8>, Option<ContainerColour>, Option<u64>), VideoError> {
     let entry = index
         .checked_sub(1)
         .and_then(|i| track.entries.get(i as usize))
         .ok_or_else(|| VideoError::Malformed(format!("sample description {index} is missing")))?;
     let colour = entry.video.as_ref().and_then(|v| v.color.as_ref()).and_then(container_colour);
     match &entry.codec {
-        CodecConfig::Avc(c) => Ok((Codec::H264, c.to_bytes(), colour)),
-        CodecConfig::Hevc(c) => Ok((Codec::Hevc, c.to_bytes(), colour)),
+        CodecConfig::Avc(c) => Ok((Codec::H264, c.to_bytes(), colour, picture_store(&entry.codec, threads))),
+        CodecConfig::Hevc(c) => Ok((Codec::Hevc, c.to_bytes(), colour, picture_store(&entry.codec, threads))),
         other => Err(unsupported_codec(other, entry.format.0)),
     }
 }
@@ -310,7 +407,7 @@ fn pick_track(file: &Mp4File) -> Result<usize, VideoError> {
     if file.tracks.iter().any(|t| video(&t)) {
         Err(VideoError::Malformed("the video track holds no pictures".into()))
     } else {
-        Err(VideoError::Unsupported("the file has no video track".into()))
+        Err(VideoError::Unsupported(reason::NO_VIDEO_TRACK.into()))
     }
 }
 
@@ -409,8 +506,9 @@ impl VideoStream {
         let track = pick_track(&file)?;
         let t = file.tracks.get(track).ok_or_else(|| VideoError::Malformed("no video track".into()))?;
         let description = t.samples.first().map_or(1, |s| s.description_index);
-        let (codec, config, container_colour) = entry_codec(t, description)?;
-        let decoder = Decoder::new(codec, &config, opts)?;
+        let (codec, config, container_colour, store) = entry_codec(t, description, opts.threads)?;
+        let decoder_bytes = decoder_budget(store, opts)?;
+        let decoder = Decoder::new(codec, &config, opts.threads, decoder_bytes)?;
         let (w, h) = t.video().map_or((t.width, t.height), |v| (u32::from(v.width), u32::from(v.height)));
         let window = Window::of(t, file.timescale);
         let (start, end) = (window.start, window.end);
@@ -428,6 +526,7 @@ impl VideoStream {
             start_seconds: seconds(start, t.timescale),
             duration_seconds: seconds(end.saturating_sub(start), t.timescale),
             sample_count: t.samples.len(),
+            decoder_bytes,
         };
         if t.timescale == 0 {
             return Err(VideoError::Malformed("the video track's timescale is 0".into()));
@@ -546,13 +645,15 @@ impl VideoStream {
     /// picture buffers, which matters for a scrub that seeks on every move); the HEVC decoder has
     /// no reset, so it is made anew.
     fn restart(&mut self, description: u32) -> Result<(), VideoError> {
-        let (codec, config, colour) = entry_codec(self.track()?, description)?;
+        let (codec, config, colour, store) = entry_codec(self.track()?, description, self.opts.threads)?;
+        let budget = decoder_budget(store, &self.opts)?;
         match &mut self.decoder {
             Decoder::H264(d) if codec == Codec::H264 => {
                 d.reset();
+                d.set_memory_budget(budget);
                 d.configure_avcc(&config).map_err(h264_error)?;
             }
-            _ => self.decoder = Decoder::new(codec, &config, &self.opts)?,
+            _ => self.decoder = Decoder::new(codec, &config, self.opts.threads, budget)?,
         }
         self.decoder.set_draft(self.draft);
         self.description = description;
@@ -652,5 +753,37 @@ impl VideoStream {
             self.ready.push_back(d.into_frame(self.container_colour, self.info.timescale)?);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The decoders' own words name bitstream syntax; the reason a person reads doesn't, and a
+    /// decoder refusing pictures over its memory budget means a clip too large, not a damaged one.
+    #[test]
+    fn decoder_refusals_read_in_plain_words() {
+        let h = |m: &str| h264_error(h264::decode::Error::Unsupported(m.into()));
+        let says = |e: VideoError, why: &str| assert_eq!(e, VideoError::Unsupported(why.into()));
+        says(h("chroma_format_idc 2 (only 4:2:0 is implemented)"), reason::H264_422);
+        says(h("bit depth luma 10 chroma 10 (only 8-bit is implemented)"), reason::H264_DEEP);
+        says(h("interlaced (field / MBAFF) coding"), reason::H264_INTERLACED);
+        says(h("field pictures"), reason::H264_INTERLACED);
+        says(h("slice groups (FMO)"), reason::H264_OTHER);
+        says(h("picture dimensions exceed the decoder memory limit"), reason::TOO_LARGE_TO_DECODE);
+        let v = |m: &str| hevc_error(hevc::decode::Error::Unsupported(m.into()));
+        says(v("4:4:4 (only 4:2:0 and 4:2:2)"), reason::HEVC_444);
+        says(v("bit depth 14/14"), reason::HEVC_DEEP);
+        says(v("SPS range extension tools"), reason::HEVC_OTHER);
+        let budget = "7680x4320 pictures with 10 in the decoder and 0 bytes queued exceed the memory budget";
+        says(hevc_error(hevc::decode::Error::Invalid(budget.into())), reason::TOO_LARGE_TO_DECODE);
+        says(h264_error(h264::decode::Error::Invalid(budget.into())), reason::TOO_LARGE_TO_DECODE);
+        // (anything else invalid is still damage)
+        assert!(matches!(hevc_error(hevc::decode::Error::Invalid("slice_qp_delta out of range".into())), VideoError::Malformed(_)));
+        for why in [reason::H264_422, reason::H264_DEEP, reason::HEVC_444, reason::TOO_LARGE_TO_DECODE] {
+            assert!(reason::ALL.contains(&why));
+            assert!(!why.contains("idc") && !why.contains('_'), "{why}");
+        }
     }
 }

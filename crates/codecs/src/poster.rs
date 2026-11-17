@@ -58,7 +58,7 @@ impl Default for PosterOptions {
             max_read_bytes: 256 << 20,
             max_frames: 240,
             max_convert_pixels: 16 << 20,
-            stream: StreamOptions { threads: 1, memory_budget: 1 << 30, max_sample_bytes: 64 << 20 },
+            stream: StreamOptions { threads: 1, ..StreamOptions::default() },
         }
     }
 }
@@ -139,6 +139,12 @@ impl<S: ClipSource + 'static> PosterClip<S> {
     /// The track's picture size, before any rotation (from the headers).
     pub fn picture_size(&self) -> (u32, u32) {
         (self.stream.info().width, self.stream.info().height)
+    }
+
+    /// Bytes of decoded pictures the decoder may hold for this clip
+    /// ([`crate::video_stream::StreamInfo::decoder_bytes`]).
+    pub fn decoder_bytes(&self) -> u64 {
+        self.stream.info().decoder_bytes
     }
 
     /// Bytes of the clip read so far (the headers, until [`Self::decode`]).

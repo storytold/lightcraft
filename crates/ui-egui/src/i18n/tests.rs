@@ -163,6 +163,19 @@ fn the_welcome_tour_is_translated_in_every_catalog() {
     }
 }
 
+/// Every reason a clip's pictures can be missing for (the card, Info, the player) is in every
+/// catalog: the reasons are plain sentences the codecs and the engine list, not decoder words.
+#[test]
+fn every_video_reason_is_translated_in_every_catalog() {
+    let reasons = lightcraft_engine::files::video_reasons();
+    assert!(reasons.len() > 20);
+    for language in Locale::ALL.iter().copied().filter(|language| *language != Locale::En) {
+        let catalog = language.catalog();
+        let missing: Vec<&str> = reasons.iter().copied().filter(|key| !catalog.contains_key(*key)).collect();
+        assert!(missing.is_empty(), "{}: no translation for {missing:?}", language.code());
+    }
+}
+
 /// Locale tags are matched leniently, so a system locale reaches a shipped language.
 /// The message box for a desktop start that failed (issue #260) names the error and the log
 /// file, in the UI language.

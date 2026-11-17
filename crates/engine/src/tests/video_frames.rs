@@ -325,7 +325,7 @@ fn a_poster_reads_its_clips_headers_once_within_the_budget() {
     let (read, starts) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
     let tight = lightcraft_codecs::poster::PosterOptions { max_read_bytes: 64, ..opts };
     let e = frames.decode(clip(&read, &starts), &tight, false, &stop).err().unwrap_or_default();
-    assert!(e.contains("MB of the clip"), "{e}");
+    assert_eq!(e, lightcraft_codecs::video_stream::reason::TOO_LARGE_TO_READ);
     assert!(read.load(Ordering::Relaxed) <= 64, "{} bytes read", read.load(Ordering::Relaxed));
     assert_eq!(gate.usage().0, 0);
 }

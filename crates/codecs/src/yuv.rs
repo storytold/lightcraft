@@ -328,7 +328,7 @@ fn matrix_of(code: u8, primaries: &RgbSpace) -> Result<Option<Matrix>, YuvError>
             let l = primaries.luma();
             kr(l[0] as f32, l[2] as f32)
         }
-        14 => return Err(YuvError::Unsupported("ICtCp (matrix 14)".into())),
+        14 => return Err(YuvError::Unsupported(crate::video_stream::reason::ICTCP.into())),
         _ => None,
     })
 }

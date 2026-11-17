@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use lightcraft_codecs::poster::{PosterOptions, open_poster};
 #[cfg(not(target_arch = "wasm32"))]
 use lightcraft_codecs::video_stream::FileSource;
-use lightcraft_codecs::video_stream::{ClipSource, StreamOptions, VideoError};
+use lightcraft_codecs::video_stream::{ClipSource, StreamOptions, VideoError, reason};
 use lightcraft_pipeline::SourceInfo;
 
 use crate::activity::{Activity, Cancel, TaskGuard};
@@ -32,17 +32,15 @@ pub const VIDEO_FRAMES_LABEL: &str = "Reading video frames";
 /// again, a preview build doesn't count it as failed).
 pub const VIDEO_STOPPED: &str = "Stopped";
 
-/// Pictures a decoder may hold at once (H.264 / HEVC reference and reorder pictures).
-const HELD_PICTURES: u64 = 16;
-
 /// What one poster decode of a `width` × `height` clip counts for at
-/// [`crate::memory::work_gate`]: the decoder's pictures (4:2:0, 1.5 bytes a pixel each; at 4K 16
-/// of 12 MB) and the converted picture in linear float (12 bytes a pixel, at most the poster's
-/// conversion budget): about 300 MB at 4K, 1 GB at 8K.
-fn poster_weight(width: u32, height: u32) -> usize {
+/// [`crate::memory::work_gate`]: the decoder's pictures, as much as its memory budget lets it
+/// hold (`decoder_bytes`, from the clip's sequence header and the decoder threads:
+/// [`lightcraft_codecs::poster::PosterClip::decoder_bytes`]), and the converted picture in linear
+/// float (12 bytes a pixel, at most the poster's conversion budget).
+fn poster_weight(decoder_bytes: u64, width: u32, height: u32) -> usize {
     let px = u64::from(width).saturating_mul(u64::from(height));
     let converted = px.min(PosterOptions::default().max_convert_pixels as u64);
-    let bytes = px.saturating_mul(HELD_PICTURES).saturating_mul(3) / 2 + converted.saturating_mul(12);
+    let bytes = decoder_bytes.saturating_add(converted.saturating_mul(12));
     usize::try_from(bytes).unwrap_or(usize::MAX)
 }
 
@@ -140,17 +138,17 @@ impl VideoFrames {
         background: bool,
         cancel: &AtomicBool,
     ) -> Result<(lightcraft_raster::Rgb32f, SourceInfo), String> {
-        let clip = open_poster(src, opts).map_err(|e| reason(&e))?;
+        let clip = open_poster(src, opts).map_err(|e| video_reason(&e))?;
         let (w, h) = clip.picture_size();
         let gate = self.gate();
-        let weight = poster_weight(w, h);
+        let weight = poster_weight(clip.decoder_bytes(), w, h);
         let _permit = if background { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         if cancel.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(VIDEO_STOPPED.into());
         }
         let r = clip.decode(cancel);
         crate::memory::release();
-        let p = r.map_err(|e| reason(&e))?;
+        let p = r.map_err(|e| video_reason(&e))?;
         Ok((p.image, SourceInfo::default()))
     }
 }
@@ -193,12 +191,29 @@ fn poster_options(max_edge: usize, background: bool) -> PosterOptions {
     }
 }
 
-/// The reason a poster isn't there, as the Info panel and the loupe show it.
-fn reason(e: &VideoError) -> String {
+/// The reason a clip's pictures aren't there, as the card, Info and the player show it: plain
+/// words the catalogs translate ([`video_reasons`]). A damaged or over-large clip's technical
+/// detail goes to the log.
+pub fn video_reason(e: &VideoError) -> String {
     match e {
         VideoError::Cancelled => VIDEO_STOPPED.into(),
-        e => e.to_string(),
+        VideoError::Unsupported(why) => why.clone(),
+        VideoError::Malformed(_) | VideoError::TooLarge(_) | VideoError::Io(_) => {
+            log::warn!("video: {e}");
+            match e {
+                VideoError::Malformed(_) => reason::DAMAGED,
+                VideoError::TooLarge(_) => reason::TOO_LARGE_TO_READ,
+                _ => open_failure(std::io::ErrorKind::Other),
+            }
+            .into()
+        }
     }
+}
+
+/// Every reason [`video_reason`] and the loader give, for the translation catalogs.
+pub fn video_reasons() -> Vec<&'static str> {
+    let files = [std::io::ErrorKind::NotFound, std::io::ErrorKind::PermissionDenied, std::io::ErrorKind::Other].map(open_failure);
+    reason::ALL.iter().copied().chain(files).collect()
 }
 
 fn progress(row: &Row) {
@@ -278,16 +293,17 @@ mod tests {
         assert!(activity.list().is_empty());
     }
 
-    /// A decode weighs what its clip's pictures take: about 300 MB at 4K, four times the pixels
-    /// at 8K, the float copy capped by the poster's conversion budget.
+    /// A decode weighs what its decoder may hold and the float copy, capped by the poster's
+    /// conversion budget.
     #[test]
-    fn a_poster_weighs_its_clips_picture_size() {
-        let mb = |w, h| poster_weight(w, h) >> 20;
-        assert!((280..=320).contains(&mb(3840, 2160)), "{}", mb(3840, 2160));
-        assert!((900..=1100).contains(&mb(7680, 4320)), "{}", mb(7680, 4320));
-        assert!(mb(640, 360) < 20);
+    fn a_poster_weighs_its_decoders_pictures_and_the_float_copy() {
+        let mb = |d: u64, w, h| poster_weight(d << 20, w, h) >> 20;
+        assert_eq!(mb(0, 640, 360), 2);
+        assert_eq!(mb(500, 3840, 2160), 500 + 94);
+        // (the float copy stops at the conversion budget: 16 MP of 12 bytes)
+        assert_eq!(mb(1300, 7680, 4320), 1300 + 192);
         // (no overflow: a hostile size weighs about everything)
-        assert!(poster_weight(u32::MAX, u32::MAX) >= usize::MAX / 2);
+        assert!(poster_weight(u64::MAX, u32::MAX, u32::MAX) >= usize::MAX / 2);
     }
 
     #[test]
@@ -296,8 +312,12 @@ mod tests {
         assert_eq!((o.max_edge, o.stream.threads), (512, 1));
         let o = poster_options(SourceLevel::Full.max_edge(), false);
         assert_eq!((o.max_edge, o.stream.threads), (0, INTERACTIVE_THREADS));
-        assert_eq!(reason(&VideoError::Cancelled), "Stopped");
-        assert_eq!(reason(&VideoError::Unsupported("Apple ProRes video can't be decoded yet".into())), "Apple ProRes video can't be decoded yet");
+        assert_eq!(video_reason(&VideoError::Cancelled), "Stopped");
+        assert_eq!(video_reason(&VideoError::Unsupported(reason::PRORES.into())), reason::PRORES);
+        // (a damaged or over-large clip's detail goes to the log, not the card)
+        assert_eq!(video_reason(&VideoError::Malformed("no movie header (moov box)".into())), reason::DAMAGED);
+        assert_eq!(video_reason(&VideoError::TooLarge("picture 3 is 99999999 bytes".into())), reason::TOO_LARGE_TO_READ);
+        assert_eq!(video_reason(&VideoError::Io("Input/output error (os error 5)".into())), "the clip's file can't be read");
     }
 
     /// A clip that can't be opened says so without its path (the card, Info and the card's

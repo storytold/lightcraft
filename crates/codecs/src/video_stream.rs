@@ -48,6 +48,72 @@ pub fn video_decoding_available() -> bool {
 /// What [`VideoStream::open`] says in a build without video decoding.
 pub const NO_VIDEO_DECODING: &str = "this build has no video decoding (feature video-frames)";
 
+/// The reasons a clip's pictures can't be had, in plain words: every
+/// [`VideoError::Unsupported`] says one of these (or [`NO_VIDEO_DECODING`]), so the app can
+/// translate it. Bitstream terms stay out of them; a [`VideoError::Malformed`] or
+/// [`VideoError::TooLarge`] keeps its technical detail for the log, and the app shows
+/// [`reason::DAMAGED`] or [`reason::TOO_LARGE_TO_READ`] for it.
+pub mod reason {
+    /// The decoder's pictures would take more memory than [`super::StreamOptions::memory_budget`].
+    pub const TOO_LARGE_TO_DECODE: &str = "the clip's pictures are too large to decode";
+    /// For a [`super::VideoError::TooLarge`]: a picture or header past a reading limit.
+    pub const TOO_LARGE_TO_READ: &str = "the clip is too large to read for its picture";
+    /// For a [`super::VideoError::Malformed`].
+    pub const DAMAGED: &str = "the clip is damaged";
+    pub const H264_422: &str = "H.264 video with 4:2:2 colour can't be decoded yet";
+    pub const H264_DEEP: &str = "H.264 video with more than 8 bits per colour can't be decoded yet";
+    pub const H264_INTERLACED: &str = "interlaced H.264 video can't be decoded yet";
+    pub const H264_OTHER: &str = "this H.264 video uses a feature that can't be decoded yet";
+    pub const HEVC_444: &str = "HEVC video with 4:4:4 colour can't be decoded yet";
+    pub const HEVC_DEEP: &str = "HEVC video with more than 12 bits per colour can't be decoded yet";
+    pub const HEVC_OTHER: &str = "this HEVC video uses a feature that can't be decoded yet";
+    pub const AV1: &str = "AV1 video can't be decoded yet";
+    pub const VP9: &str = "VP9 video can't be decoded yet";
+    pub const PRORES: &str = "Apple ProRes video can't be decoded yet";
+    pub const MOTION_JPEG: &str = "Motion JPEG video can't be decoded yet";
+    pub const DNX: &str = "Avid DNxHD / DNxHR video can't be decoded yet";
+    pub const APV: &str = "APV video can't be decoded yet";
+    pub const CINEFORM: &str = "GoPro CineForm video can't be decoded yet";
+    pub const ANIMATION: &str = "QuickTime Animation video can't be decoded yet";
+    pub const OTHER_CODEC: &str = "this clip's video format can't be decoded yet";
+    pub const TRANSPORT_STREAM: &str = "MPEG transport stream video (AVCHD .mts / .m2ts) can't be read yet";
+    pub const BARE_STREAM: &str = "a bare H.264 / HEVC stream without an MP4 or QuickTime container can't be read yet";
+    pub const NO_VIDEO_TRACK: &str = "the file has no video track";
+    pub const COMPRESSED_HEADER: &str = "an old QuickTime movie with a compressed header can't be read yet";
+    pub const OTHER_CONTAINER: &str = "this clip's MP4 or QuickTime structure can't be read yet";
+    pub const ICTCP: &str = "this clip's ICtCp colour encoding can't be shown yet";
+
+    /// Every reason above and [`super::NO_VIDEO_DECODING`]: what a translation catalog needs.
+    pub const ALL: [&str; 26] = [
+        super::NO_VIDEO_DECODING,
+        TOO_LARGE_TO_DECODE,
+        TOO_LARGE_TO_READ,
+        DAMAGED,
+        H264_422,
+        H264_DEEP,
+        H264_INTERLACED,
+        H264_OTHER,
+        HEVC_444,
+        HEVC_DEEP,
+        HEVC_OTHER,
+        AV1,
+        VP9,
+        PRORES,
+        MOTION_JPEG,
+        DNX,
+        APV,
+        CINEFORM,
+        ANIMATION,
+        OTHER_CODEC,
+        TRANSPORT_STREAM,
+        BARE_STREAM,
+        NO_VIDEO_TRACK,
+        COMPRESSED_HEADER,
+        OTHER_CONTAINER,
+        ICTCP,
+    ];
+}
+
 /// Random-access bytes of a clip: a file read in place, or a buffer. Reads go through `&self`
 /// from the decoding thread, so a source is `Send + Sync`.
 pub trait ClipSource: Send + Sync {
@@ -209,12 +275,19 @@ impl Codec {
     }
 }
 
+/// The default [`StreamOptions::memory_budget`]: 3 GiB, an 8K HEVC clip's pictures with room for
+/// several decoder threads.
+pub const DECODER_MEMORY_CEILING: u64 = 3 << 30;
+
 /// Limits and settings for a [`VideoStream`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StreamOptions {
     /// Decoder worker threads (1 decodes on the calling thread).
     pub threads: usize,
-    /// Bytes of decoded pictures a decoder may hold (current, references, reordering).
+    /// The most bytes of decoded pictures a decoder may hold (current, references, reordering,
+    /// pictures in flight). The decoder gets what the clip's sequence header asks for
+    /// ([`StreamInfo::decoder_bytes`]); a clip that asks for more than this is
+    /// [`reason::TOO_LARGE_TO_DECODE`].
     pub memory_budget: u64,
     /// The largest single sample (one coded picture) read; a larger one is an error.
     pub max_sample_bytes: u32,
@@ -222,7 +295,7 @@ pub struct StreamOptions {
 
 impl Default for StreamOptions {
     fn default() -> Self {
-        StreamOptions { threads: 1, memory_budget: 1 << 30, max_sample_bytes: 64 << 20 }
+        StreamOptions { threads: 1, memory_budget: DECODER_MEMORY_CEILING, max_sample_bytes: 64 << 20 }
     }
 }
 
@@ -252,6 +325,9 @@ pub struct StreamInfo {
     /// The clip's first audio track, described from its sample entry (whether or not anything here
     /// can play it).
     pub audio: Option<AudioTrackInfo>,
+    /// Bytes of decoded pictures the decoder may hold for this clip, from its sequence header and
+    /// the decoder threads: what a caller weighing memory should count for the decode.
+    pub decoder_bytes: u64,
 }
 
 /// An audio track as its sample entry describes it.
