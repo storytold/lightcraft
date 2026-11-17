@@ -883,6 +883,25 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
         let Some(rel) = data.get(i..at).and_then(|s| s.find('<')) else { break };
         let s = i + rel;
         let rest = data.get(s..).unwrap_or_default();
+        // A comment's or CDATA section's `>` does not close a tag: skip them whole before
+        // tag_end, so a `>` inside them does not end the namespace scan early and drop a
+        // later ancestor's xmlns declaration.
+        if rest.starts_with("<!--") {
+            if let Some(rel) = data[i..].find("-->") {
+                i += rel + 3;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            if let Some(rel) = data[i..].find("]]>") {
+                i += rel + 3;
+            } else {
+                break;
+            }
+            continue;
+        }
         let Some(end) = tag_end(data, s).filter(|end| *end < at) else { break };
         i = end + 1;
         if rest.starts_with("</") {
@@ -899,26 +918,10 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
             continue;
         }
         if rest.starts_with("<?") || rest.starts_with("<!") {
-            if rest.starts_with("<!--") {
-                // A comment's `>` does not close a tag: skip to its end.
-                if let Some(rel) = data[i..].find("-->") {
-                    i += rel + 3;
-                } else {
-                    break;
-                }
-            } else if rest.starts_with("<![CDATA[") {
-                // A CDATA section's `>` does not close a tag: skip to its end.
-                if let Some(rel) = data[i..].find("]]>") {
-                    i += rel + 3;
-                } else {
-                    break;
-                }
+            if let Some(rel) = rest[2..].find('>') {
+                i += 2 + rel + 1;
             } else {
-                if let Some(rel) = rest[2..].find('>') {
-                    i += 2 + rel + 1;
-                } else {
-                    break;
-                }
+                break;
             }
             continue;
         }
@@ -3203,5 +3206,33 @@ mod jpeg_header_tests {
             assert!(reader.bytes_read as u64 <= span, "span {span}: read {} bytes", reader.bytes_read);
             assert!(reader.cursor.position() <= span, "span {span}: at {}", reader.cursor.position());
         }
+    }
+}
+
+#[cfg(test)]
+mod ns_bindings_comment_before_ancestor_tests {
+    use super::{ns_bindings, tag_end};
+
+    /// A comment whose text contains no `>` stands before an ancestor that rebinds `crs`.
+    /// `outer_bindings` calls `tag_end` before recognising the comment, so `tag_end` takes the
+    /// `>` of the comment's own `-->`, the scan stops there, and the ancestor's binding is
+    /// dropped: `crs` resolves to the outer `CRS_NS` instead of the ancestor's `urn:other`.
+    #[test]
+    fn ns_bindings_skips_comment_before_ancestor_declaration() {
+        let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <!-- comment -->
+          <rdf:Description xmlns:crs="urn:other">
+            <crs:Exposure2012/>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let start = data.find("<crs:Exposure2012").expect("target element");
+        let end = tag_end(data, start).expect("target element closes");
+        let bindings = ns_bindings(data, start, end);
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the ancestor's urn:other binding, not the RDF's CRS_NS\n{data}"
+        );
     }
 }
