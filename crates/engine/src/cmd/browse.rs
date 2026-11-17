@@ -418,34 +418,58 @@ fn create_folder(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// File names that stop a move, each once (case aside, as file systems compare them), for its
-/// message: a library-wide move can clash on thousands, and the message names the first few.
+/// message: a library-wide move can clash on thousands, and the message names the first few of
+/// them, whichever way they clash.
 #[derive(Default)]
 struct Clashes {
-    seen: std::collections::HashSet<String>,
-    names: Vec<String>,
+    /// Each name as first seen, and whether `folder` already has it (else two or more of the
+    /// photos would take it there).
+    names: Vec<(String, bool)>,
+    index: std::collections::HashMap<String, usize>,
 }
 
 impl Clashes {
-    /// How many names the message lists before it counts the rest.
+    /// How many names the whole message lists before it counts the rest.
     const LISTED: usize = 5;
 
-    fn add(&mut self, name: &str) {
-        if self.seen.insert(name.to_lowercase()) {
-            self.names.push(name.to_string());
+    fn add(&mut self, name: &str, in_folder: bool) {
+        match self.index.get(&name.to_lowercase()) {
+            // Already in the folder wins: that's the name to rename, whatever else shares it.
+            Some(&i) => self.names[i].1 |= in_folder,
+            None => {
+                self.index.insert(name.to_lowercase(), self.names.len());
+                self.names.push((name.to_string(), in_folder));
+            }
         }
     }
 
-    fn count(&self) -> usize {
+    fn len(&self) -> usize {
         self.names.len()
     }
 
-    /// The first [`Self::LISTED`] names, and how many more there are.
-    fn listed(&self) -> String {
-        let shown = self.names.iter().take(Self::LISTED).cloned().collect::<Vec<_>>().join(", ");
-        match self.names.len().saturating_sub(Self::LISTED) {
-            0 => shown,
-            more => format!("{shown} and {more} more"),
+    /// Why the move was refused: the names already in `folder`, then those the photos share,
+    /// [`Self::LISTED`] names in all, then how many more there are.
+    fn reason(&self, folder: &str) -> String {
+        let mut room = Self::LISTED;
+        let mut first = |in_folder: bool| {
+            let names: Vec<&str> = self.names.iter().filter(|n| n.1 == in_folder).map(|n| n.0.as_str()).take(room).collect();
+            room -= names.len();
+            names
+        };
+        let (taken, shared) = (first(true), first(false));
+        let mut why = Vec::new();
+        if !taken.is_empty() {
+            why.push(format!("{} already in {folder}", taken.join(", ")));
         }
+        if !shared.is_empty() {
+            why.push(format!("{} would be moved there by more than one photo", shared.join(", ")));
+        }
+        match self.len() - taken.len() - shared.len() {
+            0 => {}
+            1 => why.push("1 more name clashes".into()),
+            more => why.push(format!("{more} more names clash")),
+        }
+        why.join("; ")
     }
 }
 
@@ -467,8 +491,7 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
     let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut moving: std::collections::HashSet<&str> = std::collections::HashSet::new();
     // Names already in `folder`, and names two or more of the photos would take there, each once.
-    let mut in_folder = Clashes::default();
-    let mut shared = Clashes::default();
+    let mut clashes = Clashes::default();
     for id in ids {
         let ph = s.catalog.photo(id).ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
         if ph.local {
@@ -492,26 +515,19 @@ fn move_to_folder(s: &mut Session, p: &Value) -> Result<Value> {
         let to_s = to.to_string_lossy().to_string();
         let file = file.to_string_lossy();
         if to.exists() {
-            in_folder.add(&file);
+            clashes.add(&file, true);
             continue;
         }
         if !taken.insert(to_s.to_lowercase()) {
-            shared.add(&file);
+            clashes.add(&file, false);
             continue;
         }
         let name = ph.file_name.clone();
         plans.push(crate::rename::RenamePlan { id: id.0, from: name.clone(), to: name, from_path: Some(path.clone()), to_path: Some(to_s) });
     }
-    if in_folder.count() + shared.count() > 0 {
-        let mut why = Vec::new();
-        if in_folder.count() > 0 {
-            why.push(format!("{} already in {folder}", in_folder.listed()));
-        }
-        if shared.count() > 0 {
-            why.push(format!("{} would be moved there by more than one photo", shared.listed()));
-        }
-        let s_ = if in_folder.count() + shared.count() == 1 { "" } else { "s" };
-        return Err(bad(C, format!("{}: nothing was moved. Rename the photo{s_} first or choose another folder", why.join("; "))));
+    if clashes.len() > 0 {
+        let s_ = if clashes.len() == 1 { "" } else { "s" };
+        return Err(bad(C, format!("{}: nothing was moved. Rename the photo{s_} first or choose another folder", clashes.reason(folder))));
     }
     let n = plans.len();
     if n == 0 {

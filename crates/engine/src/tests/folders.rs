@@ -688,16 +688,25 @@ fn a_move_that_clashes_on_many_names_lists_a_few_once() {
     let free = add_file(&mut s, &dir.path("in/free.jpg"), "F");
     ids.push(free.0);
     let e = s.execute("photo.moveToFolder", &json!({"ids": ids, "folder": dir.path("out")})).unwrap_err().to_string();
-    assert!(e.contains("taken0.jpg, taken1.jpg, taken2.jpg, taken3.jpg, taken4.jpg and 3 more already in"), "{e}");
-    assert!(!e.contains("taken5.jpg"), "{e}");
-    assert!(e.contains("same.jpg would be moved there by more than one photo"), "{e}");
-    assert_eq!(e.matches("same.jpg").count(), 1, "{e}");
-    assert!(e.contains("nothing was moved"), "{e}");
+    // Five names in the whole message (after CodeRabbit's review), the four others counted.
+    assert!(e.contains("taken0.jpg, taken1.jpg, taken2.jpg, taken3.jpg, taken4.jpg already in"), "{e}");
+    assert!(e.contains("; 4 more names clash: nothing was moved"), "{e}");
+    assert!(!e.contains("taken5.jpg") && !e.contains("same.jpg"), "{e}");
     assert_eq!(file_of(&s, free), dir.path("in/free.jpg"), "all or nothing");
     // Only photos that share a name: no "already in".
     let e = s.execute("photo.moveToFolder", &json!({"ids": &ids[8..11], "folder": dir.path("out")})).unwrap_err().to_string();
     assert!(e.contains("same.jpg would be moved there by more than one photo: nothing was moved"), "{e}");
     assert!(!e.contains("already in"), "{e}");
+    // One name in two cases, once already in the folder and twice among the photos: listed once.
+    for (f, name) in [("p", "A.jpg"), ("q", "a.jpg"), ("r", "a.jpg")] {
+        std::fs::create_dir_all(dir.0.join(f)).unwrap();
+        let id = add_file(&mut s, &dir.path(&format!("{f}/{name}")), f);
+        ids.push(id.0);
+    }
+    std::fs::write(dir.path("out/A.jpg"), "OTHER").unwrap();
+    let e = s.execute("photo.moveToFolder", &json!({"ids": &ids[ids.len() - 3..], "folder": dir.path("out")})).unwrap_err().to_string();
+    assert_eq!(e.to_lowercase().matches("a.jpg").count(), 1, "{e}");
+    assert!(e.contains("A.jpg already in") && !e.contains("more than one photo"), "{e}");
 }
 
 #[test]
