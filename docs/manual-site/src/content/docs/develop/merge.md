@@ -12,4 +12,4 @@ sidebar:
 - **HDR Panorama**: brackets grouped by EXIF, merged one set at a time.
 - **Focus Stack**: photos focused at different distances become one sharp DNG (partial).
 - **HDR for Each Bracket Set** merges many brackets in one go. **Merge with last settings** skips the dialog.
-- Runs in the background: a row in the activity stack with a stop button. The merged DNG is imported and selected.
+- Runs in the background: a row in the activity stack with a stop button. The merged DNG is imported and selected; started while viewing an album, it is added to that album too (not to a smart album).
