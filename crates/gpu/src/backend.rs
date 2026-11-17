@@ -541,16 +541,19 @@ pub fn window_renderer_order(
                     // Vulkan on Windows after the platform preferences (DX12, GL), while still
                     // trying the user's combined choice first.
                     let mut expanded: Vec<WindowRenderer> = vec![r];
+                    // First: platform-preferred backends that the user requested (in platform order)
                     for backend in &platform_order {
                         if b.contains(*backend) {
                             expanded.push(WindowRenderer::Wgpu(*backend));
                         }
                     }
+                    // Second: other explicitly requested backends not in platform order (in requested order)
                     for backend in requested {
                         if !platform_order.contains(&backend) && !expanded.contains(&WindowRenderer::Wgpu(backend)) {
                             expanded.push(WindowRenderer::Wgpu(backend));
                         }
                     }
+                    // Third: platform-preferred backends not requested (in platform order)
                     for backend in platform_order {
                         if !b.contains(backend) && !expanded.iter().any(|r| matches!(r, WindowRenderer::Wgpu(eb) if eb.contains(backend))) {
                             expanded.push(WindowRenderer::Wgpu(backend));

@@ -110,14 +110,14 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
         // failed GL start falls back to Vulkan, the next renderer in the order)
         Some((WindowRenderer::Glow, None))
     } else if os == "linux" {
-        // When the user explicitly sets LIGHTCRAFT_GPU_BACKEND/WGPU_BACKEND, honor that choice
-        // via window_backends() instead of probing with platform order (GL first).
-        // BackendChoice::Off is treated as Auto for the window (window_backends converts Off to Auto).
+        // When the user explicitly sets LIGHTCRAFT_GPU_BACKEND/WGPU_BACKEND to a specific
+        // backend, honor that choice via window_backends() instead of probing with platform
+        // order (GL first). BackendChoice::Off is treated as Auto for the window (it probes
+        // with the platform fallback order, same as Auto).
         let env_choice = backend::env_choice();
-        if matches!(env_choice, backend::BackendChoice::Auto) {
+        if matches!(env_choice, backend::BackendChoice::Auto | backend::BackendChoice::Off) {
             pick_probed(files, &order, &mut problems, compose_window)
         } else {
-            // Off is treated as Auto for the window (window_backends converts Off to Auto)
             Some((WindowRenderer::Wgpu(backend::window_backends()), None))
         }
     } else {
