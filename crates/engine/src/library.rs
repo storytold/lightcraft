@@ -85,6 +85,16 @@ pub fn is_library(dir: &Path) -> bool {
     dir.join(lightcraft_catalog::journal::SNAPSHOT).is_file() || dir.join(lightcraft_catalog::journal::LOG).is_file()
 }
 
+/// Whether `path` names one of a library's catalog files (`catalog.snap`, `catalog.log`, `catalog.lock`),
+/// in any letter case. Such a path only names a library when the folder that holds it already is one.
+fn is_catalog_file(path: &Path) -> bool {
+    path.is_file()
+        && path.file_name().and_then(|n| n.to_str()).is_some_and(|name| {
+            let name = name.to_ascii_lowercase();
+            name == lightcraft_catalog::journal::SNAPSHOT || name == lightcraft_catalog::journal::LOG || name == lightcraft_catalog::lock::LOCK
+        })
+}
+
 /// [`is_library`] that tells "no library there" from "can't tell": `Ok(false)` only when the
 /// folder or its catalog files are definitely missing; a lookup that fails otherwise (a folder it
 /// may not read, a share that timed out) is the error, so a library that is there but can't be
@@ -510,6 +520,9 @@ impl Session {
         if is_settings_file(&input) && !is_library(&dir) {
             return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
         }
+        if is_catalog_file(&input) && !is_library(&dir) {
+            return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
+        }
         if !dir.exists() {
             return Ok(dir);
         }
@@ -552,6 +565,9 @@ impl Session {
             return Err(EngineError::LightroomCatalog { path: dir.clone(), catalog: place.catalog });
         }
         if is_settings_file(&input) && !is_library(&dir) {
+            return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
+        }
+        if is_catalog_file(&input) && !is_library(&dir) {
             return Err(EngineError::Other(format!("{} is not a LightCraft library", dir.display())));
         }
         let dir = resolve_dir(&dir)?;
