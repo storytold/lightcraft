@@ -383,7 +383,11 @@ suggestions below that score, previously confirmed faces and hidden suggestions 
 without this explicit action.
 **Show photos** puts their photos in the grid; **‹ People** or Escape goes back. "More" only holds faces the scan has
 already embedded, so it fills in as the scan goes; it shows faces scoring above four fifths of the model's suggestion bar,
-since you look at each one before anything is named.
+since you look at each one before anything is named, and only those that score clearly higher for this person than for
+anyone else already named (by the margin name suggestions use), checked best first for up to four times the page's
+size. With Settings ▸ Faces ▸ Matching ▸ Ignore a person's odd faces (`faces.matching` `skipOdd`, off by default), a
+person's faces whose cosine to their average face is below 0.3 (a head from behind, someone misnamed) are left out of
+both comparisons, unless fewer than three would be left.
 
 The review queue, suggestion previews, and confirmation/rejection actions remain accessible when automatic background
 face recognition is turned off: candidate suggestions on already-embedded faces can still be reviewed, named, or rejected

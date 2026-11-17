@@ -184,6 +184,26 @@ fn mirror_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, list: &Value)
         }
     }
     hint(ui, t, "Matches a little more often, but scanning takes twice as long. Changing it scans the faces again.");
+    let mut skip = list["skipOdd"].as_bool().unwrap_or(false);
+    let r = crate::dialog_frame::in_control_column(ui, |ui| {
+        ui.checkbox(&mut skip, crate::i18n::tr("Ignore a person's odd faces (from behind, misnamed)"))
+    });
+    register(ui.ctx(), "check:settings.facesSkipOdd", r.rect);
+    if r.changed() {
+        match app.run("faces.matching", json!({"skipOdd": skip})) {
+            Ok(_) => {
+                app.caches.faces_epoch += 1;
+                // a person's page asks again for the faces that look like them
+                app.caches.person_page = None;
+            }
+            Err(e) => app.toast(ui.ctx(), e),
+        }
+    }
+    hint(
+        ui,
+        t,
+        "Improves suggestions by leaving out faces seen from behind or misnamed. Double-edged: it also leaves out some for photos that look very different (childhood, beard…). Best used for a while, if you have many photos.",
+    );
 }
 
 /// Where the face models run (the GPU only once a check shows it gives the CPU's results faster), and the switch that
