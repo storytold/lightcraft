@@ -1401,7 +1401,6 @@ fn mask_component_descriptions(data: &str, _corr_start: usize, corr_end: usize) 
                         if rest2.starts_with("</rdf:li>") {
                             li_depth -= 1;
                             if li_depth == 0 {
-                                k = s2 + "</rdf:li>".len();
                                 break;
                             }
                             k = s2 + "</rdf:li>".len();
