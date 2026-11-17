@@ -942,6 +942,8 @@ mod tests_grain;
 #[cfg(test)]
 mod tests_hdr;
 #[cfg(test)]
+mod tests_highlights;
+#[cfg(test)]
 mod tests_legacy;
 #[cfg(test)]
 mod tests_light;

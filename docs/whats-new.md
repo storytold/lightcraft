@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Highlights as strong as Lightroom's (process V9)
+- The Highlights slider now reaches down into the upper midtones and pulls the brightest tones about as hard as
+  Lightroom Classic's: at −100 it used to leave everything below the midtones alone and darken the bright tones by
+  half as much (issue #1371). New photos (and Reset) get it; photos you already edited keep their look until
+  Photo ▸ Update to Current Process.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

@@ -148,8 +148,8 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 | Process::V8 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
-            Process::V7 | Process::V8 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 | Process::V9 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 | Process::V9 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
         }
     }
 }
@@ -259,6 +259,8 @@ pub struct FinishParams {
     /// Soft proofing (the GPU kernel reads the same parameters).
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
+    /// How Highlights weighs tones ([`highlight_shape`] of the settings' process).
+    pub hl_shape: HighlightShape,
     pub sh: f32,
     pub clar: f32,
     pub tex: f32,
@@ -304,6 +306,32 @@ pub struct FinishParamsInput<'a> {
     pub draft: bool,
 }
 
+/// How Highlights (global and in masks) weighs tones: `amp · smooth(lo, hi, t)` EV at ±100, `t` the
+/// edge-aware base's log2 luminance over grey.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HighlightShape {
+    pub lo: f32,
+    pub hi: f32,
+    pub amp: f32,
+}
+
+/// The [`HighlightShape`] of `s`'s rendering process.
+pub fn highlight_shape(s: &DevelopSettings) -> HighlightShape {
+    match s.process.process() {
+        Process::V1 | Process::V2 | Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => {
+            HighlightShape { lo: -1.0, hi: 2.8, amp: 1.7 }
+        }
+        // reaches down into the upper midtones (about L* 40) and pulls the brightest tones harder, as
+        // Lightroom's Highlights does (issue #1371; fitted in `tests_highlights`)
+        Process::V9 => V9_HIGHLIGHTS,
+    }
+}
+
+/// Process V9's Highlights shape: the one #2313 fitted, which on the current tone curve comes within 1.2 L* RMS
+/// of Lightroom's per-band response at −100 (`tests_highlights`; V8: 4.4). A finer search only reached 1.0, with a
+/// stronger amplitude that the positive side has no reference for.
+pub const V9_HIGHLIGHTS: HighlightShape = HighlightShape { lo: -2.3, hi: 3.0, amp: 1.8 };
+
 impl FinishParams {
     /// Parameters for a `w × h` render into `space`; `ev`/`air_pre` as in [`crate::Prepared`].
     pub fn new(input: FinishParamsInput<'_>) -> FinishParams {
@@ -343,6 +371,7 @@ impl FinishParams {
             out_trc: space.trc(),
             proof: None,
             hl: (s.light.highlights / 100.0) as f32,
+            hl_shape: highlight_shape(s),
             sh: (s.light.shadows / 100.0) as f32,
             clar,
             tex,
@@ -407,7 +436,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         },
         // V4, with a raw's tone curve rolling off into white in stops: a camera curve past its last
         // knot, the generic curve from half a stop below its white point instead of clipping (issue #1632)
-        Process::V5 | Process::V6 | Process::V7 | Process::V8 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V5 | Process::V6 | Process::V7 | Process::V8 | Process::V9 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_rolloff_hdr(curve, 0.0, l.whites, 0.0, peak),
             None if info.raw => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -799,8 +828,8 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {
         let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
-        let highlight_weight = smooth(-1.0, 2.8, base);
-        delta += shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight;
+        let highlight_weight = smooth(fp.hl_shape.lo, fp.hl_shape.hi, base);
+        delta += shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * fp.hl_shape.amp * highlight_weight;
     }
     if l_wh != 0.0 {
         delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
