@@ -257,3 +257,53 @@ fn video_source_damaged_clips_never_panic() {
         }
     }
 }
+
+#[test]
+fn video_source_halves_big_pictures_by_averaging() {
+    use lightcraft_codecs::yuv::{Chroma, Picture, Plane, Samples};
+    // 5 × 3 luma (odd on both sides), 4:2:0 chroma 3 × 2, 10-bit
+    let y: Vec<u16> = (0..15).map(|i| i * 10).collect();
+    let cb: Vec<u16> = vec![100, 200, 300, 400, 500, 600];
+    let cr: Vec<u16> = vec![512; 6];
+    fn plane(s: &[u16], stride: usize) -> Plane<'_> {
+        Plane { samples: Samples::U16(s), stride }
+    }
+    let pic = Picture { width: 5, height: 3, bit_depth: 10, chroma: Chroma::C420, y: plane(&y, 5), cb: plane(&cb, 3), cr: plane(&cr, 3) };
+    let mut planes = [Vec::new(), Vec::new(), Vec::new()];
+    let half = half_size(&pic, &mut planes);
+    assert_eq!((half.width, half.height, half.bit_depth), (2, 1, 10));
+    // (0 + 10 + 50 + 60) / 4 = 30; (20 + 30 + 70 + 80) / 4 = 50
+    assert_eq!(planes[0], vec![30, 50]);
+    // half picture 2 × 1 at 4:2:0: chroma 1 × 1, the average of the first 2 × 2 chroma samples
+    assert_eq!(planes[1], vec![(100 + 200 + 400 + 500 + 2) / 4]);
+    assert_eq!(planes[2], vec![512]);
+    // 8-bit samples come out as u16 the converter takes
+    let y8: Vec<u8> = vec![16; 16];
+    let c8: Vec<u8> = vec![128; 4];
+    let p8 = Picture {
+        width: 4,
+        height: 4,
+        bit_depth: 8,
+        chroma: Chroma::C420,
+        y: Plane { samples: Samples::U8(&y8), stride: 4 },
+        cb: Plane { samples: Samples::U8(&c8), stride: 2 },
+        cr: Plane { samples: Samples::U8(&c8), stride: 2 },
+    };
+    let half = half_size(&p8, &mut planes);
+    let conv = Converter::new(ColourDescription { primaries: 1, transfer: 1, matrix: 1, full_range: false }, 8, 4, 4).unwrap();
+    let mut out = vec![[0u8; 4]; half.width * half.height];
+    conv.to_srgb8(&half, &mut out).unwrap();
+    assert_eq!(out, vec![[0, 0, 0, 255]; 4], "video black stays black");
+}
+
+#[test]
+fn video_source_keeps_small_pictures_full_size_while_playing() {
+    if !decoder_here() {
+        return;
+    }
+    let clip = h264_clip(6, 3, false);
+    let mut src = open(clip).unwrap();
+    src.set_draft(true);
+    let Next::Frame(f) = src.next_frame(&mut || false, Vec::new()).unwrap() else { panic!("no frame") };
+    assert_eq!((f.width as usize, f.height as usize), (W, H), "small pictures are never halved");
+}
