@@ -4,8 +4,9 @@
 //! - **Frames** come from a [`FrameSource`]: the clip's decoder plus the Y′CbCr to sRGB conversion,
 //!   run on the decode thread, so the UI thread only uploads a finished RGBA buffer
 //!   ([`crate::video_source`] opens a clip with the codecs crate's decoders).
-//! - **The queue** holds at most a few frames, capped by bytes ([`QUEUE_BYTES`]): memory stays
-//!   bounded at any resolution, and a seek throws the queue away.
+//! - **The queue** holds at most a few frames, capped by the bytes of the frames actually decoded
+//!   ([`QUEUE_BYTES`], the buffers kept for reuse included, and at least one frame): memory stays
+//!   bounded at any resolution, whatever the clip's header claims, and a seek throws the queue away.
 //! - **The clock** is a [`Clock`]; playback runs on the wall clock. A clip's audio is not played
 //!   yet (no audio output in LightCraft), so there is no audio master clock; when there is one it
 //!   becomes another [`Clock`] and video keeps following it.
@@ -17,7 +18,9 @@
 //! - **Seeking** asks the source for the frame shown at a time (the sync sample before it, then
 //!   decoding forward); scrubbing coalesces: only the newest request is decoded.
 //!
-//! Nothing here blocks the caller: commands and [`VideoPlayer::tick`] only take a short lock.
+//! Nothing here blocks the caller: commands and [`VideoPlayer::tick`] only take a short lock, and
+//! dropping a player never waits for its decode thread (which may be opening a clip on a sleeping
+//! drive): the thread sees the stop flag and ends on its own.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,11 +30,19 @@ use web_time::Instant;
 use lightcraft_catalog::PhotoId;
 use serde_json::{Value, json};
 
-/// Bytes of decoded frames the queue may hold (a 4K RGBA frame is about 33 MB).
+/// Bytes of decoded frames the queue and the reuse pool may hold together (a 4K RGBA frame is
+/// about 33 MB, so about four queued at 4K; one frame is always allowed, however large).
 pub const QUEUE_BYTES: usize = 160 << 20;
-/// Frames the queue holds at least and at most, whatever their size.
-const QUEUE_MIN: usize = 2;
+/// Frames the queue holds at most, however small.
 const QUEUE_MAX: usize = 8;
+/// Buffers kept for reuse at most (a frame leaving the screen gives its buffer to the next one).
+const POOL_MAX: usize = 2;
+/// Playing, a frame more than this many seconds behind the clock (the UI stalled, or nothing
+/// ticked the player for a while) is caught up by seeking, not by decoding everything in between.
+const CATCH_UP: f64 = 1.0;
+/// A backward step aims this far before the frame on screen, so it lands on the frame before it
+/// whatever the frame rate (above the 0.1 ms timestamp rounding [`seek_to`] allows).
+const STEP_BACK: f64 = 1e-3;
 /// Frames a seek decodes forward from its sync sample before giving up on reaching the target
 /// (a hostile clip with no sync samples must not decode for minutes on one scrub).
 pub const MAX_SEEK_FRAMES: usize = 1200;
@@ -71,7 +82,7 @@ impl SourceInfo {
 }
 
 /// Opens a clip on the decode thread (reading a clip's headers can take a while on a slow or
-/// sleeping drive, so the UI thread never does it).
+/// sleeping drive, so neither the UI thread nor dropping the player waits for it).
 pub type Open = Box<dyn FnOnce() -> Result<Box<dyn FrameSource>, String> + Send>;
 
 /// One display-ready frame: RGBA, 8 bits, sRGB, `width × height` (before rotation).
@@ -117,6 +128,9 @@ pub trait FrameSource: Send {
     /// Playback is falling behind (late frames are being dropped): a source may make frames
     /// cheaper (smaller) until it can keep up again. Never called while paused.
     fn set_behind(&mut self, _behind: bool) {}
+    /// The largest width or height the frames may have (the GPU's texture limit; 0: no limit). A
+    /// source scales bigger pictures down or fails with a reason.
+    fn set_max_side(&mut self, _pixels: usize) {}
 }
 
 /// The time playback follows, in seconds from any fixed origin.
@@ -145,6 +159,9 @@ struct Seek {
     generation: u64,
     target: f64,
     draft: bool,
+    /// Decoding the frame on screen again exactly (after playback stopped on a draft frame): an
+    /// error the decoder stopped on stays reported.
+    refresh: bool,
 }
 
 /// State shared by the player and its decode thread.
@@ -158,28 +175,68 @@ struct Shared {
     /// The generation the decode thread works on, and whether it reached the end of the clip.
     generation: u64,
     end: bool,
+    /// The newest generation whose seek the decode thread has answered (with frames or without).
+    served: u64,
     /// Whether draft decoding is allowed now (playing).
     draft: bool,
     /// Playback is dropping late frames ([`FrameSource::set_behind`]).
     behind: bool,
     error: Option<String>,
-    /// Frames the queue may hold (set from the frame size).
-    capacity: usize,
+    /// The size of the newest frame decoded (the clip header's size until then): what one more
+    /// frame costs in [`Shared::wants_frame`].
+    frame_bytes: usize,
+    /// [`FrameSource::set_max_side`].
+    max_side: usize,
+    /// The decode thread has ended (stopped, the clip could not be opened, or it failed).
+    finished: bool,
     /// The clip's description, once the decode thread has opened it.
     info: Option<SourceInfo>,
     decoded: u64,
     /// RGBA buffers of frames that left the screen, for the decoder to fill again (no 33 MB
-    /// allocation per 4K frame).
+    /// allocation per 4K frame), and their bytes.
     pool: Vec<Vec<u8>>,
+    pool_bytes: usize,
 }
 
 impl Shared {
     fn recycle(&mut self, f: Arc<VideoFrame>) {
-        if let Ok(f) = Arc::try_unwrap(f)
-            && self.pool.len() < QUEUE_MAX + 2
-        {
-            self.pool.push(f.rgba);
+        if let Ok(f) = Arc::try_unwrap(f) {
+            self.keep(f.rgba);
         }
+    }
+
+    /// Keep `buffer` for reuse when the pool and the queue have room for it (else free it).
+    fn keep(&mut self, buffer: Vec<u8>) {
+        let held = self.queued_bytes.saturating_add(self.pool_bytes).saturating_add(buffer.capacity());
+        if self.pool.len() < POOL_MAX && held <= QUEUE_BYTES {
+            self.pool_bytes = self.pool_bytes.saturating_add(buffer.capacity());
+            self.pool.push(buffer);
+        }
+    }
+
+    /// A buffer to decode into: one kept for reuse, or a new (empty) one.
+    fn buffer(&mut self) -> Vec<u8> {
+        let b = self.pool.pop().unwrap_or_default();
+        self.pool_bytes = self.pool_bytes.saturating_sub(b.capacity());
+        b
+    }
+
+    /// Whether the decoder may add a frame to the queue: always when it is empty, else while the
+    /// queued frames, the kept buffers and one more frame stay within [`QUEUE_BYTES`].
+    fn wants_frame(&self) -> bool {
+        if self.queue.is_empty() {
+            return true;
+        }
+        // a kept buffer becomes the frame: the bytes held stay the same
+        let more = if self.pool.is_empty() { self.frame_bytes } else { 0 };
+        self.queue.len() < QUEUE_MAX && self.queued_bytes.saturating_add(self.pool_bytes).saturating_add(more) <= QUEUE_BYTES
+    }
+
+    fn push(&mut self, generation: u64, f: VideoFrame) {
+        self.decoded += 1;
+        self.frame_bytes = f.bytes().max(1);
+        self.queued_bytes = self.queued_bytes.saturating_add(f.bytes());
+        self.queue.push_back((generation, Arc::new(f)));
     }
 
     fn pop(&mut self) -> Option<(u64, Arc<VideoFrame>)> {
@@ -258,26 +315,30 @@ impl VideoPlayer {
     /// at 0). Only failing to start a thread is an error here; a clip that can't be opened ends
     /// up in [`VideoPlayer::error`].
     pub fn open(photo: PhotoId, open: Open, clock: Arc<dyn Clock>) -> Result<VideoPlayer, String> {
+        VideoPlayer::open_limited(photo, open, clock, 0)
+    }
+
+    /// [`VideoPlayer::open`] with frames no wider or taller than `max_side` pixels (the GPU's
+    /// texture limit; 0: no limit), from the first frame on ([`FrameSource::set_max_side`]).
+    pub fn open_limited(photo: PhotoId, open: Open, clock: Arc<dyn Clock>, max_side: usize) -> Result<VideoPlayer, String> {
         let channel = Arc::new(Channel {
-            state: Mutex::new(Shared { capacity: QUEUE_MIN, ..Shared::default() }),
+            state: Mutex::new(Shared { frame_bytes: 1, max_side, ..Shared::default() }),
             wake: Condvar::new(),
             stop: AtomicBool::new(false),
         });
         let worker = channel.clone();
         let thread = std::thread::Builder::new()
             .name("lc-video-decode".into())
-            .spawn(move || match open() {
-                Ok(source) => {
-                    let info = source.info().clone();
-                    let frame_bytes = (info.width as usize).saturating_mul(info.height as usize).saturating_mul(4).max(1);
-                    {
-                        let mut s = worker.lock();
-                        s.capacity = (QUEUE_BYTES / frame_bytes).clamp(QUEUE_MIN, QUEUE_MAX);
-                        s.info = Some(info);
-                    }
-                    decode_loop(source, &worker);
+            .spawn(move || {
+                // a panic in a decoder ends playback with a reason, never silently
+                let r = crate::guard::catch("The video decoder", || run(open, &worker));
+                let mut s = worker.lock();
+                if let Err(e) = r {
+                    s.error = Some(e);
                 }
-                Err(e) => worker.lock().error = Some(e),
+                s.finished = true;
+                drop(s);
+                worker.wake.notify_all();
             })
             .map_err(|e| format!("could not start the video decoder: {e}"))?;
         let now = clock.now();
@@ -331,6 +392,12 @@ impl VideoPlayer {
         self.channel.lock().error.clone()
     }
 
+    /// The decode thread has ended (the clip could not be opened, or the decoder failed): nothing
+    /// more will come; opening the clip again is the way to retry.
+    pub fn finished(&self) -> bool {
+        self.channel.lock().finished
+    }
+
     /// The playback position in seconds.
     pub fn position(&self) -> f64 {
         let t = if self.playing && !self.awaiting { self.anchor_media + (self.clock.now() - self.anchor_clock) } else { self.anchor_media };
@@ -344,10 +411,19 @@ impl VideoPlayer {
 
     /// Ask the decode thread for the frame at `target`, dropping everything queued.
     fn request(&mut self, target: f64) {
+        self.request_frame(target, false);
+    }
+
+    fn request_frame(&mut self, target: f64, refresh: bool) {
         self.generation += 1;
         self.awaiting = true;
         let mut s = self.channel.lock();
-        s.request = Some(Seek { generation: self.generation, target, draft: self.playing });
+        s.request = Some(Seek { generation: self.generation, target, draft: self.playing, refresh });
+        // an error belongs to the position it happened at; a new one starts clean (unless the
+        // decode thread is gone: then the reason stays)
+        if !refresh && !s.finished {
+            s.error = None;
+        }
         s.draft = self.playing;
         s.clear_queue();
         s.end = false;
@@ -382,10 +458,21 @@ impl VideoPlayer {
         let p = self.position();
         self.playing = false;
         self.reanchor(p);
-        // the frame on screen (and the queue behind it) may be draft: decode it again exactly
-        let at = self.current.as_ref().map_or(p, |f| f.pts);
+        // the frame on screen (and the queue behind it) may be draft: decode it again exactly;
+        // while a seek's frame is on its way, the seek's target is where playback is
+        let at = if self.awaiting { p } else { self.current.as_ref().map_or(p, |f| f.pts) };
         self.anchor_media = at;
         self.request(at);
+    }
+
+    /// Playback stopped (the end, an error) on a draft or reduced frame: decode it again exactly,
+    /// as [`VideoPlayer::pause`] does, keeping the position.
+    fn refresh_exact(&mut self) {
+        if let Some(pts) = self.current.as_ref().filter(|f| f.draft).map(|f| f.pts) {
+            let anchor = self.anchor_media;
+            self.request_frame(pts, true);
+            self.anchor_media = anchor;
+        }
     }
 
     pub fn toggle(&mut self) {
@@ -406,7 +493,8 @@ impl VideoPlayer {
             self.pause();
         }
         let dur = self.info.frame_duration.max(1e-3);
-        let from = self.current.as_ref().map_or(self.anchor_media, |f| f.pts);
+        // from the frame on screen, or from a seek's target while its frame is on its way
+        let from = if self.awaiting { self.anchor_media } else { self.current.as_ref().map_or(self.anchor_media, |f| f.pts) };
         if frames > 0 && !self.awaiting {
             // the decoder runs ahead of a paused frame: the next frame is usually queued already
             let next = {
@@ -426,7 +514,9 @@ impl VideoPlayer {
                 return;
             }
         }
-        let target = (from + f64::from(frames) * dur).clamp(0.0, self.info.duration.max(0.0));
+        // back: just before the frame on screen, so a variable frame rate never skips a frame
+        let target = if frames < 0 { from + f64::from(frames + 1) * dur - STEP_BACK } else { from + f64::from(frames) * dur };
+        let target = target.clamp(0.0, self.info.duration.max(0.0));
         self.ended = false;
         self.reanchor(target);
         self.request(target);
@@ -440,11 +530,8 @@ impl VideoPlayer {
         self.stats.shown += 1;
     }
 
-    /// Advance to the frame due now. Call it every UI frame (and before reading the state). Returns
-    /// how long until the next frame is due, so the UI can schedule its next repaint; `None` while
-    /// nothing will change by itself (paused, ended, failed).
     /// Count `skipped` late frames and tell the decode thread when playback starts or stops
-    /// falling behind (more than [`LATE_BEHIND`] of them within [`LATE_WINDOW`]).
+    /// falling behind ([`LATE_BEHIND`] or more of them within [`LATE_WINDOW`]).
     fn note_late(&mut self, skipped: u64) {
         let now = self.clock.now();
         for _ in 0..skipped.min(64) {
@@ -461,12 +548,15 @@ impl VideoPlayer {
         }
     }
 
+    /// Advance to the frame due now. Call it every UI frame (and before reading the state). Returns
+    /// how long until the next frame is due, so the UI can schedule its next repaint; `None` while
+    /// nothing will change by itself (paused, ended, failed).
     pub fn tick(&mut self) -> Option<f64> {
         let tolerance = self.info.frame_duration.max(1e-3) * 0.5;
         let cur = self.generation;
         let mut due: Option<Arc<VideoFrame>> = None;
         let mut skipped = 0u64;
-        let (end, failed, next_pts) = {
+        let (end, failed, finished, served, next_pts) = {
             let mut s = self.channel.lock();
             if !self.opened
                 && let Some(info) = s.info.clone()
@@ -495,7 +585,9 @@ impl VideoPlayer {
                 }
             }
             let end = s.generation == cur && s.end && s.queue.is_empty();
-            (end, s.error.is_some(), s.queue.front().map(|(_, f)| f.pts))
+            // (the frames decoded before the error still play)
+            let failed = s.error.is_some() && s.queue.is_empty();
+            (end, failed, s.finished, s.served == cur, s.queue.front().map(|(_, f)| f.pts))
         };
         self.channel.wake.notify_all();
         self.stats.dropped += skipped;
@@ -508,16 +600,20 @@ impl VideoPlayer {
                 self.reanchor(at);
             }
             self.show(f);
-        }
-        if failed {
-            self.playing = false;
-            let p = self.current.as_ref().map_or(self.anchor_media, |f| f.pts);
-            self.reanchor(p);
-            return None;
-        }
-        if self.awaiting && end {
-            // a seek past the last decodable frame: nothing more will come
+        } else if self.awaiting && (served || finished) {
+            // the seek was answered without a frame (past the last decodable one, an error), or
+            // the decode thread is gone: nothing more will come
             self.awaiting = false;
+        }
+        if failed || finished {
+            if std::mem::replace(&mut self.playing, false) {
+                let p = self.current.as_ref().map_or(self.anchor_media, |f| f.pts);
+                self.reanchor(p);
+                if !finished {
+                    self.refresh_exact();
+                }
+            }
+            return if self.awaiting { Some(0.01) } else { None };
         }
         if !self.playing {
             return if self.awaiting { Some(0.01) } else { None };
@@ -528,12 +624,43 @@ impl VideoPlayer {
             self.ended = true;
             let p = self.info.duration.max(self.current.as_ref().map_or(0.0, |f| f.pts));
             self.reanchor(p.min(self.info.duration.max(0.0)));
-            return None;
+            self.refresh_exact();
+            return if self.awaiting { Some(0.01) } else { None };
         }
         if self.awaiting {
             return Some(0.01);
         }
+        // far behind the clock with nothing queued (a long stall): seek there rather than decode
+        // every frame in between only to drop it
+        if next_pts.is_none() && !end && self.current.as_ref().is_some_and(|f| pos - f.pts > CATCH_UP) {
+            self.reanchor(pos);
+            self.request(pos);
+            return Some(0.01);
+        }
         Some(next_pts.map_or(self.info.frame_duration.max(1e-3), |t| (t - pos).max(0.0)).min(0.1))
+    }
+
+    /// Frames no wider or taller than `pixels` from now on (0: no limit); a frame on screen that is
+    /// bigger is decoded again.
+    pub fn set_max_side(&mut self, pixels: usize) {
+        {
+            let mut s = self.channel.lock();
+            if s.max_side == pixels {
+                return;
+            }
+            s.max_side = pixels;
+        }
+        self.channel.wake.notify_all();
+        let too_big = self.current.as_ref().is_some_and(|f| pixels > 0 && (f.width as usize > pixels || f.height as usize > pixels));
+        if too_big && !self.awaiting {
+            let at = if self.playing { self.position() } else { self.anchor_media };
+            let target = self.current.as_ref().map_or(at, |f| if self.playing { at } else { f.pts });
+            let anchor = self.anchor_media;
+            self.request(target);
+            if !self.playing {
+                self.anchor_media = anchor;
+            }
+        }
     }
 
     /// The time the last frame stops being shown (the end of the clip, or past the last frame).
@@ -572,9 +699,23 @@ impl VideoPlayer {
 
 impl Drop for VideoPlayer {
     fn drop(&mut self) {
-        self.channel.stop.store(true, Ordering::Relaxed);
+        {
+            // the flag is set under the lock the decode thread checks it under before waiting, so
+            // it can't miss the wake-up below
+            let mut s = self.channel.lock();
+            self.channel.stop.store(true, Ordering::Relaxed);
+            s.request = None;
+            // free the frames now; the thread may take a while to notice
+            s.clear_queue();
+            s.pool.clear();
+            s.pool_bytes = 0;
+        }
         self.channel.wake.notify_all();
-        if let Some(t) = self.thread.take() {
+        // never wait for the decode thread: it may be opening the clip on a sleeping drive or
+        // decoding a frame; it checks the flag after each and ends by itself
+        if let Some(t) = self.thread.take()
+            && t.is_finished()
+        {
             // a decoder that panicked has already ended; its result tells nothing more
             let _ = t.join();
         }
@@ -589,11 +730,29 @@ pub struct Playback {
     pub player: Option<VideoPlayer>,
     pub opener: Opener,
     pub clock: Arc<dyn Clock>,
+    /// Whether this build decodes video ([`crate::video_source::available`]; tests that play
+    /// fakes say yes without the decoder).
+    pub decodes: fn() -> bool,
+    /// The largest frame side the frontend can show (its GPU texture limit; 0: no limit).
+    pub max_side: usize,
+}
+
+impl Playback {
+    /// Whether clips can be played in this build (without, the loupe says why and offers no Play).
+    pub fn available(&self) -> bool {
+        (self.decodes)()
+    }
 }
 
 impl Default for Playback {
     fn default() -> Self {
-        Playback { player: None, opener: crate::video_source::open_file, clock: Arc::new(WallClock::default()) }
+        Playback {
+            player: None,
+            opener: crate::video_source::open_file,
+            clock: Arc::new(WallClock::default()),
+            decodes: crate::video_source::available,
+            max_side: 0,
+        }
     }
 }
 
@@ -603,11 +762,31 @@ impl std::fmt::Debug for Playback {
     }
 }
 
+/// The decode thread's work: open the clip, then serve seeks and keep the queue filled.
+fn run(open: Open, ch: &Channel) {
+    match open() {
+        Ok(source) => {
+            let info = source.info().clone();
+            {
+                let mut s = ch.lock();
+                s.frame_bytes = (info.width as usize).saturating_mul(info.height as usize).saturating_mul(4).max(1);
+                s.info = Some(info);
+            }
+            // (dropped while opening: nothing to decode)
+            if !ch.stop.load(Ordering::Relaxed) {
+                decode_loop(source, ch);
+            }
+        }
+        Err(e) => ch.lock().error = Some(e),
+    }
+}
+
 /// The decode thread: serves the newest seek, then keeps the queue full until the clip ends.
 fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
     let mut generation = 0u64;
     let mut draft = false;
     let mut behind = false;
+    let mut max_side = 0usize;
     loop {
         let seek = {
             let mut s = ch.lock();
@@ -624,14 +803,20 @@ fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
                     behind = s.behind;
                     source.set_behind(behind);
                 }
-                if s.request.is_some() || (s.error.is_none() && !s.end && s.queue.len() < s.capacity) {
+                if s.max_side != max_side {
+                    max_side = s.max_side;
+                    source.set_max_side(max_side);
+                }
+                if s.request.is_some() || (s.error.is_none() && !s.end && s.wants_frame()) {
                     break;
                 }
                 s = ch.wake.wait(s).unwrap_or_else(PoisonError::into_inner);
             }
-            (s.request.take(), s.pool.pop().unwrap_or_default())
+            let req = s.request.take();
+            (req, s.buffer())
         };
         let (seek, buffer) = seek;
+        let answers_seek = seek.is_some();
         let result = match seek {
             Some(req) => {
                 generation = req.generation;
@@ -642,7 +827,9 @@ fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
                 {
                     let mut s = ch.lock();
                     s.generation = generation;
-                    s.error = None;
+                    if !req.refresh {
+                        s.error = None;
+                    }
                 }
                 seek_to(source.as_mut(), ch, req, buffer)
             }
@@ -654,15 +841,19 @@ fn decode_loop(mut source: Box<dyn FrameSource>, ch: &Channel) {
             },
         };
         let mut s = ch.lock();
+        // a newer seek arrived while this was decoding: what it found (frames, the end, an
+        // error) belongs to an older position and must not mark the new one
         if s.generation != generation || s.request.is_some_and(|r| r.generation != generation) {
             continue;
+        }
+        // (under the same lock as its frames: the player never sees it answered and empty)
+        if answers_seek {
+            s.served = generation;
         }
         match result {
             Ok(Some(frames)) => {
                 for f in frames {
-                    s.decoded += 1;
-                    s.queued_bytes = s.queued_bytes.saturating_add(f.bytes());
-                    s.queue.push_back((generation, Arc::new(f)));
+                    s.push(generation, f);
                 }
             }
             Ok(None) => s.end = true,
@@ -686,8 +877,13 @@ fn seek_to(source: &mut dyn FrameSource, ch: &Channel, req: Seek, buffer: Vec<u8
     let mut best: Option<VideoFrame> = None;
     let mut buffer = Some(buffer);
     for _ in 0..MAX_SEEK_FRAMES {
-        let buf = buffer.take().unwrap_or_else(|| ch.lock().pool.pop().unwrap_or_default());
-        match source.next_frame(&mut || superseded(ch), buf)? {
+        let buf = buffer.take().unwrap_or_else(|| ch.lock().buffer());
+        let next = match source.next_frame(&mut || superseded(ch), buf) {
+            // the target frame was found: show it; the error comes back when decoding on
+            Err(_) if best.is_some() => return Ok(best.map(|f| vec![f])),
+            r => r?,
+        };
+        match next {
             Next::Stopped => return Ok(None),
             Next::End => return Ok(best.map(|f| vec![f])),
             Next::Frame(f) if f.pts <= req.target + tolerance => {
