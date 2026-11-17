@@ -918,11 +918,8 @@ fn outer_bindings(data: &str, at: usize) -> Vec<(String, String)> {
             continue;
         }
         if rest.starts_with("<?") || rest.starts_with("<!") {
-            if let Some(rel) = rest[2..].find('>') {
-                i += 2 + rel + 1;
-            } else {
-                break;
-            }
+            // tag_end already moved i past the closing '>'; advancing again
+            // would skip the following tag and its xmlns declarations.
             continue;
         }
         // A self-closing tag's declarations apply only inside the tag itself, so they do not
@@ -3265,6 +3262,30 @@ mod ns_bindings_comment_before_ancestor_tests {
         let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
           xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
           <!-- comment -->
+          <rdf:Description xmlns:crs="urn:other">
+            <crs:Exposure2012/>
+          </rdf:Description>
+        </rdf:RDF>"#;
+        let start = data.find("<crs:Exposure2012").expect("target element");
+        let end = tag_end(data, start).expect("target element closes");
+        let bindings = ns_bindings(data, start, end);
+        assert_eq!(
+            bindings.iter().rev().find(|(p, _)| p == "crs"),
+            Some(&("crs".to_string(), "urn:other".to_string())),
+            "crs must resolve to the ancestor's urn:other binding, not the RDF's CRS_NS\n{data}"
+        );
+    }
+
+    /// A processing instruction stands before an ancestor that rebinds `crs`.
+    /// `outer_bindings` calls `tag_end` on the PI, which sets `i = end + 1` past the `>`,
+    /// then the `<? / <!` handler advances `i` by `2 + rel + 1` again, skipping the
+    /// following tag and its xmlns declaration. `crs` then resolves to the outer `CRS_NS`
+    /// instead of the ancestor's `urn:other`.
+    #[test]
+    fn ns_bindings_skips_processing_instruction_before_ancestor() {
+        let data = r#"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+          xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <?xml version="1.0"?>
           <rdf:Description xmlns:crs="urn:other">
             <crs:Exposure2012/>
           </rdf:Description>
