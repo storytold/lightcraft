@@ -20,6 +20,10 @@ const MAX_BYTES: usize = 32 << 20;
 pub const MAX_EXAMPLES: usize = 64;
 /// Role bindings kept.
 const MAX_ROLES: usize = 5000;
+/// Suggestion decisions kept (the newest win; a rejection is small and only ever one per face).
+pub const MAX_DECISIONS: usize = 200_000;
+/// A face region index a decision may name: photos have far fewer faces than this.
+const MAX_DECISION_INDEX: usize = 1_000_000;
 
 /// Where a role applies.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +64,37 @@ pub struct PersonData {
     pub examples: Vec<Example>,
 }
 
+/// One face the user decided about in the Suggested category (issue #1050): "not this person", or "this one is".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Verdict {
+    /// Not the person that was suggested: the face stays unknown and is never suggested as them again.
+    Rejected,
+    /// This person's: confirming from the groups, on top of the name on the face.
+    Confirmed,
+}
+
+/// A decision about one face region. Only a [`Verdict::Rejected`] changes what the app suggests (a confirmation is the
+/// face's name, kept where the faces' names have always been); both are kept, so the Suggested category can leave the
+/// face out of its groups without reading every photo, and so a rejection can be undone and reported.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SuggestionDecision {
+    pub photo: u64,
+    /// The face's region index in the photo.
+    pub index: usize,
+    /// The person the suggestion was about (trimmed; matched ignoring capitalization, as names are).
+    pub person: String,
+    pub verdict: Verdict,
+    /// The region's rectangle when the decision was made: a decision only holds while the region at `index` still has
+    /// this rectangle (a moved, redrawn or re-detected face is a different face). Entries written without one are
+    /// dropped on load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<lcc_geom::Rect>,
+    /// `YYYY-MM-DD` when it was made.
+    #[serde(default)]
+    pub decided: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PeopleStore {
     pub version: u32,
@@ -67,11 +102,15 @@ pub struct PeopleStore {
     pub roles: Vec<RoleBinding>,
     #[serde(default)]
     pub people: Vec<PersonData>,
+    /// Faces decided about in the Suggested category, in photo and region order (see [`SuggestionDecision`];
+    /// `faces.suggestionDecisions` lists them newest first).
+    #[serde(default)]
+    pub decisions: Vec<SuggestionDecision>,
 }
 
 impl Default for PeopleStore {
     fn default() -> Self {
-        PeopleStore { version: 1, roles: Vec::new(), people: Vec::new() }
+        PeopleStore { version: 1, roles: Vec::new(), people: Vec::new(), decisions: Vec::new() }
     }
 }
 
@@ -128,6 +167,14 @@ impl PeopleStore {
         }
         let mut s: PeopleStore = serde_json::from_slice(bytes).map_err(|e| format!("{FILE} is damaged: {e}"))?;
         s.roles.truncate(MAX_ROLES);
+        let n = s.decisions.len();
+        if n > MAX_DECISIONS {
+            s.decisions.drain(..n - MAX_DECISIONS);
+        }
+        // a file from another build (or a hand edit) may hold unusable entries: they are dropped, never a panic
+        s.decisions.retain(|d| d.rect.is_some() && d.index < MAX_DECISION_INDEX && !d.person.trim().is_empty() && d.person.chars().count() <= 200);
+        s.decisions.sort_by_key(|d| (d.photo, d.index));
+        s.decisions.dedup_by(|a, b| a.photo == b.photo && a.index == b.index);
         for p in &mut s.people {
             let n = p.examples.len();
             if n > MAX_EXAMPLES {
@@ -227,6 +274,11 @@ impl PeopleStore {
                 b.person = to.into();
             }
         }
+        for d in &mut self.decisions {
+            if same(&d.person, from) {
+                d.person = to.into();
+            }
+        }
         let moved: Vec<Example> = self.people.iter_mut().filter(|p| same(&p.name, from)).flat_map(|p| std::mem::take(&mut p.examples)).collect();
         self.people.retain(|p| !same(&p.name, from) || !p.examples.is_empty());
         for e in moved {
@@ -236,18 +288,74 @@ impl PeopleStore {
 
     /// Delete `name`'s examples and roles; whether there was anything.
     pub fn forget(&mut self, name: &str) -> bool {
-        let n = (self.people.len(), self.roles.len());
+        let n = (self.people.len(), self.roles.len(), self.decisions.len());
         self.people.retain(|p| !same(&p.name, name));
         self.roles.retain(|b| !same(&b.person, name));
-        n != (self.people.len(), self.roles.len())
+        // what was decided about suggestions of them goes with their roles and examples: nothing about them stays
+        self.decisions.retain(|d| !same(&d.person, name));
+        n != (self.people.len(), self.roles.len(), self.decisions.len())
     }
 
-    /// Forget the examples remembered on these photos (they were removed).
+    /// Where the decision about the face region `index` of `photo` is (or would go) in the sorted list.
+    fn decision_slot(&self, photo: u64, index: usize) -> std::result::Result<usize, usize> {
+        self.decisions.binary_search_by(|d| (d.photo, d.index).cmp(&(photo, index)))
+    }
+
+    /// What was decided about the face region `index` of `photo` while it had `rect`, if anything (a decision made
+    /// about a region whose rectangle has since changed is stale and does not apply).
+    pub fn decision(&self, photo: u64, index: usize, rect: lcc_geom::Rect) -> Option<&SuggestionDecision> {
+        let at = self.decision_slot(photo, index).ok()?;
+        self.decisions.get(at).filter(|d| d.rect == Some(rect))
+    }
+
+    /// Record what the user decided about one face region (with its rectangle now): `verdict` about `person` (a face
+    /// has one decision, so a new one replaces it). A rejection is what keeps the face out of that person's suggestions.
+    pub fn decide(&mut self, photo: u64, index: usize, rect: lcc_geom::Rect, person: &str, verdict: Verdict, day: &str) -> Result<(), String> {
+        let person = person.trim();
+        if person.is_empty() {
+            return Err("a decision is about a person".into());
+        }
+        if person.chars().count() > 200 {
+            return Err("that name is too long".into());
+        }
+        if index >= MAX_DECISION_INDEX {
+            return Err("that face region does not exist".into());
+        }
+        let entry = SuggestionDecision { photo, index, person: person.into(), verdict, rect: Some(rect), decided: day.into() };
+        match self.decision_slot(photo, index) {
+            Ok(at) => {
+                if let Some(slot) = self.decisions.get_mut(at) {
+                    *slot = entry;
+                }
+            }
+            Err(at) => {
+                if self.decisions.len() >= MAX_DECISIONS {
+                    return Err("too many face decisions are kept".into());
+                }
+                self.decisions.insert(at, entry);
+            }
+        }
+        Ok(())
+    }
+
+    /// Forget the decisions about the face regions of these photos (they were removed).
+    pub fn forget_decisions(&mut self, photos: &[u64]) {
+        self.decisions.retain(|d| !photos.contains(&d.photo));
+    }
+
+    /// Whether the face region `index` of `photo` (still with `rect`) was rejected as `person` (matched ignoring capitalization, as names
+    /// are everywhere in People).
+    pub fn rejected_as(&self, photo: u64, index: usize, rect: lcc_geom::Rect, person: &str) -> bool {
+        self.decision(photo, index, rect).is_some_and(|d| d.verdict == Verdict::Rejected && same(&d.person, person))
+    }
+
+    /// Forget the examples remembered on these photos (they were removed), and the decisions about their faces.
     pub fn forget_photos(&mut self, photos: &[u64]) {
         for p in &mut self.people {
             p.examples.retain(|e| !photos.contains(&e.photo));
         }
         self.people.retain(|p| !p.examples.is_empty());
+        self.forget_decisions(photos);
     }
 }
 
@@ -311,6 +419,68 @@ mod tests {
             s.people.iter_mut().for_each(|p| p.examples.iter_mut().for_each(|e| e.photo += 100));
         }
         assert!(s.person("Many").is_some_and(|p| p.examples.len() <= MAX_EXAMPLES));
+    }
+
+    /// Issue #1050: a face has one decision, a rejection is matched the way names are, and the decisions follow
+    /// renames, forgets and removed photos.
+    #[test]
+    fn suggestion_decisions_are_one_per_face_and_follow_people_and_photos() {
+        const R: lcc_geom::Rect = lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 };
+        let mut s = PeopleStore::default();
+        assert!(!s.rejected_as(1, 0, R, "Ann"), "nothing decided yet");
+        s.decide(1, 0, R, "  Ann  ", Verdict::Rejected, "2026-11-15").unwrap();
+        s.decide(1, 1, R, "Ann", Verdict::Confirmed, "2026-11-15").unwrap();
+        assert_eq!((s.decisions.len(), s.decisions[0].index, s.decisions[0].person.as_str()), (2, 0, "Ann"));
+        assert!(s.rejected_as(1, 0, R, "ANN") && !s.rejected_as(1, 1, R, "Ann"), "a confirmation is not a rejection");
+        // a second decision replaces the first
+        s.decide(1, 0, R, "Ann", Verdict::Confirmed, "2026-11-15").unwrap();
+        assert!(!s.rejected_as(1, 0, R, "Ann") && s.decisions.len() == 2);
+        s.decide(1, 0, R, "Rex", Verdict::Rejected, "2026-11-16").unwrap();
+        assert!(!s.rejected_as(1, 0, R, "Ann") && s.rejected_as(1, 0, R, "rex"), "about Rex now");
+        // a rename carries them, and so does a merge
+        s.rename("Rex", "Ann");
+        assert!(s.rejected_as(1, 0, R, "Ann") && s.decisions.iter().all(|d| d.person == "Ann"));
+        // bad input is an error that changes nothing
+        let before = s.decisions.clone();
+        for (person, index) in [("", 0), ("   ", 0), ("x".repeat(201).as_str(), 0), ("Ann", usize::MAX)] {
+            assert!(s.decide(2, index, R, person, Verdict::Rejected, "2026-11-15").is_err(), "{person:?} {index}");
+        }
+        assert_eq!(s.decisions, before);
+        // forgetting a person forgets what was decided about them; so does removing one of their photos
+        assert!(s.forget("ann"));
+        assert!(s.decisions.is_empty());
+        s.decide(7, 0, R, "Bea", Verdict::Rejected, "2026-11-15").unwrap();
+        s.forget_photos(&[7]);
+        assert!(s.decisions.is_empty());
+        // a stored file keeps them, and a damaged or odd one is still read (or refused) without a panic
+        s.decide(9, 3, R, "Cid", Verdict::Rejected, "2026-11-15").unwrap();
+        let back = PeopleStore::from_bytes(&s.to_bytes()).unwrap();
+        assert_eq!(back.decisions, s.decisions);
+        let odd = br#"{"version":1,"decisions":[{"photo":1,"index":0,"person":"","verdict":"rejected"}]}"#;
+        assert!(PeopleStore::from_bytes(odd).map(|st| st.decisions.is_empty()).unwrap_or(false), "an unusable entry is dropped");
+        assert!(PeopleStore::from_bytes(br#"{"version":1,"decisions":[{"photo":1,"index":0,"person":"Ann","verdict":"maybe"}]}"#).is_err());
+        // an entry from before decisions carried the region's rectangle is dropped, never applied to whatever face now
+        // has that index
+        let old = br#"{"version":1,"decisions":[{"photo":1,"index":0,"person":"Ann","verdict":"rejected"}]}"#;
+        assert!(PeopleStore::from_bytes(old).map(|st| st.decisions.is_empty()).unwrap_or(false));
+    }
+
+    /// A decision is about the face that was there: once the region at that index has another rectangle it is stale.
+    #[test]
+    fn a_decision_no_longer_applies_after_the_region_changes() {
+        let r = lcc_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.3, y1: 0.4 };
+        let moved = lcc_geom::Rect { x0: 0.5, y0: 0.1, x1: 0.7, y1: 0.4 };
+        let mut s = PeopleStore::default();
+        for (photo, index) in [(5, 2), (1, 0), (5, 0), (3, 1)] {
+            s.decide(photo, index, r, "Ann", Verdict::Rejected, "2026-11-17").unwrap();
+        }
+        assert!(s.decisions.windows(2).all(|w| (w[0].photo, w[0].index) < (w[1].photo, w[1].index)), "kept sorted");
+        assert!(s.rejected_as(5, 2, r, "Ann") && s.decision(5, 2, r).is_some());
+        assert!(!s.rejected_as(5, 2, moved, "Ann") && s.decision(5, 2, moved).is_none(), "stale after the region moved");
+        // deciding about the new face replaces the stale entry
+        s.decide(5, 2, moved, "Bea", Verdict::Rejected, "2026-11-17").unwrap();
+        assert_eq!(s.decisions.len(), 4);
+        assert!(s.rejected_as(5, 2, moved, "Bea") && !s.rejected_as(5, 2, r, "Ann"));
     }
 
     #[test]
