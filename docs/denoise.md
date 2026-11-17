@@ -1,5 +1,11 @@
 # AI Denoise
 
+Settings ▸ AI Denoise ▸ **Model manifest help**, below **Install from file…**, explains
+the required fields and limits of `denoise-model.json`. **Copy JSON example** copies
+a minimal manifest to the clipboard. Save it beside the ONNX file and adjust the
+model-specific values to the model's documented input and output; the example is
+not a compatibility converter for arbitrary ONNX models.
+
 Edit ▸ Detail ▸ **AI Denoise** is a per-photo switch above **Amount** (0–100).
 Turning it on starts at 50, or preserves an already positive Amount. Turning it off
 preserves Amount and mixes none of the cleaned picture. It affects only the requesting
