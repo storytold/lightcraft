@@ -13,7 +13,9 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use lightcraft_codecs::poster::{PosterOptions, poster_frame};
-use lightcraft_codecs::video_stream::{FileSource, StreamOptions, VideoError};
+#[cfg(not(target_arch = "wasm32"))]
+use lightcraft_codecs::video_stream::FileSource;
+use lightcraft_codecs::video_stream::{StreamOptions, VideoError};
 use lightcraft_pipeline::SourceInfo;
 
 use crate::activity::{Activity, Cancel, TaskGuard};
@@ -87,13 +89,26 @@ impl VideoFrames {
         let gate = crate::memory::work_gate();
         let _permit = if background { gate.acquire(POSTER_WEIGHT) } else { gate.acquire_urgent(POSTER_WEIGHT) };
         let (_ticket, cancel) = self.enter();
-        let src = FileSource::open(path).map_err(|e| format!("{path}: {e}"))?;
+        let src = open_clip(path)?;
         let opts = poster_options(max_edge, background);
         let r = poster_frame(src, &opts, &cancel);
         crate::memory::release();
         let p = r.map_err(|e| reason(&e))?;
         Ok((p.image, SourceInfo::default()))
     }
+}
+
+/// The clip at `path`, read in place.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_clip(path: &str) -> Result<FileSource, String> {
+    FileSource::open(path).map_err(|e| format!("{path}: {e}"))
+}
+
+/// The web build has no files to read a clip from (and no video decoding: `load` answers that
+/// before it gets here).
+#[cfg(target_arch = "wasm32")]
+fn open_clip(_path: &str) -> Result<Box<dyn lightcraft_codecs::video_stream::ClipSource>, String> {
+    Err(lightcraft_codecs::video_stream::NO_VIDEO_DECODING.into())
 }
 
 /// Poster options for a source of `max_edge` (`usize::MAX`: the full picture).
