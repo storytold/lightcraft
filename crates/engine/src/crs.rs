@@ -817,6 +817,23 @@ mod crs_write_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `crs_settings(settings, None)` must return an empty vector: without a baseline
+    /// there is nothing to differ from, so no `crs:` fields are written (issue #934).
+    #[test]
+    fn crs_settings_returns_empty_when_no_baseline() {
+        use lightcraft_develop::DevelopSettings;
+
+        let current = DevelopSettings::default();
+        let crs = crate::crs::crs_settings(&current, None);
+        assert!(crs.is_empty(), "no baseline means no crs fields written: {crs:?}");
+
+        // A changed field is also omitted when there is no baseline
+        let mut changed = DevelopSettings::default();
+        changed.light.exposure = 0.5;
+        let crs = crate::crs::crs_settings(&changed, None);
+        assert!(crs.is_empty(), "changed field still omitted without baseline: {crs:?}");
+    }
+
     /// Without a baseline (`lc:settings`) in an existing foreign sidecar, `crs_settings` must not
     /// emit any `crs:` fields: `previous == None` means there is nothing to differ from, so a
     /// foreign value must not be overwritten with our default (issue #934).
