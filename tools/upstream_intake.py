@@ -42,7 +42,7 @@ def fail(message):
 def gh(args):
     """Run gh and return stdout, raising RuntimeError with its stderr on failure."""
     try:
-        done = subprocess.run(["gh", *args], capture_output=True, text=True)
+        done = subprocess.run(["gh", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     except FileNotFoundError as exc:
         raise RuntimeError("gh is not installed") from exc
     if done.returncode != 0:
@@ -376,6 +376,71 @@ def check_cmd(args):
     return 1 if errors else 0
 
 
+def drift_cmd(args):
+    """Waiting rows (PENDING/WATCH) whose upstream PR moved since review: merged, closed, approved, head changed,
+    or out of draft. Read-only: it reports, it never decides (docs/upstream-pr-intake.md, Automation)."""
+    if not shutil.which("gh"):
+        return fail("gh is not installed")
+    try:
+        repo = upstream_repo()
+        rows = parse_ledger(Path(args.ledger))
+    except RuntimeError as exc:
+        return fail(str(exc))
+    waiting = {"PENDING", "WATCH"} | ({"LEARN", "ADOPT"} if args.all else set())
+    watched = [r for r in rows if r["decision"] in waiting and pr_number(r["item"]) is not None]
+    try:
+        fields = "number,title,state,isDraft,headRefOid,reviewDecision,mergedAt,updatedAt"
+        live = json.loads(gh(["pr", "list", "--repo", repo, "--state", "all", "--limit", str(args.limit), "--json", fields]))
+    except (RuntimeError, ValueError) as exc:
+        return fail(f"gh pr list: {exc}")
+    by_number = {pr["number"]: pr for pr in live}
+    groups = {"merged": [], "closed": [], "approved": [], "out of draft": [], "head moved": [], "not found": []}
+    quiet = 0
+    for row in watched:
+        number = pr_number(row["item"])
+        pr = by_number.get(number)
+        if pr is None:
+            groups["not found"].append((row, None))
+            continue
+        ref = row["upstream_ref"].strip("`").strip()
+        head = pr.get("headRefOid") or ""
+        moved = bool(ref) and not head.startswith(ref[:10])
+        state = (pr.get("state") or "").lower()
+        if state == "merged" and row["state"] != "merged":
+            groups["merged"].append((row, pr))
+        elif state == "closed" and row["state"] != "closed":
+            groups["closed"].append((row, pr))
+        elif pr.get("reviewDecision") == "APPROVED" and "approv" not in row["reason"].lower():
+            groups["approved"].append((row, pr))
+        elif moved:
+            groups["head moved"].append((row, pr))
+        elif not pr.get("isDraft") and "draft" in row["reason"].lower():
+            groups["out of draft"].append((row, pr))
+        else:
+            quiet += 1
+    lines = [f"# Upstream drift: {len(watched)} waiting rows", "", f"- upstream: `{repo}` · unchanged: {quiet}", ""]
+    for name, items in groups.items():
+        if not items:
+            continue
+        lines += [f"## {name.capitalize()} ({len(items)})", ""]
+        for row, pr in items:
+            head = short(pr.get("headRefOid") or "") if pr else "-"
+            title = (pr or {}).get("title") or row["title"]
+            lines.append(
+                f"- [#{pr_number(row['item'])}](https://github.com/{repo}/pull/{pr_number(row['item'])}) {title} — "
+                f"{row['decision']}, reviewed `{row['upstream_ref'].strip('`')}` → now `{head}`; recheck: {row['recheck']}"
+            )
+        lines.append("")
+    text = "\n".join(lines)
+    if args.out:
+        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"{args.out}: {len(watched) - quiet} of {len(watched)} waiting rows moved")
+    else:
+        print(text)
+    return 0
+
+
 def main(argv):
     parser = argparse.ArgumentParser(description="Upstream PR intake helper (docs/upstream-pr-intake.md)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -393,9 +458,16 @@ def main(argv):
     checker = sub.add_parser("check", help="validate the ledger")
     checker.add_argument("--ledger", default=str(LEDGER))
 
+    drift = sub.add_parser("drift", help="waiting rows whose upstream PR moved since review (head, state, approval)")
+    drift.add_argument("--ledger", default=str(LEDGER))
+    drift.add_argument("--limit", type=int, default=6000, help="PRs to ask gh for (default 6000)")
+    drift.add_argument("--all", action="store_true", help="also LEARN and ADOPT rows")
+    drift.add_argument("--out", help="write the report here instead of stdout")
+
     args = parser.parse_args(argv)
+    commands = {"check": check_cmd, "enumerate": enumerate_cmd, "drift": drift_cmd}
     try:
-        return check_cmd(args) if args.command == "check" else enumerate_cmd(args)
+        return commands[args.command](args)
     except KeyboardInterrupt:
         return 130
 
