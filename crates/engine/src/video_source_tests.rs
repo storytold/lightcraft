@@ -266,7 +266,8 @@ fn video_source_damaged_clips_never_panic() {
     for keep in [clip.len() * 3 / 4, clip.len() / 2, 200, 16, 0] {
         let Some(bytes) = clip.get(..keep) else { continue };
         match open(bytes.to_vec()) {
-            Err(e) => assert!(!e.is_empty()),
+            // a plain reason the UI translates, the technical detail in the log
+            Err(e) => assert!(crate::files::video_reasons().contains(&e.as_str()), "{e}"),
             Ok(src) => {
                 let mut p = VideoPlayer::start(PhotoId(1), Box::new(src), Arc::new(ManualClock::default())).unwrap();
                 p.seek(0.5);
@@ -493,4 +494,28 @@ fn video_source_halves_again_while_behind_once_the_conversion_is_slow_again() {
     let mut b = Adapt::default();
     b.after(0.010, 0.040, false, frame);
     assert!(!b.half);
+}
+
+/// An 8K clip on playback's decoder threads asks for more picture memory than the fixed 768 MiB
+/// playback once gave its decoder: it plays, the decoder holding what the clip asks for, up to the
+/// codecs' ceiling. Found with an 8K drone clip that played as "the clip is damaged".
+#[test]
+fn video_source_plays_an_8k_clip_on_playbacks_decoder_threads() {
+    if !decoder_here() {
+        return;
+    }
+    let mut src = open_with(h264_big(1, 7680, 4320), &options(PLAYBACK_THREADS)).unwrap_or_else(|e| panic!("the 8K clip was refused: {e}"));
+    assert!(src.info().decoder_bytes > 768 << 20, "the case this guards: {} MiB", src.info().decoder_bytes >> 20);
+    assert_eq!(all_frames(&mut src).len(), 1);
+}
+
+/// A clip whose decoder would need more than the ceiling is too large to decode, never damaged.
+#[test]
+fn video_source_says_a_clip_over_the_ceiling_is_too_large_not_damaged() {
+    if !decoder_here() {
+        return;
+    }
+    let opts = StreamOptions { memory_budget: 64 << 20, ..options(PLAYBACK_THREADS) };
+    let e = open_with(h264_big(1, 7680, 4320), &opts).err();
+    assert_eq!(e.as_deref(), Some(lightcraft_codecs::video_stream::reason::TOO_LARGE_TO_DECODE));
 }

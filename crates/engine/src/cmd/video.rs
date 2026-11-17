@@ -219,7 +219,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Video Playback State",
             [],
             None,
-            "{} → {open, available (this build decodes video), opening, playing, ended, position, duration (seconds), frameRate, width, height, orientation (EXIF 1 to 8), codec, frame: {pts, draft, width, height (the frame's own size: half while playback falls behind)}|null, behind (playback is dropping late frames), shown, dropped (late frames skipped), decoded, queued, queuedBytes, audio: {track, played: false}|null (audio is not played yet), error|null}",
+            "{} → {open, available (this build decodes video), opening, playing, ended, position, duration (seconds), frameRate, width, height, orientation (EXIF 1 to 8), codec, frame: {pts, draft, width, height (the frame's own size: half while playback falls behind)}|null, behind (playback is dropping late frames), shown, dropped (late frames skipped), decoded, queued, queuedBytes, decoderBytes (what the decoder may hold for its pictures), memoryBytes (all playback holds: decoder, frames waiting, the frame shown), audio: {track, played: false}|null (audio is not played yet), error|null}",
             always,
             state
         ),

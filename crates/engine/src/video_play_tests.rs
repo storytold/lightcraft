@@ -48,6 +48,7 @@ fn synthetic(frames: usize, gop: usize) -> (Synthetic, Arc<AtomicU64>) {
             orientation: lightcraft_geom::Orientation::Normal,
             codec: "Test".into(),
             audio: None,
+            decoder_bytes: 0,
         },
         frames,
         gop,

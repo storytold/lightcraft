@@ -40,6 +40,9 @@ impl FrameSource for Fake {
     fn set_draft(&mut self, _: bool) {}
 }
 
+/// What the fake clip's decoder may hold.
+const FAKE_DECODER_BYTES: u64 = 3 << 20;
+
 fn fake_opener(path: &str) -> Result<Box<dyn FrameSource>, String> {
     if path.contains("missing") {
         return Err("The clip could not be opened: no such file".into());
@@ -52,6 +55,7 @@ fn fake_opener(path: &str) -> Result<Box<dyn FrameSource>, String> {
         orientation: lightcraft_geom::Orientation::Rotate90,
         codec: "H.264".into(),
         audio: Some("AAC, 48 kHz, stereo".into()),
+        decoder_bytes: FAKE_DECODER_BYTES,
     };
     Ok(Box::new(Fake { info, next: 0 }))
 }
@@ -268,4 +272,25 @@ fn a_build_without_video_decoding_says_so_before_starting_anything() {
     assert!(s.video.player.is_none(), "no decode thread for a build that can't decode");
     let v = s.execute("video.state", &json!({})).unwrap();
     assert_eq!((v["open"].clone(), v["available"].clone()), (json!(false), json!(false)));
+}
+
+/// The playing clip's memory (its decoder's pictures and its frames) shows in `video.state` and
+/// in `library.memory` → `playback`, and is gone once playback stops.
+#[test]
+fn playback_memory_counts_the_decoder_and_the_frames() {
+    let (mut s, _, _) = session();
+    assert_eq!(s.execute("library.memory", &json!({})).unwrap()["playback"], json!({"count": 0, "bytes": 0}));
+    s.execute("video.play", &json!({})).unwrap();
+    let v = state_until(&mut s, |v| v["frame"].is_object());
+    let decoder = FAKE_DECODER_BYTES as usize;
+    assert_eq!(v["decoderBytes"], json!(decoder));
+    // the decoder's figure, the frame shown (4 × 2 RGBA) and the frames waiting (their
+    // recycled buffers come on top)
+    let queued = v["queuedBytes"].as_u64().unwrap() as usize;
+    assert!(v["memoryBytes"].as_u64().unwrap() as usize >= decoder + 32 + queued, "{v}");
+    let m = s.execute("library.memory", &json!({})).unwrap();
+    assert_eq!(m["playback"]["count"], 1);
+    assert!(m["playback"]["bytes"].as_u64().unwrap() as usize >= decoder + 32, "{m}");
+    s.execute("video.stop", &json!({})).unwrap();
+    assert_eq!(s.execute("library.memory", &json!({})).unwrap()["playback"], json!({"count": 0, "bytes": 0}));
 }

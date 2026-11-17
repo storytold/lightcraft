@@ -65,6 +65,10 @@ pub struct SourceInfo {
     /// The clip's audio track, described for people ("AAC, 48 kHz, stereo"); `None` when it has none.
     /// Not played: LightCraft has no audio output yet.
     pub audio: Option<String>,
+    /// Bytes of decoded pictures the clip's decoder may hold (from its sequence header and the
+    /// decoder threads, up to the codecs' ceiling): counted with the frames in
+    /// [`VideoPlayer::memory_bytes`].
+    pub decoder_bytes: u64,
 }
 
 impl SourceInfo {
@@ -78,6 +82,7 @@ impl SourceInfo {
             orientation: lightcraft_geom::Orientation::Normal,
             codec: String::new(),
             audio: None,
+            decoder_bytes: 0,
         }
     }
 }
@@ -699,6 +704,20 @@ impl VideoPlayer {
         last.min(self.info.duration.max(0.0))
     }
 
+    /// The memory playback holds: the decoder's pictures, the decoded frames waiting and their
+    /// recycled buffers, and the frame on screen (`library.memory` → `playback`).
+    pub fn memory_bytes(&self) -> usize {
+        Self::held(&self.channel.lock(), self.current.as_ref(), self.info.decoder_bytes)
+    }
+
+    fn held(s: &Shared, current: Option<&Arc<VideoFrame>>, decoder_bytes: u64) -> usize {
+        usize::try_from(decoder_bytes)
+            .unwrap_or(usize::MAX)
+            .saturating_add(s.queued_bytes)
+            .saturating_add(s.pool_bytes)
+            .saturating_add(current.map_or(0, |f| f.bytes()))
+    }
+
     /// Everything agents and the UI read about playback.
     pub fn state(&self) -> Value {
         let s = self.channel.lock();
@@ -721,6 +740,8 @@ impl VideoPlayer {
             "decoded": s.decoded,
             "queued": s.queue.len(),
             "queuedBytes": s.queued_bytes,
+            "decoderBytes": self.info.decoder_bytes,
+            "memoryBytes": Self::held(&s, self.current.as_ref(), self.info.decoder_bytes),
             "audio": self.info.audio.as_ref().map(|a| json!({"track": a, "played": false})),
             "error": self.error,
         })

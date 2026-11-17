@@ -61,6 +61,7 @@ fn opener(_path: &str) -> Result<Box<dyn FrameSource>, String> {
         orientation: lightcraft_geom::Orientation::Rotate90,
         codec: "H.264".into(),
         audio: Some("AAC, 48 kHz, stereo".into()),
+        decoder_bytes: 0,
     };
     Ok(Box::new(Fake { info, next: 0 }))
 }

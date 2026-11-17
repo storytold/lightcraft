@@ -247,6 +247,9 @@ pub struct MemoryReport {
     pub rendered: Usage,
     /// Sum of the above.
     pub engine_bytes: usize,
+    /// The playing clip (count 1 while one is open): its decoder's pictures and its frames
+    /// ([`crate::video_play::VideoPlayer::memory_bytes`]). Not a cache, so not in `engine_bytes`.
+    pub playback: Usage,
     pub gpu: GpuUsage,
     /// The memory budget (see [`budget`]) and the engine caches' share of it.
     pub budget: usize,
@@ -306,6 +309,7 @@ impl crate::Session {
             full_source,
             rendered,
             engine_bytes: thumb_sources.bytes + preview_sources.bytes + full_source.bytes + rendered.bytes,
+            playback: self.video.player.as_ref().map_or_else(Usage::default, |p| Usage::new(1, p.memory_bytes())),
             gpu: gpu_usage(),
             budget: budget(),
             cache_budget: self.media.budget(),

@@ -15,10 +15,6 @@ use crate::video_play::{FrameSource, Next, SourceInfo, VideoFrame};
 /// Decoder threads for playback: enough for 4K HEVC Main 10 at several times real time on a
 /// laptop, leaving cores for the UI and the GPU driver.
 const PLAYBACK_THREADS: usize = 6;
-/// Decoded pictures a playback decoder may hold (references and reordering), per clip.
-const DECODER_MEMORY: u64 = 768 << 20;
-/// The largest coded picture read (a 4K intra picture at a high bit rate is a few MB).
-const MAX_SAMPLE_BYTES: u32 = 64 << 20;
 /// Pictures at least this big (pixels) may be shown at half size while playback falls behind
 /// ([`Adapt`]); smaller ones always play at full size.
 const HALVE_MIN: usize = 1_000_000;
@@ -130,15 +126,10 @@ pub fn available() -> bool {
     lightcraft_codecs::video_stream::video_decoding_available()
 }
 
-/// A sentence for people about why a clip can't be played.
-pub fn describe(e: &VideoError) -> String {
-    match e {
-        VideoError::Unsupported(why) => why.clone(),
-        VideoError::Malformed(why) => format!("The clip is damaged: {why}"),
-        VideoError::TooLarge(why) => format!("The clip is too large to play: {why}"),
-        VideoError::Io(why) => format!("The clip could not be read: {why}"),
-        VideoError::Cancelled => "Stopped".to_string(),
-    }
+/// Why a clip can't be played, in the words the poster card uses (plain sentences the UI
+/// translates; a damaged clip's technical detail goes to the log).
+fn reason(e: &VideoError) -> String {
+    crate::files::video_reason(e)
 }
 
 /// The clip at `path` (a file on this computer), ready to play. Why it can't be opened is worded
@@ -162,8 +153,19 @@ pub fn open_file(_path: &str) -> Result<Box<dyn FrameSource>, String> {
 /// A clip from any byte source (tests open clips held in memory).
 pub fn open(src: impl lightcraft_codecs::video_stream::ClipSource + 'static) -> Result<CodecSource, String> {
     let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, PLAYBACK_THREADS);
-    let opts = StreamOptions { threads, memory_budget: DECODER_MEMORY, max_sample_bytes: MAX_SAMPLE_BYTES };
-    let stream = VideoStream::open(src, &opts).map_err(|e| describe(&e))?;
+    open_with(src, &options(threads))
+}
+
+/// The stream options playback decodes with on `threads` decoder threads. The decoder's memory
+/// is what the clip's sequence header asks for on them, up to the codecs' ceiling (one figure
+/// for posters and playback); over it the clip is too large to decode, never damaged.
+fn options(threads: usize) -> StreamOptions {
+    StreamOptions { threads, ..StreamOptions::default() }
+}
+
+/// [`open`] with the stream's options given (tests fix the decoder threads and the ceiling).
+fn open_with(src: impl lightcraft_codecs::video_stream::ClipSource + 'static, opts: &StreamOptions) -> Result<CodecSource, String> {
+    let stream = VideoStream::open(src, opts).map_err(|e| reason(&e))?;
     let si = stream.info();
     let audio = si.audio.as_ref().map(|a| {
         let channels = match a.channels {
@@ -181,6 +183,7 @@ pub fn open(src: impl lightcraft_codecs::video_stream::ClipSource + 'static) -> 
         orientation: si.orientation,
         codec: si.codec.name().to_string(),
         audio,
+        decoder_bytes: si.decoder_bytes,
     };
     let start = if si.start_seconds.is_finite() { si.start_seconds } else { 0.0 };
     let convert = Convert { converter: None, draft: false, adapt: Adapt::default(), max_side: 0, half: [Vec::new(), Vec::new(), Vec::new()], start };
@@ -269,7 +272,7 @@ impl Convert {
         let key = (f.colour, f.bit_depth, pic.width, pic.height);
         if self.converter.as_ref().is_none_or(|(k, _)| *k != key) {
             // (the full size picks the defaults for unspecified code points)
-            let c = Converter::new(f.colour, f.bit_depth, f.width, f.height).map_err(|e| describe(&e.into()))?;
+            let c = Converter::new(f.colour, f.bit_depth, f.width, f.height).map_err(|e| reason(&e.into()))?;
             self.converter = Some((key, c));
         }
         let Some((_, conv)) = &self.converter else {
@@ -279,7 +282,7 @@ impl Convert {
         buffer.clear();
         buffer.resize(len, 0);
         let t = Instant::now();
-        conv.to_srgb8(&pic, bytemuck::cast_slice_mut(&mut buffer)).map_err(|e| describe(&e.into()))?;
+        conv.to_srgb8(&pic, bytemuck::cast_slice_mut(&mut buffer)).map_err(|e| reason(&e.into()))?;
         let secs = t.elapsed().as_secs_f64();
         let frame = VideoFrame {
             pts: f.seconds - self.start,
@@ -299,7 +302,7 @@ fn decode(stream: &mut VideoStream, stop: &mut dyn FnMut() -> bool) -> Ahead {
         Ok(Some(f)) => Ahead::Picture(f),
         Ok(None) => Ahead::End,
         Err(VideoError::Cancelled) => Ahead::Stopped,
-        Err(e) => Ahead::Failed(describe(&e)),
+        Err(e) => Ahead::Failed(reason(&e)),
     }
 }
 
@@ -310,7 +313,7 @@ impl FrameSource for CodecSource {
 
     fn seek(&mut self, seconds: f64) -> Result<(), String> {
         self.ahead = None;
-        self.stream.seek(seconds + self.convert.start, SeekMode::Exact).map_err(|e| describe(&e))
+        self.stream.seek(seconds + self.convert.start, SeekMode::Exact).map_err(|e| reason(&e))
     }
 
     fn next_frame(&mut self, stop: &mut dyn FnMut() -> bool, buffer: Vec<u8>) -> Result<Next, String> {
