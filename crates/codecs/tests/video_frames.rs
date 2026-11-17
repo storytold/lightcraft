@@ -744,3 +744,39 @@ fn a_picture_over_the_conversion_budget_converts_smaller() {
     let p = poster(&bytes, &PosterOptions { max_convert_pixels: 64 * 48 - 1, ..opts() }).unwrap();
     assert_eq!((p.image.width, p.image.height), (43, 32), "factor 3, partial blocks at the edges");
 }
+
+/// A file with no movie header that is a valid clip of a kind not read here (an AVCHD camcorder's
+/// MPEG transport stream, `.mts` / `.m2ts`, or a bare H.264 / HEVC stream with no container) is
+/// unsupported, not a damaged clip; anything else without a movie header still is damaged.
+#[test]
+fn a_transport_stream_or_a_bare_stream_is_unsupported_not_damaged() {
+    let packets = |prefix: usize| -> Vec<u8> {
+        (0..8)
+            .flat_map(|i| {
+                let mut p = vec![0u8; prefix + 188];
+                p[..prefix].fill(i as u8);
+                p[prefix] = 0x47;
+                p
+            })
+            .collect()
+    };
+    let annex_b = [0u8, 0, 0, 1, 0x09, 0x10, 0, 0, 0, 1, 0x67, 0x64, 0, 0x28].repeat(4);
+    let short_start_code = [0u8, 0, 1, 0x40, 0x01, 0x0c, 0x01].repeat(4);
+    for (what, bytes, says) in [
+        ("transport stream", packets(0), "transport stream"),
+        ("timestamped transport stream", packets(4), "transport stream"),
+        ("bare stream", annex_b.clone(), "container"),
+        ("bare stream, 3-byte start code", short_start_code, "container"),
+    ] {
+        match VideoStream::open(bytes, &StreamOptions::default()) {
+            Err(VideoError::Unsupported(m)) => assert!(m.contains(says), "{what}: {m}"),
+            other => panic!("{what}: {:?}", other.err()),
+        }
+    }
+    // (one sync byte, or a start code past the beginning, is no evidence)
+    let mut junk = vec![0x55u8; 600];
+    junk[0] = 0x47;
+    junk[300..304].copy_from_slice(&[0, 0, 0, 1]);
+    assert!(matches!(VideoStream::open(junk, &StreamOptions::default()), Err(VideoError::Malformed(_))));
+    assert!(matches!(VideoStream::open(Vec::new(), &StreamOptions::default()), Err(VideoError::Malformed(_) | VideoError::Io(_))));
+}

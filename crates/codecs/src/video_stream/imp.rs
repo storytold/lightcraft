@@ -30,6 +30,27 @@ fn demux_error(e: isobmff::Error) -> VideoError {
     }
 }
 
+/// Why a file with no movie header has no pictures here: a valid clip of a kind not read (an
+/// AVCHD camcorder's MPEG transport stream, a bare H.264 / HEVC stream) is unsupported, not
+/// damaged. Told by its first bytes: a transport stream's sync byte at the start of two
+/// consecutive 188-byte packets (`.m2ts` puts a 4-byte timestamp before each: 192 bytes apart), a
+/// bare stream's start code at the very start.
+fn not_a_movie(src: &Src) -> VideoError {
+    let mut head = [0u8; 4 + 192 + 1];
+    let n = (src.len().min(head.len() as u64)) as usize;
+    if src.read_at(0, &mut head[..n]).is_ok() {
+        let head = &head[..n];
+        let sync = |at: usize, stride: usize| head.get(at) == Some(&0x47) && head.get(at + stride) == Some(&0x47);
+        if sync(0, 188) || sync(4, 192) {
+            return VideoError::Unsupported("MPEG transport stream video (AVCHD .mts / .m2ts) can't be read yet".into());
+        }
+        if head.starts_with(&[0, 0, 1]) || head.starts_with(&[0, 0, 0, 1]) {
+            return VideoError::Unsupported("a bare H.264 / HEVC stream without an MP4 or QuickTime container can't be read yet".into());
+        }
+    }
+    demux_error(isobmff::Error::NoMoov)
+}
+
 /// The first audio track's description.
 fn audio_info(file: &Mp4File) -> Option<AudioTrackInfo> {
     let t = file.tracks.iter().find(|t| t.kind == TrackKind::Audio)?;
@@ -381,7 +402,10 @@ impl VideoStream {
     /// Reads the clip's headers (its `moov`) and gets the decoder ready for the first picture.
     pub fn open(src: impl ClipSource + 'static, opts: &StreamOptions) -> Result<VideoStream, VideoError> {
         let src = Src(Box::new(src));
-        let file = isobmff::open(&src).map_err(demux_error)?;
+        let file = isobmff::open(&src).map_err(|e| match e {
+            isobmff::Error::NoMoov => not_a_movie(&src),
+            e => demux_error(e),
+        })?;
         let track = pick_track(&file)?;
         let t = file.tracks.get(track).ok_or_else(|| VideoError::Malformed("no video track".into()))?;
         let description = t.samples.first().map_or(1, |s| s.description_index);
