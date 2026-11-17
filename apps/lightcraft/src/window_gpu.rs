@@ -114,9 +114,10 @@ pub fn choose(files: &Files, compose_window: bool) -> Chosen {
         // via window_backends() instead of probing with platform order (GL first).
         // BackendChoice::Off is treated as Auto for the window (window_backends converts Off to Auto).
         let env_choice = backend::env_choice();
-        if matches!(env_choice, backend::BackendChoice::Auto | backend::BackendChoice::Off) {
+        if matches!(env_choice, backend::BackendChoice::Auto) {
             pick_probed(files, &order, &mut problems, compose_window)
         } else {
+            // Off is treated as Auto for the window (window_backends converts Off to Auto)
             Some((WindowRenderer::Wgpu(backend::window_backends()), None))
         }
     } else {
