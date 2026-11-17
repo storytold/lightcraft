@@ -35,7 +35,7 @@ const HEIF_PACKAGES: &[&str] = &["lightcraft-codecs"];
 const EMBEDDED: &[(&str, &[&str])] = &[
     ("assets/app-icon/", &["lightcraft", "lightcraft-ui-egui"]),
     ("assets/camera-profiles/", &["lightcraft-engine"]),
-    ("assets/camera-tone/", &["lightcraft-engine"]),
+    ("assets/camera-tone/", &["lightcraft-engine", "lightcraft-pipeline"]),
     ("assets/fonts/", &["lightcraft-engine", "lightcraft-ui-egui"]),
     ("contributors/", &["lightcraft-ui-egui"]),
     ("docs/whats-new.md", &["lightcraft-ui-egui"]),
