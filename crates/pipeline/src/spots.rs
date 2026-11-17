@@ -297,7 +297,7 @@ pub struct SpotLayout {
     /// The stroke's points.
     pub pts: Vec<(f32, f32)>,
     /// Where the patch is read from, relative to the target; `None`: chosen automatically
-    /// ([`auto_source`] around the first point, on the image as the earlier spots left it).
+    /// ([`auto_source`] around the first point, on the pre-spot snapshot).
     pub offset: Option<(f32, f32)>,
     /// The box the spot works in: left, top, width, height (inside the image, never empty).
     pub bx: usize,
