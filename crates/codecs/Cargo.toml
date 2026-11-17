@@ -21,7 +21,7 @@ craft-metadata = { workspace = true }
 craft-tiff = { workspace = true }
 craft-gif = { workspace = true }
 craft-psd = { workspace = true }
-craft-heif = { workspace = true, optional = true }
+craft-heif = { workspace = true, optional = true, features = ["decode"] }
 serde = { workspace = true }
 bytemuck = { workspace = true }
 thiserror = { workspace = true }
