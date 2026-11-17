@@ -215,20 +215,12 @@ fn get_from(model: &str, directory: Option<&Path>) -> Option<Arc<CameraProfile>>
                 if !path.extension().is_some_and(|x| x == "json") || !path.is_file() {
                     continue;
                 }
-                let rank = if path.file_stem().map_or(false, |s| {
-                    normalize_for_local_match(&s.to_string_lossy()) == needle
-                }) {
-                    1
-                } else {
-                    2
-                };
+                let rank = if path.file_stem().map_or(false, |s| normalize_for_local_match(&s.to_string_lossy()) == needle) { 1 } else { 2 };
                 ranked.push((rank, path));
             }
             ranked.sort();
             for (_, path) in ranked {
-                if let Some(p) = load(&path).ok()
-                    .filter(|p| normalize_for_local_match(&p.model) == needle)
-                {
+                if let Some(p) = load(&path).ok().filter(|p| normalize_for_local_match(&p.model) == needle) {
                     return Some(Arc::new(p));
                 }
             }
@@ -576,9 +568,7 @@ mod tests {
             let _ = tx.send(found.map(|profile| profile.files));
         });
 
-        let files = rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .expect("local profile lookup blocked on a special file");
+        let files = rx.recv_timeout(std::time::Duration::from_secs(1)).expect("local profile lookup blocked on a special file");
         assert_eq!(files, Some(2), "local profile selection must not depend on filesystem iteration order");
 
         let _ = std::fs::remove_dir_all(&dir);
