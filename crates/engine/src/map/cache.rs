@@ -80,8 +80,8 @@ impl TileMeta {
     /// stored response's lifetime again, from now; the validators it sent, else the old ones.
     pub fn revalidated<'a>(&self, now: i64, header: impl Fn(&str) -> Option<&'a str>) -> (TileMeta, bool) {
         let (fresh, store) = TileMeta::from_response(now, &header);
-        let cc = header("cache-control").unwrap_or_default().to_ascii_lowercase();
-        let gives_freshness = cc.contains("max-age") || cc.contains("no-cache") || header("expires").is_some();
+        let gives_freshness = header("expires").is_some()
+            || directives(header("cache-control").unwrap_or_default()).any(|(name, _)| name == "max-age" || name == "no-cache");
         let expires =
             if gives_freshness { fresh.expires } else { now.saturating_add(self.expires.saturating_sub(self.fetched).clamp(0, MAX_FRESH_SECS)) };
         let meta = TileMeta {
@@ -119,12 +119,7 @@ pub fn freshness(now: i64, cache_control: Option<&str>, expires: Option<&str>, d
     let mut store = true;
     let mut max_age: Option<i64> = None;
     let mut no_cache = false;
-    for d in cache_control.unwrap_or_default().split(',') {
-        let d = d.trim().to_ascii_lowercase();
-        let (name, value) = match d.split_once('=') {
-            Some((n, v)) => (n.trim().to_string(), Some(v.trim().trim_matches('"').to_string())),
-            None => (d.clone(), None),
-        };
+    for (name, value) in directives(cache_control.unwrap_or_default()) {
         match name.as_str() {
             "no-store" => store = false,
             "no-cache" => no_cache = true,
@@ -149,6 +144,17 @@ pub fn freshness(now: i64, cache_control: Option<&str>, expires: Option<&str>, d
         DEFAULT_FRESH_SECS
     };
     (now.saturating_add(lifetime.clamp(0, MAX_FRESH_SECS)), store)
+}
+
+/// The directives of a `Cache-Control` value: each name (lower-cased) and its value, if any.
+fn directives(cache_control: &str) -> impl Iterator<Item = (String, Option<String>)> + '_ {
+    cache_control.split(',').map(|d| {
+        let d = d.trim().to_ascii_lowercase();
+        match d.split_once('=') {
+            Some((n, v)) => (n.trim().to_string(), Some(v.trim().trim_matches('"').to_string())),
+            None => (d, None),
+        }
+    })
 }
 
 /// A tile read from the cache.
@@ -492,6 +498,8 @@ mod tests {
         assert_eq!((r.fetched, r.expires, r.etag.as_deref(), store), (500, 560, Some("\"abc\""), true));
         let (r, _) = m.revalidated(500, headers(&[("Cache-Control", "public")]));
         assert_eq!(r.expires, 560, "a Cache-Control without a lifetime keeps the stored one");
+        let (r, _) = m.revalidated(500, headers(&[("Cache-Control", "x-max-age=10, x-no-cache")]));
+        assert_eq!(r.expires, 560, "only the directives themselves give a lifetime, not names containing them");
         let (r, _) = m.revalidated(500, headers(&[("ETag", "\"new\""), ("Cache-Control", "max-age=10")]));
         assert_eq!((r.expires, r.etag.as_deref()), (510, Some("\"new\"")));
         let (r, _) = m.revalidated(500, headers(&[("Cache-Control", "no-cache")]));

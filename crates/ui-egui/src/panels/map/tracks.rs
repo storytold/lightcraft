@@ -418,8 +418,10 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
             // the session's command, then the map fits a newly loaded (or picked) track
             let r = app.session.execute(id, p).map_err(|e| e.to_string());
             // a track log loaded or cleared here replaces any still being read: that one, when it
-            // arrives, must not overwrite this (a query or an offset leaves it to come)
-            let replaced = ["path", "gpx"].iter().any(|k| p.get(*k).is_some()) || p.get("clear") == Some(&Value::Bool(true));
+            // arrives, must not overwrite this (a query or an offset leaves it to come; a null
+            // `path` / `gpx` is not given, as the engine reads it)
+            let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+            let replaced = given("path") || given("gpx") || p.get("clear") == Some(&Value::Bool(true));
             if r.is_ok() && replaced {
                 app.map_tracks.pending = None;
             }

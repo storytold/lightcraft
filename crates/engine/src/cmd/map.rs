@@ -71,11 +71,12 @@ fn commit_gps(s: &mut Session, targets: &[lightcraft_catalog::PhotoId], gps: Opt
         .collect();
     let count = ops.len();
     if count > 0 {
-        // before the commit: the sidecar written when it lands already follows LightCraft's position
+        s.commit(label, Op::Batch { ops })?;
+        // once it landed (a refused commit marks nothing): the sidecars, written after the
+        // command, follow LightCraft's position
         let before = s.gps_edited.len();
         s.gps_edited.extend(targets.iter().copied());
         s.gps_owned_grew(before);
-        s.commit(label, Op::Batch { ops })?;
     }
     Ok(count)
 }
@@ -189,10 +190,7 @@ fn tile_source(s: &mut Session, p: &Value) -> Result<Value> {
         let old = s.map.source().clone();
         s.map.choose(next).map_err(|e| bad(SOURCE, e))?;
         // a source that can't be saved isn't kept: an error means nothing changed
-        if let Err(e) = s.save_prefs() {
-            s.map.restore(old);
-            return Err(e);
-        }
+        s.save_prefs_or_undo(|s| s.map.restore(old))?;
     }
     Ok(source_json(s))
 }

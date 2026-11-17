@@ -212,6 +212,9 @@ fn a_track_loaded_while_another_is_read_is_not_overwritten() {
     let path = temp_gpx("race", &gpx);
     h.app.run("map.loadTrackLog", json!({"path": path.to_string_lossy()})).unwrap();
     assert!(state(&mut h)["trackLog"]["loading"].is_string());
+    // a null path is no path (the engine reads it as a query): the load goes on
+    h.app.run("map.trackLog", json!({"path": null, "gpx": null})).unwrap();
+    assert!(state(&mut h)["trackLog"]["loading"].is_string(), "a query leaves the load to come");
     h.app.run("map.trackLog", json!({"gpx": TWO_TRACKS})).unwrap();
     assert!(state(&mut h)["trackLog"]["loading"].is_null(), "the earlier load is given up");
     // the worker finishes (its row goes); what it read is dropped

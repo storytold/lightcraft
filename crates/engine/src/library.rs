@@ -138,9 +138,10 @@ pub struct Library {
     /// Why the last write of presets.json failed; `None` once it is written. While set, the preset
     /// changes exist only in memory and count as unsaved ([`Session::unsaved`], issue #2266).
     presets_error: Option<String>,
-    /// A write of prefs.json failed and hasn't succeeded since (what it holds, such as which
-    /// photos' GPS is LightCraft's, exists only in memory): retried by [`Session::persist`].
-    prefs_dirty: bool,
+    /// Why the last write of prefs.json failed; `None` once one lands. While set, what it holds
+    /// (such as which photos' GPS is LightCraft's) exists only in memory: retried by
+    /// [`Session::persist`], and counted as unsaved ([`Session::unsaved`]).
+    prefs_error: Option<String>,
     /// Records the catalog log's own thread holds because writing them failed (it retries them),
     /// and why; refreshed by every persist and every frame ([`Session::persist_if_dirty`]). While
     /// set they count as unsaved ([`Session::unsaved`]), so quitting asks first.
@@ -883,7 +884,7 @@ impl Session {
             last_error: None,
             unsaved_error: None,
             presets_error: None,
-            prefs_dirty: false,
+            prefs_error: None,
             log_held: None,
             retry_at: None,
             forgot_local: None,
@@ -954,7 +955,7 @@ impl Session {
             lib.last_error = Some(format!("compaction: {e}"));
         }
         // a prefs.json write that failed (GPS ownership, a preference): retried until it lands
-        if self.library.as_ref().is_some_and(|l| l.prefs_dirty)
+        if self.library.as_ref().is_some_and(|l| l.prefs_error.is_some())
             && let Err(e) = self.save_prefs()
         {
             log::error!("library: {e}");
@@ -992,7 +993,7 @@ impl Session {
     /// changed outside [`Session::execute`]).
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
-        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some() || l.prefs_dirty);
+        let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some() || l.prefs_error.is_some());
         // records the log's thread can't write: a snapshot (a fresh file holding everything) is due
         let log_held = self.library.as_ref().is_some_and(|l| l.log_held.is_some());
         if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || log_held) && !backing_off {
@@ -1028,15 +1029,17 @@ impl Session {
     }
 
     /// Changes applied in memory but not yet written to disk because saving failed: the number of
-    /// queued ops (plus one for presets.json) and why (`None` when everything is saved, or no library
+    /// queued ops (plus one each for presets.json and prefs.json) and why (`None` when everything is saved, or no library
     /// is open). Retried by every command and by [`Session::persist_if_dirty`].
     pub fn unsaved(&self) -> Option<(usize, &str)> {
         let lib = self.library.as_ref()?;
         let ops = lib.unsaved_error.as_deref().filter(|_| !self.pending_log.is_empty());
         let presets = lib.presets_error.as_deref();
+        let prefs = lib.prefs_error.as_deref();
         let held = lib.log_held.as_ref().map(|(n, why)| (*n, why.as_str()));
-        let n = ops.map_or(0, |_| self.pending_log.len()) + held.map_or(0, |(n, _)| n) + usize::from(presets.is_some());
-        ops.or(held.map(|(_, why)| why)).or(presets).map(|why| (n, why))
+        let n =
+            ops.map_or(0, |_| self.pending_log.len()) + held.map_or(0, |(n, _)| n) + usize::from(presets.is_some()) + usize::from(prefs.is_some());
+        ops.or(held.map(|(_, why)| why)).or(presets).or(prefs).map(|why| (n, why))
     }
 
     /// Flush everything and write a snapshot (on quit). Ends an open interaction first.
@@ -1121,12 +1124,27 @@ impl Session {
     /// set didn't grow now). A failure is logged, not the command's: the position is set, the set
     /// stays for this session, and [`Session::persist`] retries the write.
     pub(crate) fn gps_owned_grew(&mut self, before: usize) {
-        let pending = self.library.as_ref().is_some_and(|l| l.prefs_dirty);
+        let pending = self.library.as_ref().is_some_and(|l| l.prefs_error.is_some());
         if (self.gps_edited.len() != before || pending)
             && let Err(e) = self.save_prefs()
         {
             log::warn!("library: the photos' GPS ownership wasn't saved: {e}");
         }
+    }
+
+    /// Save the library preferences after a change that `undo` takes back if the write fails. The
+    /// change then never happened, so the failed write isn't left pending as unsaved
+    /// ([`Session::unsaved`]) unless an earlier one already was.
+    pub(crate) fn save_prefs_or_undo(&mut self, undo: impl FnOnce(&mut Self)) -> Result<()> {
+        let pending = self.library.as_ref().and_then(|l| l.prefs_error.clone());
+        let saved = self.save_prefs();
+        if saved.is_err() {
+            undo(self);
+            if let Some(lib) = self.library.as_mut() {
+                lib.prefs_error = pending;
+            }
+        }
+        saved
     }
 
     /// Save the library preferences (no-op for in-memory sessions).
@@ -1174,9 +1192,9 @@ impl Session {
             ));
         }
         // a failed write stays pending (retried by persist) until one lands
-        let written = lib.files.write_atomic("prefs.json", &v);
-        lib.prefs_dirty = written.is_err();
-        written.map_err(|e| EngineError::Other(format!("prefs: {e}")))
+        let written = lib.files.write_atomic("prefs.json", &v).map_err(|e| format!("prefs: {e}"));
+        lib.prefs_error = written.as_ref().err().cloned();
+        written.map_err(EngineError::Other)
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

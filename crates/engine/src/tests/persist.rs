@@ -233,8 +233,32 @@ fn a_failed_prefs_write_is_retried_until_it_lands() {
     files.set_failing(true);
     s.execute("photo.setGps", &json!({"lat": 1.0, "lon": 2.0})).unwrap();
     assert!(owned(&files).is_empty(), "the write failed");
+    // meanwhile it counts as unsaved (the quit prompt asks, a backup refuses)
+    let (n, why) = s.unsaved().expect("prefs.json unsaved");
+    assert!(n >= 1 && why.starts_with("prefs:"), "{n} {why}");
     files.set_failing(false);
     // any later save writes it (the set didn't change)
     s.execute("library.info", &json!({})).unwrap();
     assert_eq!(owned(&files), vec![json!(id.0)]);
+    assert!(s.unsaved().is_none(), "written");
+}
+
+/// A preference change whose prefs.json write failed is taken back, so nothing is left unsaved:
+/// the failure isn't reported as pending (a quit would ask about a change that never happened).
+#[test]
+fn a_preference_taken_back_after_a_failed_write_leaves_nothing_unsaved() {
+    let files = Flaky::default();
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, true).unwrap();
+    let was = s.hold_view;
+    files.set_failing(true);
+    assert!(s.execute("library.holdView", &json!({"on": !was})).is_err());
+    assert_eq!(s.hold_view, was, "not kept");
+    assert_eq!(s.unsaved(), None, "nothing changed, so nothing is unsaved");
+    // a failure already pending stays pending
+    s.execute("photo.setGps", &json!({"lat": 1.0, "lon": 2.0})).unwrap();
+    assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("prefs:")));
+    assert!(s.execute("library.holdView", &json!({"on": !was})).is_err());
+    assert!(s.unsaved().is_some_and(|(_, why)| why.starts_with("prefs:")), "the GPS ownership is still unsaved");
 }

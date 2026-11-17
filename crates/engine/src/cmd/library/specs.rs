@@ -282,11 +282,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if on != s.hold_view {
                     let was = s.hold_view;
                     s.hold_view = on;
-                    if let Err(e) = s.save_prefs() {
-                        // not kept: not changed either, so asking again does what was asked
-                        s.hold_view = was;
-                        return Err(e);
-                    }
+                    // not kept: not changed either, so asking again does what was asked
+                    s.save_prefs_or_undo(|s| s.hold_view = was)?;
                     s.refresh_view();
                 }
                 Ok(json!({"hold": s.hold_view}))
@@ -729,14 +726,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => None,
                 };
                 let mut ops = Vec::new();
-                let owned_before = s.gps_edited.len();
+                let mut owned = Vec::new();
                 for id in targets {
                     let Some(ph) = s.catalog.photo(id) else { continue };
                     let mut m = ph.meta.clone();
                     if let Some(g) = gps {
                         m.gps = g;
                         // the position typed in is LightCraft's: its sidecar follows it, cleared too
-                        s.gps_edited.insert(id);
+                        owned.push(id);
                     }
                     if let Some(st) = status {
                         m.copyright_status = st;
@@ -787,8 +784,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
                 let n = ops.len();
-                s.gps_owned_grew(owned_before);
                 s.commit("Edit Info", Op::Batch { ops })?;
+                // marked once the commit landed (a refused one marks nothing)
+                let owned_before = s.gps_edited.len();
+                s.gps_edited.extend(owned);
+                s.gps_owned_grew(owned_before);
                 // keywords just added become the Recent Keywords set
                 let added: Vec<String> = strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
                 if n > 0 && !added.is_empty() {
