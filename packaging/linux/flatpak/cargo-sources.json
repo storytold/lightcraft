@@ -2,14 +2,26 @@
     {
         "type": "git",
         "url": "https://github.com/storytold/craft-libs",
-        "commit": "94777dcf7f8962476e96b049d08d22e25b9330c2",
-        "dest": "flatpak-cargo/git/craft-libs-94777dc"
+        "commit": "7f30d664695cd5ce14fc30659d36c3e32f234247",
+        "dest": "flatpak-cargo/git/craft-libs-7f30d66"
+    },
+    {
+        "type": "git",
+        "url": "https://github.com/storytold/craft-libs",
+        "commit": "eeb134def2daa7e03512b4946bd59d6b419b9484",
+        "dest": "flatpak-cargo/git/craft-libs-eeb134d"
     },
     {
         "type": "git",
         "url": "https://github.com/storytold/craft-libs",
         "commit": "f0f4758c01581d79577b9bf5046c06f4e77b1f18",
         "dest": "flatpak-cargo/git/craft-libs-f0f4758"
+    },
+    {
+        "type": "git",
+        "url": "https://github.com/storytold/craft-libs",
+        "commit": "c28356d400aed7575b04ec1551b4665107cfe845",
+        "dest": "flatpak-cargo/git/craft-libs-c28356d"
     },
     {
         "type": "git",
@@ -32,14 +44,14 @@
     {
         "type": "git",
         "url": "https://github.com/storytold/craft-libs",
-        "commit": "5ac7c9664c8d54aaf69d1bb826e187686c1a4e1a",
-        "dest": "flatpak-cargo/git/craft-libs-5ac7c96"
+        "commit": "4ffa307f1a0a6fbd8897318cc719440ab06e9c63",
+        "dest": "flatpak-cargo/git/craft-libs-4ffa307"
     },
     {
         "type": "git",
         "url": "https://github.com/storytold/craft-libs",
-        "commit": "947dc5fb0ec436c0841f560eac0d65c6ad055ed4",
-        "dest": "flatpak-cargo/git/craft-libs-947dc5f"
+        "commit": "5ac7c9664c8d54aaf69d1bb826e187686c1a4e1a",
+        "dest": "flatpak-cargo/git/craft-libs-5ac7c96"
     },
     {
         "type": "git",
@@ -1600,19 +1612,37 @@
     {
         "type": "shell",
         "commands": [
-            "mkdir -p \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-94777dc/crates/cms\" \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-cms\""
+            "mkdir -p \"cargo/vendor-git/7afa30ca311804d863bbc144ec2c79a3a321ce72c30264402ae2c6af8a05da44\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-7f30d66/crates/cms\" \"cargo/vendor-git/7afa30ca311804d863bbc144ec2c79a3a321ce72c30264402ae2c6af8a05da44/craft-cms\""
         ]
     },
     {
         "type": "inline",
         "contents": "[package]\nname = \"craft-cms\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\ndescription = \"Pure-Rust ICC v2/v4 colour management: profile parsing and writing, transforms, rendering intents, black point compensation\"\nexclude = [\"tests/data\", \"tests/fogra39.rs\"]\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[dependencies.md5]\npackage = \"md-5\"\nversion = \"0.10\"\ndefault-features = false\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies]\nrayon = \"1\"\n\n[dev-dependencies]\nmoxcms = \"0.8\"\n",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-cms",
+        "dest": "cargo/vendor-git/7afa30ca311804d863bbc144ec2c79a3a321ce72c30264402ae2c6af8a05da44/craft-cms",
         "dest-filename": "Cargo.toml"
     },
     {
         "type": "inline",
         "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-cms",
+        "dest": "cargo/vendor-git/7afa30ca311804d863bbc144ec2c79a3a321ce72c30264402ae2c6af8a05da44/craft-cms",
+        "dest-filename": ".cargo-checksum.json"
+    },
+    {
+        "type": "shell",
+        "commands": [
+            "mkdir -p \"cargo/vendor-git/92168c1af4f3f511076af4245ec3ce22c5c554b4cc78c215ddf71587aac87d85\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-eeb134d/crates/cms\" \"cargo/vendor-git/92168c1af4f3f511076af4245ec3ce22c5c554b4cc78c215ddf71587aac87d85/craft-cms\""
+        ]
+    },
+    {
+        "type": "inline",
+        "contents": "[package]\nname = \"craft-cms\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\ndescription = \"Pure-Rust ICC v2/v4 colour management: profile parsing and writing, transforms, rendering intents, black point compensation\"\nexclude = [\"tests/data\", \"tests/fogra39.rs\"]\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[dependencies.md5]\npackage = \"md-5\"\nversion = \"0.10\"\ndefault-features = false\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies]\nrayon = \"1\"\n\n[dev-dependencies]\nmoxcms = \"0.8\"\n",
+        "dest": "cargo/vendor-git/92168c1af4f3f511076af4245ec3ce22c5c554b4cc78c215ddf71587aac87d85/craft-cms",
+        "dest-filename": "Cargo.toml"
+    },
+    {
+        "type": "inline",
+        "contents": "{\"package\": null, \"files\": {}}",
+        "dest": "cargo/vendor-git/92168c1af4f3f511076af4245ec3ce22c5c554b4cc78c215ddf71587aac87d85/craft-cms",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -1636,19 +1666,19 @@
     {
         "type": "shell",
         "commands": [
-            "mkdir -p \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-94777dc/crates/crw\" \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-crw\""
+            "mkdir -p \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-c28356d/crates/crw\" \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-crw\""
         ]
     },
     {
         "type": "inline",
         "contents": "[package]\nname = \"craft-crw\"\ndescription = \"Clean-room Canon CRW (CIFF) raw decoder: the heap container, the derived entropy coding, sensor levels and as-shot white balance.\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[dependencies]\nthiserror = \"2\"\n\n[dev-dependencies]\nproptest = \"1\"\nserde_json = \"1\"\n\n[dev-dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dev-dependencies.sha2]\nversion = \"0.10\"\ndefault-features = false\nfeatures = [\"std\"]\n",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-crw",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-crw",
         "dest-filename": "Cargo.toml"
     },
     {
         "type": "inline",
         "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-crw",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-crw",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -1726,19 +1756,19 @@
     {
         "type": "shell",
         "commands": [
-            "mkdir -p \"cargo/vendor-git/36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-9dcbd90/crates/heif\" \"cargo/vendor-git/36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61/craft-heif\""
+            "mkdir -p \"cargo/vendor-git/ded75ace3b48131a7498b2ad3ce7884b178155a1ef794dda2327c20c2979a816\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-4ffa307/crates/heif\" \"cargo/vendor-git/ded75ace3b48131a7498b2ad3ce7884b178155a1ef794dda2327c20c2979a816/craft-heif\""
         ]
     },
     {
         "type": "inline",
-        "contents": "[package]\nname = \"craft-heif\"\ndescription = \"Optional HEIF/HEIC still-image decoder: heic-rs for the container and HEVC, libheif-matching colour conversion, panic-guarded.\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[dependencies.heic-rs]\nversion = \"=0.1.4\"\ndefault-features = false\nfeatures = [\"std\"]\noptional = true\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies.heic-rs]\nversion = \"=0.1.4\"\ndefault-features = false\nfeatures = [\"std\", \"parallel\"]\noptional = true\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies.rayon]\noptional = true\nversion = \"1\"\n\n[features]\ndefault = [\"decode\"]\ndecode = [\"dep:heic-rs\", \"dep:rayon\"]\nmetadata = []\ntestdata = []\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n",
-        "dest": "cargo/vendor-git/36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61/craft-heif",
+        "contents": "[package]\nname = \"craft-heif\"\ndescription = \"Optional HEIF/HEIC still-image decoder: heic-rs for the container and HEVC, libheif-matching colour conversion, panic-guarded.\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[dependencies.heic-rs]\nversion = \"=0.1.4\"\ndefault-features = false\nfeatures = [\"std\"]\noptional = true\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies.heic-rs]\nversion = \"=0.1.4\"\ndefault-features = false\nfeatures = [\"std\", \"parallel\"]\noptional = true\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies.rayon]\noptional = true\nversion = \"1\"\n\n[dev-dependencies]\nproptest = \"1\"\n\n[features]\ndefault = [\"decode\"]\ndecode = [\"dep:heic-rs\", \"dep:rayon\"]\nmetadata = []\ntestdata = []\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n",
+        "dest": "cargo/vendor-git/ded75ace3b48131a7498b2ad3ce7884b178155a1ef794dda2327c20c2979a816/craft-heif",
         "dest-filename": "Cargo.toml"
     },
     {
         "type": "inline",
         "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61/craft-heif",
+        "dest": "cargo/vendor-git/ded75ace3b48131a7498b2ad3ce7884b178155a1ef794dda2327c20c2979a816/craft-heif",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -1780,19 +1810,19 @@
     {
         "type": "shell",
         "commands": [
-            "mkdir -p \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-947dc5f/crates/image-codecs\" \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-image-codecs\""
+            "mkdir -p \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-c28356d/crates/image-codecs\" \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-image-codecs\""
         ]
     },
     {
         "type": "inline",
-        "contents": "[package]\nname = \"craft-image-codecs\"\ndescription = \"Bounded, depth- and metadata-preserving codecs for flat raster image formats\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[features]\ncorpus = []\ndefault = []\navif = [\"image/avif\", \"dep:ravif\", \"dep:rav1e\", \"dep:avif-serialize\"]\nheif = [\"dep:craft-heif\"]\navif-decode = [\"dep:craft-video\", \"craft-video/av1-decode\"]\n\n[dependencies]\ncrc32fast = \"1.5\"\nthiserror = \"2\"\npng = \"0.18\"\nhalf = \"2\"\nserde_json = \"1\"\nimage-webp = \"0.2\"\nzune-jpeg = \"0.5\"\nzune-core = \"0.5\"\njpeg-encoder = \"0.6\"\n\n[dependencies.image]\nversion = \"0.25\"\ndefault-features = false\nfeatures = [\"png\", \"jpeg\", \"tiff\", \"gif\", \"bmp\", \"tga\", \"ico\", \"qoi\", \"hdr\"]\n\n[dependencies.tiff]\nversion = \"0.11\"\ndefault-features = false\nfeatures = [\"deflate\", \"fax\", \"jpeg\", \"lzw\"]\n\n[dependencies.exr]\nversion = \"1.73\"\ndefault-features = false\n\n[dependencies.flate2]\nversion = \"1.1.10\"\ndefault-features = false\nfeatures = [\"zlib-rs\", \"runtime_detection\"]\n\n[dependencies.craft-jpeg]\npath = \"crates/jpeg\"\n\n[dependencies.craft-metadata]\npath = \"crates/metadata\"\n\n[dependencies.craft-tiff]\npath = \"crates/tiff\"\n\n[dependencies.zune-jpegxl]\nversion = \"=0.5.2\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dependencies.craft-heif]\noptional = true\npath = \"crates/heif\"\n\n[dependencies.ravif]\nversion = \"0.13\"\ndefault-features = false\noptional = true\n\n[dependencies.rav1e]\nversion = \"0.8\"\ndefault-features = false\noptional = true\n\n[dependencies.avif-serialize]\nversion = \"0.8\"\noptional = true\n\n[dependencies.hayro-jpeg2000]\nversion = \"=0.3.5\"\ndefault-features = false\nfeatures = [\"std\", \"simd\"]\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies]\nrayon = \"1\"\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies.craft-video]\noptional = true\npath = \"crates/video\"\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies.exr]\nversion = \"1.73\"\ndefault-features = false\nfeatures = [\"rayon\"]\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dev-dependencies.craft-video]\nfeatures = [\"av1-decode\"]\npath = \"crates/video\"\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dev-dependencies.jxl-oxide]\nversion = \"=0.12.6\"\ndefault-features = false\nfeatures = [\"rayon\"]\n\n[dev-dependencies]\nproptest = \"1\"\n\n[dev-dependencies.image]\nversion = \"0.25\"\ndefault-features = false\nfeatures = [\"png\", \"jpeg\", \"tiff\"]\n\n[dev-dependencies.sha2]\nversion = \"0.10\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dev-dependencies.craft-media-testkit]\npath = \"crates/media-testkit\"\n",
-        "dest": "cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-image-codecs",
+        "contents": "[package]\nname = \"craft-image-codecs\"\ndescription = \"Bounded, depth- and metadata-preserving codecs for flat raster image formats\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[features]\ncorpus = []\ndefault = []\nsgi = []\nsunraster = []\navif = [\"image/avif\", \"dep:ravif\", \"dep:rav1e\", \"dep:avif-serialize\"]\nheif = [\"dep:craft-heif\"]\navif-decode = [\"dep:craft-video\", \"craft-video/av1-decode\"]\n\n[dependencies]\ncrc32fast = \"1.5\"\nthiserror = \"2\"\npng = \"0.18\"\nhalf = \"2\"\nserde_json = \"1\"\nimage-webp = \"0.2\"\nzune-jpeg = \"0.5\"\nzune-core = \"0.5\"\njpeg-encoder = \"0.6\"\n\n[dependencies.image]\nversion = \"0.25\"\ndefault-features = false\nfeatures = [\"png\", \"jpeg\", \"tiff\", \"gif\", \"bmp\", \"tga\", \"ico\", \"qoi\", \"hdr\"]\n\n[dependencies.tiff]\nversion = \"0.11\"\ndefault-features = false\nfeatures = [\"deflate\", \"fax\", \"jpeg\", \"lzw\"]\n\n[dependencies.exr]\nversion = \"1.73\"\ndefault-features = false\n\n[dependencies.flate2]\nversion = \"1.1.10\"\ndefault-features = false\nfeatures = [\"zlib-rs\", \"runtime_detection\"]\n\n[dependencies.craft-jpeg]\npath = \"crates/jpeg\"\n\n[dependencies.craft-metadata]\npath = \"crates/metadata\"\n\n[dependencies.craft-tiff]\npath = \"crates/tiff\"\n\n[dependencies.zune-jpegxl]\nversion = \"=0.5.2\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dependencies.craft-heif]\noptional = true\npath = \"crates/heif\"\n\n[dependencies.ravif]\nversion = \"0.13\"\ndefault-features = false\noptional = true\n\n[dependencies.rav1e]\nversion = \"0.8\"\ndefault-features = false\noptional = true\n\n[dependencies.avif-serialize]\nversion = \"0.8\"\noptional = true\n\n[dependencies.hayro-jpeg2000]\nversion = \"=0.3.5\"\ndefault-features = false\nfeatures = [\"std\", \"simd\"]\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies]\nrayon = \"1\"\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies.craft-video]\noptional = true\npath = \"crates/video\"\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dependencies.exr]\nversion = \"1.73\"\ndefault-features = false\nfeatures = [\"rayon\"]\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dev-dependencies.craft-video]\nfeatures = [\"av1-decode\"]\npath = \"crates/video\"\n\n[target.\"cfg(not(target_arch = \\\"wasm32\\\"))\".dev-dependencies.jxl-oxide]\nversion = \"=0.12.6\"\ndefault-features = false\nfeatures = [\"rayon\"]\n\n[dev-dependencies]\nproptest = \"1\"\n\n[dev-dependencies.image]\nversion = \"0.25\"\ndefault-features = false\nfeatures = [\"png\", \"jpeg\", \"tiff\"]\n\n[dev-dependencies.sha2]\nversion = \"0.10\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dev-dependencies.craft-media-testkit]\npath = \"crates/media-testkit\"\n",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-image-codecs",
         "dest-filename": "Cargo.toml"
     },
     {
         "type": "inline",
         "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-image-codecs",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-image-codecs",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -1834,19 +1864,19 @@
     {
         "type": "shell",
         "commands": [
-            "mkdir -p \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-947dc5f/crates/jpeg\" \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-jpeg\""
+            "mkdir -p \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-c28356d/crates/jpeg\" \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-jpeg\""
         ]
     },
     {
         "type": "inline",
         "contents": "[package]\nname = \"craft-jpeg\"\ndescription = \"Clean-room JPEG decoder and 8-bit optimized baseline encoder (ITU-T T.81).\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[dependencies]\nthiserror = \"2\"\n\n[dependencies.rayon]\noptional = true\nversion = \"1\"\n\n[dev-dependencies]\njpeg-encoder = \"0.6\"\nzune-jpeg = \"0.5\"\njpeg-decoder = \"0.3\"\n\n[features]\ndefault = []\nparallel = [\"dep:rayon\"]\n",
-        "dest": "cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-jpeg",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-jpeg",
         "dest-filename": "Cargo.toml"
     },
     {
         "type": "inline",
         "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-jpeg",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-jpeg",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -1906,37 +1936,19 @@
     {
         "type": "shell",
         "commands": [
-            "mkdir -p \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-94777dc/crates/metadata\" \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-metadata\""
+            "mkdir -p \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-c28356d/crates/metadata\" \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-metadata\""
         ]
     },
     {
         "type": "inline",
         "contents": "[package]\nname = \"craft-metadata\"\ndescription = \"Photo metadata: EXIF, IPTC-IIM, XMP packets (read, write, merge) and GPX track logs, the blocks that carry them in JPEG, PNG, WebP, TIFF and CR3 files, and one model they all read into.\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[dependencies]\nquick-xml = \"0.41\"\n\n[dependencies.craft-tiff]\npath = \"crates/tiff\"\n\n[dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dependencies.chrono]\nversion = \"0.4.45\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dependencies.brotli-decompressor]\nversion = \"6\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dev-dependencies]\nproptest = \"1\"\nserde_json = \"1\"\n\n[dev-dependencies.brotli]\nversion = \"9\"\ndefault-features = false\nfeatures = [\"std\"]\n",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-metadata",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-metadata",
         "dest-filename": "Cargo.toml"
     },
     {
         "type": "inline",
         "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-metadata",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "shell",
-        "commands": [
-            "mkdir -p \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-947dc5f/crates/metadata\" \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-metadata\""
-        ]
-    },
-    {
-        "type": "inline",
-        "contents": "[package]\nname = \"craft-metadata\"\ndescription = \"Photo metadata: EXIF, IPTC-IIM, XMP packets (read, write, merge) and GPX track logs, the blocks that carry them in JPEG, PNG, WebP, TIFF and CR3 files, and one model they all read into.\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[dependencies]\nquick-xml = \"0.41\"\n\n[dependencies.craft-tiff]\npath = \"crates/tiff\"\n\n[dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dependencies.chrono]\nversion = \"0.4.45\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dependencies.brotli-decompressor]\nversion = \"6\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dev-dependencies]\nproptest = \"1\"\nserde_json = \"1\"\n\n[dev-dependencies.brotli]\nversion = \"9\"\ndefault-features = false\nfeatures = [\"std\"]\n",
-        "dest": "cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-metadata",
-        "dest-filename": "Cargo.toml"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-metadata",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-metadata",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -2014,19 +2026,19 @@
     {
         "type": "shell",
         "commands": [
-            "mkdir -p \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-94777dc/crates/raw\" \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-raw\""
+            "mkdir -p \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-c28356d/crates/raw\" \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-raw\""
         ]
     },
     {
         "type": "inline",
         "contents": "[package]\nname = \"craft-raw\"\ndescription = \"Camera raw files, the file-format layer: container parsing, decompression and the sensor data out as a neutral raw image with its levels, crop, orientation, colour tags and embedded previews. DNG (read and write), Hasselblad 3FR/FFF, MRW, ERF, MEF, Kodak DCS, Pentax PEF, Samsung SRW, Canon CR2, Nikon NEF/NRW, Panasonic RW2, Fujifilm RAF, Olympus ORF (uncompressed), Sony ARW, Canon CR3 and Canon CRW so far.\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[features]\ndefault = [\"dng\", \"jxl\", \"crw\", \"hasselblad\", \"mrw\", \"erf\", \"mef\", \"kodak\", \"pef\", \"srw\", \"cr2\", \"nef\", \"rw2\", \"raf\", \"orf\", \"arw\", \"cr3\"]\ndng = [\"dep:miniz_oxide\", \"dep:zune-jpeg\", \"dep:zune-core\"]\njxl = [\"dng\", \"dep:jxl-oxide\"]\nhasselblad = [\"dng\"]\nmrw = []\nerf = []\nmef = []\nkodak = []\npef = []\nsrw = []\ncr2 = []\nnef = []\nrw2 = []\nraf = []\norf = []\narw = []\ncr3 = [\"dep:craft-metadata\"]\ncrw = [\"dep:craft-crw\", \"dep:chrono\"]\n\n[dependencies]\nthiserror = \"2\"\nrayon = \"1\"\n\n[dependencies.craft-tiff]\npath = \"crates/tiff\"\n\n[dependencies.craft-crw]\noptional = true\npath = \"crates/crw\"\n\n[dependencies.craft-metadata]\noptional = true\npath = \"crates/metadata\"\n\n[dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dependencies.chrono]\noptional = true\nversion = \"0.4.45\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dependencies.miniz_oxide]\nversion = \"0.9\"\noptional = true\n\n[dependencies.zune-jpeg]\nversion = \"0.5\"\ndefault-features = false\nfeatures = [\"std\", \"x86\", \"neon\"]\noptional = true\n\n[dependencies.zune-core]\nversion = \"0.5\"\ndefault-features = false\nfeatures = [\"std\"]\noptional = true\n\n[dependencies.jxl-oxide]\nversion = \"0.12\"\ndefault-features = false\noptional = true\n\n[dev-dependencies]\nproptest = \"1\"\n\n[dev-dependencies.sha2]\nversion = \"0.10\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dev-dependencies.jpeg-encoder]\nversion = \"0.7\"\ndefault-features = false\nfeatures = [\"std\"]\n\n[dev-dependencies.zune-jpegxl]\nversion = \"0.5\"\ndefault-features = false\nfeatures = [\"std\"]\n",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-raw",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-raw",
         "dest-filename": "Cargo.toml"
     },
     {
         "type": "inline",
         "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-raw",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-raw",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -2050,37 +2062,19 @@
     {
         "type": "shell",
         "commands": [
-            "mkdir -p \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-94777dc/crates/tiff\" \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-tiff\""
+            "mkdir -p \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-c28356d/crates/tiff\" \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-tiff\""
         ]
     },
     {
         "type": "inline",
         "contents": "[package]\nname = \"craft-tiff\"\ndescription = \"TIFF and BigTIFF IFD reader and writer: every field type, the Exif/GPS/Interop pointer IFDs, maker-note IFDs, strip and tile layout.\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[dependencies]\nthiserror = \"2\"\n\n[dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dev-dependencies]\nproptest = \"1\"\n",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-tiff",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-tiff",
         "dest-filename": "Cargo.toml"
     },
     {
         "type": "inline",
         "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1/craft-tiff",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "shell",
-        "commands": [
-            "mkdir -p \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc\" && cp -r --reflink=auto \"flatpak-cargo/git/craft-libs-947dc5f/crates/tiff\" \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-tiff\""
-        ]
-    },
-    {
-        "type": "inline",
-        "contents": "[package]\nname = \"craft-tiff\"\ndescription = \"TIFF and BigTIFF IFD reader and writer: every field type, the Exif/GPS/Interop pointer IFDs, maker-note IFDs, strip and tile layout.\"\nversion = \"0.1.0\"\nedition = \"2024\"\nlicense = \"MIT OR Apache-2.0\"\nrust-version = \"1.95\"\nrepository = \"https://github.com/storytold/craft-libs\"\n\n[lints.rust]\nunsafe_code = \"forbid\"\nunused_workspace_dependencies = \"allow\"\n\n[lints.rust.unexpected_cfgs]\nlevel = \"warn\"\ncheck-cfg = [\"cfg(craft_pdf_unicode_fixtures)\"]\n\n[lints.clippy]\ncognitive_complexity = \"deny\"\ntoo_many_arguments = \"deny\"\nunused_workspace_dependencies = \"allow\"\nwildcard_imports = \"deny\"\ndbg_macro = \"warn\"\ntodo = \"warn\"\n\n[dependencies]\nthiserror = \"2\"\n\n[dependencies.serde]\nversion = \"1\"\nfeatures = [\"derive\"]\n\n[dev-dependencies]\nproptest = \"1\"\n",
-        "dest": "cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-tiff",
-        "dest-filename": "Cargo.toml"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": null, \"files\": {}}",
-        "dest": "cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc/craft-tiff",
+        "dest": "cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801/craft-tiff",
         "dest-filename": ".cargo-checksum.json"
     },
     {
@@ -10245,7 +10239,7 @@
     },
     {
         "type": "inline",
-        "contents": "[source.vendored-sources]\ndirectory = \"cargo/vendor\"\n\n[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=94777dcf7f8962476e96b049d08d22e25b9330c2\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1\"\nrev = \"94777dcf7f8962476e96b049d08d22e25b9330c2\"\n\n[source.git-vendor-6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1]\ndirectory = \"cargo/vendor-git/6fd0ceba5f4137be1fe00e9c031f810234e38df6f60195003fed7057c96f0aa1\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-bc00bd22a20692df38f25839a8568cd55b90e379a41719721bbc0f04fe5e29f7\"\nrev = \"f0f4758c01581d79577b9bf5046c06f4e77b1f18\"\n\n[source.git-vendor-bc00bd22a20692df38f25839a8568cd55b90e379a41719721bbc0f04fe5e29f7]\ndirectory = \"cargo/vendor-git/bc00bd22a20692df38f25839a8568cd55b90e379a41719721bbc0f04fe5e29f7\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-11a22760e699d74db2deeccbdb390b343ad010ce425dcb15451f0e14e45ff298\"\nrev = \"c5a1cbfb5f9049f9270955caffb5bee5997aebf7\"\n\n[source.git-vendor-11a22760e699d74db2deeccbdb390b343ad010ce425dcb15451f0e14e45ff298]\ndirectory = \"cargo/vendor-git/11a22760e699d74db2deeccbdb390b343ad010ce425dcb15451f0e14e45ff298\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61\"\nrev = \"9dcbd90c7d16e1a668b3afa057e940e2db328b93\"\n\n[source.git-vendor-36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61]\ndirectory = \"cargo/vendor-git/36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=b77af389f30bb10de10d8436ca9b39fe94e3bb67\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-a51e2c3f46af71f1caed91009f88b4f9982db0c4152c6659d11967a7731b1ccc\"\nrev = \"b77af389f30bb10de10d8436ca9b39fe94e3bb67\"\n\n[source.git-vendor-a51e2c3f46af71f1caed91009f88b4f9982db0c4152c6659d11967a7731b1ccc]\ndirectory = \"cargo/vendor-git/a51e2c3f46af71f1caed91009f88b4f9982db0c4152c6659d11967a7731b1ccc\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=5ac7c9664c8d54aaf69d1bb826e187686c1a4e1a\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-9100d311acc530b0286234c55b78dbdc0325d5e30950478c5c7864bfed7a4545\"\nrev = \"5ac7c9664c8d54aaf69d1bb826e187686c1a4e1a\"\n\n[source.git-vendor-9100d311acc530b0286234c55b78dbdc0325d5e30950478c5c7864bfed7a4545]\ndirectory = \"cargo/vendor-git/9100d311acc530b0286234c55b78dbdc0325d5e30950478c5c7864bfed7a4545\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=947dc5fb0ec436c0841f560eac0d65c6ad055ed4\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc\"\nrev = \"947dc5fb0ec436c0841f560eac0d65c6ad055ed4\"\n\n[source.git-vendor-eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc]\ndirectory = \"cargo/vendor-git/eb100b17aaa74f1bccee5b69dce3d22ac29d6bc14b796a0a0b93237c93fcabbc\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=478c50560d3c6fad3d613af2a30b35c3bc9f4c0f\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-cb31475a7a9d19c00f48b4c43603f2f1a464c6dce15da1d21bba4c653eeba6b2\"\nrev = \"478c50560d3c6fad3d613af2a30b35c3bc9f4c0f\"\n\n[source.git-vendor-cb31475a7a9d19c00f48b4c43603f2f1a464c6dce15da1d21bba4c653eeba6b2]\ndirectory = \"cargo/vendor-git/cb31475a7a9d19c00f48b4c43603f2f1a464c6dce15da1d21bba4c653eeba6b2\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=5c91598ccc86537a779f438d520fa6406c26efe6\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-6f5ad8618176b3fc0aac703e6e74df7229b0350b4574c7edbe0bb86c53c1cb6c\"\nrev = \"5c91598ccc86537a779f438d520fa6406c26efe6\"\n\n[source.git-vendor-6f5ad8618176b3fc0aac703e6e74df7229b0350b4574c7edbe0bb86c53c1cb6c]\ndirectory = \"cargo/vendor-git/6f5ad8618176b3fc0aac703e6e74df7229b0350b4574c7edbe0bb86c53c1cb6c\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=0fd30aeb3e02207d9d4c7c601540d9da45abf8de\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-fafb086755da4e9bf32b4ac1b53a42a6017167d56ec0071462788465fa35eb30\"\nrev = \"0fd30aeb3e02207d9d4c7c601540d9da45abf8de\"\n\n[source.git-vendor-fafb086755da4e9bf32b4ac1b53a42a6017167d56ec0071462788465fa35eb30]\ndirectory = \"cargo/vendor-git/fafb086755da4e9bf32b4ac1b53a42a6017167d56ec0071462788465fa35eb30\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=bea6ed1ff031b81df2d64be470485c1ca808847e\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-32c3b4109a3afdabed8bce488e027fa99fcc1b06e4fbe9ee85802b6b73337040\"\nrev = \"bea6ed1ff031b81df2d64be470485c1ca808847e\"\n\n[source.git-vendor-32c3b4109a3afdabed8bce488e027fa99fcc1b06e4fbe9ee85802b6b73337040]\ndirectory = \"cargo/vendor-git/32c3b4109a3afdabed8bce488e027fa99fcc1b06e4fbe9ee85802b6b73337040\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=16d838105b07965832bb43132880176f299634d5\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-879b5ad1e55c0c2de1d740528f2a8f8e2ffec953302517957e516331e9525f03\"\nrev = \"16d838105b07965832bb43132880176f299634d5\"\n\n[source.git-vendor-879b5ad1e55c0c2de1d740528f2a8f8e2ffec953302517957e516331e9525f03]\ndirectory = \"cargo/vendor-git/879b5ad1e55c0c2de1d740528f2a8f8e2ffec953302517957e516331e9525f03\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=6e03f65bf45181db77ba6229716e6624db9eb25b\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-4765c8f813a43ec0005270c9f4b16bff2eb2e09aeb15e4230bcd10e5bba1c4ba\"\nrev = \"6e03f65bf45181db77ba6229716e6624db9eb25b\"\n\n[source.git-vendor-4765c8f813a43ec0005270c9f4b16bff2eb2e09aeb15e4230bcd10e5bba1c4ba]\ndirectory = \"cargo/vendor-git/4765c8f813a43ec0005270c9f4b16bff2eb2e09aeb15e4230bcd10e5bba1c4ba\"\n\n[source.\"https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a\"]\ngit = \"https://github.com/storytold/egui\"\nreplace-with = \"git-vendor-11e349eb0774eb3ab9192b38c47d748bf18abba91a0e3952d8f196513da96ee6\"\nrev = \"6d518fc799681571963842f95b55a6b68431b15a\"\n\n[source.git-vendor-11e349eb0774eb3ab9192b38c47d748bf18abba91a0e3952d8f196513da96ee6]\ndirectory = \"cargo/vendor-git/11e349eb0774eb3ab9192b38c47d748bf18abba91a0e3952d8f196513da96ee6\"\n\n[source.\"https://github.com/storytold/winit.git?rev=a517b3846ee8457d84ee4975110bfda6797c44dc\"]\ngit = \"https://github.com/storytold/winit\"\nreplace-with = \"git-vendor-9c7f809a50c4212d761a5b6359c5e4a02fcf86376d330a441c4ce9d112706ee9\"\nrev = \"a517b3846ee8457d84ee4975110bfda6797c44dc\"\n\n[source.git-vendor-9c7f809a50c4212d761a5b6359c5e4a02fcf86376d330a441c4ce9d112706ee9]\ndirectory = \"cargo/vendor-git/9c7f809a50c4212d761a5b6359c5e4a02fcf86376d330a441c4ce9d112706ee9\"\n",
+        "contents": "[source.vendored-sources]\ndirectory = \"cargo/vendor\"\n\n[source.crates-io]\nreplace-with = \"vendored-sources\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=7f30d664695cd5ce14fc30659d36c3e32f234247\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-7afa30ca311804d863bbc144ec2c79a3a321ce72c30264402ae2c6af8a05da44\"\nrev = \"7f30d664695cd5ce14fc30659d36c3e32f234247\"\n\n[source.git-vendor-7afa30ca311804d863bbc144ec2c79a3a321ce72c30264402ae2c6af8a05da44]\ndirectory = \"cargo/vendor-git/7afa30ca311804d863bbc144ec2c79a3a321ce72c30264402ae2c6af8a05da44\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=eeb134def2daa7e03512b4946bd59d6b419b9484\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-92168c1af4f3f511076af4245ec3ce22c5c554b4cc78c215ddf71587aac87d85\"\nrev = \"eeb134def2daa7e03512b4946bd59d6b419b9484\"\n\n[source.git-vendor-92168c1af4f3f511076af4245ec3ce22c5c554b4cc78c215ddf71587aac87d85]\ndirectory = \"cargo/vendor-git/92168c1af4f3f511076af4245ec3ce22c5c554b4cc78c215ddf71587aac87d85\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=f0f4758c01581d79577b9bf5046c06f4e77b1f18\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-bc00bd22a20692df38f25839a8568cd55b90e379a41719721bbc0f04fe5e29f7\"\nrev = \"f0f4758c01581d79577b9bf5046c06f4e77b1f18\"\n\n[source.git-vendor-bc00bd22a20692df38f25839a8568cd55b90e379a41719721bbc0f04fe5e29f7]\ndirectory = \"cargo/vendor-git/bc00bd22a20692df38f25839a8568cd55b90e379a41719721bbc0f04fe5e29f7\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=c28356d400aed7575b04ec1551b4665107cfe845\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801\"\nrev = \"c28356d400aed7575b04ec1551b4665107cfe845\"\n\n[source.git-vendor-547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801]\ndirectory = \"cargo/vendor-git/547b31fae2076d587e497f8a6226e18e0bfe27e9014d2bdf3cce7d69262df801\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-11a22760e699d74db2deeccbdb390b343ad010ce425dcb15451f0e14e45ff298\"\nrev = \"c5a1cbfb5f9049f9270955caffb5bee5997aebf7\"\n\n[source.git-vendor-11a22760e699d74db2deeccbdb390b343ad010ce425dcb15451f0e14e45ff298]\ndirectory = \"cargo/vendor-git/11a22760e699d74db2deeccbdb390b343ad010ce425dcb15451f0e14e45ff298\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=9dcbd90c7d16e1a668b3afa057e940e2db328b93\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61\"\nrev = \"9dcbd90c7d16e1a668b3afa057e940e2db328b93\"\n\n[source.git-vendor-36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61]\ndirectory = \"cargo/vendor-git/36bf00be069421f8a8a7428c4360efee8b4243207a59d7b566c6f48fc5918f61\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=b77af389f30bb10de10d8436ca9b39fe94e3bb67\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-a51e2c3f46af71f1caed91009f88b4f9982db0c4152c6659d11967a7731b1ccc\"\nrev = \"b77af389f30bb10de10d8436ca9b39fe94e3bb67\"\n\n[source.git-vendor-a51e2c3f46af71f1caed91009f88b4f9982db0c4152c6659d11967a7731b1ccc]\ndirectory = \"cargo/vendor-git/a51e2c3f46af71f1caed91009f88b4f9982db0c4152c6659d11967a7731b1ccc\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=4ffa307f1a0a6fbd8897318cc719440ab06e9c63\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-ded75ace3b48131a7498b2ad3ce7884b178155a1ef794dda2327c20c2979a816\"\nrev = \"4ffa307f1a0a6fbd8897318cc719440ab06e9c63\"\n\n[source.git-vendor-ded75ace3b48131a7498b2ad3ce7884b178155a1ef794dda2327c20c2979a816]\ndirectory = \"cargo/vendor-git/ded75ace3b48131a7498b2ad3ce7884b178155a1ef794dda2327c20c2979a816\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=5ac7c9664c8d54aaf69d1bb826e187686c1a4e1a\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-9100d311acc530b0286234c55b78dbdc0325d5e30950478c5c7864bfed7a4545\"\nrev = \"5ac7c9664c8d54aaf69d1bb826e187686c1a4e1a\"\n\n[source.git-vendor-9100d311acc530b0286234c55b78dbdc0325d5e30950478c5c7864bfed7a4545]\ndirectory = \"cargo/vendor-git/9100d311acc530b0286234c55b78dbdc0325d5e30950478c5c7864bfed7a4545\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=478c50560d3c6fad3d613af2a30b35c3bc9f4c0f\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-cb31475a7a9d19c00f48b4c43603f2f1a464c6dce15da1d21bba4c653eeba6b2\"\nrev = \"478c50560d3c6fad3d613af2a30b35c3bc9f4c0f\"\n\n[source.git-vendor-cb31475a7a9d19c00f48b4c43603f2f1a464c6dce15da1d21bba4c653eeba6b2]\ndirectory = \"cargo/vendor-git/cb31475a7a9d19c00f48b4c43603f2f1a464c6dce15da1d21bba4c653eeba6b2\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=5c91598ccc86537a779f438d520fa6406c26efe6\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-6f5ad8618176b3fc0aac703e6e74df7229b0350b4574c7edbe0bb86c53c1cb6c\"\nrev = \"5c91598ccc86537a779f438d520fa6406c26efe6\"\n\n[source.git-vendor-6f5ad8618176b3fc0aac703e6e74df7229b0350b4574c7edbe0bb86c53c1cb6c]\ndirectory = \"cargo/vendor-git/6f5ad8618176b3fc0aac703e6e74df7229b0350b4574c7edbe0bb86c53c1cb6c\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=0fd30aeb3e02207d9d4c7c601540d9da45abf8de\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-fafb086755da4e9bf32b4ac1b53a42a6017167d56ec0071462788465fa35eb30\"\nrev = \"0fd30aeb3e02207d9d4c7c601540d9da45abf8de\"\n\n[source.git-vendor-fafb086755da4e9bf32b4ac1b53a42a6017167d56ec0071462788465fa35eb30]\ndirectory = \"cargo/vendor-git/fafb086755da4e9bf32b4ac1b53a42a6017167d56ec0071462788465fa35eb30\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=bea6ed1ff031b81df2d64be470485c1ca808847e\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-32c3b4109a3afdabed8bce488e027fa99fcc1b06e4fbe9ee85802b6b73337040\"\nrev = \"bea6ed1ff031b81df2d64be470485c1ca808847e\"\n\n[source.git-vendor-32c3b4109a3afdabed8bce488e027fa99fcc1b06e4fbe9ee85802b6b73337040]\ndirectory = \"cargo/vendor-git/32c3b4109a3afdabed8bce488e027fa99fcc1b06e4fbe9ee85802b6b73337040\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=16d838105b07965832bb43132880176f299634d5\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-879b5ad1e55c0c2de1d740528f2a8f8e2ffec953302517957e516331e9525f03\"\nrev = \"16d838105b07965832bb43132880176f299634d5\"\n\n[source.git-vendor-879b5ad1e55c0c2de1d740528f2a8f8e2ffec953302517957e516331e9525f03]\ndirectory = \"cargo/vendor-git/879b5ad1e55c0c2de1d740528f2a8f8e2ffec953302517957e516331e9525f03\"\n\n[source.\"https://github.com/storytold/craft-libs?rev=6e03f65bf45181db77ba6229716e6624db9eb25b\"]\ngit = \"https://github.com/storytold/craft-libs\"\nreplace-with = \"git-vendor-4765c8f813a43ec0005270c9f4b16bff2eb2e09aeb15e4230bcd10e5bba1c4ba\"\nrev = \"6e03f65bf45181db77ba6229716e6624db9eb25b\"\n\n[source.git-vendor-4765c8f813a43ec0005270c9f4b16bff2eb2e09aeb15e4230bcd10e5bba1c4ba]\ndirectory = \"cargo/vendor-git/4765c8f813a43ec0005270c9f4b16bff2eb2e09aeb15e4230bcd10e5bba1c4ba\"\n\n[source.\"https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a\"]\ngit = \"https://github.com/storytold/egui\"\nreplace-with = \"git-vendor-11e349eb0774eb3ab9192b38c47d748bf18abba91a0e3952d8f196513da96ee6\"\nrev = \"6d518fc799681571963842f95b55a6b68431b15a\"\n\n[source.git-vendor-11e349eb0774eb3ab9192b38c47d748bf18abba91a0e3952d8f196513da96ee6]\ndirectory = \"cargo/vendor-git/11e349eb0774eb3ab9192b38c47d748bf18abba91a0e3952d8f196513da96ee6\"\n\n[source.\"https://github.com/storytold/winit.git?rev=a517b3846ee8457d84ee4975110bfda6797c44dc\"]\ngit = \"https://github.com/storytold/winit\"\nreplace-with = \"git-vendor-9c7f809a50c4212d761a5b6359c5e4a02fcf86376d330a441c4ce9d112706ee9\"\nrev = \"a517b3846ee8457d84ee4975110bfda6797c44dc\"\n\n[source.git-vendor-9c7f809a50c4212d761a5b6359c5e4a02fcf86376d330a441c4ce9d112706ee9]\ndirectory = \"cargo/vendor-git/9c7f809a50c4212d761a5b6359c5e4a02fcf86376d330a441c4ce9d112706ee9\"\n",
         "dest": "cargo",
         "dest-filename": "config"
     }
