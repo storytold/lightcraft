@@ -143,7 +143,11 @@ impl CurveStage {
         Some(CurveStage { chan, base, refine })
     }
 
-    /// Linear Rec.2020 in and out (display referred, after the tone map). Values above white keep slope 1.
+    /// Linear Rec.2020 in and out (display referred, after the tone map).
+    ///
+    /// The curves are looked up on the colour clamped to [0, 1] in linear ProPhoto; whatever a channel had
+    /// above white is added back after them, so HDR input keeps slope 1 above white and is not clipped by an
+    /// active curve (`hdr_values_keep_slope_one_above_white`).
     pub fn apply(&self, d: [f32; 3]) -> [f32; 3] {
         let (to, from) = matrices();
         let p = mul3(to, d);
