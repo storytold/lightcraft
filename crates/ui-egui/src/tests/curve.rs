@@ -589,3 +589,35 @@ fn the_four_regions_tile_the_graph() {
         prev = r;
     }
 }
+
+/// Whether widget `id` was registered in the last frame.
+fn shown(h: &Headless, id: &str) -> bool {
+    h.app.widgets.iter().any(|(w, _)| w == id)
+}
+
+#[test]
+fn the_curve_eye_hides_a_channel_for_viewing_only_and_belongs_to_one_photo() {
+    let mut h = curve_open("red");
+    let id = h.app.session.active().unwrap();
+    h.app.session.execute("develop.curve", &json!({"channel": "red", "points": [[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]]})).unwrap();
+    h.step();
+    assert!(!shown(&h, "curveEye:red"), "the eye shows only while the graph is hovered");
+    let r = h.request("ui.hoverWidget", json!({"id": "curve"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let before = develop(&h);
+    click_widget(&mut h, "curveEye:red", 1);
+    assert_eq!(h.app.ui.curve_hidden_for(id), [false, false, true, false, false]);
+    assert_eq!(develop(&h), before, "not an edit, and the click on the eye adds no curve point");
+    // the eye stays on screen while the channel is hidden, and shows it again
+    h.request("ui.move", json!({"x": 5.0, "y": 5.0}), T);
+    h.step();
+    assert!(shown(&h, "curveEye:red"));
+    click_widget(&mut h, "curveEye:red", 1);
+    assert_eq!(h.app.ui.curve_hidden_for(id), [false; 5]);
+    // hidden channels belong to one photo
+    h.app.ui.set_curve_hidden(id, "parametric", true);
+    assert_eq!(h.app.ui.curve_hidden_for(id), [true, false, false, false, false]);
+    assert_eq!(h.app.ui.curve_hidden_for(lightcraft_catalog::PhotoId(id.0 + 1)), [false; 5]);
+}

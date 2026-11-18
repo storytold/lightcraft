@@ -246,6 +246,10 @@ pub struct UiState {
     /// the photo that applies to: not an edit, and forgotten on moving to another photo or quitting.
     #[serde(skip)]
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
+    /// Tone Curve channels (parametric, point, red, green, blue) hidden for viewing by the eye on
+    /// the curve, and the photo that applies to: not an edit, as [`Self::grading_hidden`].
+    #[serde(skip)]
+    pub curve_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 5])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove",
     /// "lensBlurFocus" / "lensBlurBlur" (Lens Blur Brush Refinement, in the Edit panel).
     pub tool: String,
@@ -480,6 +484,7 @@ impl Default for UiState {
             mixer_mode: "hue".into(),
             grading_mode: "3way".into(),
             grading_hidden: None,
+            curve_hidden: None,
             tool: String::new(),
             selected_guide: None,
             brush_size: 0.04,
@@ -540,6 +545,10 @@ impl Default for UiState {
     }
 }
 
+/// The Tone Curve's channels, in the order of [`UiState::curve_hidden`] and
+/// `RenderJob::with_hidden_curves`.
+pub const CURVE_CHANNELS: [&str; 5] = ["parametric", "master", "red", "green", "blue"];
+
 impl UiState {
     /// Which colour grading wheels (shadows, midtones, highlights) are hidden for viewing `photo`.
     pub fn grading_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 3] {
@@ -556,6 +565,23 @@ impl UiState {
             *slot = hidden;
         }
         self.grading_hidden = h.iter().any(|x| *x).then_some((photo, h));
+    }
+
+    /// Which Tone Curve channels (in [`CURVE_CHANNELS`] order) are hidden for viewing `photo`.
+    pub fn curve_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 5] {
+        match self.curve_hidden {
+            Some((p, h)) if p == photo => h,
+            _ => [false; 5],
+        }
+    }
+
+    /// Show or hide Tone Curve channel `channel` (one of [`CURVE_CHANNELS`]) on `photo`.
+    pub fn set_curve_hidden(&mut self, photo: lightcraft_catalog::PhotoId, channel: &str, hidden: bool) {
+        let mut h = self.curve_hidden_for(photo);
+        if let Some(slot) = CURVE_CHANNELS.iter().position(|c| *c == channel).and_then(|i| h.get_mut(i)) {
+            *slot = hidden;
+        }
+        self.curve_hidden = h.iter().any(|x| *x).then_some((photo, h));
     }
 
     /// A right-panel section that folds by its title is folded shut.

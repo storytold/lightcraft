@@ -2411,5 +2411,7 @@
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
   "Bottom bar": "Alapalkki",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Show this curve's effect": "Näytä tämän käyrän vaikutus",
+  "Hide this curve's effect": "Piilota tämän käyrän vaikutus"
 }

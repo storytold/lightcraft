@@ -2377,5 +2377,7 @@
   "Welcome": "Witamy",
   "Next": "Dalej",
   "Get Started": "Zaczynamy",
-  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć"
+  "Stopped at the scan limit: there may be more photos": "Zatrzymano na limicie skanowania: możliwe, że jest więcej zdjęć",
+  "Show this curve's effect": "Pokaż efekt tej krzywej",
+  "Hide this curve's effect": "Ukryj efekt tej krzywej"
 }
