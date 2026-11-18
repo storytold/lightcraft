@@ -540,7 +540,8 @@ pub(crate) fn card(app: &mut LccApp, ui: &egui::Ui, area: Rect, dock: Rect) {
 fn pill(app: &mut LccApp, ui: &mut egui::Ui, spec: &'static ControlSpec) {
     let Some(v) = value_of(app, spec) else { return };
     let section = section_of(spec.id);
-    let out = crate::widgets::pill(ui, spec, v, true, section.is_some());
+    let own = edit::photo_default_spec(app, spec);
+    let out = crate::widgets::pill(ui, own.as_ref().unwrap_or(spec), v, true, section.is_some());
     if out.more {
         app.ui.modern.more = section.map(str::to_string);
     }
