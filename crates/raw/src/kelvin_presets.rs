@@ -14,9 +14,9 @@
 //! curve reads the as-shot levels within 5 % of the camera's own `ColorTempAsShot`.
 //!
 //! Canon CR3s list the same presets in the `ColorData` of the maker note (layout by `ColorDataVersion`, see
-//! `vendor::cr3`). Panasonic and Leica RW2s store, in tag `0x0027`, neutral multipliers for named lights (D55 and
-//! studio tungsten, which are 5500 K and 3200 K: `vendor::rw2`), and Pentax PEFs a table of presets
-//! keyed by temperature in maker note tag `0x0221` (`vendor::pef`); each gives the same
+//! craft-raw's `cr3`). Panasonic and Leica RW2s store, in tag `0x0027`, neutral multipliers for named lights (D55 and
+//! studio tungsten, which are 5500 K and 3200 K: craft-raw's `rw2`), and Pentax PEFs a table of presets
+//! keyed by temperature in maker note tag `0x0221` (craft-raw's `pef`); each gives the same
 //! curve, the two-point ones through [`KelvinPresets::from_neutral_lights`]. All tag numbers were found with a
 //! black-box `exiftool` run; the layouts were read from the bytes of the sample files.
 //!
