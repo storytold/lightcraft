@@ -46,6 +46,7 @@ const EMBEDDED: &[(&str, &[&str])] = &[
     ("docs/raf-corpus.sha256", &["lcc-raw"]),
     ("xtask/src/main.rs", &["lcc-raw"]),
     ("crates/ui-egui/src/menus.rs", &["xtask"]),
+    ("crates/gpu/src/wgsl/finish.wgsl", &["lcc-pipeline"]),
 ];
 
 /// The packages that compile in `path` from outside their own directory.

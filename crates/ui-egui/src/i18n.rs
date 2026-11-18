@@ -1237,6 +1237,8 @@ mod tests {
         }
         app.ui.dialog = None;
         app.ui.view = crate::state::ViewMode::People;
+        // the named people are under Confirmed; the view opens on the unknown faces (issue #1050)
+        app.ui.people_category = crate::state::PeopleCategory::Confirmed;
         let text = painted_text(&ctx, &mut app, Locale::De);
         assert!(text.contains(Locale::De.tr("Named People")), "{text}");
         set_language(Locale::En);
