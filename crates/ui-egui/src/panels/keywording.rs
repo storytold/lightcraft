@@ -821,8 +821,8 @@ fn entered_names<'a>(start: &[Chip], text: &'a str) -> Vec<&'a str> {
     let spells = |s: &str, c: &Chip| {
         let marked = s.strip_suffix('*');
         let inside = [quoted(s), marked.and_then(quoted)];
-        // as written, and with `>` and `<` read as hierarchy marks
-        let leveled: Vec<String> = [Some(s), marked].into_iter().flatten().map(levels).collect();
+        // as written, and with `>` and `<` read as hierarchy marks (a name without them reads the same)
+        let leveled: Vec<String> = [Some(s), marked].into_iter().flatten().filter(|n| n.contains(['>', '<'])).map(levels).collect();
         [Some(s), marked]
             .into_iter()
             .flatten()
