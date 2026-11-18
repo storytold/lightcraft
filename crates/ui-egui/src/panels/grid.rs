@@ -2072,10 +2072,16 @@ pub fn context_menu(app: &mut LccApp, ui: &mut egui::Ui, id: PhotoId) {
             ("dialog.mergePanorama", "Panorama…"),
             ("dialog.mergeHdrPanorama", "HDR Panorama…"),
             ("dialog.mergeFocusStack", "Focus Stack…"),
+            (crate::menus::PIXEL_SHIFT_ID, crate::menus::PIXEL_SHIFT_LABEL),
         ] {
             if ui.add_enabled(n >= 2, egui::Button::new(crate::i18n::tr(label))).clicked() {
                 let _ = app.run(id, json!({}));
             }
+        }
+        ui.separator();
+        let can_delete_sources = crate::menus::ui_enabled(app, crate::menus::DELETE_SOURCES_ID);
+        if ui.add_enabled(can_delete_sources, egui::Button::new(crate::i18n::tr(crate::menus::DELETE_SOURCES_LABEL))).clicked() {
+            let _ = app.run(crate::menus::DELETE_SOURCES_ID, json!({}));
         }
     });
     ui.separator();

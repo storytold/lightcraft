@@ -5527,6 +5527,7 @@ dependencies = [
  "lcc-sync",
  "lcc-testkit",
  "lcc-text",
+ "lcc-tiff",
  "lcc-updater",
  "lcc-webgallery",
  "log",

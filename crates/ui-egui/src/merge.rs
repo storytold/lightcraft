@@ -137,7 +137,7 @@ impl MergeState {
 }
 
 fn spawn(app: &LccApp, options: &MergeDialog, ids: &[PhotoId], preview: bool) -> Result<MergeTask, String> {
-    let (kind, finish) = lcc_engine::merge::parse(&options.command, &options.params()).map_err(|e| e.to_string())?;
+    let (kind, finish) = lcc_engine::merge::parse_dialog(&options.command, &options.params()).map_err(|e| e.to_string())?;
     let job = app.session.plan_merge(kind, finish, ids, preview).map_err(|e| e.to_string())?;
     let progress = Arc::new(Mutex::new((0.0, "Starting".to_string())));
     let cancel = Arc::new(AtomicBool::new(false));
@@ -177,6 +177,118 @@ pub fn open(app: &mut LccApp, command: &str) -> Result<Value, String> {
     if ids.len() < 2 {
         return Err("select at least 2 photos to merge".into());
     }
+    // exactly one complete pixel-shift series: its frames are not exposures, views or focus positions of anything
+    // else, so the person is asked whether to merge them as what they are
+    if command != "merge.pixelShift" && is_pixel_shift_series(app, &ids) {
+        app.merge.ids = ids;
+        app.ui.dialog = Some(crate::state::Dialog::PixelShiftOffer { command: command.into() });
+        return Ok(json!({"offer": "pixelShift", "photos": app.merge.ids.len()}));
+    }
+    open_dialog(app, command, ids)
+}
+
+/// What the person chose in the question a complete pixel-shift series raises for another kind of merge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OfferChoice {
+    /// Merge it as Pixel Shift, with that merge's own defaults.
+    PixelShift,
+    /// Go on with the kind of merge that was chosen, exactly as without the question.
+    Continue,
+    /// Do nothing.
+    Cancel,
+}
+
+/// The answer to the pixel-shift question that [`open`] raised for `command`.
+pub fn answer_offer(app: &mut LccApp, command: &str, choice: OfferChoice) -> Result<Value, String> {
+    app.ui.dialog = None;
+    let ids = app.session.selected();
+    match choice {
+        OfferChoice::PixelShift => {
+            let r = start_last(app, "merge.pixelShift");
+            reported(app, r)
+        }
+        OfferChoice::Continue => open_dialog(app, command, ids),
+        OfferChoice::Cancel => Ok(Value::Null),
+    }
+}
+
+/// A refusal or failure to start a merge is said in a message on the window: an error returned by a menu command
+/// reaches only the status line, which nobody reads.
+pub fn reported(app: &mut LccApp, r: Result<Value, String>) -> Result<Value, String> {
+    if let Err(e) = &r {
+        say(app, crate::i18n::tr(e).to_string());
+    }
+    r
+}
+
+/// A message on the window (the time of the frame it is said in is not known inside a command).
+fn say(app: &mut LccApp, text: String) {
+    let now = app.tasks.repaint.as_ref().map(|ctx| ctx.input(|i| i.time)).unwrap_or(app.last_time);
+    app.ui.show_toast((text, now + 6.0, None));
+}
+
+/// Photo ▸ Photo Merge ▸ Delete Merge Sources: the other frames of the merged pixel-shift photo go to Recently Deleted,
+/// after the confirmation "Confirm before deleting" asks for.
+pub fn ask_delete_sources(app: &mut LccApp) -> Result<Value, String> {
+    let id = app.session.active().ok_or_else(|| crate::i18n::tr("This photo is not a pixel-shift merge").to_string())?;
+    let Some((present, _)) = app.session.merge_sources_to_delete(id) else {
+        return Err(crate::i18n::tr("This photo is not a pixel-shift merge").to_string());
+    };
+    if present.is_empty() {
+        return Err(crate::i18n::tr("No merge sources other than frame 01 are left").to_string());
+    }
+    if app.ui.settings.confirm_delete {
+        app.ui.dialog = Some(crate::state::Dialog::ConfirmDeleteSources { id: id.0, count: present.len() });
+        return Ok(json!({"asking": present.len()}));
+    }
+    delete_sources(app, id.0)
+}
+
+/// Delete the other frames of the merged photo `id` and say how many went (and how many were already gone).
+pub fn delete_sources(app: &mut LccApp, id: u64) -> Result<Value, String> {
+    let r = app.run("merge.deleteSources", json!({"id": id}))?;
+    let (n, missing) = (r["deleted"].as_u64().unwrap_or(0), r["missing"].as_u64().unwrap_or(0));
+    say(
+        app,
+        if missing == 0 {
+            crate::i18n::tr_format!("Frames moved to Recently Deleted: {n}", n = n)
+        } else {
+            crate::i18n::tr_format!("Frames moved to Recently Deleted: {n}; already gone: {missing}", n = n, missing = missing)
+        },
+    );
+    Ok(r)
+}
+
+/// The refusal in the person's language.
+fn refusal_text(r: &lcc_engine::merge::PixelShiftRefusal) -> String {
+    use lcc_engine::merge::PixelShiftRefusal as R;
+    use lcc_raw::pixel_shift::SeriesError as S;
+    let reason = match r {
+        R::NotFiles { name } => crate::i18n::tr_format!("{name} is not a photo file", name = name),
+        R::Unreadable { name, reason } => crate::i18n::tr_format!("{name} could not be read: {reason}", name = name, reason = reason),
+        R::NotFrame { name, .. } => crate::i18n::tr_format!("{name} is not a pixel-shift frame", name = name),
+        R::Unsupported(n) => crate::i18n::tr_format!("{n}-shot pixel-shift series are not supported yet", n = n),
+        R::Exists { name } => return crate::i18n::tr_format!("A pixel-shift merge of this series already exists ({name})", name = name),
+        R::Series(e) => match e {
+            S::Empty => crate::i18n::tr("Select the frames of a pixel-shift series").to_string(),
+            S::NoIndex(n) => crate::i18n::tr_format!("Photo {n} has no valid pixel-shift frame number", n = n),
+            S::MixedCount(_) => crate::i18n::tr("The photos are from series with different shot counts").to_string(),
+            S::Incomplete { have, count } => {
+                crate::i18n::tr_format!("The series has {count} shots, but {have} photos are selected", count = count, have = have)
+            }
+            S::Duplicate(n) => crate::i18n::tr_format!("Frame {n} of the series is selected more than once", n = n),
+            S::Missing(n) => crate::i18n::tr_format!("Frame {n} of the series is missing", n = n),
+            S::MixedCamera => crate::i18n::tr("The photos are from different cameras or lenses").to_string(),
+            S::MixedExposure => crate::i18n::tr("The photos have different exposure settings").to_string(),
+            S::MixedGeometry => crate::i18n::tr("The photos have different image sizes or areas").to_string(),
+            S::CounterGap => crate::i18n::tr("The frames are not one burst: their exposure counters do not follow each other").to_string(),
+            S::TimeGap => crate::i18n::tr("The frames were not shot one right after the other").to_string(),
+        },
+    };
+    crate::i18n::tr_format!("Pixel Shift: {reason}", reason = reason)
+}
+
+fn open_dialog(app: &mut LccApp, command: &str, ids: Vec<PhotoId>) -> Result<Value, String> {
     app.merge.ids = ids;
     app.merge.error = None;
     app.merge.preview = None;
@@ -189,6 +301,21 @@ pub fn open(app: &mut LccApp, command: &str) -> Result<Value, String> {
     Ok(json!({"photos": app.merge.ids.len()}))
 }
 
+/// Whether `ids` are one complete Nikon pixel-shift series (their headers are read, not their pixels).
+fn is_pixel_shift_series(app: &LccApp, ids: &[PhotoId]) -> bool {
+    if !(4..=32).contains(&ids.len()) {
+        return false;
+    }
+    let sources: Vec<(PhotoId, String)> = ids
+        .iter()
+        .filter_map(|id| match &app.session.catalog.photo(*id)?.source {
+            lcc_catalog::Source::File { path } => Some((*id, path.clone())),
+            _ => None,
+        })
+        .collect();
+    sources.len() == ids.len() && app.session.plan_pixel_shift(&sources).is_ok()
+}
+
 /// Start the full-resolution merge (the dialog's Merge button / `ui.dialog.confirm`).
 pub fn start_final(app: &mut LccApp, opts: &MergeDialog) -> Result<Value, String> {
     if app.merge.final_task.is_some() {
@@ -198,6 +325,10 @@ pub fn start_final(app: &mut LccApp, opts: &MergeDialog) -> Result<Value, String
         t.cancel.store(true, Ordering::Relaxed);
     }
     let ids = app.merge.ids.clone();
+    // a pixel-shift merge is refused with its reason before anything is decoded
+    if opts.command == "merge.pixelShift" {
+        app.session.pixel_shift_check(&ids, None).map_err(|r| refusal_text(&r))?;
+    }
     let mut task = spawn(app, opts, &ids, false)?;
     let guard = app.session.activity.start("merge", "Merging", Cancel::Flag(task.cancel.clone()));
     guard.set_unit(Unit::Percent);
@@ -216,7 +347,11 @@ pub fn start_final(app: &mut LccApp, opts: &MergeDialog) -> Result<Value, String
 pub fn start_last(app: &mut LccApp, command: &str) -> Result<Value, String> {
     let ids = app.session.selected();
     if ids.len() < 2 {
-        return Err("select at least 2 photos to merge".into());
+        return Err(if command == "merge.pixelShift" {
+            crate::i18n::tr_format!("Pixel Shift: {reason}", reason = crate::i18n::tr("Select the frames of a pixel-shift series"))
+        } else {
+            "select at least 2 photos to merge".into()
+        });
     }
     app.merge.ids = ids;
     let opts = last_options(app, command);
@@ -318,6 +453,7 @@ pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
                     "merge.panorama" => "Panorama",
                     "merge.hdrPanorama" => "HDR panorama",
                     "merge.focusStack" => "Focus stack",
+                    "merge.pixelShift" => "Pixel shift",
                     _ => "HDR",
                 });
                 match r.map_err(lcc_engine::EngineError::Other).and_then(|out| app.session.finish_merge(&t.job, out)) {

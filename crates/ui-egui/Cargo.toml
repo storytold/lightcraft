@@ -53,6 +53,8 @@ resvg = { version = "0.45", default-features = false }
 image = { workspace = true }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lcc-testkit = { workspace = true }
+# the pixel-shift tests write frame headers
+lcc-tiff = { workspace = true }
 # the GPU-drawn view test makes a wgpu device
 pollster = { workspace = true }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
