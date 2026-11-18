@@ -2425,5 +2425,14 @@
   "Top bar": "Bilah atas",
   "Tool strip": "Bilah alat",
   "Bottom bar": "Bilah bawah",
-  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto"
+  "Stopped at the scan limit: there may be more photos": "Berhenti pada batas pemindaian: mungkin masih ada foto",
+  "Reduce Motion": "Kurangi gerakan",
+  "Reduce motion": "Kurangi gerakan",
+  "Turns off zoom and spinner animations. Fades stay.": "Menonaktifkan animasi zoom dan indikator putar. Efek memudar tetap ada.",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Menonaktifkan animasi zoom dan indikator putar. Efek memudar tetap ada. Mengikuti pengaturan Kurangi Gerakan sistem sampai Anda mengubahnya di sini.",
+  "Increase Contrast": "Tingkatkan kontras",
+  "Increase contrast": "Tingkatkan kontras",
+  "Makes borders, separators and text stand out more in every theme.": "Membuat batas, pemisah, dan teks lebih menonjol di setiap tema.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Membuat batas, pemisah, dan teks lebih menonjol di setiap tema. Mengikuti pengaturan Tingkatkan Kontras sistem sampai Anda mengubahnya di sini.",
+  "Use the system setting": "Gunakan pengaturan sistem"
 }

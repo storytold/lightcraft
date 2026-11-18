@@ -32,11 +32,15 @@ mod control_server;
 mod dialog_filter;
 mod editors;
 mod hdr_display;
+#[cfg(target_os = "macos")]
+mod increase_contrast;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
 #[cfg(any(target_os = "linux", windows))]
 mod profile_file;
+#[cfg(target_os = "macos")]
+mod reduce_motion;
 #[cfg(target_os = "macos")]
 mod screen_profile;
 #[cfg(windows)]

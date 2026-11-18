@@ -2500,5 +2500,14 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Reduce Motion": "Omezit pohyb",
+  "Reduce motion": "Omezit pohyb",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Vypne animace přiblížení a načítacích indikátorů. Prolínání zůstává. Dokud to zde nezměníte, řídí se nastavením Omezit pohyb v systému.",
+  "Increase Contrast": "Zvýšit kontrast",
+  "Increase contrast": "Zvýšit kontrast",
+  "Makes borders, separators and text stand out more in every theme.": "Zvýrazní ohraničení, oddělovače a text ve všech motivech.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Zvýrazní ohraničení, oddělovače a text ve všech motivech. Dokud to zde nezměníte, řídí se nastavením Zvýšit kontrast v systému.",
+  "Use the system setting": "Použít nastavení systému",
+  "Turns off zoom and spinner animations. Fades stay.": "Vypne animace přiblížení a načítacích indikátorů. Prolínání zůstává."
 }

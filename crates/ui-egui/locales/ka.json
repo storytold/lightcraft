@@ -3720,5 +3720,14 @@
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
   "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
-  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის"
+  "Stopped at the scan limit: there may be more photos": "სკანირების ლიმიტზე გაჩერდა: შესაძლოა სხვა ფოტოებიც არის",
+  "Reduce Motion": "მოძრაობის შემცირება",
+  "Reduce motion": "მოძრაობის შემცირება",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "გამორთავს მასშტაბირებისა და მიმდინარეობის ინდიკატორის ანიმაციებს. გაბუნდოვნება შენარჩუნდება. სანამ აქ არ შეცვლით, სისტემის „მოძრაობის შემცირების“ პარამეტრს მისდევს.",
+  "Increase Contrast": "კონტრასტის გაზრდა",
+  "Increase contrast": "კონტრასტის გაზრდა",
+  "Makes borders, separators and text stand out more in every theme.": "ყველა თემაში უფრო გამოკვეთს საზღვრებს, გამყოფებს და ტექსტს.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "ყველა თემაში უფრო გამოკვეთს საზღვრებს, გამყოფებს და ტექსტს. სანამ აქ არ შეცვლით, სისტემის „კონტრასტის გაზრდის“ პარამეტრს მისდევს.",
+  "Use the system setting": "სისტემის პარამეტრის გამოყენება",
+  "Turns off zoom and spinner animations. Fades stay.": "გამორთავს მასშტაბირებისა და მიმდინარეობის ინდიკატორის ანიმაციებს. გაბუნდოვნება შენარჩუნდება."
 }

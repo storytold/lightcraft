@@ -2298,5 +2298,14 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Inicie o aplicativo com --control 7980 (ou LIGHTCRAFT_CONTROL_PORT) e o lightcraft-cli mcp --connect conecta um agente a ele.",
   "Welcome": "Bem-vindo",
   "Next": "Próximo",
-  "Get Started": "Começar"
+  "Get Started": "Começar",
+  "Reduce Motion": "Reduzir movimento",
+  "Reduce motion": "Reduzir movimento",
+  "Turns off zoom and spinner animations. Fades stay. Follows the system's Reduce Motion until you change it here.": "Desativa as animações de zoom e dos indicadores de atividade. As transições de opacidade continuam. Segue o ajuste Reduzir movimento do sistema até você alterá-lo aqui.",
+  "Increase Contrast": "Aumentar contraste",
+  "Increase contrast": "Aumentar contraste",
+  "Makes borders, separators and text stand out more in every theme.": "Faz as bordas, os separadores e o texto se destacarem mais em todos os temas.",
+  "Makes borders, separators and text stand out more in every theme. Follows the system's Increase Contrast until you change it here.": "Faz as bordas, os separadores e o texto se destacarem mais em todos os temas. Segue o ajuste Aumentar contraste do sistema até você alterá-lo aqui.",
+  "Use the system setting": "Usar o ajuste do sistema",
+  "Turns off zoom and spinner animations. Fades stay.": "Desativa as animações de zoom e dos indicadores de atividade. As transições de opacidade continuam."
 }
