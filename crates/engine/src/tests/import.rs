@@ -1080,6 +1080,34 @@ fn smart_previews_stand_in_for_offline_originals() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// The app asks whether an original is there from a cache a worker fills, and about its smart preview
+/// only once the original is known to be offline. A render that finds the original gone before that
+/// (the drive was unplugged a moment ago, or the photo was never looked at) uses the smart preview all
+/// the same, in the layout it is in: the folders of the older releases keep them flat.
+#[test]
+fn a_render_that_finds_the_original_gone_uses_the_smart_preview_in_either_layout() {
+    let src = temp_dir("smartgone-src");
+    let lib = temp_dir("smartgone-lib");
+    write_png(&src.join("a.png"), 11);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
+    let id = s.active().unwrap();
+    assert_eq!(s.execute("library.smartPreviews", &json!({})).unwrap()["built"], 1);
+    // as in the app, and nothing is known about the photo yet
+    s.media.availability.run_in_background(std::sync::Arc::new(|| {}));
+    std::fs::rename(&src, src.with_extension("offline")).unwrap();
+    s.media.forget(id);
+    s.render_now(id, 48, 32).expect("renders from the smart preview in the sharded folder");
+    // (another size: not the render just made)
+    let (dir, photo) = (s.media.smart_dir.clone().unwrap(), s.catalog.photo(id).unwrap().clone());
+    std::fs::rename(crate::smart::sharded_file_path(&dir, &photo), dir.join(crate::smart::file_name(&photo))).unwrap();
+    s.media.forget(id);
+    s.render_now(id, 44, 30).expect("renders from the smart preview in the flat folder");
+    let _ = std::fs::remove_dir_all(src.with_extension("offline"));
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 /// Issue #1534: the decoder facts a render interprets its settings against (a camera colour model,
 /// the file's local tone map, its semantic mattes) must be stored with the smart preview, so an
 /// edit made while the original is offline renders the same picture as the online source instead

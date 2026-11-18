@@ -96,6 +96,17 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### Scrolling through a very large library takes far less memory
+- LightCraft keeps a note of which photos' files are on disk, so the grid never waits for a slow or unplugged drive. It
+  kept a note for every photo you scrolled past, and another for each one's smart preview, a file most photos don't
+  have, until the library was closed: scrolling through a library of 1.6 million photos added about 0.4 GB. It now
+  keeps up to 65,536 notes of files that are there (the last ones found or looked at), a few tens of MB at most, and
+  the grid asks about a smart preview only when the photo's original is offline. The note of a missing file is kept for
+  as long as it is missing, so scrolling through the photos of an unplugged drive still adds notes for each. In a
+  library of up to 65,536 photos nearly every note is kept; in a larger one, a note that was dropped is made again when
+  its photo is next looked at. For a photo whose original has just gone offline, the Info panel can say "no smart
+  preview" until it has checked, which takes longer when a drive is slow.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
