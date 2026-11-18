@@ -284,8 +284,9 @@ fn slide_texture(app: &LightcraftApp, id: PhotoId) -> Option<&crate::render::Tex
 /// photo's visible part of a composed slide without overlays (its image cell), else all of it (a
 /// photo drawn on its own, a plain slide or a stand-in, and a slide with overlays, which are
 /// drawn into its texture and can cross the cell's edge: they move with the slide). The cell
-/// comes from the current settings, so a texture rendered with older ones (its new render still
-/// on the way) also moves whole.
+/// comes from the current settings and the size of the photo's render the slide was composed
+/// from, so a texture rendered with older settings (its new render still on the way) also moves
+/// whole.
 pub(crate) fn moving_part(app: &LightcraftApp, item: Item, t: &crate::render::Tex) -> Rect {
     let Item::Photo(id) = item else { return full_uv() };
     let composed = !app.session.slides_plain()
@@ -293,7 +294,9 @@ pub(crate) fn moving_part(app: &LightcraftApp, item: Item, t: &crate::render::Te
         && slide_texture(app, id).is_some_and(|s| std::ptr::eq(s, t))
         && app.renderer.is_current(Slot::Slide(item), t.key);
     let [w, h] = t.size;
-    let Some(aspect) = app.session.slide_photo_aspect(id).filter(|_| composed && w > 0 && h > 0) else { return full_uv() };
+    let photo = t.slide_photo.filter(|[pw, ph]| composed && w > 0 && h > 0 && *pw > 0 && *ph > 0);
+    let Some([pw, ph]) = photo else { return full_uv() };
+    let aspect = pw as f64 / ph as f64;
     let v = lightcraft_slideshow::layout(&app.session.slide_layout, aspect, w, h).visible;
     let (w, h) = (w as f64, h as f64);
     let uv = Rect::from_min_max(pos2((v.x0 / w) as f32, (v.y0 / h) as f32), pos2((v.x1 / w) as f32, (v.y1 / h) as f32));

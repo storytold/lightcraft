@@ -102,6 +102,9 @@ pub struct Tex {
     pub pixels: Option<std::sync::Arc<egui::ColorImage>>,
     /// Showing a render that stayed on the GPU ([`ScreenTextures`]): drawn by this id instead of `tex`.
     pub native: Option<egui::TextureId>,
+    /// A composed slide's photo: the size of the render the slide was laid out with
+    /// ([`RenderResult::slide_photo`]).
+    pub slide_photo: Option<[usize; 2]>,
 }
 
 impl Tex {
@@ -1333,13 +1336,25 @@ impl Renderer {
                 t.histogram = Some(histogram);
                 t.ms = ms;
                 t.quick = None;
+                t.slide_photo = r.slide_photo;
             }
             None => {
                 // (`tex` is never drawn while `native` is set)
                 let blank = egui::ColorImage::filled([1, 1], egui::Color32::BLACK);
                 let tex = ctx.load_texture(format!("{slot:?}"), blank, egui::TextureOptions::LINEAR);
-                let t =
-                    Tex { look, key: r.key, photo: r.photo, tex, size, histogram: Some(histogram), ms, quick: None, pixels: None, native: Some(id) };
+                let t = Tex {
+                    look,
+                    key: r.key,
+                    photo: r.photo,
+                    tex,
+                    size,
+                    histogram: Some(histogram),
+                    ms,
+                    quick: None,
+                    pixels: None,
+                    native: Some(id),
+                    slide_photo: r.slide_photo,
+                };
                 self.textures.insert(slot, t);
             }
         }
@@ -1479,6 +1494,7 @@ impl Renderer {
                     t.histogram = Some(rendered.histogram);
                     t.ms = ms;
                     t.quick = r.quick;
+                    t.slide_photo = r.slide_photo;
                 }
                 None => {
                     let tex = ctx.load_texture(name, color, egui::TextureOptions::LINEAR);
@@ -1495,6 +1511,7 @@ impl Renderer {
                             quick: r.quick,
                             pixels,
                             native: None,
+                            slide_photo: r.slide_photo,
                         },
                     );
                 }
@@ -1767,7 +1784,19 @@ mod stage_budget_tests {
         let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
         r.textures.insert(
             Slot::Region,
-            Tex { look: None, key: 1, photo: PhotoId(1), tex, native: None, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+            Tex {
+                look: None,
+                key: 1,
+                photo: PhotoId(1),
+                tex,
+                native: None,
+                size: [1, 1],
+                histogram: None,
+                ms: 0.0,
+                quick: None,
+                pixels: None,
+                slide_photo: None,
+            },
         );
         let long_ago = std::time::Instant::now().checked_sub(IDLE_TRIM * 2).unwrap();
         r.idle = Some((long_ago, false));
@@ -1797,6 +1826,7 @@ mod stage_budget_tests {
             ms: 0.0,
             quick: None,
             pixels: None,
+            slide_photo: None,
         };
         r.textures.insert(Slot::Before, view(tex("before"), Some(egui::TextureId::User(7))));
         r.textures.insert(Slot::Compare(0), view(tex("compare"), Some(egui::TextureId::User(8))));
@@ -1824,6 +1854,7 @@ mod stage_budget_tests {
             ms: 0.0,
             quick: None,
             pixels: Some(std::sync::Arc::new(egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]))),
+            slide_photo: None,
         };
         t.show_native(egui::TextureId::User(7));
         assert_eq!(t.tex.size(), [1, 1], "the pixel image is released");
@@ -1953,6 +1984,7 @@ mod color_image_tests {
             quick: None,
             display: None,
             frame: None,
+            slide_photo: None,
         };
         let histogram = Histogram::of_srgb8(&image);
         let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);

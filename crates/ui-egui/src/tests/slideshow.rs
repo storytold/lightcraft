@@ -522,6 +522,59 @@ fn pan_and_zoom_moves_only_the_visible_photo_at_any_aspect() {
     h.settle(SETTLE);
 }
 
+/// A crop so narrow (aspect 0.001) or so wide (aspect 1000) that the photo's render is 1 px
+/// across: the slide is laid out with that render's size, not the crop's aspect, so the part that
+/// moves is the strip of the slide the photo was composed into, not the whole cell around it.
+#[test]
+fn pan_and_zoom_moves_the_composed_strip_of_an_extreme_crop() {
+    let mut h = grid();
+    h.app.renderer.keep_pixels = true;
+    run(&mut h, "slideshow.layout", json!({"margins": 0.1, "backdropColor": "#ff0000"}));
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true, "panAndZoomAmount": 1.0}));
+    let id = h.app.session.visible_cloned()[0];
+    let own = h.app.session.slide_photo_aspect(id).unwrap();
+    for aspect in [0.001, 1000.0] {
+        let mut d = (*h.app.session.develop_of(id).expect("settings")).clone();
+        d.crop.geometry.rect = if aspect < own {
+            let f = aspect / own;
+            lightcraft_geom::Rect::new(0.5 - f / 2.0, 0.0, 0.5 + f / 2.0, 1.0)
+        } else {
+            let f = own / aspect;
+            lightcraft_geom::Rect::new(0.0, 0.5 - f / 2.0, 1.0, 0.5 + f / 2.0)
+        };
+        h.app.session.set_develop(id, d, "Test").expect("edit");
+        run(&mut h, "library.select", json!({"ids": [id.0]}));
+        run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "manual": true, "seed": 3}));
+        assert_eq!(photo_up(&h), id);
+        let slot = Slot::Slide(id.into());
+        assert!(h.step_until(SETTLE, |h| has_slide(h, id) && h.app.renderer.wanted(slot) == h.app.renderer.textures.get(&slot).map(|t| t.key)));
+        h.step();
+        let tex = h.app.renderer.textures.get(&slot).unwrap();
+        assert_eq!(tex.size, [1000, 700]);
+        // where the photo is in the composed slide: every pixel that is not the red backdrop
+        let px = tex.pixels.as_ref().expect("the slide's pixels");
+        let [w, rows] = px.size;
+        let (mut x0, mut y0, mut x1, mut y1) = (w, rows, 0, 0);
+        for y in 0..rows {
+            for x in 0..w {
+                let c = px.pixels[y * w + x];
+                if !(c.r() > 240 && c.g() < 15 && c.b() < 15) {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+                }
+            }
+        }
+        assert!(x1 > x0 && y1 > y0, "{aspect}: the photo shows in the slide");
+        assert!((x1 - x0).min(y1 - y0) <= 2, "{aspect}: a strip of {x0}..{x1} × {y0}..{y1}");
+        let part = crate::panels::slideshow::moving_part(&h.app, id.into(), tex);
+        let got = [part.min.x * 1000.0, part.min.y * 700.0, part.max.x * 1000.0, part.max.y * 700.0];
+        for (g, want) in got.into_iter().zip([x0, y0, x1, y1]) {
+            assert!((g - want as f32).abs() <= 1.0, "{aspect}: moves {got:?}, the photo is at {:?}", [x0, y0, x1, y1]);
+        }
+        run(&mut h, "slideshow.end", json!({}));
+    }
+    h.settle(SETTLE);
+}
+
 /// The amount set on the Low to High slider is saved with the library: the slider writes the
 /// live value as it moves, which leaves `slideshow.playback` nothing to change when it ends.
 #[test]
