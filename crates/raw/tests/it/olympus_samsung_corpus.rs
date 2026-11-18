@@ -91,11 +91,7 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
         assert_eq!((raw.width, raw.height, raw.cpp), (sensor.0, sensor.1, 1), "{name}: sensor size");
         assert_eq!(raw.info(), probe_info(&bytes).unwrap(), "{name}: probe and decode disagree");
         let RawData::U16(samples) = &raw.data else { panic!("{name}: integer sensor data expected") };
-        let actual = samples
-            .iter()
-            .flat_map(|v| v.to_le_bytes())
-            .fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3));
-        assert_eq!(actual, hash, "{name}: sensor pixels differ from the pinned decode");
+        assert_eq!(sample_hash(samples), hash, "{name}: sensor pixels differ from the pinned decode");
         assert!(raw.white_at(0) > raw.black.mean(), "{name}: invalid black/white levels");
         if !jpeg_check {
             seen += 1;
@@ -110,16 +106,22 @@ fn olympus_and_samsung_bodies_decode_like_the_camera_jpeg() {
     eprintln!("Olympus / Samsung bodies checked on {seen} files");
 }
 
-/// Compressed Olympus ORF and ORI files decode correctly and correlate with the camera embedded JPEG preview.
+/// FNV-1a over the decoded u16 samples (row-major, little-endian, masked borders included).
+fn sample_hash(samples: &[u16]) -> u64 {
+    samples.iter().flat_map(|v| v.to_le_bytes()).fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3))
+}
+
+/// Compressed Olympus ORF and ORI files decode correctly and correlate with the camera embedded JPEG preview. The
+/// pinned FNV-1a of every sensor sample covers all four CFA channels; the JPEG check follows green only.
 #[test]
 fn compressed_olympus_bodies_decode_like_camera_jpeg() {
     let cases = [
-        ("orf-olympus-em1.orf", (4640, 3472)),
-        ("orf-olympus-em10iii.orf", (4640, 3472)),
-        ("ori-olympus-e-m1markii-16bit-4-3-2.ori", (5240, 3912)),
-        ("ori-olympus-e-m5-mark-ii-16bit-16bit-normal-4-3.ori", (4640, 3472)),
+        ("orf-olympus-em1.orf", (4640, 3472), 0xc61b_0bb3_5170_4735u64),
+        ("orf-olympus-em10iii.orf", (4640, 3472), 0xedc1_ec6d_15a8_a303),
+        ("ori-olympus-e-m1markii-16bit-4-3-2.ori", (5240, 3912), 0xbe86_2d7e_f2ec_a09f),
+        ("ori-olympus-e-m5-mark-ii-16bit-16bit-normal-4-3.ori", (4640, 3472), 0xc042_efb6_8422_2a11),
     ];
-    for &(name, (expected_w, expected_h)) in &cases {
+    for &(name, (expected_w, expected_h), hash) in &cases {
         let mut path = corpus().join("raw").join(name);
         if !path.exists() {
             let alt_name = match name {
@@ -141,6 +143,8 @@ fn compressed_olympus_bodies_decode_like_camera_jpeg() {
         raw.validate().unwrap();
         assert_eq!((raw.width, raw.height), (expected_w, expected_h), "{name}: sensor size mismatch");
         assert_eq!(raw.info(), probe_info(&bytes).unwrap(), "{name}: probe and decode disagree");
+        let RawData::U16(samples) = &raw.data else { panic!("{name}: integer sensor data expected") };
+        assert_eq!(sample_hash(samples), hash, "{name}: sensor pixels differ from the pinned decode");
 
         let jpeg = embedded_preview(&bytes).unwrap_or_else(|| panic!("{name}: no camera JPEG"));
         let r = green_vs_camera_jpeg(&raw, &jpeg, 24, 16);

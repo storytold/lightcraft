@@ -117,26 +117,25 @@ impl OrfCompressionConfig {
     }
 }
 
-/// Helper to parse an optional unsigned 32-bit tag with range validation, falling back to default when absent.
+/// Helper to parse an optional unsigned 32-bit tag with range validation. The default applies only when the tag is
+/// absent: a present value that is unreadable (not an integer), negative or out of range rejects the configuration.
 fn parse_bounded_u32(ip: &Ifd, tag: u16, default: u32, range: std::ops::RangeInclusive<u32>) -> Option<u32> {
-    match ip.u64(tag) {
-        Some(raw) => {
-            let val = u32::try_from(raw).ok()?;
-            if range.contains(&val) { Some(val) } else { None }
-        }
-        None => Some(default),
+    if !ip.contains(tag) {
+        return Some(default);
     }
+    let val = u32::try_from(ip.i64(tag)?).ok()?;
+    range.contains(&val).then_some(val)
 }
 
-/// Helper to parse an optional signed 32-bit tag with range validation, falling back to default when absent.
+/// Helper to parse an optional signed 32-bit tag with range validation. The default applies only when the tag is
+/// absent: a present value that is unreadable (not an integer), unrepresentable or out of range rejects the
+/// configuration.
 fn parse_bounded_i32(ip: &Ifd, tag: u16, default: i32, range: std::ops::RangeInclusive<i32>) -> Option<i32> {
-    match ip.u64(tag) {
-        Some(raw) => {
-            let val = i32::try_from(raw).ok()?;
-            if range.contains(&val) { Some(val) } else { None }
-        }
-        None => Some(default),
+    if !ip.contains(tag) {
+        return Some(default);
     }
+    let val = i32::try_from(ip.i64(tag)?).ok()?;
+    range.contains(&val).then_some(val)
 }
 
 /// Verify that the compressed strip begins with $N$ big-endian bytes equal to 1, followed by `[0x00, 0x00]`.
@@ -308,6 +307,10 @@ pub(crate) fn decompress_stream(stream: &[u8], width: usize, height: usize, conf
         return Err(RawError::Corrupt("ORF compressed stream shorter than expected frame".into()));
     }
 
+    // S_0 is validated to 0..=16 by `from_subifd` (spec §2); the bound here keeps the shifts below panic-free (an
+    // i32 shift of 32 or more) for any other caller, without cutting the valid 16.
+    let s0 = config.direct_low_bits.min(16);
+
     let mut pixels = vec![0u16; total_pixels];
     let mut reader = MsbBitReader::new(stream);
 
@@ -388,12 +391,12 @@ pub(crate) fn decompress_stream(stream: &[u8], width: usize, height: usize, conf
             let north = if row < 2 {
                 config.boundary_baseline
             } else {
-                pixels.get((row - 2) * width + col).map_or(config.boundary_baseline, |&val| (val as i32) >> config.direct_low_bits.min(15))
+                pixels.get((row - 2) * width + col).map_or(config.boundary_baseline, |&val| (val as i32) >> s0)
             };
             let north_west = if row < 2 || col < 2 {
                 config.boundary_baseline
             } else {
-                pixels.get((row - 2) * width + col - 2).map_or(config.boundary_baseline, |&val| (val as i32) >> config.direct_low_bits.min(15))
+                pixels.get((row - 2) * width + col - 2).map_or(config.boundary_baseline, |&val| (val as i32) >> s0)
             };
 
             flat_history[1] = last_reconstructed_sum;
@@ -404,12 +407,15 @@ pub(crate) fn decompress_stream(stream: &[u8], width: usize, height: usize, conf
             // Final photosite sample reconstruction
             let reconstructed_sum =
                 adjusted_residual.checked_add(predicted_baseline).ok_or_else(|| RawError::Corrupt("ORF predictor overflow".into()))?;
-            last_reconstructed_sum = reconstructed_sum;
 
-            let final_sample = i64::from(symbol.low_bits).saturating_add(i64::from(reconstructed_sum) << config.direct_low_bits.min(15));
+            let final_sample = i64::from(symbol.low_bits).saturating_add(i64::from(reconstructed_sum) << s0);
+            let stored = final_sample.clamp(0, i64::from(u16::MAX)) as u16;
+
+            // The west neighbour is the stored (clamped) sample `>> S_0` (spec §6), as the north neighbours are.
+            last_reconstructed_sum = i32::from(stored) >> s0;
 
             if let Some(pixel_slot) = pixels.get_mut(row_offset + col) {
-                *pixel_slot = final_sample.clamp(0, i64::from(u16::MAX)) as u16;
+                *pixel_slot = stored;
             }
         }
     }
@@ -470,6 +476,76 @@ mod tests {
         // Outer condition true, nested directional condition false: N (spec §6, measured on the CC0 corpus).
         let p3 = predict_spatial_baseline(100, 200, 50, 32);
         assert_eq!(p3, 200);
+    }
+
+    /// MSB-first bytes from a string of `0`/`1` (other characters ignored), zero-padded to a whole byte.
+    fn pack(bits: &str) -> Vec<u8> {
+        let bits: Vec<u8> = bits.bytes().filter(|b| matches!(b, b'0' | b'1')).map(|b| b - b'0').collect();
+        bits.chunks(8).map(|c| c.iter().enumerate().fold(0u8, |acc, (i, &b)| acc | (b << (7 - i)))).collect()
+    }
+
+    fn plain_config() -> OrfCompressionConfig {
+        OrfCompressionConfig {
+            direct_low_bits: 0,
+            gradient_threshold: 32,
+            boundary_baseline: 0,
+            residual_sub_bits: 0,
+            feedback_shift: 5,
+            flatness_threshold: 16,
+            run_threshold: 3,
+            table_a: (0, 15),
+            table_b: (0, 15),
+            max_rice_k: 15,
+            max_unary_run: 1,
+            header_prefix_len: 4,
+            sensor_bits: 12,
+        }
+    }
+
+    /// `S_0 = 16` is valid (spec §2): the low bits and the reconstructed sum shift by the full 16, not 15.
+    #[test]
+    fn sixteen_direct_low_bits_shift_by_sixteen() {
+        let config = OrfCompressionConfig { direct_low_bits: 16, boundary_baseline: 1, ..plain_config() };
+        // sign 0, u_low = 1 (16 bits), unary stop bit: residual 0, so P_recon = P_0 = 1 and Sample = (1 << 16) + 1
+        let stream = pack("0 0000000000000001 1");
+        assert_eq!(decompress_stream(&stream, 1, 1, &config).unwrap(), vec![u16::MAX]);
+    }
+
+    /// The west neighbour is the stored (clamped) sample (spec §6), not the unclamped reconstructed sum.
+    #[test]
+    fn west_neighbour_is_the_clamped_stored_sample() {
+        let config = OrfCompressionConfig { boundary_baseline: -100, ..plain_config() };
+        // x = 0, 1: residual 0 on P_0 = -100, stored as 0. x = 2: escape-coded residual +150 (15 bits, then the
+        // discarded boundary bit) on W = 0 (stored x = 0), N = NW = -100, so the predictor picks W.
+        let stream = pack("01 01 00 000000010010110 0");
+        assert_eq!(decompress_stream(&stream, 3, 1, &config).unwrap(), vec![0, 0, 150]);
+    }
+
+    /// A tag that is present but unreadable, negative or out of range rejects the configuration; only an absent
+    /// tag takes the default.
+    #[test]
+    fn present_but_invalid_parameters_reject_the_configuration() {
+        use craft_tiff::{Entry, Value};
+        let ifd = |extra: Option<(u16, Value)>| {
+            let mut entries = vec![Entry { tag: 0x0653, value: Value::Short(vec![4]), offset: 0 }];
+            entries.extend(extra.map(|(tag, value)| Entry { tag, value, offset: 0 }));
+            entries.sort_by_key(|e| e.tag);
+            Ifd { entries, ..Ifd::default() }
+        };
+        let defaults = OrfCompressionConfig::from_subifd(&ifd(None), None).unwrap();
+        assert_eq!((defaults.direct_low_bits, defaults.run_threshold, defaults.residual_sub_bits), (0, 3, 2));
+        let present = OrfCompressionConfig::from_subifd(&ifd(Some((0x0646, Value::SShort(vec![7])))), None).unwrap();
+        assert_eq!(present.run_threshold, 7, "a signed type with a valid value reads");
+        for (tag, value) in [
+            (0x0646, Value::Ascii("3".into())),
+            (0x0646, Value::Rational(vec![(3, 1)])),
+            (0x0640, Value::SShort(vec![-1])),
+            (0x0647, Value::SLong(vec![-2])),
+            (0x0643, Value::Short(vec![3])),
+            (0x0652, Value::Long8(vec![u64::MAX])),
+        ] {
+            assert_eq!(OrfCompressionConfig::from_subifd(&ifd(Some((tag, value.clone()))), None), None, "{tag:#06x} {value:?}");
+        }
     }
 
     #[test]

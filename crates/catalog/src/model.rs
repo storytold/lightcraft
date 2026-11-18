@@ -363,7 +363,7 @@ pub struct Analysis {
 /// file's white balance is edited relative to its as-shot look or in Kelvin depends on the camera:
 /// [`relative_wb_camera`].
 pub fn relative_wb_format(format: &str) -> bool {
-    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ERF", "MRW", "CRW"]
+    ["ARW", "NEF", "NRW", "RW2", "RWL", "RAW", "RAF", "CR3", "CR2", "PEF", "SRW", "ORF", "ORI", "ERF", "MRW", "CRW"]
         .iter()
         .any(|f| format.eq_ignore_ascii_case(f))
 }
@@ -708,6 +708,7 @@ mod edited_tests {
             ("a.cr2", "CR2", true),
             ("a.pef", "pef", true),
             ("a.orf", "ORF", true),
+            ("a.ori", "ORI", true),
             ("a.erf", "ERF", true),
             ("a.mrw", "MRW", true),
             ("a.dng", "DNG", false),
