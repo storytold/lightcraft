@@ -2313,8 +2313,12 @@ pub enum Dialog {
         name: String,
         parent: Option<String>,
     },
+    /// `masks_off`: the active photo's masks left unticked under Masking (issue #1268; empty: all
+    /// of them, as before).
     CopySettings {
         groups: Vec<String>,
+        #[serde(default)]
+        masks_off: Vec<u32>,
     },
     /// Synchronize Settings (Lightroom Classic's Sync…): the groups the active photo's settings
     /// carry to the other selected photos, plus single Basic Tone controls when Light is unchecked.

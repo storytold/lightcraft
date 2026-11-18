@@ -107,3 +107,52 @@ fn the_left_bar_copies_pastes_and_opens_export() {
     assert_eq!(h.app.ui.module, crate::module::ModuleId::Export, "Export… opens the Export module");
     assert!(h.app.ui.dialog.is_none(), "not the dialog: {:?}", h.app.ui.dialog);
 }
+
+/// Issue #1268: Copy Settings lists the photo's masks under Masking, each with its name and what
+/// it is made of; ticking two of three copies just those two, and Check All copies all again.
+#[test]
+fn copy_settings_picks_single_masks() {
+    let (mut h, ids) = edited();
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "brush"}));
+    exec(&mut h, "mask.add", json!({"kind": "linear"}));
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    // (a mask from before automatic names keeps its placeholder)
+    let mut d = (*h.app.session.develop_of(PhotoId(ids[0])).unwrap()).clone();
+    d.masks[2].name = "Mask 3".into();
+    h.app.session.set_develop(PhotoId(ids[0]), d, "test").unwrap();
+    let masks = h.app.session.develop_of(PhotoId(ids[0])).unwrap().masks.clone();
+    let rows = crate::panels::dialogs::copy_mask_rows(&h.app.session);
+    let texts: Vec<&str> = rows.iter().map(|(_, t)| t.as_str()).collect();
+    assert_eq!(texts, ["Radial Gradient + Brush", "Linear Gradient", "Mask 3: Radial Gradient"], "{masks:?}");
+
+    copy_dialog(&mut h);
+    click(&mut h, "copyGroup:none");
+    click(&mut h, "copyGroup:open:masks");
+    click(&mut h, &format!("copyGroup:mask:{}", masks[0].id));
+    click(&mut h, &format!("copyGroup:mask:{}", masks[2].id));
+    assert!(
+        matches!(&h.app.ui.dialog, Some(Dialog::CopySettings { groups, masks_off }) if groups == &["masks"] && masks_off == &[masks[1].id]),
+        "{:?}",
+        h.app.ui.dialog
+    );
+    key(&mut h, json!({"key": "Enter"}));
+    assert!(h.app.ui.dialog.is_none());
+    exec(&mut h, "library.select", json!({"ids": [ids[1]]}));
+    exec(&mut h, "develop.paste", json!({}));
+    let pasted: Vec<String> = h.app.session.develop_of(PhotoId(ids[1])).unwrap().masks.iter().map(|m| m.name.clone()).collect();
+    assert_eq!(pasted, [masks[0].name.clone(), masks[2].name.clone()]);
+    assert_eq!(exposure(&h, ids[1]), 0.0, "Check None left Light out");
+
+    // Check All: every mask again
+    exec(&mut h, "library.select", json!({"ids": [ids[0]]}));
+    copy_dialog(&mut h);
+    click(&mut h, "copyGroup:none");
+    // (Masking stays open from before)
+    click(&mut h, &format!("copyGroup:mask:{}", masks[1].id));
+    click(&mut h, "copyGroup:all");
+    assert!(matches!(&h.app.ui.dialog, Some(Dialog::CopySettings { masks_off, .. }) if masks_off.is_empty()), "{:?}", h.app.ui.dialog);
+    key(&mut h, json!({"key": "Enter"}));
+    let copied = h.app.session.clipboard.as_ref().and_then(|c| c.get("masks")).and_then(Value::as_array).map(Vec::len);
+    assert_eq!(copied, Some(3));
+}

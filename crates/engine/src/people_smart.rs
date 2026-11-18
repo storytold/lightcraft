@@ -106,13 +106,30 @@ impl Session {
     }
 
     /// Give the masks of `after` that still carry an automatic name (a placeholder such as
-    /// "Mask 3", or the name they had automatically in `before`) the name of what they select now;
-    /// a name the photographer gave is kept.
+    /// "Mask 3", or the name they had automatically in `before`, numbered or not) the name of what
+    /// they select now; a name the photographer gave is kept. A name another mask of the photo
+    /// has already gets a number ("Brush 2", issue #1268); a mask whose name doesn't change keeps
+    /// it, so masks that shared a name before (imported ones too) keep theirs.
     pub(crate) fn refresh_mask_names(&mut self, id: PhotoId, before: &[lcc_develop::Mask], after: &mut [lcc_develop::Mask]) {
-        for m in after.iter_mut().filter(|m| !m.components.is_empty()) {
+        use lcc_develop::recipe::{generic_name, numbered_name, unique_name};
+        for i in 0..after.len() {
+            let Some(m) = after.get(i).filter(|m| !m.components.is_empty()).cloned() else { continue };
             let was = before.iter().find(|b| b.id == m.id).filter(|b| !b.components.is_empty()).map(|b| self.auto_mask_name(id, b));
-            if lcc_develop::recipe::generic_name(&m.name) || was.as_deref() == Some(m.name.as_str()) {
-                m.name = self.auto_mask_name(id, m);
+            let placeholder = generic_name(&m.name);
+            if !placeholder && !was.as_deref().is_some_and(|w| numbered_name(&m.name, w)) {
+                continue;
+            }
+            let base = self.auto_mask_name(id, &m);
+            if !placeholder && was.as_deref() == Some(base.as_str()) {
+                // selects what it selected: its name (and number) stays
+                continue;
+            }
+            let name = {
+                let taken: Vec<&str> = after.iter().enumerate().filter(|(k, _)| *k != i).map(|(_, x)| x.name.as_str()).collect();
+                unique_name(&base, &taken)
+            };
+            if let Some(m) = after.get_mut(i) {
+                m.name = name;
             }
         }
     }

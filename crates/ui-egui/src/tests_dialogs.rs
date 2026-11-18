@@ -143,7 +143,7 @@ fn modal_dialogs_close_menus_and_block_background_shortcuts_and_clicks() {
         assert_eq!(r["ok"], true, "{r}");
         h.step();
         let choices = h.app.ui.dialog.clone();
-        assert!(matches!(&choices, Some(crate::state::Dialog::CopySettings { groups }) if groups.is_empty()));
+        assert!(matches!(&choices, Some(crate::state::Dialog::CopySettings { groups, .. }) if groups.is_empty()));
         let r = h.request("ui.clickWidget", json!({"id": "icon:copyGear"}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.step();

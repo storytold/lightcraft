@@ -2399,7 +2399,7 @@ pub fn run_ui_command(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Va
         }
         "dialog.copySettings" => {
             let groups = app.session.dialogs.copy.to_ids();
-            app.ui.dialog = Some(Dialog::CopySettings { groups });
+            app.ui.dialog = Some(Dialog::CopySettings { groups, masks_off: Vec::new() });
             Ok(Value::Null)
         }
         "dialog.slideshowExport" => {
