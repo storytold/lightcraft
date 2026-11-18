@@ -3279,6 +3279,61 @@ mod tests {
         assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "the field is not duplicated:\n{data}");
         assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "the packet still parses:\n{data}");
     }
+
+    /// Regression: a nested self-closing `rdf:Description` must not make CRS write-back
+    /// skip or duplicate a CRS field on a following sibling description. Covers the
+    /// attribute and element forms, with the CRS namespace declared on the sibling and
+    /// on the enclosing `rdf:RDF`.
+    #[test]
+    fn crs_write_regression_nested_self_closing_description_sibling_crs_field() {
+        for data in [
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+            crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" crs:Exposure2012="0.5"/>
+        </rdf:RDF></x:xmpmeta>"#,
+        ] {
+            let mut data = data.to_string();
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+            assert!(data.contains(r#"crs:Exposure2012="0.9""#), "attribute form not updated:\n{data}");
+            assert_eq!(data.matches("crs:Exposure2012").count(), 1, "attribute form duplicated:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "attribute form does not parse:\n{data}");
+        }
+
+        for data in [
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#,
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/">
+          <rdf:Description rdf:about="">
+            <rdf:Description rdf:about="nested"/>
+          </rdf:Description>
+          <rdf:Description rdf:about="">
+            <crs:Exposure2012>0.5</crs:Exposure2012>
+          </rdf:Description>
+        </rdf:RDF></x:xmpmeta>"#,
+        ] {
+            let mut data = data.to_string();
+            update_crs_attributes(&mut data, &[("Exposure2012", "0.9".to_string())]);
+            assert!(data.contains("<crs:Exposure2012>0.9</crs:Exposure2012>"), "element form not updated:\n{data}");
+            assert!(!data.contains("crs:Exposure2012=\""), "element form gained an attribute duplicate:\n{data}");
+            assert_eq!(data.matches("<crs:Exposure2012").count(), 1, "element form duplicated:\n{data}");
+            assert!(lightcraft_meta::parse_xmp(&data).is_ok(), "element form does not parse:\n{data}");
+        }
+    }
 }
 
 #[cfg(test)]
