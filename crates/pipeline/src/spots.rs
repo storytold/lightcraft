@@ -855,4 +855,41 @@ mod tests {
         let c = img.get(35, 50);
         assert!(c[0] < 0.5, "spot 2 read spot 1's output instead of the snapshot: {c:?}");
     }
+
+    #[test]
+    fn overlapping_spots_with_auto_source_are_order_independent() {
+        // Spot 1 copies bright columns onto the left side. Spot 2 is a Remove spot
+        // whose automatic source must be chosen from the pre-spot snapshot, so its
+        // result (and the preserved earlier correction) must not depend on order.
+        let mut base = Rgb32f::from_fn(100, 100, |_, _| [0.1; 3]);
+        for x in 68..72 {
+            for y in 0..100 {
+                base.set(x, y, [0.9; 3]);
+            }
+        }
+        let frame = Frame::new(100, 100, &DevelopSettings::default(), true);
+        let ppl = frame.px_per_long(100);
+        let spot1 = Spot {
+            mode: SpotMode::Clone,
+            points: vec![Point::new(0.30, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: Some(Point::new(0.40, 0.0)),
+        };
+        let spot2 = Spot {
+            mode: SpotMode::Remove,
+            points: vec![Point::new(0.60, 0.50)],
+            size: 4.0 / 100.0,
+            feather: 0.0,
+            opacity: 100.0,
+            source_offset: None,
+        };
+        let mut first = base.clone();
+        apply(&mut first, &[spot1.clone(), spot2.clone()], &frame, ppl);
+        let mut second = base.clone();
+        apply(&mut second, &[spot2.clone(), spot1.clone()], &frame, ppl);
+        assert_eq!(first.data, second.data, "overlapping spots with auto source depended on order");
+        assert!(first.get(30, 50)[0] > 0.5, "earlier clone correction was lost: {:?}", first.get(30, 50));
+    }
 }
