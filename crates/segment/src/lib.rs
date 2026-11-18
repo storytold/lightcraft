@@ -76,8 +76,14 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub const INPUT: usize = 1008;
 /// Side of the low-resolution masks the model predicts.
 pub const MASK_SIDE: usize = 288;
+/// Most clicks one Object selection may carry (the engine's `MAX_CLICKS`).
+pub const MAX_CLICKS: usize = 64;
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = assert!(MASK_SIDE == tracker::LOW_RES && INPUT == vit::IMAGE);
+
+/// What a photo's subject usually is, as concept prompts ([`Sam3::segment_subject`]); anything else
+/// (an object, a landscape's feature) is selected at the focus point instead.
+pub const SUBJECT_CONCEPTS: &[&str] = &["person", "animal"];
 
 /// The files of a model directory.
 pub const WEIGHTS_FILE: &str = "model.safetensors";
@@ -149,6 +155,7 @@ impl Sam3 {
             return Err(Error::Missing(dir.to_path_buf()));
         }
         let weights = weights::Weights::open(&dir.join(WEIGHTS_FILE))?;
+        hugging_face_format(&weights)?;
         let backbone = vit::Vit::new(Self::vb(&weights, &device).pp("detector_model.vision_encoder.backbone"))?;
         Ok(Self { dir: dir.to_path_buf(), device, weights, backbone, tracker_neck: None, tracker: None, detector: None, tokenizer: None })
     }
@@ -202,6 +209,10 @@ impl Sam3 {
         if clicks.is_empty() {
             return Err(Error::Model("no clicks".into()));
         }
+        // the prompt grows with every click: the editor takes at most this many (the engine's `MAX_CLICKS`)
+        if clicks.len() > MAX_CLICKS {
+            return Err(Error::Model(format!("at most {MAX_CLICKS} clicks, not {}", clicks.len())));
+        }
         let (neck, tracker) = self.tracker_parts()?;
         if enc.tracker.is_none() {
             let levels = neck.forward(&enc.backbone, 3)?;
@@ -240,6 +251,15 @@ impl Sam3 {
         Ok(detector::merge(&out, threshold))
     }
 
+    /// The photo's subject among its people and animals ([`detector::subject`]): the ones the
+    /// camera's focus (`focus`, normalized; `None` when the file doesn't record it) falls on, or
+    /// without it the most prominent, with whoever is about as large. `None` when the subject is
+    /// neither (a focus on something else, or nobody in the photo): select what is at the point.
+    pub fn segment_subject(&mut self, enc: &mut Encoded, focus: Option<(f32, f32)>, threshold: f32) -> Result<Option<Prediction>> {
+        let outs = SUBJECT_CONCEPTS.iter().map(|c| self.detect(enc, c)).collect::<Result<Vec<_>>>()?;
+        Ok(detector::subject(&outs, threshold, focus))
+    }
+
     /// Raw detector outputs for `text` (tests and tools).
     pub fn detect(&mut self, enc: &mut Encoded, text: &str) -> Result<detector::Output> {
         let (det, tok) = self.detector_parts()?;
@@ -261,6 +281,20 @@ impl Encoded {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Meta's original checkpoint (`sam3.pt`, or a `sam3.safetensors` conversion of it as on community
+/// mirrors) names its tensors differently: say so, rather than name the first tensor it lacks (#3378).
+fn hugging_face_format(weights: &weights::Weights) -> Result<()> {
+    let first = "detector_model.vision_encoder.backbone.embeddings.patch_embeddings.projection.weight";
+    if !weights.contains(first) && (weights.has_prefix("detector.backbone.") || weights.has_prefix("tracker.")) {
+        return Err(Error::Model(format!(
+            "{WEIGHTS_FILE} is Meta's original checkpoint (sam3.pt, or a sam3.safetensors conversion of it as on community mirrors); \
+             LightCraft needs the Hugging Face format: {WEIGHTS_FILE} from facebook/sam3"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
@@ -272,4 +306,23 @@ pub use detector::Output as DetectorOutput;
 /// Wait for queued GPU work to finish (benchmarks).
 pub fn sync(model: &Sam3) -> Result<()> {
     Ok(model.device.synchronize()?)
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_original_checkpoint_is_named_as_such() {
+        // #3378: a community mirror's `sam3.safetensors` (Meta's key names, C64 RoPE tables) saved as model.safetensors
+        let dir = std::env::temp_dir().join(format!("lc-sam3-original-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = r#"{"detector.backbone.vision_backbone.trunk.blocks.0.attn.freqs_cis":{"dtype":"C64","shape":[2],"data_offsets":[0,16]},"tracker.sam_mask_decoder.iou_token.weight":{"dtype":"F32","shape":[2],"data_offsets":[16,24]}}"#;
+        std::fs::rename(weights::tests::write("original", header, 24), dir.join(WEIGHTS_FILE)).unwrap();
+        std::fs::write(dir.join("vocab.json"), "{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), "").unwrap();
+        let err = Sam3::load_cpu(&dir).err().unwrap().to_string();
+        assert!(err.contains("Meta's original checkpoint") && err.contains("facebook/sam3"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

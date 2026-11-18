@@ -1,5 +1,5 @@
 use super::encoding::srgb8_in;
-use super::*;
+use super::{DeepImage, DeepSamples, Deserialize, OutputSpace, Rgba8, Serialize};
 
 /// Where a watermark sits.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,12 +236,20 @@ pub(crate) fn watermark_logo(path: &str) -> Option<std::sync::Arc<Rgba8>> {
     Some(img)
 }
 
+/// Most pixels of a watermark or layout graphic (8192 x 8192).
+const MAX_GRAPHIC_PIXELS: u64 = 1 << 26;
+
+/// Most bytes of a watermark or layout graphic file.
+const MAX_GRAPHIC_BYTES: u64 = 256 << 20;
+
 /// A graphic file (a PNG with transparency, typically) as 8-bit sRGB with its alpha: the
 /// watermark logo, the loupe's layout image. Applies EXIF orientation before either consumer sizes it.
 /// The error says why it couldn't be read or decoded.
 pub fn read_graphic(path: &str) -> Result<Rgba8, String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("can't read {path}: {e}"))?;
-    let decoded = lightcraft_codecs::decode(&bytes, Default::default()).map_err(|e| format!("can't decode {path}: {e}"))?;
+    let bytes = crate::read_file::read_regular(path, MAX_GRAPHIC_BYTES).map_err(|e| format!("can't read {path}: {e}"))?;
+    // a graphic is a logo or a layout image, not a photo: its decode is held to 8192 x 8192 pixels, not the general gigapixel
+    let opts = lightcraft_codecs::DecodeOptions { max_pixels: MAX_GRAPHIC_PIXELS, ..Default::default() };
+    let decoded = lightcraft_codecs::decode(&bytes, opts).map_err(|e| format!("can't decode {path}: {e}"))?;
     Ok(decoded.to_srgb8().into_oriented(lightcraft_geom::Orientation::from_exif(decoded.orientation)))
 }
 

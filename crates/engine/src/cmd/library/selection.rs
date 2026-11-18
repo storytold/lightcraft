@@ -1,4 +1,4 @@
-use super::*;
+use super::{AlbumId, Flag, Op, PhotoId, Result, Selection, Session, Value, bad, bool_or, json, ok};
 
 /// The selection after photos left the view (deleted, or rated, flagged or labelled out of it).
 /// Its callers end an open edit (a slider drag) before their own change, as moving to the next
@@ -35,10 +35,22 @@ pub(super) fn strs(p: &Value, key: &str) -> Vec<String> {
 
 /// The targets an album can hold and how many were browsed (Local) photos, which album views
 /// never show (issue #684): those are skipped, and reported, instead of becoming invisible members.
+/// An id the catalog doesn't have (named outright, or kept selected after an undo took its photo
+/// away) is dropped before anything changes, and isn't counted: `skipped` stays the Local count
+/// the toasts name.
 pub(super) fn album_targets(s: &Session, targets: Vec<PhotoId>) -> (Vec<PhotoId>, usize) {
-    let before = targets.len();
-    let kept: Vec<PhotoId> = targets.into_iter().filter(|id| s.catalog.photo(*id).is_none_or(|p| !p.local)).collect();
-    let skipped = before - kept.len();
+    let mut skipped = 0;
+    let kept: Vec<PhotoId> = targets
+        .into_iter()
+        .filter(|id| match s.catalog.photo(*id) {
+            None => false,
+            Some(p) if p.local => {
+                skipped += 1;
+                false
+            }
+            Some(_) => true,
+        })
+        .collect();
     (kept, skipped)
 }
 
@@ -170,12 +182,17 @@ pub(super) fn rotate(s: &mut Session, p: &Value, cw: bool) -> Result<Value> {
     let targets = s.targets(p)?;
     let mut ops = Vec::new();
     for id in targets {
-        if let Some(d) = s.develop_of(id) {
-            let mut d = (*d).clone();
+        if let Some(before) = s.develop_of(id) {
+            let mut d = (*before).clone();
             d.orientation = d.orientation.rotated(cw);
             // the crop lives in the oriented frame, so it turns with the image (else it keeps the old width and height and cuts the photo)
             let turn = lightcraft_geom::Orientation::Normal.rotated(cw);
             d.crop.geometry.rect = turn.map_norm_rect(d.crop.geometry.rect);
+            // and so do the masks: on the photo first (an old one), then turned with it
+            s.attach_masks(id, &before, &mut d);
+            for m in &mut d.masks {
+                lightcraft_pipeline::mask_space::turn(m, turn);
+            }
             d.crop.aspect = d.crop.aspect.map(|(w, h)| (h, w));
             ops.extend(s.develop_op(id, d, "Rotate"));
         }
