@@ -132,58 +132,7 @@ pub fn write_matrix_trc(space: &RgbSpace, trc: &Trc) -> Vec<u8> {
     };
     p.copyright = "No copyright, use freely".to_string();
     let encoded = p.with_encoded_bytes();
-    align_tags(&fixed_date(encoded.to_bytes().to_vec()))
-}
-
-/// Zero the header's creation date/time (ICC.1 §7.2.8, bytes 24..36) so a profile's bytes depend
-/// only on its colour space and curve. `moxcms` stamps the wall clock there on every `encode`
-/// (ignoring `ColorProfile::creation_date_time`), which made two exports of one photo differ in
-/// the embedded profile and nowhere else, so output hashes could not be compared (#180). Readers
-/// do not interpret the field; all zeros is the conventional "unspecified" value.
-fn fixed_date(mut b: Vec<u8>) -> Vec<u8> {
-    if let Some(date) = b.get_mut(24..36) {
-        date.fill(0);
-    }
-    b
-}
-
-/// Re-lay a profile's tag data on 4-byte boundaries (ICC.1 §7.3.1). The encoder packs tags back to
-/// back, so a tag of odd length (e.g. a `mluc` description with an odd number of characters)
-/// misaligns every following tag — which some readers (macOS ImageIO for PNG `iCCP`) reject.
-fn align_tags(b: &[u8]) -> Vec<u8> {
-    let be = |i: usize| b.get(i..i + 4).map(|s| u32::from_be_bytes([s[0], s[1], s[2], s[3]]) as usize);
-    let Some(n) = be(128) else { return b.to_vec() };
-    let table_end = 132 + 12 * n;
-    let tags: Option<Vec<(usize, usize)>> = (0..n).map(|t| Some((be(132 + 12 * t + 4)?, be(132 + 12 * t + 8)?))).collect();
-    let Some(tags) = tags.filter(|t| table_end <= b.len() && t.iter().all(|&(o, l)| o >= table_end && o + l <= b.len())) else {
-        return b.to_vec();
-    };
-    let mut out = b[..table_end].to_vec();
-    let mut placed: Vec<((usize, usize), usize)> = Vec::new();
-    for (t, &(off, len)) in tags.iter().enumerate() {
-        let new_off = match placed.iter().find(|(k, _)| *k == (off, len)) {
-            // tags sharing data keep sharing it
-            Some(&(_, o)) => o,
-            None => {
-                while !out.len().is_multiple_of(4) {
-                    out.push(0);
-                }
-                let o = out.len();
-                out.extend_from_slice(&b[off..off + len]);
-                placed.push(((off, len), o));
-                o
-            }
-        };
-        out[132 + 12 * t + 4..132 + 12 * t + 8].copy_from_slice(&(new_off as u32).to_be_bytes());
-    }
-    while !out.len().is_multiple_of(4) {
-        out.push(0);
-    }
-    let size = out.len() as u32;
-    out[0..4].copy_from_slice(&size.to_be_bytes());
-    // the profile ID (MD5) would no longer match: clear it (= "not computed")
-    out[84..100].fill(0);
-    out
+    craft_cms::normalize_for_embedding(encoded.to_bytes().to_vec())
 }
 
 /// A profile for one of the well-known spaces with its standard curve.
