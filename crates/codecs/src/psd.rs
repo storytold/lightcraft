@@ -4,7 +4,7 @@
 //! Also a flat-file writer ([`encode`]): the merged image of an 8- or 16-bit gray/RGB document
 //! with no layers, so an image editor opens it as one background layer and saves back to it.
 
-use crate::convert::{Buf, Meta, Model, Raw, check_size, finish};
+use crate::convert::{Buf, Meta, Model, Raw, finish};
 use crate::encode::{EncodeImage, EncodeMeta, Samples};
 use crate::{DecodeOptions, Decoded, Error, Format, Result};
 
@@ -14,11 +14,13 @@ fn err(s: &str) -> Error {
     Error::Malformed(F, s.to_string())
 }
 
+#[cfg(test)]
 struct Rd<'a> {
     b: &'a [u8],
     p: usize,
 }
 
+#[cfg(test)]
 impl<'a> Rd<'a> {
     fn take(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.p.checked_add(n).filter(|&e| e <= self.b.len()).ok_or_else(|| err("truncated"))?;
@@ -34,71 +36,64 @@ impl<'a> Rd<'a> {
         let s = self.take(4)?;
         Ok(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
     }
-    fn u64(&mut self) -> Result<u64> {
-        let s = self.take(8)?;
-        Ok(u64::from_be_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
-    }
 }
 
-/// The header (`craft-psd`), colour mode data and image resources, with a reader at the layer and mask section.
-struct Start<'a> {
-    psb: bool,
-    channels: usize,
-    width: usize,
-    height: usize,
-    depth: u16,
-    mode: u16,
-    color_mode_data: &'a [u8],
-    resources: Vec<craft_psd::ImageResource>,
-    r: Rd<'a>,
+/// The merged composite of `bytes`. A file whose image resources section doesn't parse is opened
+/// with that section emptied (a copy in `spare`): the picture still decodes, without its profile
+/// and metadata.
+fn open_merged<'a>(bytes: &'a [u8], opts: &DecodeOptions, spare: &'a mut Vec<u8>) -> Result<craft_psd::merged::Merged<'a>> {
+    let error = match open_exact(bytes, opts) {
+        Ok(merged) => return Ok(merged),
+        // a pixel-limit refusal reads the header, which the copy keeps: no retry
+        Err(error @ Error::TooLarge(..)) => return Err(error),
+        Err(error) => error,
+    };
+    let Some(stripped) = without_resources(bytes) else { return Err(error) };
+    *spare = stripped;
+    let spare: &'a Vec<u8> = spare;
+    open_exact(spare, opts).map_err(|_| error)
 }
 
-fn start<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<Start<'a>> {
-    // the size limit first, from the header's fixed fields, so an oversized file is `TooLarge` as for other formats
-    if let (Some(&[h0, h1, h2, h3]), Some(&[w0, w1, w2, w3])) = (bytes.get(14..18), bytes.get(18..22)) {
-        check_size(F, u64::from(u32::from_be_bytes([w0, w1, w2, w3])), u64::from(u32::from_be_bytes([h0, h1, h2, h3])), opts)?;
+/// `bytes` with an empty image resources section, when the header parses but the resources don't.
+fn without_resources(bytes: &[u8]) -> Option<Vec<u8>> {
+    if craft_psd::Head::from_bytes(bytes).is_ok() || craft_psd::Header::from_bytes(bytes).is_err() {
+        return None;
     }
-    let h = craft_psd::Header::from_bytes(bytes).map_err(|e| match e {
+    let len_at = |at: usize| -> Option<usize> { usize::try_from(u32::from_be_bytes(bytes.get(at..at.checked_add(4)?)?.try_into().ok()?)).ok() };
+    let res_at = 30usize.checked_add(len_at(26)?)?;
+    let tail = bytes.get(res_at.checked_add(4)?.checked_add(len_at(res_at)?)?..)?;
+    let mut out = Vec::new();
+    // a failed allocation leaves the original parse error, not an abort
+    out.try_reserve_exact(bytes.len()).ok()?;
+    out.extend_from_slice(bytes.get(..res_at)?);
+    out.extend_from_slice(&0u32.to_be_bytes());
+    out.extend_from_slice(tail);
+    Some(out)
+}
+
+fn open_exact<'a>(bytes: &'a [u8], opts: &DecodeOptions) -> Result<craft_psd::merged::Merged<'a>> {
+    craft_psd::merged::Merged::open(bytes, opts.max_pixels).map_err(|error| match error {
+        craft_psd::PsdError::LimitExceeded("pixel count") => {
+            let (w, h) = craft_psd::merged::declared_dimensions(bytes).unwrap_or((0, 0));
+            Error::TooLarge(u64::from(w), u64::from(h))
+        }
+        craft_psd::PsdError::Invalid(message) => err(&message),
         craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
-        e => err(&e.to_string()),
-    })?;
-    let mut r = Rd { b: bytes, p: 26 };
-    let cm_len = r.u32()? as usize;
-    let color_mode_data = r.take(cm_len)?;
-    let res_len = r.u32()? as usize;
-    r.take(res_len)?;
-    // a resource section that doesn't parse is left out: the picture still decodes, without its profile and metadata
-    let resources = craft_psd::Head::from_bytes(bytes).map(|head| head.resources).unwrap_or_default();
-    Ok(Start {
-        psb: h.version.is_psb(),
-        channels: usize::from(h.channels),
-        width: h.width as usize,
-        height: h.height as usize,
-        depth: h.depth,
-        mode: h.color_mode.as_u16(),
-        color_mode_data,
-        resources,
-        r,
+        other => err(&other.to_string()),
     })
 }
 
 pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
-    let Start { psb, channels, width, height, depth, mode, color_mode_data, resources: res, mut r } = start(bytes, opts)?;
-    let (icc, exif, xmp) = resources(&res);
-
-    // Layer and mask information: only the layer count sign matters (merged transparency).
-    let lm_len = if psb { r.u64()? } else { u64::from(r.u32()?) };
-    let lm = r.take(usize::try_from(lm_len).map_err(|_| err("truncated"))?)?;
-    let merged_transparency = if lm.len() >= if psb { 10 } else { 6 } {
-        let off = if psb { 8 } else { 4 };
-        let count = i16::from_be_bytes([lm[off], lm[off + 1]]);
-        count < 0
-    } else {
-        false
-    };
+    let mut spare = Vec::new();
+    let merged = open_merged(bytes, opts, &mut spare)?;
+    let head = &merged.head;
+    let h = &head.header;
+    let (channels, width, height, depth, mode) = (usize::from(h.channels), h.width as usize, h.height as usize, h.depth, h.color_mode.as_u16());
+    let color_mode_data = head.color_mode_data.as_slice();
+    let (icc, exif, xmp) = resources(&head.resources);
+    let merged_transparency = merged.transparency;
 
     // Image data.
-    let compression = r.u16()?;
     let bpc = match depth {
         8 => 1usize,
         16 => 2,
@@ -124,57 +119,13 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     let used = n_color + alpha as usize;
     let too_large = || Error::TooLarge(width as u64, height as u64);
     let n = width.checked_mul(height).ok_or_else(too_large)?;
-    let row_bytes = width.checked_mul(bpc).ok_or_else(too_large)?;
-    let plane = n.checked_mul(bpc).ok_or_else(too_large)?;
-    let mut planes: Vec<Vec<u8>> = Vec::with_capacity(used);
-    match compression {
-        0 => {
-            // Raw planes are borrowed from the input, so their size is bounded by the file.
-            for _ in 0..used {
-                planes.push(r.take(plane)?.to_vec());
-            }
-        }
-        1 => {
-            // Row byte-count table: one entry per row per channel (all channels, since the data
-            // follows it). Taken from the input before anything is allocated from it.
-            let entry = if psb { 4 } else { 2 };
-            let table_len = channels.checked_mul(height).and_then(|c| c.checked_mul(entry)).ok_or_else(|| err("truncated"))?;
-            let table = r.take(table_len)?;
-            let count = |i: usize| -> usize {
-                let at = i.saturating_mul(entry);
-                match table.get(at..at.saturating_add(entry)) {
-                    Some(&[a, b]) => usize::from(u16::from_be_bytes([a, b])),
-                    Some(&[a, b, c, d]) => u32::from_be_bytes([a, b, c, d]) as usize,
-                    _ => 0,
-                }
-            };
-            // PackBits expands at most 64× (a 2-byte repeat run yields 128 bytes), so a row needs
-            // at least this many encoded bytes. Requiring it (and the data being present) before
-            // allocating bounds the decoded planes by the file size: a tiny file can no longer
-            // declare gigabytes of zero-padded or repeat-run rows.
-            let min_row = row_bytes.div_ceil(128).saturating_mul(2);
-            let mut data_len = 0usize;
-            for i in 0..used.saturating_mul(height) {
-                let c = count(i);
-                if c < min_row {
-                    return Err(err("RLE row too short for its width"));
-                }
-                data_len = data_len.saturating_add(c);
-            }
-            if data_len > bytes.len().saturating_sub(r.p) {
-                return Err(err("truncated"));
-            }
-            for c in 0..used {
-                let mut out = zeroed::<u8>(plane, too_large)?;
-                for (y, row) in out.chunks_exact_mut(row_bytes).enumerate() {
-                    let src = r.take(count(c * height + y))?;
-                    unpackbits(src, row)?;
-                }
-                planes.push(out);
-            }
-        }
-        _ => return Err(Error::Unsupported(F, "ZIP-compressed merged image data")),
-    }
+    let planes = merged.read_planes(used).map_err(|error| match error {
+        craft_psd::PsdError::LimitExceeded(_) | craft_psd::PsdError::OutOfMemory(_) => too_large(),
+        craft_psd::PsdError::Unsupported(_) => Error::Unsupported(F, "ZIP-compressed merged image data"),
+        craft_psd::PsdError::Invalid(message) => err(&message),
+        craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
+        other => err(&other.to_string()),
+    })?;
     let samples = n.checked_mul(used).ok_or_else(too_large)?;
 
     // Interleave to device samples.
@@ -256,18 +207,18 @@ pub(crate) fn encode(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
 /// depth, colour mode or compression, or merged image data that runs past the end of the file
 /// (truncated). The run-length data itself is not unpacked.
 pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
-    let Start { psb, channels, width, height, depth, mode, color_mode_data, resources: res, mut r } = start(bytes, &DecodeOptions::default())?;
-    let (_, exif, _) = resources(&res);
-    let lm_len = if psb { r.u64()? as usize } else { r.u32()? as usize };
-    r.take(lm_len)?;
-    let compression = r.u16()?;
-    let bpc = match depth {
-        8 => 1usize,
-        16 => 2,
-        32 => 4,
+    let mut spare = Vec::new();
+    let merged = open_merged(bytes, &DecodeOptions::default(), &mut spare)?;
+    let head = &merged.head;
+    let h = &head.header;
+    let (channels, width, height, depth, mode) = (usize::from(h.channels), h.width as usize, h.height as usize, h.depth, h.color_mode.as_u16());
+    let color_mode_data = head.color_mode_data.as_slice();
+    let (_, exif, _) = resources(&head.resources);
+    match depth {
+        8 | 16 | 32 => {}
         1 => return Err(Error::Unsupported(F, "1-bit bitmap PSD")),
         _ => return Err(err("bad depth")),
-    };
+    }
     let n_color = match mode {
         1 | 8 | 7 | 2 => 1,
         3 => 3,
@@ -281,24 +232,12 @@ pub(crate) fn header(bytes: &[u8]) -> Result<(u32, u32, u16)> {
     if mode == 2 && (color_mode_data.len() < 768 || depth != 8) {
         return Err(err("bad indexed palette"));
     }
-    let rest = bytes.len().saturating_sub(r.p);
-    let need = match compression {
-        0 => width.checked_mul(height).and_then(|n| n.checked_mul(bpc)).and_then(|n| n.checked_mul(channels)),
-        1 => {
-            // the row byte counts, then the rows they count
-            let rows = channels.checked_mul(height).ok_or_else(|| err("truncated"))?;
-            let table = rows.checked_mul(if psb { 4 } else { 2 }).filter(|&t| t <= rest).ok_or_else(|| err("truncated"))?;
-            let mut total = table;
-            for _ in 0..rows {
-                total = total.saturating_add(if psb { r.u32()? as usize } else { r.u16()? as usize });
-            }
-            Some(total)
-        }
-        _ => return Err(Error::Unsupported(F, "ZIP-compressed merged image data")),
-    };
-    if need.is_none_or(|n| n > rest) {
-        return Err(err("truncated"));
-    }
+    merged.validate_all().map_err(|error| match error {
+        craft_psd::PsdError::Unsupported(_) => Error::Unsupported(F, "ZIP-compressed merged image data"),
+        craft_psd::PsdError::Invalid(message) => err(&message),
+        craft_psd::PsdError::UnexpectedEof { .. } => err("truncated"),
+        other => err(&other.to_string()),
+    })?;
     let orientation = exif.as_deref().map(crate::exif::summarize).unwrap_or_default().orientation.unwrap_or(1);
     Ok((width as u32, height as u32, orientation))
 }
@@ -311,30 +250,9 @@ fn zeroed<T: Clone + Default>(len: usize, too_large: impl Fn() -> Error) -> Resu
     Ok(v)
 }
 
-/// PackBits: decode one row into `row` (pre-zeroed, so short run data leaves zero padding).
-/// A run that would write past the end of the row is an error; trailing bytes are ignored.
-fn unpackbits(mut src: &[u8], row: &mut [u8]) -> Result<()> {
-    let mut at = 0;
-    while at < row.len() {
-        let Some((&h, rest)) = src.split_first() else { break };
-        src = rest;
-        let h = h as i8;
-        if h >= 0 {
-            let n = h as usize + 1;
-            let lit = src.get(..n).unwrap_or(src);
-            let dst = row.get_mut(at..at + lit.len()).ok_or_else(|| err("RLE row overruns its width"))?;
-            dst.copy_from_slice(lit);
-            at += lit.len();
-            src = src.get(n..).unwrap_or(&[]);
-        } else if h != -128 {
-            let n = (1 - h as isize) as usize;
-            let Some((&b, rest)) = src.split_first() else { break };
-            src = rest;
-            row.get_mut(at..at + n).ok_or_else(|| err("RLE row overruns its width"))?.fill(b);
-            at += n;
-        }
-    }
-    Ok(())
+#[cfg(test)]
+fn unpackbits(src: &[u8], row: &mut [u8]) -> Result<()> {
+    craft_psd::merged::unpackbits(src, row).map_err(|error| err(&error.to_string()))
 }
 
 /// ICC (1039), EXIF (1058, without its optional `Exif\0\0` prefix) and XMP (1060) resources; the last of each id.
@@ -422,6 +340,17 @@ mod tests {
         let d = decode(&b, &DecodeOptions::default()).unwrap();
         assert_eq!((d.width, d.height, d.icc.is_none()), (1, 1, true));
         assert_eq!(super::header(&b).unwrap(), (1, 1, 1));
+    }
+
+    #[test]
+    fn a_damaged_resource_section_over_the_pixel_limit_is_too_large() {
+        // the size refusal comes before (and instead of) the copy without the resources
+        let mut b = header(3, 4, 4, 8, 3, 0);
+        b[30..34].copy_from_slice(&4u32.to_be_bytes());
+        b.splice(34..34, *b"JUNK");
+        let opts = DecodeOptions { max_pixels: 15, ..DecodeOptions::default() };
+        let e = decode(&b, &opts).unwrap_err();
+        assert!(matches!(e, Error::TooLarge(4, 4)), "{e:?}");
     }
 
     #[test]
