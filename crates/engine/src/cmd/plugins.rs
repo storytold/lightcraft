@@ -201,6 +201,7 @@ fn list(_: &mut Session, _: &Value) -> Result<Value> {
             .map(|p| {
                 let mut v = p.info();
                 v["previousVersion"] = json!(m.previous_version(&p.plugin.manifest().id));
+                v["updates"] = p.updates_info(m.features());
                 v
             })
             .collect();
@@ -382,6 +383,103 @@ fn install_as(s: &mut Session, p: &Value, by_user: bool) -> Result<Value> {
     })?;
     sync_fields(s);
     Ok(r)
+}
+
+fn set_update_check(_: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "plugin.setUpdateCheck";
+    let id = id_param(p, C)?;
+    if crate::filter_plugins::registry().get(id).is_some() {
+        return Err(bad(C, format!("{id:?} is a pixel filter: pixel filters get no update checks")));
+    }
+    let on = match p.get("on") {
+        Some(Value::Bool(b)) => *b,
+        _ => return Err(bad(C, "missing `on`: true or false")),
+    };
+    with_manager(|m| {
+        m.set_update_check(id, on).map_err(|e| plugin_err(C, e))?;
+        let i = m.get(id).ok_or_else(|| bad(C, format!("no plug-in {id:?} is installed")))?;
+        Ok(json!({"id": id, "updates": i.updates_info(m.features())}))
+    })
+}
+
+fn check_updates_cmd(_: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "plugin.checkUpdates";
+    let id = str_param(p, "id").or_else(|| str_param(p, "plugin"));
+    if let Some(id) = id
+        && crate::filter_plugins::registry().get(id).is_some()
+    {
+        return Err(bad(C, format!("{id:?} is a pixel filter: pixel filters get no update checks")));
+    }
+    check_updates(id, bool_or(p, "due", false)).map_err(|e| plugin_err(C, e))
+}
+
+/// Checks plug-ins' update feeds (`plugin.checkUpdates`): plug-in `id` on request, else every
+/// plug-in whose check the user turned on, only those whose last check is a day old when `due`
+/// (the Plug-in Manager opening). The feeds are fetched off the manager's lock, so it may run on a
+/// worker. → `{checked: [ids], plugins: [{id, name, version, updates}]}` for the plug-ins checked.
+pub fn check_updates(id: Option<&str>, due: bool) -> lcc_plugins::Result<Value> {
+    let now = chrono::Utc::now().timestamp();
+    let (checks, fetcher) = {
+        let mut g = manager();
+        let m = g.get_or_insert_with(Manager::in_memory);
+        (m.update_checks(id, due.then_some(now))?, m.fetcher())
+    };
+    let mut plugins = Vec::new();
+    for c in &checks {
+        let fetched = fetcher.get(&c.url, lcc_plugins::updates::MAX_FEED_BYTES);
+        let mut g = manager();
+        let m = g.get_or_insert_with(Manager::in_memory);
+        m.record_check(c, now, fetched)?;
+        if let Some(i) = m.get(&c.id) {
+            let man = i.plugin.manifest();
+            plugins.push(json!({"id": man.id, "name": man.name, "version": man.version, "updates": i.updates_info(m.features())}));
+        }
+    }
+    Ok(json!({"checked": checks.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), "plugins": plugins}))
+}
+
+/// Downloads the update plug-in `id`'s last check found (`plugin.update`'s first half), off the
+/// manager's lock, so it may run on a worker. Refused when there is none, or it needs host
+/// features this version lacks.
+pub fn download_update(id: &str) -> lcc_plugins::Result<Vec<u8>> {
+    let (offer, fetcher, max) = {
+        let mut g = manager();
+        let m = g.get_or_insert_with(Manager::in_memory);
+        (m.update_offer(id)?, m.fetcher(), m.limits().max_module_bytes as u64)
+    };
+    fetcher.get(&offer.url, max).map_err(|e| lcc_plugins::Error::Update(format!("the download failed: {e}")))
+}
+
+/// Installs a downloaded update (`plugin.update`'s second half; `by_user` as for an install from
+/// the Plug-in Manager) → `{updated: true, plugin}`, or, when the file asks for permission groups
+/// its feed didn't declare and `accept_undeclared` isn't set, `{updated: false, reason, undeclared:
+/// [groups], requests: [{group, value?}]}` with nothing installed.
+pub fn install_update(s: &mut Session, id: &str, bytes: &[u8], accept_undeclared: bool, by_user: bool) -> Result<Value> {
+    const C: &str = "plugin.update";
+    let lib = s.plugin_library.clone();
+    let r = with_library(&lib, |m| match m.install_update(id, bytes, accept_undeclared, by_user) {
+        Ok(i) => Ok(json!({"updated": true, "plugin": i.info()})),
+        Err(e @ lcc_plugins::Error::Undeclared { .. }) => {
+            let reason = e.to_string();
+            let lcc_plugins::Error::Undeclared { groups, requests } = e else { return Err(bad(C, reason)) };
+            Ok(json!({"updated": false, "reason": reason, "undeclared": groups, "requests": requests}))
+        }
+        Err(e) => Err(plugin_err(C, e)),
+    })?;
+    if r["updated"] == json!(true) {
+        sync_fields(s);
+    }
+    Ok(r)
+}
+
+fn update(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "plugin.update";
+    let id = id_param(p, C)?;
+    if crate::filter_plugins::registry().get(id).is_some() {
+        return Err(bad(C, format!("{id:?} is a pixel filter: pixel filters get no updates")));
+    }
+    let bytes = download_update(id).map_err(|e| plugin_err(C, e))?;
+    install_update(s, id, &bytes, bool_or(p, "acceptUndeclared", false), false)
 }
 
 /// `acceptSigner: "<fingerprint>"` or `acceptUnsigned: true`: the user's yes to a file that isn't
@@ -1403,6 +1501,9 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "plugin.install", "Install Plug-in", [], None, "{path: .wasm, grant?: {catalog, metadataWrite, network: [hosts], fs: [{path, write}], programs: [entries as plugin.list gives them]}, allowDowngrade?: bool = false, acceptSigner?: the file's signerKey or its fingerprint, acceptUnsigned?: bool = false}: installs or updates. Nothing is granted: a fresh install has no permissions, and the plug-in asks the user for each as it needs it; an update keeps what the user allowed (cut back to what the new version asks for) and what they denied. `grant` may repeat or leave out what the installed version has, never add to it (an error, nothing installed): only the user allows. A module whose code differs from the installed one keeps none of its programs (its log says so). Refused: features in `requires` this version lacks, a `version` that isn't semver, an older version than the installed one unless allowDowngrade (pixel filters too), an id an installed module of the other kind (plug-in or pixel filter) has; an invalid author signature (a photo-plugin.signature section that doesn't hold up). The first signed install pins its signer (plugin.list `signer`); a later file signed by another key, unsigned, or over a pin plugins.json can't read is refused, naming both signers, unless acceptSigner gives that file's signerKey or fingerprint (pins it) or acceptUnsigned: true for an unsigned file (no pin) → plugin", always, install),
         cmd!(query "plugin.uninstall", "Remove Plug-in", [], None, "{id} | {file}, keepData?: bool = false: removes the module and its data (with keepData its data and settings stay, for a later install of the same id; a pixel filter keeps none); also a plug-in listed under plugin.list → failed (by its id there). With `file` (a plugin.list → failed row's): only that module file when another module has its id (the first by file name loads), else the plug-in as by its id", always, uninstall),
         cmd!(query "plugin.rollback", "Go Back to Previous Plug-in Version", [], None, "{id, acceptSigner?, acceptUnsigned?}: goes back to the version the plug-in's last update replaced (plugin.list → previousVersion), with its settings as they were before that update; one level deep. That file must still be signed as it was when it was replaced (the signer recorded beside it): another key, unsigned or an invalid signature is refused naming both, unless acceptSigner (its signerKey or fingerprint) or acceptUnsigned says yes, as for plugin.install. Its grant is kept, cut back to what that version asks for, without programs (only the user keeps those, from the plug-in's page). An error when no version is kept; nothing changes when the old module can't be written → the plug-in, as plugin.list lists it", always, rollback),
+        cmd!(query "plugin.setUpdateCheck", "Check Plug-in for Updates", [], None, "{id, on: bool}: turns a plug-in's update check on or off (off by default). Only a plug-in whose manifest names an update feed (updateUrl) and whose file is stamped and signed by its pinned author key can have one (plugin.list → updates.available, or updates.reason why not); pixel filters get none. With it on, opening the Plug-in Manager checks the feed when the last check is a day old (plugin.checkUpdates {due: true}); nothing checks while the Plug-in Manager is closed → {id, updates}", always, set_update_check),
+        cmd!(query "plugin.checkUpdates", "Check Plug-ins for Updates", [], None, "{id?, due?: bool = false}: fetches update feeds (https only, at most 1 MB): plug-in `id` now, whatever its setting and the age of its last check (an error when it can't have one), else every plug-in whose update check is on; with due: true only those whose last check is a day old or more. Each result is kept (plugins.json) and shown as plugin.list → updates: {check: the user turned it on, available: it can have one, reason: why not | null, checkedAt: seconds since 1970, error: why the check failed | null, offer: {version (above the installed one), url, sha256, requires, permissions: groups the feed declares, changelog, notes: plain text, at most 280 characters, adds: declared groups the installed version doesn't have, missing: host features this version lacks (not installable)} | null}. A feed entry is matched by its `id`; one whose version isn't above the installed one, can't be read, or shares its id with another offers nothing (the plug-in's log says why). It waits for the network (each fetch ends within 5 minutes); the Plug-in Manager runs it on a worker → {checked: [ids], plugins: [{id, name, version, updates}]}", always, check_updates_cmd),
+        cmd!(query "plugin.update", "Update Plug-in", [], None, "{id, acceptUndeclared?: bool = false}: downloads the version the last check found (plugin.list → updates.offer) and installs it as plugin.install does (its grant kept, cut back to what it asks for; new permissions not granted; the version replaced kept for plugin.rollback). Refused, installing nothing: no update found, one needing host features this version lacks, a file over the install size limit, whose SHA-256 isn't the feed's, that isn't stamped, is another plug-in or version than offered, or isn't signed by the pinned author key. A file whose manifest asks for permission groups the feed didn't declare installs nothing and gives {updated: false, reason, undeclared: [groups], requests: [{group, value?}]: what it asks for that the installed version doesn't}, until called again with acceptUndeclared: true. It waits for the download (at most 5 minutes); the Plug-in Manager runs it on a worker → {updated: true, plugin}", always, update),
         cmd!(query "plugin.enable", "Enable Plug-in", [], None, "{id, enabled?: bool = true}", always, enable),
         cmd!(query "plugin.grant", "Set Plug-in Permissions", [], None, "{id, grant}: replaces the grant with one that may repeat or leave out what is granted (revoking what it leaves out), never add to it: a permission, host, folder (or its write), program or wider program entry the plug-in doesn't have is an error and changes nothing. Only the user allows, when the plug-in asks or in the Plug-in Manager → granted", always, set_grant),
         cmd!(query "plugin.revoke", "Revoke Plug-in Permission", [], None, "{id, group: catalog|metadataWrite|libraryAdd|pixels|crop|virtualCopy|network|fs|programs, value?: the host, folder or program id (none: all of the group)}: takes back one permission; the plug-in may ask for it again → granted", always, revoke),

@@ -21,7 +21,9 @@
 //!
 //! `export_plugin!(package: MANIFEST, handle)` takes the manifest's `version`, `description`,
 //! `author`, `homepage`, `repository` and `license` from the crate's `Cargo.toml` where the JSON
-//! doesn't set them, so they can't drift apart.
+//! doesn't set them, so they can't drift apart. Other manifest fields go in the JSON as they are,
+//! such as `"updateUrl"` (the plug-in's update feed; `"requires": ["updates"]`): see the host's
+//! `docs/plugins.md`.
 //!
 //! The SDK itself has no `unsafe` blocks: buffers the host fills are ordinary `Vec`s kept in a
 //! table by address; the host imports are declared `safe`. The only `unsafe` token is the

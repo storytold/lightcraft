@@ -669,3 +669,89 @@ fn signed_files_are_inspected_and_another_signer_installs_on_the_users_yes() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!((&after["version"], &after["signer"]), (&json!("3.0.0"), &Value::Null), "installed unsigned, as the user said yes to");
 }
+
+/// Serves update feeds and files from a map, for `plugin.checkUpdates` and `plugin.update`.
+#[derive(Debug, Default)]
+struct Served(std::sync::Mutex<std::collections::BTreeMap<String, Vec<u8>>>);
+
+impl lcc_plugins::Fetch for Served {
+    fn get(&self, url: &str, max: u64) -> Result<Vec<u8>, String> {
+        let body = self.0.lock().unwrap().get(url).cloned().ok_or_else(|| format!("{url}: HTTP 404"))?;
+        if body.len() as u64 > max { Err("too large".into()) } else { Ok(body) }
+    }
+}
+
+/// AC-6, AC-3, AC-4: the update commands drive the whole flow: a signed, stamped plug-in with a
+/// feed has its check turned on, `plugin.checkUpdates` finds the update (listed in `plugin.list`),
+/// `plugin.update` asks before permission groups the feed didn't declare and then installs it, and
+/// `plugin.rollback` goes back. A pixel filter gets no update checks.
+#[test]
+fn the_update_commands_check_ask_and_install() {
+    use sha2::Digest as _;
+    let _turn = turn();
+    let mut s = Session::with_demo();
+    let id = "test.installs.updates";
+    let feed_url = "https://feed.test/index.json";
+    let file = |v: &str, perms: Value| {
+        let m = json!({"id": id, "name": "Updated", "version": v, "requires": ["updates"], "updateUrl": feed_url, "permissions": perms});
+        let f = stamped_file(&format!("updates-{v}"), Some(&m), &m);
+        signed(&std::fs::read(f.path()).unwrap(), 7).0
+    };
+    let v1 = file("1.0.0", json!({"catalog": true}));
+    let v2 = file("2.0.0", json!({"catalog": true, "metadataWrite": true}));
+    let served = std::sync::Arc::new(Served::default());
+    let sha: String = sha2::Sha256::digest(&v2).iter().map(|b| format!("{b:02x}")).collect();
+    let entry = json!({"id": id, "version": "2.0.0", "url": "https://feed.test/v2.wasm", "sha256": sha, "permissions": ["catalog"],
+        "changelog": "https://feed.test/CHANGELOG.md", "notes": "Writes captions now."});
+    served.0.lock().unwrap().insert(feed_url.into(), json!({"updated": entry}).to_string().into_bytes());
+    served.0.lock().unwrap().insert("https://feed.test/v2.wasm".into(), v2.clone());
+    let dir = folder("updates");
+    // a manager with a folder (an update keeps the version it replaced there), put back however
+    // the test ends
+    struct Restore(Option<lcc_plugins::Manager>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            *crate::cmd::plugins::manager() = self.0.take();
+        }
+    }
+    let mut m = lcc_plugins::Manager::open(&dir.join("plugins")).unwrap();
+    m.set_fetcher(served.clone());
+    let _restore = Restore(crate::cmd::plugins::manager().replace(m));
+    let path = dir.join("v1.wasm");
+    std::fs::write(&path, &v1).unwrap();
+    s.execute("plugin.install", &json!({"path": path})).unwrap();
+
+    let updates = |s: &mut Session| listed(s, id).unwrap()["updates"].clone();
+    assert_eq!((updates(&mut s)["check"].clone(), updates(&mut s)["available"].clone()), (json!(false), json!(true)), "{}", updates(&mut s));
+    let none = s.execute("plugin.checkUpdates", &json!({})).unwrap();
+    assert_eq!(none["checked"], json!([]), "off by default: nothing is checked");
+    s.execute("plugin.setUpdateCheck", &json!({"id": id, "on": true})).unwrap();
+    let checked = s.execute("plugin.checkUpdates", &json!({"due": true})).unwrap();
+    assert_eq!(checked["checked"], json!([id]), "{checked}");
+    let offer = &checked["plugins"][0]["updates"]["offer"];
+    assert_eq!((&offer["version"], &offer["notes"], &offer["adds"]), (&json!("2.0.0"), &json!("Writes captions now."), &json!([])), "{checked}");
+    assert_eq!(s.execute("plugin.checkUpdates", &json!({"due": true})).unwrap()["checked"], json!([]), "within the day: not again");
+    assert_eq!(updates(&mut s)["offer"]["version"], "2.0.0", "plugin.list shows the result");
+
+    let asked = s.execute("plugin.update", &json!({"id": id})).unwrap();
+    assert_eq!((&asked["updated"], &asked["undeclared"]), (&json!(false), &json!(["metadataWrite"])), "{asked}");
+    assert_eq!(listed(&mut s, id).unwrap()["version"], "1.0.0", "nothing installed");
+    let done = s.execute("plugin.update", &json!({"id": id, "acceptUndeclared": true})).unwrap();
+    assert_eq!((&done["updated"], &done["plugin"]["version"]), (&json!(true), &json!("2.0.0")), "{done}");
+    assert_eq!(listed(&mut s, id).unwrap()["previousVersion"], "1.0.0");
+    assert!(s.execute("plugin.update", &json!({"id": id})).is_err(), "nothing more to install");
+    s.execute("plugin.rollback", &json!({"id": id})).unwrap();
+    assert_eq!(listed(&mut s, id).unwrap()["version"], "1.0.0");
+
+    // a pixel filter gets no update checks
+    let f = filter_file("updates-filter", "test.installs.updates.filter", "1.0.0");
+    s.execute("plugin.install", &json!({"path": f.path()})).unwrap();
+    for (cmd, p) in [("plugin.setUpdateCheck", json!({"on": true})), ("plugin.checkUpdates", json!({})), ("plugin.update", json!({}))] {
+        let mut p = p;
+        p["id"] = json!("test.installs.updates.filter");
+        let e = s.execute(cmd, &p).unwrap_err().to_string();
+        assert!(e.contains("pixel filter"), "{cmd}: {e}");
+    }
+    s.execute("plugin.uninstall", &json!({"id": "test.installs.updates.filter"})).unwrap();
+    s.execute("plugin.uninstall", &json!({"id": id})).unwrap();
+}

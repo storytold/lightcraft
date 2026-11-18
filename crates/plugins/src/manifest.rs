@@ -59,6 +59,9 @@ pub const HOST_FEATURES: &[&str] = &[
     "about",
     // `quickAction` on a command: a button in the quick settings bar that runs it
     "quickActions",
+    // `updateUrl` in the manifest: the feed the Plug-in Manager checks for newer versions
+    // (`plugin.checkUpdates`, `plugin.update`), and `requires` in a feed entry
+    "updates",
 ];
 
 /// The manifest a plug-in returns from `lcc_manifest`.
@@ -122,6 +125,12 @@ pub struct Manifest {
     /// [`Manifest::parse`]; a value the host can't use is dropped and named in [`Manifest::dropped`].
     #[serde(skip)]
     pub about: About,
+    /// The update feed it names (`"updateUrl": "https://…"`, host feature `updates`): checked for
+    /// newer versions only when the user turned that on, and only for a stamped, signed plug-in.
+    /// Read by [`Manifest::parse`]; a value that isn't an `https://` link is dropped and named in
+    /// [`Manifest::dropped`].
+    #[serde(skip)]
+    pub update_url: Option<String>,
     /// Manifest values [`Manifest::parse`] dropped, each with why (`"homepage: not an https://
     /// link"`): the install puts them in the plug-in's log.
     #[serde(skip)]
@@ -426,7 +435,7 @@ pub(crate) fn valid_id(id: &str) -> bool {
 
 /// Plug-in manifest fields read leniently (a picture the host can't use is dropped, not an
 /// error): never reported as unknown.
-const LENIENT: &[&str] = &["icon", "header", "homepage", "repository", "changelog", "license"];
+const LENIENT: &[&str] = &["icon", "header", "homepage", "repository", "changelog", "license", "updateUrl"];
 
 impl Manifest {
     /// Parses and validates a manifest.
@@ -441,6 +450,7 @@ impl Manifest {
         m.icon = svg_document(raw.get("icon"));
         m.header = raw.get("header").and_then(Header::parse);
         (m.about, m.dropped) = About::parse(&raw);
+        m.update_url = crate::about::link_field(&raw, "updateUrl", &mut m.dropped);
         m.validate()?;
         m.unknown_fields = ignored_fields(&raw, LENIENT, |v| serde_json::from_value::<Manifest>(v.clone()).ok());
         Ok(m)
