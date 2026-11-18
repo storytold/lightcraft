@@ -246,7 +246,7 @@ fn load_bytes_now(
             kept_tone,
         );
         let local_tone = local_tone(&raw);
-        let (temp, tint) = scale.as_shot(xy);
+        let (temp, tint) = scale.as_shot(balanced_white(&raw.color, xy));
         return Ok((
             img,
             twin,
@@ -314,9 +314,12 @@ impl WbScaleOf {
         let model = meta.model.as_deref().filter(|_| fitted);
         let camera = model.and_then(|model| lightcraft_raw::spectral::find(meta.make.as_deref(), model));
         let presets = camera.is_none() && model.is_some_and(|model| lightcraft_raw::kelvin_presets::covers(meta.make.as_deref(), model));
+        // samples already balanced (Sony M / S ARWs) carry unit multipliers; As Shot is the white they were balanced to
+        // (issue #4078: the unit multipliers read through the camera's matrices as a very warm, green white)
+        let as_shot = color.balanced_with.or(wb_multipliers);
         let scale_white = match camera {
-            Some(c) => lightcraft_raw::spectral::as_shot_white_through(c, color, wb_multipliers),
-            None if presets => lightcraft_raw::kelvin_presets::as_shot_white(color, wb_multipliers),
+            Some(c) => lightcraft_raw::spectral::as_shot_white_through(c, color, as_shot),
+            None if presets => lightcraft_raw::kelvin_presets::as_shot_white(color, as_shot),
             None => None,
         };
         let covered = camera.is_some() || presets;
@@ -355,6 +358,17 @@ impl WbScaleOf {
         }
         let (t, tint) = xy_to_temp_tint(self.scale_white.unwrap_or(own));
         (t.round(), tint.round())
+    }
+}
+
+/// The as-shot white `xy` (read from the file's tags or its multipliers) unless the samples were balanced before
+/// they reached us ([`lightcraft_raw::ColorData::balanced_with`], Sony M / S ARWs): then the white they were balanced
+/// to, through `color`'s matrices, explicit as-shot tags first. [`WbScaleOf`] does this through the camera's measured
+/// matrices; this covers an imported camera profile's, where the scale has no white of its own (issue #4078).
+pub(super) fn balanced_white(color: &lightcraft_raw::ColorData, xy: lightcraft_color::Xy) -> lightcraft_color::Xy {
+    match color.balanced_with.filter(|m| m.iter().all(|v| *v > 0.0 && v.is_finite())) {
+        Some(m) => lightcraft_raw::color::as_shot_white_of(color, Some(m)),
+        None => xy,
     }
 }
 

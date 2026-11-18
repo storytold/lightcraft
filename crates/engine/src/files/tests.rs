@@ -72,6 +72,50 @@ fn crw_probes_name_their_camera_from_the_ciff_records() {
 /// fitted-look file is absolute through its camera's measured matrices, which only read the as-shot
 /// multipliers as Kelvin; any other raw stays relative (6500 / 0 = as shot). The catalog's decision from the
 /// format and camera string agrees.
+/// Issue #4078: a Sony downsized (M / S) ARW stores linear YCbCr already balanced to as shot, so it hands over unit
+/// multipliers. Its As Shot is the white it was balanced to, as for the full-size file with those multipliers, not
+/// the unit multipliers read through the camera's matrices (an ILCE-7M4 file showed 1691 K / -190).
+#[test]
+fn a_pre_balanced_raw_reads_as_shot_from_the_white_it_was_balanced_to() {
+    use lightcraft_raw::{ColorData, RawFormat};
+    let meta = lightcraft_meta::Metadata { make: Some("SONY".into()), model: Some("ILCE-7M4".into()), ..Default::default() };
+    let d65 = lightcraft_color::D65;
+    let mul = [2.2f32, 1.0, 1.6];
+    let full = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), Some(mul), &meta).as_shot(d65);
+    let balanced = ColorData { balanced_with: Some(mul), ..Default::default() };
+    let small = WbScaleOf::new(RawFormat::Arw, &balanced, Some([1.0; 3]), &meta);
+    assert!(!small.relative && small.legacy_relative, "the camera's Kelvin scale, as the catalog decides from its name");
+    assert_eq!(small.as_shot(d65), full);
+    assert!((3500.0..7000.0).contains(&full.0) && full.1.abs() < 30.0, "{full:?}");
+    // without the white it was balanced to, the unit multipliers read as a very warm, green white
+    let unit = WbScaleOf::new(RawFormat::Arw, &ColorData::default(), Some([1.0; 3]), &meta).as_shot(d65);
+    assert!(unit.0 < 2500.0 && unit.1 < -100.0, "{unit:?}");
+}
+
+/// With an imported camera profile the scale has no white of its own and reads As Shot from the profile's matrices:
+/// a pre-balanced raw's is the white its samples were balanced to there too, not the unit multipliers'.
+#[test]
+fn a_pre_balanced_raw_under_a_camera_profile_reads_the_white_it_was_balanced_to() {
+    use lightcraft_raw::ColorData;
+    let camera = lightcraft_raw::spectral::find(Some("SONY"), "ILCE-7M4").unwrap();
+    // a colour model with matrices, standing in for an imported profile's
+    let mut color = ColorData::default();
+    assert!(camera.fill(&mut color));
+    let mul = [2.2f32, 1.0, 1.6];
+    let unit = lightcraft_raw::color::as_shot_white_of(&color, Some([1.0; 3]));
+    let balanced = ColorData { balanced_with: Some(mul), ..color.clone() };
+    let white = super::load::balanced_white(&balanced, unit);
+    assert_eq!(white, lightcraft_raw::color::as_shot_white_of(&color, Some(mul)));
+    assert_ne!(white, unit);
+    // nothing recorded, or nothing usable: the white given
+    assert_eq!(super::load::balanced_white(&color, unit), unit);
+    let broken = ColorData { balanced_with: Some([0.0, 1.0, 1.0]), ..color.clone() };
+    assert_eq!(super::load::balanced_white(&broken, unit), unit);
+    // the file's own as-shot tag comes first
+    let tagged = ColorData { as_shot_neutral: Some([0.5, 1.0, 0.7]), ..balanced };
+    assert_eq!(super::load::balanced_white(&tagged, unit), lightcraft_raw::color::as_shot_white_of(&tagged, None));
+}
+
 #[test]
 fn white_balance_scale_follows_the_files_matrices_then_the_cameras() {
     use lightcraft_raw::{ColorData, RawFormat};
