@@ -1,5 +1,20 @@
 use super::{LightcraftApp, PhotoId, Tokens, divider, header, json, padded, register, slider, text_button};
 
+/// Arrange crop controls from the reading edge without changing stored
+/// aspect values, numeric field IDs, or crop command IDs.
+fn crop_row_layout(locale: crate::i18n::Locale) -> egui::Layout {
+    if locale == crate::i18n::Locale::He {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    }
+}
+
+/// Use the locale reading edge even when the toolbar buttons wrap.
+fn crop_wrapped_row_layout(locale: crate::i18n::Locale) -> egui::Layout {
+    crop_row_layout(locale).with_main_wrap(true)
+}
+
 /// The aspect presets of the Crop panel: (menu label, `crop.aspect` value).
 const ASPECT_PRESETS: [(&str, &str); 10] = [
     ("Free", "free"),
@@ -43,7 +58,7 @@ fn custom_aspect(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let key = egui::Id::unique("crop-custom-aspect");
     let (mut w, mut h): (String, String) = ui.data_mut(|d| d.get_temp(key)).unwrap_or_else(|| ("3".into(), "2".into()));
     let mut apply = false;
-    ui.horizontal(|ui| {
+    ui.with_layout(crop_row_layout(crate::i18n::language()), |ui| {
         ui.label(crate::i18n::tr("Custom"));
         let a = ui.add(egui::TextEdit::singleline(&mut w).desired_width(34.0));
         crate::widgets::screen_reader_name(ui.ctx(), a.id, crate::i18n::tr("Width"));
@@ -76,7 +91,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let (w, h) = (p.width.max(1) as f64, p.height.max(1) as f64);
             if d.orientation.swaps_axes() { h / w } else { w / h }
         });
-        ui.horizontal(|ui| {
+        ui.with_layout(crop_row_layout(crate::i18n::language()), |ui| {
             ui.label(crate::i18n::tr("Aspect Ratio"));
             let cur = aspect_label(app.crop_tool_aspect(), original);
             let t = Tokens::get(ui.ctx());
@@ -97,7 +112,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
+        ui.with_layout(crop_wrapped_row_layout(crate::i18n::language()), |ui| {
             if text_button(ui, "cropRotateLeft", crate::i18n::tr("Rotate Left"), false).clicked() {
                 let _ = app.run("photo.rotateLeft", json!({}));
             }
@@ -106,7 +121,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
+        ui.with_layout(crop_wrapped_row_layout(crate::i18n::language()), |ui| {
             if text_button(ui, "cropFlipH", crate::i18n::tr("Flip H"), d.crop.flip_h).clicked() {
                 let _ = app.run("photo.flipHorizontal", json!({}));
             }
@@ -127,7 +142,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         crate::panels::edit::apply_slider_out(app, &spec, out, |app, v| app.run("crop.straighten", json!({"angle": v})));
         // an exact angle, typed (issue #534): a field of its own, besides the slider's value
         padded(ui, |ui| {
-            ui.horizontal(|ui| {
+            ui.with_layout(crop_row_layout(crate::i18n::language()), |ui| {
                 ui.label(crate::i18n::tr("Angle"));
                 let mut angle = d.crop.geometry.angle;
                 let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -170,7 +185,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
     }
     padded(ui, |ui| {
-        ui.horizontal(|ui| {
+        ui.with_layout(crop_row_layout(crate::i18n::language()), |ui| {
             let on = app.ui.tool == "straighten";
             if text_button(ui, "straightenTool", crate::i18n::tr("Straighten Tool"), on)
                 .on_hover_text(crate::i18n::tr("Drag along the horizon; double-click for Auto"))
@@ -231,7 +246,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
         let guided = d.geometry.upright == lightcraft_develop::Upright::Guided;
-        ui.horizontal_wrapped(|ui| {
+        ui.with_layout(crop_wrapped_row_layout(crate::i18n::language()), |ui| {
             if !guided
                 && d.geometry.upright != lightcraft_develop::Upright::Off
                 && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false).clicked()
@@ -401,7 +416,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     use crate::state::ToolOverlay;
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
+    ui.with_layout(crop_row_layout(crate::i18n::language()), |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Tool Overlay")).color(t.text_dim));
         let current = app.ui.tool_overlay;
         let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
@@ -480,4 +495,25 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::crop_row_layout;
+    use crate::i18n::Locale;
+
+    #[test]
+    fn active_crop_control_rows_follow_locale_direction() {
+        assert_eq!(crop_row_layout(Locale::He).main_dir, egui::Direction::RightToLeft);
+        assert_eq!(crop_row_layout(Locale::En).main_dir, egui::Direction::LeftToRight);
+        assert_eq!(crop_row_layout(Locale::Fr).main_dir, egui::Direction::LeftToRight);
+    }
+    #[test]
+    fn crop_toolbar_wrapping_preserves_reading_edge() {
+        let he = super::crop_wrapped_row_layout(Locale::He);
+        let en = super::crop_wrapped_row_layout(Locale::En);
+        assert_eq!(he.main_dir, egui::Direction::RightToLeft);
+        assert_eq!(en.main_dir, egui::Direction::LeftToRight);
+        assert!(he.main_wrap && en.main_wrap);
+    }
 }

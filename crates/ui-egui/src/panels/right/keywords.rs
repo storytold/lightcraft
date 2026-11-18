@@ -1,5 +1,15 @@
 use super::{HOLD, LightcraftApp, PhotoId, Rect, Tokens, fold_header, json, padded, register, text_button, vec2};
 
+/// Keep keyword editing rows in the user's reading direction without changing
+/// keyword values, field IDs, command IDs, or the English layout.
+fn keyword_row_layout(locale: crate::i18n::Locale) -> egui::Layout {
+    if locale == crate::i18n::Locale::He {
+        egui::Layout::right_to_left(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Center)
+    }
+}
+
 pub(super) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // (the box is the selection's: the active photo only says that there is one)
     if app.session.catalog.photo(id).is_none() {
@@ -147,7 +157,7 @@ fn keywording(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         keyword_set(app, ui);
         ui.add_space(8.0);
         // the painter: click photos in the grid to give them (or take away) a keyword
-        ui.horizontal(|ui| {
+        ui.with_layout(keyword_row_layout(crate::i18n::language()), |ui| {
             let painting = app.ui.keyword_painter.clone();
             let mut k = app.ui.keyword_painter_text.clone();
             // (fixed while painting: Stop first)
@@ -236,7 +246,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let sets = lightcraft_engine::cmd::keywords::keyword_sets_json(&app.session);
     let current = sets["current"].as_str().unwrap_or_default().to_string();
-    ui.horizontal(|ui| {
+    ui.with_layout(keyword_row_layout(crate::i18n::language()), |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
         let combo = crate::widgets::combo_box("kw-set")
             .selected_text(crate::i18n::builtin_label(&current, current == lightcraft_engine::cmd::keywords::RECENT))
@@ -326,4 +336,17 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod hebrew_keyword_layout_tests {
+    use super::keyword_row_layout;
+    use crate::i18n::Locale;
+
+    #[test]
+    fn keyword_controls_follow_hebrew_direction_only() {
+        assert_eq!(keyword_row_layout(Locale::He).main_dir, egui::Direction::RightToLeft);
+        assert_eq!(keyword_row_layout(Locale::En).main_dir, egui::Direction::LeftToRight);
+        assert_eq!(keyword_row_layout(Locale::Fr).main_dir, egui::Direction::LeftToRight);
+    }
 }
