@@ -19,10 +19,11 @@ use serde_json::{Value, json};
 use crate::context::{CallContext, HostApi, JobReporter, Unwatched};
 use crate::manifest::{Field, dialog_args, parse_version};
 use crate::permissions::{Permissions, Request, refused_root};
-use crate::runtime::{Limits, Plugin};
+use crate::runtime::{Limits, ManifestSource, Plugin};
 use crate::settings::{MAX_SETTINGS_BYTES, SettingsStore, command_scope, destination_scope};
 use crate::signature::{Signature, Signer};
 use crate::store::{NamespaceStore, write_atomic};
+use crate::updates::{CHECK_INTERVAL_SECS, Fetch, Net, Offer};
 use crate::{Error, Result};
 
 /// Log lines kept per plug-in.
@@ -62,6 +63,35 @@ pub struct Installed {
     path: Option<PathBuf>,
     /// The author key pinned for it.
     pin: Pin,
+    /// The user turned its update check on (off by default).
+    check_updates: bool,
+    /// Its last update check, kept until it is a day old or its version changes.
+    last_check: Option<LastCheck>,
+}
+
+/// A plug-in's last update check ([`Manager::record_check`]), as `plugins.json` keeps it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastCheck {
+    /// When, in seconds since 1970 (UTC).
+    pub at: i64,
+    /// The version it found the plug-in at: a result for another version is out of date.
+    pub version: String,
+    /// The newer version the feed offers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer: Option<Offer>,
+    /// Why the check failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+/// One update check to run ([`Manager::update_checks`]): plug-in `id` at `version`, whose feed is
+/// `url`. Fetched off the manager's lock, then handed to [`Manager::record_check`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateCheck {
+    pub id: String,
+    pub version: String,
+    pub url: String,
 }
 
 impl Installed {
@@ -72,7 +102,51 @@ impl Installed {
 
     /// Its `plugins.json` entry.
     fn entry(&self) -> Entry {
-        Entry { enabled: self.enabled, grant: self.grant.clone(), denied: self.denied.clone(), signer: self.pin.stored() }
+        Entry {
+            enabled: self.enabled,
+            grant: self.grant.clone(),
+            denied: self.denied.clone(),
+            signer: self.pin.stored(),
+            check_updates: self.check_updates,
+            last_check: self.last_check.clone(),
+        }
+    }
+
+    /// Its update feed, or why it gets no update checks: only a plug-in whose manifest names a
+    /// feed (`updateUrl`) and whose file is stamped and signed by its pinned author key, so an
+    /// update's permissions can be read before it runs and only its author can ship one.
+    pub fn update_feed(&self) -> std::result::Result<&str, String> {
+        let url = self.plugin.manifest().update_url.as_deref().ok_or("its manifest names no update feed (updateUrl)")?;
+        if !self.plugin.stamped() {
+            return Err("its file isn't stamped with its manifest".into());
+        }
+        match (self.plugin.signature().signer(), self.pin.signer()) {
+            (Some(file), Some(pinned)) if file == pinned => Ok(url),
+            _ => Err("its file isn't signed by an author key pinned for it".into()),
+        }
+    }
+
+    /// Its update check as `plugin.list` gives it: whether the user turned it on, whether it can
+    /// have one (or why not), and the last result: the version offered, with the declared
+    /// permission groups it adds and the host features `features` lacks.
+    pub fn updates_info(&self, features: &[String]) -> Value {
+        let feed = self.update_feed();
+        let mut v = json!({"check": self.check_updates, "available": feed.is_ok(), "reason": feed.err()});
+        let current = self.last_check.as_ref().filter(|c| c.version == self.plugin.manifest().version);
+        if let Some(c) = current {
+            v["checkedAt"] = json!(c.at);
+            v["error"] = json!(c.error);
+            v["offer"] = match &c.offer {
+                Some(o) => {
+                    let mut ov = serde_json::to_value(o).unwrap_or(Value::Null);
+                    ov["adds"] = json!(o.adds(&self.plugin.manifest().permissions));
+                    ov["missing"] = json!(o.missing(features));
+                    ov
+                }
+                None => Value::Null,
+            };
+        }
+        v
     }
 
     /// Its module file in the plug-ins folder (`None` without a folder).
@@ -213,6 +287,11 @@ struct Entry {
     /// The pinned author key in standard base64 ([`Pin`]); none: unsigned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     signer: Option<String>,
+    /// The user turned its update check on.
+    #[serde(default, rename = "checkUpdates", skip_serializing_if = "std::ops::Not::not")]
+    check_updates: bool,
+    #[serde(default, rename = "lastCheck", skip_serializing_if = "Option::is_none")]
+    last_check: Option<LastCheck>,
 }
 
 impl Entry {
@@ -601,6 +680,8 @@ pub struct Manager {
     library: String,
     /// Where `program.start` makes run folders (`None`: [`crate::programs::runs_root`]).
     runs_root: Option<PathBuf>,
+    /// What update checks and updates download with ([`Net`]; tests serve their own).
+    fetcher: Arc<dyn Fetch>,
 }
 
 impl Default for Manager {
@@ -618,6 +699,7 @@ impl Default for Manager {
             previous: BTreeMap::new(),
             library: String::new(),
             runs_root: None,
+            fetcher: Arc::new(Net),
         }
     }
 }
@@ -713,6 +795,7 @@ impl Manager {
             // not in plugins.json (copied in by hand): disabled, nothing granted
             let (enabled, grant, denied) =
                 state.plugins.get(&id).map_or((false, Permissions::default(), Vec::new()), |e| (e.enabled, e.grant.clone(), e.denied.clone()));
+            let (check_updates, last_check) = state.plugins.get(&id).map_or((false, None), |e| (e.check_updates, e.last_check.clone()));
             let mut log = VecDeque::new();
             if let Err(e) = p.manifest().semver() {
                 log.push_back(format!("loaded without a valid version ({e}); installing a new version will need one"));
@@ -721,8 +804,22 @@ impl Manager {
             log.extend(damaged);
             let live = Arc::new(Mutex::new(Permissions::default()));
             let refused = m.refused_roots(&p.manifest().permissions);
-            let installed =
-                Installed { plugin: Arc::new(p), enabled, grant, denied, refused, log, store: None, settings, busy: None, live, path: Some(f), pin };
+            let installed = Installed {
+                plugin: Arc::new(p),
+                enabled,
+                grant,
+                denied,
+                refused,
+                log,
+                store: None,
+                settings,
+                busy: None,
+                live,
+                path: Some(f),
+                pin,
+                check_updates,
+                last_check,
+            };
             installed.share_effective();
             if let Some((version, ..)) = read_previous(dir, &id) {
                 m.previous.insert(id.clone(), version);
@@ -961,6 +1058,14 @@ impl Manager {
             adds_nothing(g, &plugin.manifest().permissions, &previous)?;
         }
         let denied = self.plugins.get(&id).map(|i| i.denied.clone()).or_else(|| self.kept.get(&id).map(|e| e.denied.clone())).unwrap_or_default();
+        // the update check stays as the user set it; its last result only for the same version
+        let (check_updates, last_check) = self
+            .plugins
+            .get(&id)
+            .map(|i| (i.check_updates, i.last_check.clone()))
+            .or_else(|| self.kept.get(&id).map(|e| (e.check_updates, e.last_check.clone())))
+            .unwrap_or_default();
+        let last_check = last_check.filter(|c| c.version == new);
         let grant = grant.unwrap_or_else(|| previous.clone()).intersect(&plugin.manifest().permissions);
         // a granted program whose entry the update widened is no longer allowed: say why
         let widened: Vec<String> = plugin
@@ -1060,8 +1165,22 @@ impl Manager {
             log.push_back(format!("settings: {e}"));
         }
         let refused = self.refused_roots(&plugin.manifest().permissions);
-        let installed =
-            Installed { plugin: Arc::new(plugin), enabled: true, grant, denied, refused, log, store: None, settings, busy: None, live, path, pin };
+        let installed = Installed {
+            plugin: Arc::new(plugin),
+            enabled: true,
+            grant,
+            denied,
+            refused,
+            log,
+            store: None,
+            settings,
+            busy: None,
+            live,
+            path,
+            pin,
+            check_updates,
+            last_check,
+        };
         installed.share_effective();
         self.plugins.insert(id.clone(), installed);
         self.save()?;
@@ -1279,6 +1398,152 @@ impl Manager {
         let file = p.path.as_ref().map_or_else(|| format!("{id}.wasm"), |f| f.display().to_string());
         self.failed.push(Failed { file, error, missing: Vec::new(), id: id.to_string(), path: p.path });
         true
+    }
+
+    /// What update checks and updates download with (default: the network).
+    pub fn set_fetcher(&mut self, fetcher: Arc<dyn Fetch>) {
+        self.fetcher = fetcher;
+    }
+
+    /// See [`Manager::set_fetcher`]: cloned out, so a download runs off the manager's lock.
+    pub fn fetcher(&self) -> Arc<dyn Fetch> {
+        self.fetcher.clone()
+    }
+
+    /// Turns plug-in `id`'s update check on or off (off by default). Only a plug-in that can have
+    /// one ([`Installed::update_feed`]) can have it turned on.
+    pub fn set_update_check(&mut self, id: &str, on: bool) -> Result<()> {
+        let p = self.plugins.get_mut(id).ok_or_else(|| Error::NotFound(id.into()))?;
+        if on && let Err(why) = p.update_feed() {
+            return Err(Error::Update(format!("{} gets no update checks: {why}", p.plugin.manifest().name)));
+        }
+        if p.check_updates != on {
+            p.check_updates = on;
+            p.push_log(if on { "update check turned on".into() } else { "update check turned off".into() });
+        }
+        self.save()
+    }
+
+    /// The update checks to run: plug-in `id` whatever its setting and the age of its last
+    /// check (an error when it can't have one), or, with no `id`, every plug-in whose check the
+    /// user turned on; with `due_at` (now, in seconds since 1970) only those whose last check is
+    /// a day old or more (or from another version, or from the future).
+    pub fn update_checks(&self, id: Option<&str>, due_at: Option<i64>) -> Result<Vec<UpdateCheck>> {
+        let check = |p: &Installed, url: &str| UpdateCheck {
+            id: p.plugin.id().to_string(),
+            version: p.plugin.manifest().version.clone(),
+            url: url.to_string(),
+        };
+        if let Some(id) = id {
+            let p = self.plugins.get(id).ok_or_else(|| Error::NotFound(id.into()))?;
+            let url = p.update_feed().map_err(|why| Error::Update(format!("{} gets no update checks: {why}", p.plugin.manifest().name)))?;
+            return Ok(vec![check(p, url)]);
+        }
+        let due = |p: &Installed| match (due_at, &p.last_check) {
+            (None, _) | (_, None) => true,
+            (Some(now), Some(c)) => c.version != p.plugin.manifest().version || c.at > now || now.saturating_sub(c.at) >= CHECK_INTERVAL_SECS,
+        };
+        Ok(self.plugins.values().filter(|p| p.check_updates && due(p)).filter_map(|p| p.update_feed().ok().map(|url| check(p, url))).collect())
+    }
+
+    /// Keeps the result of `check` made at `at` (seconds since 1970): the feed as fetched, or why
+    /// it couldn't be. Nothing is kept when the plug-in changed version (or went) meanwhile.
+    pub fn record_check(&mut self, check: &UpdateCheck, at: i64, fetched: std::result::Result<Vec<u8>, String>) -> Result<()> {
+        let Some(p) = self.plugins.get_mut(&check.id) else { return Ok(()) };
+        if p.plugin.manifest().version != check.version {
+            return Ok(());
+        }
+        let mut lines = Vec::new();
+        let result = fetched.and_then(|feed| crate::updates::read_feed(&feed, &check.id, &check.version, &mut lines));
+        let (offer, error) = match result {
+            Ok(offer) => (offer, None),
+            Err(e) => (None, Some(e)),
+        };
+        lines.extend(error.as_ref().map(|e| format!("update check failed: {e}")));
+        lines.extend(offer.as_ref().map(|o| format!("update check: version {} is available", o.version)));
+        for line in lines {
+            p.push_log(line);
+        }
+        p.last_check = Some(LastCheck { at, version: check.version.clone(), offer, error });
+        self.save()
+    }
+
+    /// The update plug-in `id`'s last check found, when it can be installed: not one that needs
+    /// host features this version lacks.
+    pub fn update_offer(&self, id: &str) -> Result<Offer> {
+        let p = self.plugins.get(id).ok_or_else(|| Error::NotFound(id.into()))?;
+        p.update_feed().map_err(|why| Error::Update(format!("{} gets no updates: {why}", p.plugin.manifest().name)))?;
+        let offer = p
+            .last_check
+            .as_ref()
+            .filter(|c| c.version == p.plugin.manifest().version)
+            .and_then(|c| c.offer.clone())
+            .ok_or_else(|| Error::Update(format!("no update of {} was found; check for one first", p.plugin.manifest().name)))?;
+        let missing = offer.missing(&self.features);
+        if !missing.is_empty() {
+            return Err(Error::Unsupported(missing));
+        }
+        Ok(offer)
+    }
+
+    /// Installs `bytes`, downloaded from [`Manager::update_offer`]'s `url`, as plug-in `id`'s
+    /// update, through the same path as an install (`by_user` as for one): its grant cut back to
+    /// what it asks for, new permissions not granted, the version replaced kept to go back to.
+    /// Refused, installing nothing: a file whose SHA-256 isn't the feed's, that isn't stamped, is
+    /// another plug-in or version than offered, or isn't signed by the pinned key; and, unless
+    /// `accept_undeclared`, one whose manifest asks for permission groups the feed didn't declare
+    /// ([`Error::Undeclared`]).
+    pub fn install_update(&mut self, id: &str, bytes: &[u8], accept_undeclared: bool, by_user: bool) -> Result<&Installed> {
+        use sha2::{Digest, Sha256};
+        let offer = self.update_offer(id)?;
+        let fail = |why: String| Err(Error::Update(why));
+        let sha: String = Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect();
+        if sha != offer.sha256 {
+            return fail(format!("the downloaded file's SHA-256 is {sha}, not the {} its update feed gives", offer.sha256));
+        }
+        // read from the stamped section and the signature without running the module: nothing
+        // runs before it is known to be the offered version, signed by the pinned key
+        let seen = Plugin::inspect(bytes, self.limits.clone(), false)?;
+        if seen.source != ManifestSource::Section {
+            return fail("the downloaded file isn't stamped with its manifest, so what it asks for can't be read before it runs".into());
+        }
+        if seen.manifest.id != id || seen.manifest.version != offer.version {
+            return fail(format!(
+                "the downloaded file is {} {}, not {id} {} as its update feed says",
+                seen.manifest.id, seen.manifest.version, offer.version
+            ));
+        }
+        if let Signature::Invalid(why) = &seen.signature {
+            return fail(format!("the downloaded file's signature doesn't hold up: {why}"));
+        }
+        let installed = self.plugins.get(id).ok_or_else(|| Error::NotFound(id.into()))?;
+        if !installed.pin.matches(&seen.signature) || seen.signature.signer().is_none() {
+            return fail(match seen.signature.signer() {
+                Some(s) => {
+                    format!("the downloaded file is signed by {}, not by the author key pinned for it; install it by hand to decide", s.fingerprint())
+                }
+                None => "the downloaded file isn't signed; install it by hand to decide".into(),
+            });
+        }
+        let had = &installed.plugin.manifest().permissions;
+        let requests: Vec<Request> = seen.manifest.permissions.requests().into_iter().filter(|r| !had.holds(r)).collect();
+        let mut groups: Vec<String> = requests
+            .iter()
+            .filter(|r| !had.holds(&Request::group(r.group)) && !offer.permissions.iter().any(|g| g == r.group.name()))
+            .map(|r| r.group.name().to_string())
+            .collect();
+        groups.dedup();
+        if !groups.is_empty() && !accept_undeclared {
+            return Err(Error::Undeclared { groups, requests });
+        }
+        // now it runs: loading checks the section against `lcc_manifest`'s answer
+        let plugin = self.load(bytes)?;
+        self.install_plugin(plugin, bytes, None, false, by_user, false, &SignerAnswer::None)
+    }
+
+    /// The limits of plug-ins installed from now on ([`Manager::set_limits`]).
+    pub fn limits(&self) -> &Limits {
+        &self.limits
     }
 
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> Result<()> {

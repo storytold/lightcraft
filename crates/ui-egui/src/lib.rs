@@ -386,6 +386,8 @@ mod tests_plugin_jobs;
 #[cfg(test)]
 mod tests_plugin_signing;
 #[cfg(test)]
+mod tests_plugin_updates;
+#[cfg(test)]
 mod tests_preset_favorites;
 #[cfg(test)]
 mod tests_preset_folders;

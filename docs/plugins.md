@@ -437,7 +437,7 @@ hook that's never called, a host call that fails as an unknown method).
 
 - **The host's list** is `lcc_plugins::HOST_FEATURES`, and `plugin.list` returns it as
   `host: {abi, features}`. Everything the host had when `requires` arrived is the baseline and
-  has no name. Names so far: `programs` ([Programs](#programs)), `settings` ([below](#settings-remembered-values-and-prepare-steps)), `libraryAdd` ([Adding files to the library](#adding-files-to-the-library)), `jobs` ([Jobs](#jobs-long-commands-with-progress)), `pixels`, `crop` and `virtualCopy` ([Pixels and crop](#pixels-and-crop)), `pictures` (`icon` and `header`) and `about` (`homepage`, `repository`, `changelog`, `license`; both in [What a plug-in can add](#what-a-plug-in-can-add)), and `quickActions` (`quickAction` on a command, [Quick actions](#quick-actions)). Every manifest field, permission group or host call added
+  has no name. Names so far: `programs` ([Programs](#programs)), `settings` ([below](#settings-remembered-values-and-prepare-steps)), `libraryAdd` ([Adding files to the library](#adding-files-to-the-library)), `jobs` ([Jobs](#jobs-long-commands-with-progress)), `pixels`, `crop` and `virtualCopy` ([Pixels and crop](#pixels-and-crop)), `pictures` (`icon` and `header`) and `about` (`homepage`, `repository`, `changelog`, `license`; both in [What a plug-in can add](#what-a-plug-in-can-add)), `updates` (`updateUrl`, [Updates](#updates)), and `quickActions` (`quickAction` on a command, [Quick actions](#quick-actions)). Every manifest field, permission group or host call added
   from then on gets a name there in the change that adds it, and its documentation here says
   which name to require.
 - **Names** are `[A-Za-z0-9._-]{1,64}`, at most 64, none repeated; anything else is a manifest
@@ -620,6 +620,7 @@ The manifest fields:
 | `requires` | `[names]`: the host features the plug-in uses beyond the baseline (see [Compatibility](#compatibility-requires-and-version)) |
 | `name`, `description`, `author` | shown in the Plug-in Manager |
 | `homepage`, `repository`, `changelog`, `license` | optional, shown on the About tab: `https://` links and the licence as text (see [Where it comes from](#what-a-plug-in-can-add)); host feature `about` |
+| `updateUrl` | optional `https://` link to the plug-in's update feed ([Updates](#updates)); another value is dropped and named in `dropped`; host feature `updates` |
 | `icon`, `header` | optional SVG pictures (see [Its own pictures](#what-a-plug-in-can-add)); host feature `pictures` |
 | `permissions` | what the plug-in asks for (see [Permissions](#permissions)); ask for as little as possible |
 | `commands` | `[{id, label, menu?, dialog?, prepare?, job?, quickAction?}]`, File ▸ Plug-ins ▸ `name` ▸ `menu` ▸ `label`; dialog fields may say `remember: false`; `quickAction: true` adds a quick settings bar button ([Quick actions](#quick-actions)) |
@@ -784,6 +785,74 @@ What the app does with it:
 **A lost or changed key** has no recovery step: sign the next version with the new key and tell
 users to expect the question. They install it by hand, see both fingerprints, and say yes.
 
+## Updates
+
+A plug-in can name an **update feed** in its manifest, `"updateUrl": "https://…"` (host feature
+`updates`). The app finds a newer version there and shows it in the Plug-in Manager; the user
+installs it. Nothing installs by itself.
+
+**Which plug-ins can have update checks:** a plug-in whose manifest names a feed, whose installed
+file is stamped ([Stamping your plug-in](#stamping-your-plug-in)) and signed by its pinned key
+([Signing your plug-in](#signing-your-plug-in)). The update's permissions are then read from the
+downloaded file's section before anything runs, and its signature shows it comes from the same
+author. An unstamped or unsigned plug-in installs and runs as before, with no update checks: its
+first stamped, signed version is a hand install. Pixel filters get none.
+
+**When the app checks:** only when the user turns a plug-in's check on (*Check for updates* on its
+page; off by default), and then only **when the Plug-in Manager opens**, at most once a day per
+plug-in. A result from within the day is shown as it was. Nothing contacts a feed while the
+Plug-in Manager is closed; *Check Now* (or `plugin.checkUpdates {id}`) checks at once. This is
+separate from the app's own update check.
+
+### The feed
+
+One JSON file with an entry per plug-in, so one author's file can serve several plug-ins, each
+released on its own. An entry is matched to a plug-in by its **`id` field** (the manifest `id`);
+its key is free, such as a folder name:
+
+```json
+{
+  "geotag": {
+    "id": "org.example.geotag",
+    "version": "1.3.0",
+    "url": "https://example.org/releases/geotag-1.3.0.wasm",
+    "sha256": "<64 hex digits: the .wasm file's SHA-256>",
+    "requires": ["settings", "updates"],
+    "permissions": ["catalog", "network"],
+    "changelog": "https://example.org/geotag/CHANGELOG.md",
+    "notes": "Faster lookups; the cache now survives a restart."
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `id` | the plug-in's manifest `id`; two entries with one id offer nothing for it |
+| `version` | semver; offered only when above the installed version (a stale or replayed feed offers nothing), and an entry whose version can't be read is ignored |
+| `url` | the `.wasm` to download, `https://` only |
+| `sha256` | the file's SHA-256 in hex; a download that doesn't match isn't installed |
+| `requires` | the host features that version needs, as its manifest names them (there is no separate minimum app version); an update needing one this app lacks is shown with what's missing, and can't be installed |
+| `permissions` | the permission groups that version asks for (`catalog`, `metadataWrite`, `libraryAdd`, `pixels`, `crop`, `virtualCopy`, `network`, `fs`, `programs`), shown before the download, marked as declared by the feed |
+| `changelog` | optional `https://` link, shown next to the note |
+| `notes` | optional short note on what's new: plain text, at most 280 characters (cut on a word boundary with "…"); markup and links show as the text they are |
+
+Take `notes` from the changelog when the feed is built: the entry whose heading names the version
+being published (never "Unreleased"), stripped to plain text and cut to the cap. With no such
+entry, leave `notes` out. So there is one file to keep, and the app makes no request to the
+changelog's host.
+
+The feed is fetched over `https` only (a redirect to `http` is refused), and at most 1 MB is read;
+a feed or a download that takes longer than 5 minutes in all is stopped.
+A feed that can't be fetched or read offers nothing; why is shown on the plug-in's page and
+written to its log, as is why an entry was ignored.
+
+**The feed isn't signed**, so the app trusts nothing in it beyond what it shows: the version must
+go up, the file must match the feed's SHA-256, be stamped, carry the offered id and version, and
+be signed by the pinned key, and its own stamped manifest decides what it asks for. When that
+asks for a permission group the feed didn't declare, the update stops and the user is asked
+first (a taken-over feed would hide exactly that). New permissions aren't granted, as with any
+update, and the version replaced is kept for *Go Back to Version X*.
+
 ## Engine commands
 
 `plugin.list`, `plugin.inspectFile {path, verify?}`, `plugin.install {path, grant?, allowDowngrade?, acceptSigner?, acceptUnsigned?}`,
@@ -792,7 +861,19 @@ users to expect the question. They install it by hand, see both fingerprints, an
 `plugin.run {plugin, command, args?, ids?, source?, wait?}` (a job: `{job}` at once, or its result with `wait`), `plugin.settings {id}`, `plugin.setSettings {id, values}`,
 `plugin.suggestMetadata {ids?}`, `plugin.postExport {files}`, `plugin.publishServices`,
 `plugin.exportDestinations`, `plugin.exportTo {plugin, destination, files, args?}`,
-`plugin.metadataFields {id?}`, `plugin.setField {plugin, field, value, id?}`.
+`plugin.metadataFields {id?}`, `plugin.setField {plugin, field, value, id?}`,
+`plugin.setUpdateCheck {id, on}`, `plugin.checkUpdates {id?, due?}`, `plugin.update {id, acceptUndeclared?}`.
+
+The update commands ([Updates](#updates)): `plugin.setUpdateCheck` turns a plug-in's check on or
+off. `plugin.checkUpdates` checks plug-in `id` now (an error when it can't have checks), or without
+`id` every plug-in whose check is on; with `due: true` only those whose last check is a day old
+(what the Plug-in Manager runs when it opens). It returns `{checked: [ids], plugins: [{id, name,
+version, updates}]}`. `plugin.update` downloads the version found and installs it through
+`plugin.install`'s path; when the file asks for a permission group the feed didn't declare it
+installs nothing and returns `{updated: false, reason, undeclared: [groups], requests: [{group,
+value?}]}`, and installs only when called again with `acceptUndeclared: true`. Installed, it returns
+`{updated: true, plugin}`. Both wait for the network (each fetch at most 5 minutes) before they
+return; the Plug-in Manager runs them on a worker with a row in the activity stack.
 
 `plugin.inspectFile {path, verify?}` says what a `.wasm` is and what installing it would do,
 without installing it. Its result says where the manifest came from:
@@ -822,8 +903,11 @@ manifest is always read from `pc_manifest`.
 `plugin.list` gives `{dir, host, plugins, failed, skipped}`: `dir` is the plug-ins folder (`null`
 when plug-ins are kept in memory), each plug-in has its module's `moduleHash` (sha256), a
 `settingsRevision` that changes when one of its settings does, `previousVersion` (the version
-`plugin.rollback` goes back to, or `null`) and `signer` (the pinned signer's fingerprint, or
-`null`), each `failed` row has `file`, `error`, `kind` (`plugin` or
+`plugin.rollback` goes back to, or `null`), `signer` (the pinned signer's fingerprint, or
+`null`) and `updates` (`{check, available, reason, checkedAt?, error?, offer?}`: whether the user
+turned its check on, whether it can have one and why not, and the last check's time, error and
+offer: `{version, url, sha256, requires, permissions, changelog?, notes?}` from the feed, with `adds`, the declared
+groups the installed version doesn't have, and `missing`, the host features this app lacks), each `failed` row has `file`, `error`, `kind` (`plugin` or
 `filter`) and, when the module named one, `id`, and `skipped` counts the modules past the most the
 folder loads.
 
@@ -841,7 +925,10 @@ Pixel Filters, each with an icon drawn from its id (the same id always gets the 
 plug-in's own icon when its manifest carries one), its name, version and a mark: enabled, disabled or didn't load. The selected entry's page is on the
 right:
 
-- **A plug-in:** Enabled, Remove, *Go Back to Version X* (after an update), and tabs: Settings (when it declares settings), Permissions (each
+- **A plug-in:** Enabled, Remove, *Go Back to Version X* (after an update), *Check for updates*
+  and *Check Now* (a plug-in that can have update checks, [Updates](#updates)) with the update
+  found: its version, note, changelog link and the permission groups its feed says it adds, and
+  **Update**, which asks first when the file wants groups the feed didn't declare; and tabs: Settings (when it declares settings), Permissions (each
   one it may ask for: allowed, denied on a date, not asked yet or refused, with Allow / Revoke), About (description, what it adds, its commands
   to run, where it comes from: Homepage, Source Code with *Report a Problem*, Changelog, Licence; the module's size) and Log.
 - **A pixel filter:** Remove, its stage, whether it measures the photo (the cropped photo or the
@@ -870,7 +957,8 @@ message}` when that module is already installed; an error while another install 
 window with that entry selected, on `tab`: `settings`, `permissions`, `about` or `log`; it fails
 for a tab the entry doesn't have), `plugins.showFolder` (the folder in the system file manager),
 `plugins.openLink {id, link}` (opens `link`, one of `homepage`, `repository`, `issues` or
-`changelog`, of that plug-in's or filter's About in the browser, which opens only `https://`
+`changelog`, of that plug-in's or filter's About, or `updateChangelog`, the changelog of the update
+found, in the browser, which opens only `https://`
 links; an unknown id or link, or one the manifest doesn't have, is an error that opens nothing) and
 `plugins.runItem {plugin, command}`.
 
@@ -890,7 +978,7 @@ toast and to `ui.inspect` → `export.last.plugins` when they finish. An export 
 (`app.export` without `background`, the CLI, MCP) runs them before it returns, as before.
 
 Plug-ins are installed per user in `<settings_dir>/plugins`, or in `<PREFIX>_PLUGINS` if that
-is set. That folder holds `<id>.wasm`, `plugins.json` (enabled state, grants and the pinned signer) and
+is set. That folder holds `<id>.wasm`, `plugins.json` (enabled state, grants, the pinned signer, whether its update check is on and the last check's result) and
 `data/<id>.json` (the plug-in's namespace: `{"format": 2, "libraries": {<library id>: {<photo id>:
 {…}}}}`; a file written before namespaces were kept per library is claimed whole by the first
 library opened from a folder, so no value is lost), and `settings/<id>.json` (its settings and
@@ -1066,7 +1154,8 @@ filters turn it (long edge 2048, cached per photo and stack; a change of the sta
   are skipped with a message.
 - Network and filesystem permissions are fixed in the manifest: a WebDAV destination for "any
   server the user types" isn't possible; the author names the hosts.
-- No plug-in store or automatic updates; Lightroom Lua plug-ins don't run. Signatures say who made
+- No plug-in store, and updates aren't installed automatically or checked while the Plug-in
+  Manager is closed; Lightroom Lua plug-ins don't run. Signatures say who made
   a plug-in, not whether it is safe: the permissions still decide what it may do.
 - Programs: a plug-in can't read a program's output while it runs, or stop it; ✕ only stops
   waiting. It adds what a program made only from the folder of the source photo, and can't make

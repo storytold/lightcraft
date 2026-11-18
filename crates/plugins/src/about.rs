@@ -98,10 +98,38 @@ impl About {
     }
 }
 
+/// Manifest field `key` of `raw` as an `https://` link, read as [`About::parse`] reads its links:
+/// left out, `null` or empty is absent; anything else it can't use is absent and pushed onto
+/// `dropped` with why (`"updateUrl: not an https:// link"`).
+pub fn link_field(raw: &Value, key: &str, dropped: &mut Vec<String>) -> Option<String> {
+    let t = match raw.get(key)? {
+        Value::Null => return None,
+        Value::String(s) => s.trim(),
+        _ => {
+            dropped.push(format!("{key}: not text"));
+            return None;
+        }
+    };
+    if t.is_empty() {
+        return None;
+    }
+    let why = if t.len() > MAX_LINK_BYTES {
+        format!("{} bytes (limit {MAX_LINK_BYTES})", t.len())
+    } else if t.chars().any(hidden) {
+        "has control or invisible characters".to_string()
+    } else if link_host(t).is_none() {
+        "not an https:// link".to_string()
+    } else {
+        return Some(t.to_string());
+    };
+    dropped.push(format!("{key}: {why}"));
+    None
+}
+
 /// A control character, or an invisible one that changes how the text around it reads: direction
 /// overrides and isolates (`U+202E` shows `txt.exe` as `exe.txt`), zero-width spaces and joiners,
 /// the byte-order mark, a soft hyphen.
-fn hidden(c: char) -> bool {
+pub(crate) fn hidden(c: char) -> bool {
     c.is_control() || matches!(c, '\u{AD}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2069}' | '\u{FEFF}')
 }
 

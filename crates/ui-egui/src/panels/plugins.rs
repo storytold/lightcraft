@@ -20,6 +20,14 @@
 //!   the command again, **Deny** remembers the answer ([`ask_ui`]).
 //! - After an export, enabled export hooks and the chosen export destination run on the written
 //!   files, on a worker with an activity row ([`after_export`], [`poll`]).
+//! - Updates: a plug-in that can have update checks (its manifest names a feed, and its file is
+//!   stamped and signed by its pinned key) has a *Check for updates* box on its page, off by
+//!   default. Opening the window checks the feeds of those turned on whose last check is a day old
+//!   (`plugin.checkUpdates {due: true}`), on a worker with an activity row; nothing checks while
+//!   it's closed. An update found shows on the plug-in's page with its versions, notes, changelog
+//!   and the permission groups its feed says it adds; **Update** downloads and installs it on a
+//!   worker, and asks first when the file wants permission groups the feed didn't say
+//!   ([`update_ask_ui`]).
 //!
 //! - Permissions are granted only here, by the user: the Allow buttons go through
 //!   [`lcc_engine::cmd::plugins::allow_by_user`], which no command reaches, and ignore a click in a
@@ -138,6 +146,20 @@ struct State {
     /// The permission prompt on screen.
     asking: Option<Asking>,
     message: String,
+    /// The update checks due when the window opened have been started (cleared when it closes).
+    checked_open: bool,
+    /// An update that asks for permission groups its feed didn't declare: the question on screen.
+    update_ask: Option<UpdateAsk>,
+}
+
+/// An update `plugin.update` didn't install because its file asks for permission groups its feed
+/// didn't declare ([`update_ask_ui`]).
+#[derive(Clone)]
+struct UpdateAsk {
+    id: String,
+    name: String,
+    /// What it asks for that the installed version doesn't, as the Permissions tab words it.
+    requests: Vec<String>,
 }
 
 /// The question Remove asks before anything is deleted.
@@ -194,7 +216,7 @@ fn app_ctx(app: &LccApp) -> egui::Context {
 /// dialog first, if it has one); `plugins.page {id, tab?, open?}` opens the window on a plug-in's
 /// page (`tab`: settings, permissions, about or log; `open: false` closes the window if it shows
 /// that page); `plugins.showFolder` opens the plug-ins folder in the system file manager;
-/// `plugins.openLink {id, link}` opens a link of a plug-in's About ([`open_link`]).
+/// `plugins.openLink {id, link}` opens a link of a plug-in's About, or its update's changelog ([`open_link`]).
 pub fn run(app: &mut LccApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
     let ctx = app_ctx(app);
     let mut s = state(&ctx);
@@ -643,6 +665,7 @@ pub fn export_hooks_running() -> bool {
 /// Per frame: answer the running export hooks' catalog requests, keep their activity row up to
 /// date and, when they finish, report how they went.
 pub fn poll(app: &mut LccApp, ctx: &egui::Context) {
+    poll_updates(app, ctx);
     // a plug-in's program.end hook, or a job, asks for the catalog from its own thread
     lcc_engine::cmd::plugin_programs::answer_requests(&mut app.session);
     if lcc_engine::cmd::plugin_programs::hooks_running() || lcc_engine::cmd::plugin_jobs::running() {
@@ -917,6 +940,15 @@ const MIN_PAGE_W: f32 = 360.0;
 pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     let mut s = state(ctx);
     ask_ui(app, ctx, &mut s);
+    if !s.open {
+        s.checked_open = false;
+    } else if !s.checked_open {
+        // opening the window checks the feeds the user turned on, a day after the last check
+        s.checked_open = true;
+        if let Err(e) = start_check(app, ctx, None, true) {
+            log::info!("plug-in update check not started: {e}");
+        }
+    }
     if !s.open && s.dialog.is_none() && s.pending.is_none() {
         set_state(ctx, s);
         return;
@@ -1029,6 +1061,7 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
     }
     approval_ui(ctx, &mut s, &installs, &mut actions);
     dialog_ui(ctx, &mut s, &mut actions);
+    update_ask_ui(ctx, &mut s, &mut actions);
     for (id, p) in actions {
         s.message.clear();
         match id {
@@ -1109,6 +1142,18 @@ pub fn show(app: &mut LccApp, ctx: &egui::Context) {
             "plugins.userRollback" => {
                 if let Err(e) = lcc_engine::cmd::plugins::rollback_by_user(&mut app.session, &p) {
                     s.message = e.to_string();
+                }
+            }
+            "plugins.checkUpdates" => {
+                if let Err(e) = start_check(app, ctx, p["id"].as_str().map(str::to_string), false) {
+                    s.message = e;
+                }
+            }
+            // as the user's own install, unless the control channel clicked (then as plugin.update)
+            "plugins.userUpdate" => {
+                let (id, accept) = (p["id"].as_str().unwrap_or("").to_string(), p["acceptUndeclared"].as_bool() == Some(true));
+                if let Err(e) = start_update(app, ctx, id, accept, !app.synthetic_frame) {
+                    s.message = e;
                 }
             }
             "plugin.run" => match run_as_user(app, &p) {
@@ -1750,6 +1795,7 @@ fn plugin_page(ui: &mut egui::Ui, e: &Entry, tab: &mut Tab, page: Option<&mut Pa
             }
         }
     });
+    updates_ui(ui, e, actions);
     ui.add_space(6.0);
     let tabs: Vec<Tab> = Tab::ALL.into_iter().filter(|t| *t != Tab::Settings || page.is_some()).collect();
     if !tabs.contains(tab) {
@@ -1923,19 +1969,285 @@ fn about_row(ui: &mut egui::Ui, name: &str, value: impl FnOnce(&mut egui::Ui)) {
 
 /// `plugins.openLink {id, link}`: opens link `link` (`homepage`, `repository`, `issues` or
 /// `changelog`) of installed plug-in or filter `id`'s About in the browser, as its page's link
-/// does. The browser service opens only `https://` links.
+/// does, or (`updateChangelog`) the changelog of the update its last check found. The browser
+/// service opens only `https://` links.
 fn open_link(app: &mut LccApp, p: &Value) -> Result<Value, String> {
     let (Some(id), Some(link)) = (p.get("id").and_then(Value::as_str), p.get("link").and_then(Value::as_str)) else {
         return Err("plugins.openLink needs `id` and `link`".into());
     };
-    if link != "issues" && !ABOUT_LINKS.contains(&link) {
-        return Err(format!("plugins.openLink: no link {link:?} (homepage, repository, issues or changelog)"));
+    if link != "issues" && link != "updateChangelog" && !ABOUT_LINKS.contains(&link) {
+        return Err(format!("plugins.openLink: no link {link:?} (homepage, repository, issues, changelog or updateChangelog)"));
     }
     let list = app.session.execute("plugin.list", &json!({})).map_err(|e| e.to_string())?;
     let entry = entries(&list).into_iter().find(|e| e.id == id && e.mark != Mark::Failed);
     let entry = entry.ok_or_else(|| format!("{id}: {}", tr("no such plug-in is installed")))?;
-    let url = entry.info["about"][link].as_str().ok_or_else(|| format!("{id}: {}", tr_format!("its manifest has no {link} link", link = link)))?;
+    let url = match link {
+        // the changelog the update found names (`plugin.list` → updates.offer)
+        "updateChangelog" => entry.info["updates"]["offer"]["changelog"].as_str(),
+        _ => entry.info["about"][link].as_str(),
+    };
+    let url = url.ok_or_else(|| format!("{id}: {}", tr_format!("its manifest has no {link} link", link = link)))?;
     crate::links::open(app, url)
+}
+
+/// A plug-in's update check on its page: the *Check for updates* box and **Check Now** for a
+/// plug-in that can have one (none for any other: its first stamped, signed version is a hand
+/// install), why the last check failed, and the update it found ([`update_row`]).
+fn updates_ui(ui: &mut egui::Ui, e: &Entry, actions: &mut Vec<(&'static str, Value)>) {
+    use crate::button::Button;
+    let u = &e.info["updates"];
+    if u["available"].as_bool() != Some(true) {
+        return;
+    }
+    let id = &e.id;
+    ui.horizontal(|ui| {
+        let mut on = u["check"].as_bool().unwrap_or(false);
+        let r = ui.checkbox(&mut on, tr("Check for updates"));
+        crate::widgets::register(ui.ctx(), format!("pluginUpdateCheck:{id}"), r.rect);
+        if r.changed() {
+            actions.push(("plugin.setUpdateCheck", json!({"id": id, "on": on})));
+        }
+        if Button::new("Check Now").small().widget(format!("button:pluginCheckUpdates:{id}")).show(ui).clicked() {
+            actions.push(("plugins.checkUpdates", json!({"id": id})));
+        }
+    });
+    if let Some(err) = u["error"].as_str() {
+        ui.colored_label(ui.visuals().warn_fg_color, tr_format!("Couldn't check for updates: {error}", error = err));
+    }
+    if u["offer"].is_object() {
+        update_row(ui, e, &u["offer"], actions);
+    }
+}
+
+/// The update a plug-in's last check found, all from its feed (nothing is downloaded to show
+/// it): the version, the author's note as plain text, the changelog link, the permission groups
+/// the feed says it adds, and **Update**, or the host features this version lacks.
+fn update_row(ui: &mut egui::Ui, e: &Entry, offer: &Value, actions: &mut Vec<(&'static str, Value)>) {
+    use crate::button::{Button, Kind};
+    let id = &e.id;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(tr_format!("Version {version} is available", version = offer["version"].as_str().unwrap_or("")));
+            if let Some(url) = offer["changelog"].as_str()
+                && let Some(host) = lcc_engine::cmd::plugins::link_host(url)
+            {
+                ui.weak("·");
+                let r = ui.link(format!("{} ({host})", tr("Changelog"))).on_hover_text(url);
+                crate::widgets::register(ui.ctx(), format!("link:plugin-updateChangelog-{id}"), r.rect);
+                if r.clicked() {
+                    actions.push(("plugins.openLink", json!({"id": id, "link": "updateChangelog"})));
+                }
+            }
+        });
+        // plain text, cut by the host: markup and links show as the text they are
+        if let Some(notes) = offer["notes"].as_str() {
+            ui.label(notes);
+        }
+        let adds: Vec<&str> = offer["adds"].as_array().into_iter().flatten().filter_map(Value::as_str).map(group_label).collect();
+        if !adds.is_empty() {
+            ui.weak(format!("{} {}", tr("Its update feed says it also asks to:"), adds.join(" · ")));
+        }
+        let missing: Vec<&str> = offer["missing"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+        if missing.is_empty() {
+            if Button::new("Update").kind(Kind::Primary).widget(format!("button:pluginUpdate:{id}")).show(ui).clicked() {
+                actions.push(("plugins.userUpdate", json!({"id": id})));
+            }
+        } else {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("{} {}", tr("It needs features this version of the app doesn't have:"), missing.join(", ")),
+            );
+        }
+    });
+}
+
+/// A permission group as the update row names it.
+fn group_label(group: &str) -> &'static str {
+    match group {
+        "catalog" => tr("Read the catalog"),
+        "metadataWrite" => tr("Write photo metadata"),
+        "libraryAdd" => tr("Add files made from photos to the catalog"),
+        "pixels" => tr("Look at downsized copies of photos"),
+        "crop" => tr("Change the crop of photos"),
+        "virtualCopy" => tr("Make virtual copies of photos"),
+        "network" => tr("Connect to the network"),
+        "fs" => tr("Read or write files"),
+        _ => tr("Start programs"),
+    }
+}
+
+/// One request an update asks for (`plugin.update` → requests: `{group, value?}`), as the
+/// Permissions tab words it.
+fn request_label(r: &Value) -> String {
+    let group = r["group"].as_str().unwrap_or("");
+    match (group, r["value"].as_str()) {
+        ("network", Some(h)) => format!("{} {h}", tr("Connect to")),
+        ("fs", Some(path)) => format!("{} {path}", tr("Read or write files in")),
+        ("programs", Some(p)) => format!("{} {p}", tr("Start the program")),
+        _ => group_label(group).to_string(),
+    }
+}
+
+/// The question an update asks when its file wants permission groups its feed didn't declare:
+/// what it asks for, then **Update Anyway** (downloaded and checked again, then installed; none
+/// of it is granted) or **Cancel**.
+fn update_ask_ui(ctx: &egui::Context, s: &mut State, actions: &mut Vec<(&'static str, Value)>) {
+    let Some(ask) = s.update_ask.take() else { return };
+    let mut keep = true;
+    let window_id = key().with("update-ask");
+    egui::Window::new(tr("Update"))
+        .id(window_id)
+        .title_bar(false)
+        .frame(crate::dialog_frame::card_frame(ctx))
+        .collapsible(false)
+        .resizable(false)
+        .show(ctx, |ui| {
+            crate::dialog_frame::card_header(ui, &ask.name, None);
+            ui.label(tr("It asks for more than its update feed said:"));
+            for r in &ask.requests {
+                ui.label(format!("• {r}"));
+            }
+            ui.weak(tr("Nothing new is allowed: it asks when it needs one."));
+            ui.add_space(6.0);
+            button_row(ui, |ui| {
+                use crate::button::{Button, Kind};
+                if Button::new("Update Anyway").kind(Kind::Primary).widget("button:pluginUpdateAnyway").show(ui).clicked() {
+                    actions.push(("plugins.userUpdate", json!({"id": ask.id, "acceptUndeclared": true})));
+                    keep = false;
+                }
+                if Button::new("Cancel").widget("button:pluginUpdateCancel").show(ui).clicked() {
+                    keep = false;
+                }
+            });
+        });
+    if keep {
+        s.update_ask = Some(ask);
+    }
+}
+
+/// An update check or download running on its worker ([`start_check`], [`start_update`]).
+struct UpdateTask {
+    done: std::sync::mpsc::Receiver<UpdateDone>,
+    /// Its row in the activity stack, while it runs.
+    _guard: TaskGuard,
+}
+
+enum UpdateDone {
+    Checked(Result<Value, String>),
+    /// Plug-in `id`'s update downloaded (or why not), to install here with the user's answer.
+    Downloaded {
+        id: String,
+        accept: bool,
+        by_user: bool,
+        bytes: Result<Vec<u8>, String>,
+    },
+}
+
+#[cfg(not(test))]
+static UPDATE: Mutex<Option<UpdateTask>> = Mutex::new(None);
+
+// Under test, each test's own, as [`TASK`].
+#[cfg(test)]
+thread_local! {
+    static UPDATE: &'static Mutex<Option<UpdateTask>> = Box::leak(Box::new(Mutex::new(None)));
+}
+
+fn update_lock() -> std::sync::MutexGuard<'static, Option<UpdateTask>> {
+    #[cfg(not(test))]
+    let task = &UPDATE;
+    #[cfg(test)]
+    let task = UPDATE.with(|t| *t);
+    task.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Whether an update check or download is running (`ui.inspect`, tests).
+pub fn updates_running() -> bool {
+    update_lock().is_some()
+}
+
+/// Runs `work` on a worker with an activity row `label`, one at a time.
+fn start_update_work(app: &mut LccApp, ctx: &egui::Context, label: &str, work: impl FnOnce() -> UpdateDone + Send + 'static) -> Result<(), String> {
+    let mut g = update_lock();
+    if g.is_some() {
+        return Err(tr("A plug-in update is already being checked or downloaded").to_string());
+    }
+    let (tx, done) = std::sync::mpsc::channel();
+    let repaint = ctx.clone();
+    std::thread::Builder::new()
+        .name("plugin-updates".into())
+        .spawn(move || {
+            let _ = tx.send(work());
+            repaint.request_repaint();
+        })
+        .map_err(|e| e.to_string())?;
+    let guard = app.session.activity.start("plugins", label, Cancel::No);
+    *g = Some(UpdateTask { done, _guard: guard });
+    Ok(())
+}
+
+/// Checks update feeds on a worker: plug-in `id` now, or (no `id`) those whose check is on, only
+/// the ones due when `due` (the window opening). Nothing to check starts nothing.
+fn start_check(app: &mut LccApp, ctx: &egui::Context, id: Option<String>, due: bool) -> Result<(), String> {
+    if id.is_none() {
+        let now = chrono::Utc::now().timestamp();
+        let g = lcc_engine::cmd::plugins::manager();
+        let any = g.as_ref().and_then(|m| m.update_checks(None, due.then_some(now)).ok()).is_some_and(|c| !c.is_empty());
+        if !any {
+            return Ok(());
+        }
+    }
+    start_update_work(app, ctx, "Checking plug-ins for updates", move || {
+        UpdateDone::Checked(lcc_engine::cmd::plugins::check_updates(id.as_deref(), due).map_err(|e| e.to_string()))
+    })
+}
+
+/// Downloads plug-in `id`'s update on a worker; [`poll_updates`] installs it.
+fn start_update(app: &mut LccApp, ctx: &egui::Context, id: String, accept: bool, by_user: bool) -> Result<(), String> {
+    start_update_work(app, ctx, "Downloading a plug-in update", move || {
+        let bytes = lcc_engine::cmd::plugins::download_update(&id).map_err(|e| e.to_string());
+        UpdateDone::Downloaded { id, accept, by_user, bytes }
+    })
+}
+
+/// Per frame: when an update check ends, says why it failed; when a download ends, installs it
+/// (`plugin.update`'s path), or asks the user about permission groups its feed didn't declare.
+fn poll_updates(app: &mut LccApp, ctx: &egui::Context) {
+    let mut g = update_lock();
+    let Some(task) = g.as_ref() else { return };
+    let done = match task.done.try_recv() {
+        Ok(d) => d,
+        Err(std::sync::mpsc::TryRecvError::Empty) => return,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => UpdateDone::Checked(Err(tr("the plug-in worker stopped unexpectedly").to_string())),
+    };
+    *g = None;
+    drop(g);
+    let mut s = state(ctx);
+    match done {
+        UpdateDone::Checked(Ok(_)) => {}
+        UpdateDone::Checked(Err(e)) => s.message = e,
+        UpdateDone::Downloaded { bytes: Err(e), .. } => s.message = e,
+        UpdateDone::Downloaded { id, accept, by_user, bytes: Ok(bytes) } => {
+            match lcc_engine::cmd::plugins::install_update(&mut app.session, &id, &bytes, accept, by_user) {
+                Ok(v) if v["updated"] == json!(true) => {
+                    let p = &v["plugin"];
+                    let (name, version) = (p["name"].as_str().unwrap_or(&id), p["version"].as_str().unwrap_or(""));
+                    app.toast(ctx, tr_format!("Updated {name} to version {version}", name = name, version = version));
+                }
+                Ok(v) => {
+                    let name = lcc_engine::cmd::plugins::manager()
+                        .as_ref()
+                        .and_then(|m| m.get(&id).map(|i| i.plugin.manifest().name.clone()))
+                        .unwrap_or_else(|| id.clone());
+                    let requests = v["requests"].as_array().into_iter().flatten().map(request_label).collect();
+                    s.update_ask = Some(UpdateAsk { id, name, requests });
+                }
+                Err(e) => s.message = e.to_string(),
+            }
+        }
+    }
+    set_state(ctx, s);
+    ctx.request_repaint();
 }
 
 /// What the plug-in has logged.

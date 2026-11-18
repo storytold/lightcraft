@@ -88,6 +88,9 @@ pub struct Plugin {
     digest: [u8; 32],
     /// Its author signature: none or valid ([`Plugin::load`] refuses an invalid one).
     signature: Signature,
+    /// Its file carries a stamped [`MANIFEST_SECTION`] (which [`Plugin::load`] checked is
+    /// `lcc_manifest`'s answer).
+    stamped: bool,
 }
 
 impl fmt::Debug for Plugin {
@@ -238,7 +241,8 @@ impl Plugin {
     fn load_compiled(bytes: &[u8], limits: Limits, engine: Engine, module: Module, signature: Signature) -> Result<Plugin> {
         let section = stamped_section(&module)?.map(<[u8]>::to_vec);
         let digest = Sha256::digest(bytes).into();
-        let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), digest, signature };
+        let stamped = section.is_some();
+        let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), digest, signature, stamped };
         let deadline = Deadline::new(&p.limits);
         let mut live = p.instantiate()?;
         let version: TypedFunc<(), i32> = live.func("lcc_abi_version")?;
@@ -302,6 +306,11 @@ impl Plugin {
     /// Its author signature: [`Signature::None`] or [`Signature::Valid`].
     pub fn signature(&self) -> &Signature {
         &self.signature
+    }
+    /// Its file carries a stamped manifest section, the same as `lcc_manifest`'s answer: what its
+    /// update's permissions are read from before anything of the update runs.
+    pub fn stamped(&self) -> bool {
+        self.stamped
     }
     /// [`Plugin::digest`] as lowercase hex, as `plugin.list` gives it (`moduleHash`, like a pixel filter's).
     pub fn module_hash(&self) -> String {
@@ -561,6 +570,7 @@ fn placeholder_manifest() -> Manifest {
         icon: None,
         header: None,
         about: Default::default(),
+        update_url: None,
         dropped: Vec::new(),
     }
 }
