@@ -41,8 +41,11 @@ fn allocate<T: Clone>(n: usize, value: T) -> Result<Vec<T>, Error> {
 
 /// Something that runs the model on one tile.
 pub trait TileRunner: Sync {
-    /// `input` is the tile as four planes `[R, G1, G2, B]` of `tile × tile` cells (NCHW, batch 1); the answer is
-    /// camera RGB, three planes of `2·tile × 2·tile` pixels (CHW), in the model's own scale.
+    /// Runs one tile. A Bayer model (`Domain::BayerToRgb`) gets the tile as four planes `[R, G1, G2, B]` of `tile × tile`
+    /// cells (NCHW, batch 1) and answers camera RGB, three planes of `2·tile × 2·tile` pixels (CHW). A linear-RGB model
+    /// (`Domain::LinearRgb`) gets the demosaiced tile as three planes `[R, G, B]` of `tile × tile` pixels (in camera RGB
+    /// or linear Rec.2020, as its manifest says) and answers the same three planes of `tile × tile`. Either answer is in
+    /// the model's own scale.
     fn run(&self, input: &[f32]) -> Result<Vec<f32>, Error>;
 }
 

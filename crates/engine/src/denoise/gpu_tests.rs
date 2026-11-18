@@ -372,3 +372,27 @@ fn a_marker_that_another_process_holds_locked_is_waited_for_not_taken_for_a_cras
     assert_eq!(r, Ok((5, 6)), "a marker on its way out is waited for, not taken for a crash");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_marker_held_past_the_crash_grace_is_waited_for_when_its_set_up_ends() {
+    // a real set-up holds its marker for longer than the grace an unlocked one gets, then unlocks it and deletes it: that
+    // is a set-up that ended, not a crash, and the grace counts from the unlock rather than from the start of the wait
+    let dir = folder("longheld");
+    let marker = dir.join(GPU_SETUP_MARKER);
+    use std::io::Write;
+    let mut other = std::fs::OpenOptions::new().write(true).create_new(true).open(&marker).unwrap();
+    other.write_all(b"setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    other.lock().unwrap();
+    let m = marker.clone();
+    let ender = std::thread::spawn(move || {
+        std::thread::sleep(super::gpu::MARKER_GRACE + Duration::from_millis(300));
+        drop(other);
+        // unlocked but not deleted yet: the window Windows needs to close the file before it can go
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = std::fs::remove_file(&m);
+    });
+    let r = set_up_card(&marker, Duration::from_secs(10), || Ok(8), || 9);
+    ender.join().unwrap();
+    assert_eq!(r, Ok((8, 9)), "a set-up that ended after the grace is not taken for a crash");
+    let _ = std::fs::remove_dir_all(&dir);
+}

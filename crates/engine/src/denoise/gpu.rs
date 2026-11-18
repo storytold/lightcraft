@@ -27,6 +27,11 @@ pub(crate) const GPU_SETUP_MARKER: &str = "gpu-setup.marker";
 #[cfg(feature = "denoise")]
 pub(super) const GPU_CRASHED: &str = "LightCraft closed while it was setting up the graphics card for AI Denoise last time";
 
+/// How long a set-up marker may stay unlocked before it is taken for one a crash left behind: a set-up that ends unlocks
+/// its marker and then deletes it, and the two are not one step.
+#[cfg(feature = "denoise")]
+pub(super) const MARKER_GRACE: Duration = Duration::from_secs(1);
+
 /// Why the card is not used when its set-up ran out of time (the start of it).
 #[cfg(feature = "denoise")]
 pub(super) const GPU_SLOW: &str = "setting up the graphics card took longer than";
@@ -65,23 +70,29 @@ impl Drop for SetUpEnded {
 
 /// A marker that another process holds locked is that process's set-up under way, not a crash's: wait for it to end (up to
 /// `limit`). It returns `Ok` when the marker is gone. A marker that nobody holds is one a crash left behind — unless it
-/// disappears within a moment, which is the process that has just ended removing it (it unlocks before it deletes: Windows
-/// cannot delete a file another handle still holds open, so the two are not atomic).
+/// disappears within [`MARKER_GRACE`], which is the process that has just ended removing it (it unlocks before it deletes:
+/// Windows cannot delete a file another handle still holds open, so the two are not atomic). The grace is counted from
+/// when the marker was first seen unlocked, not from the start of this wait: a set-up holds its marker for as long as it
+/// takes, and one that ends after that is still a set-up that ended, not a crash.
 #[cfg(feature = "denoise")]
 fn wait_for_other_set_up(marker: &Path, limit: Duration) -> Result<(), String> {
     let began = web_time::Instant::now();
+    let mut unlocked_since: Option<web_time::Instant> = None;
     loop {
         let Ok(file) = std::fs::OpenOptions::new().read(true).open(marker) else { return Ok(()) };
         match file.try_lock() {
             Ok(()) => {
                 // nobody holds it: either it is about to go or a crash left it
                 drop(file);
-                if began.elapsed() >= Duration::from_secs(1) {
+                let since = *unlocked_since.get_or_insert_with(web_time::Instant::now);
+                if since.elapsed() >= MARKER_GRACE {
                     return Err(GPU_CRASHED.into());
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
             Err(std::fs::TryLockError::WouldBlock) => {
+                // held again: the set-up is still under way, so the grace starts over if it unlocks later
+                unlocked_since = None;
                 if began.elapsed() >= limit {
                     return Err(GPU_STUCK.into());
                 }

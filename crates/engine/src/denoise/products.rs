@@ -324,9 +324,12 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
             let r = inv_m[0][0] * px[0] + inv_m[0][1] * px[1] + inv_m[0][2] * px[2];
             let g = inv_m[1][0] * px[0] + inv_m[1][1] * px[1] + inv_m[1][2] * px[2];
             let b = inv_m[2][0] * px[0] + inv_m[2][1] * px[1] + inv_m[2][2] * px[2];
-            let cr = (r / wb[0]).max(0.0);
-            let cg = (g / wb[1]).max(0.0);
-            let cb = (b / wb[2]).max(0.0);
+            // Negatives are kept, as the CameraRgb and Bayer paths keep them: the inverse matrix puts colours outside the
+            // camera's gamut below zero and noise does the same in the dark, and clipping them here would move hue; only a
+            // sample that is not a number is replaced. The display transform clips, not this step.
+            let cr = r / wb[0];
+            let cg = g / wb[1];
+            let cb = b / wb[2];
             *px = [if cr.is_finite() { cr } else { 0.0 }, if cg.is_finite() { cg } else { 0.0 }, if cb.is_finite() { cb } else { 0.0 }];
         });
     }

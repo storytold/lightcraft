@@ -1254,3 +1254,68 @@ fn an_xtrans_photo_denoised_by_linear_rec2020_model_transforms_and_exports_clean
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A linear model whose answer is the same negative value everywhere, to see what the engine does with values below zero.
+struct BelowZeroLinear {
+    runs: Arc<AtomicUsize>,
+}
+
+impl TileRunner for BelowZeroLinear {
+    fn run(&self, input: &[f32]) -> Result<Vec<f32>, lightcraft_denoise::Error> {
+        self.runs.fetch_add(1, Ordering::Relaxed);
+        Ok(input.iter().map(|_| -0.01).collect())
+    }
+}
+
+impl Model for BelowZeroLinear {
+    fn runner(&self, _: RunOn, threads: usize) -> (&dyn TileRunner, usize) {
+        (self, threads)
+    }
+
+    fn self_test(&self, _: RunOn) -> Result<Value, String> {
+        Ok(json!({"ok": true}))
+    }
+}
+
+/// The LinRec2020 inverse transform keeps the negative camera values it produces, as the CameraRgb and Bayer paths keep
+/// theirs: the matrix puts colours outside the camera's gamut below zero, and clipping them at zero would move the hue.
+#[test]
+fn a_linear_rec2020_product_keeps_the_negative_camera_values_the_inverse_transform_makes() {
+    let dir = temp_dir("xtrans-rec2020-negative");
+    let originals = dir.join("originals");
+    std::fs::create_dir_all(&originals).unwrap();
+    let data: Vec<u16> = (0..192 * 160).map(|i| 1200 + (i % 192) as u16 * 20 + (i / 192) as u16 * 30).collect();
+    let xtrans_path = originals.join("xtrans.dng");
+    std::fs::write(&xtrans_path, synthetic_xtrans_dng_of(192, 160, data)).unwrap();
+
+    let runs = Arc::new(AtomicUsize::new(0));
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("library"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [xtrans_path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.set_denoise_models_dir(Some(dir.join("denoise-models")));
+
+    let counted = runs.clone();
+    s.denoise.loader = Arc::new(move |_, _| Ok(Arc::new(BelowZeroLinear { runs: counted.clone() }) as Arc<dyn Model>));
+    let mut manifest = linear_manifest("stand-in-below-zero");
+    manifest.space = LinearSpace::LinRec2020;
+    let src = dir.join("src-stand-in-below-zero");
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(src.join("denoise-model.json"), serde_json::to_vec(&manifest).unwrap()).unwrap();
+    std::fs::write(src.join("model.onnx"), "stand-in for a model that answers below zero").unwrap();
+    s.execute("denoise.models.install", &json!({"path": src.join("model.onnx").to_string_lossy(), "acknowledged": true})).unwrap();
+
+    set_amount(&mut s, 100.0);
+    let r = pump_until_ready(&mut s, 1);
+    assert_eq!(r["ready"], 1);
+    assert_eq!(s.denoise_photo_state(id), PhotoState::Ready);
+
+    let spec = s.media.denoise.spec(id).unwrap().clone();
+    let product = lightcraft_denoise::product::read(&spec.product, &spec.key, 1).unwrap();
+    let lowest = product.data.iter().flatten().copied().fold(f32::INFINITY, f32::min);
+    assert!(lowest.is_finite(), "the product has a value that is not a number: {lowest}");
+    assert!(lowest < -1e-5, "the inverse transform's negative values are kept, not clipped at zero (lowest {lowest})");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
