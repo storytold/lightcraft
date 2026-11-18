@@ -82,6 +82,13 @@ corrections: **Enable Profile Corrections** and its Distortion / Vignetting amou
 stage (one resample), orientation handling and DNG export. A conversion whose radial error exceeds 0.001 of the
 half diagonal, or that would fold the image, is not applied.
 
+A raw whose look is fitted to its own camera JPEG (Sony, Nikon, Pentax, Olympus and others without a colour
+matrix, and a DNG whose tone is fitted to its preview, [camera-preview-colour.md](camera-preview-colour.md)) has that fit made on the sensor with only the
+share of a profile's vignetting correction its camera JPEG shows, measured per photo: the profile describes the
+lens, not what the camera did to its JPEG relative to the raw (a Sony JPEG with shading compensation Auto can show
+none of it). When the share can't be measured (too few usable pixels, or a lens-warped sensor proxy) the fit keeps
+the whole correction. The render still applies the profile at the Vignetting amount.
+
 Normalisation follows lensfun's documentation: distortion and TCA radii are 1 at half the shorter side of the
 calibration frame (its `cropfactor` and `aspect-ratio`), vignetting radii 1 at its corner; the optical centre is
 the image centre (lensfun's `<center>` offsets are not read). Missing or invalid crop factors remain unknown;

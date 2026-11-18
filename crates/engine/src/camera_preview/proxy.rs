@@ -93,6 +93,20 @@ pub(super) fn proxies(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
+    framed_proxies(raw, bytes, transform, size, min_fraction, lens, embedded).map(|(sensor, reference, clipped, _)| (sensor, reference, clipped))
+}
+
+/// [`proxies`], and the CR3 framing the sensor proxy was moved to ([`estimate_cr3_framing`]; `None` when it was not
+/// moved): a pixel of the returned CR3 sensor proxy shows the oriented sensor at `framing.source` of its position.
+pub(super) fn framed_proxies(
+    raw: &RawImage,
+    bytes: &[u8],
+    transform: &CameraTransform,
+    size: usize,
+    min_fraction: f64,
+    lens: Option<&LensGeometry>,
+    embedded: Option<&lightcraft_develop::EmbeddedLens>,
+) -> Option<(Rgb32f, Rgb32f, Vec<bool>, Option<Cr3Framing>)> {
     let edge = (2 * size).max(384) as u32;
     let decoded = crate::files::decode_raw_preview(
         bytes,
@@ -127,6 +141,7 @@ pub(super) fn proxies(
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
     let mut sensor = sensor_proxy(raw, k, edge as usize)?;
     let mut clipped = clip_mask(&sensor);
+    let mut framing = None;
     correct_vignetting(&mut sensor, embedded, raw.orientation);
     // The camera may have corrected its JPEG with the lens warp the file carries (Nikon Z lenses always, at up to 9 %
     // zoom; other cameras when their correction setting is on): the sensor moved into that geometry is a candidate,
@@ -144,7 +159,7 @@ pub(super) fn proxies(
         sensor.map_in_place(to_working);
         // Canon's JPEG can be cropped differently from the sensor. Estimate only that common
         // framing from edge directions, independently of the subsequent colour fit.
-        (sensor, clipped) = align_cr3_framing(sensor, clipped, &reference);
+        (sensor, clipped, framing) = align_cr3_framing(sensor, clipped, &reference);
     }
     let mut sensor = fit(&sensor, size, size, Filter::Box);
     let mut reference_small = reference_at(&reference, &sensor);
@@ -163,7 +178,7 @@ pub(super) fn proxies(
     if raw.format != RawFormat::Cr3 {
         sensor.map_in_place(to_working);
     }
-    Some((sensor, reference, clipped))
+    Some((sensor, reference, clipped, framing))
 }
 
 /// The camera JPEG at exactly the sensor proxy's size, so the two pair pixel for pixel. Fitting it
@@ -299,9 +314,10 @@ pub(super) fn estimate_cr3_framing(sensor: &Rgb32f, reference: &Rgb32f) -> Optio
     Some(best.1)
 }
 
-/// The sensor proxy and its clip mask (same size), both moved to the camera JPEG's framing.
-fn align_cr3_framing(sensor: Rgb32f, clipped: Rgb32f, reference: &Rgb32f) -> (Rgb32f, Rgb32f) {
-    let Some(framing) = estimate_cr3_framing(&sensor, reference) else { return (sensor, clipped) };
+/// The sensor proxy and its clip mask (same size), both moved to the camera JPEG's framing, and that framing (`None`
+/// when they stay as they are).
+fn align_cr3_framing(sensor: Rgb32f, clipped: Rgb32f, reference: &Rgb32f) -> (Rgb32f, Rgb32f, Option<Cr3Framing>) {
+    let Some(framing) = estimate_cr3_framing(&sensor, reference) else { return (sensor, clipped, None) };
     let apply = |image: &Rgb32f| {
         let (w, h) = (image.width, image.height);
         let mut aligned = Rgb32f::new(w, h);
@@ -311,7 +327,7 @@ fn align_cr3_framing(sensor: Rgb32f, clipped: Rgb32f, reference: &Rgb32f) -> (Rg
         }
         aligned
     };
-    (apply(&sensor), apply(&clipped))
+    (apply(&sensor), apply(&clipped), Some(framing))
 }
 
 /// Colour training pairs of one raw for a camera profile: white-balanced camera RGB (with the
