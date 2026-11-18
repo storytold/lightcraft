@@ -326,5 +326,6 @@
   "{name} is installed and in use: face recognition is on": "{name} está instalado y en uso: el reconocimiento facial está activado",
   "Bring photos in with File › Import Photos… ({keys}).": "Importa fotos con Archivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Vista › Vista de detalle ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Archivo › Exportar… · Archivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Archivo › Exportar… · Archivo › Imprimir… ({keys}).",
+  "{toast} · {n} photos": "{toast} · {n} fotos"
 }

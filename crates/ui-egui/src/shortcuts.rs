@@ -514,7 +514,9 @@ fn fixed_photo_keys(i: &egui::InputState, native: &dyn Fn(&str) -> bool, taken: 
 }
 
 /// Rating/flag/label keys: in Compare/Survey they act on the active photo only; `advance` (Shift+key) or
-/// Auto Advance then moves on (next candidate in Compare, next photo elsewhere).
+/// Auto Advance then moves on (next candidate in Compare, next photo elsewhere). The toast is the command's own
+/// (`app::cull_toast`, shown by `run`), made before the advance, so it names the photo that changed; a refused key
+/// gets none, only the reason `run` puts in the status line.
 fn cull(app: &mut LightcraftApp, id: &str, mut params: serde_json::Value, advance: bool) {
     use crate::panels::compare;
     compare::target_active(app, &mut params);
@@ -555,19 +557,6 @@ fn fire_alias(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: se
     }
 }
 
-/// The toast naming a flag.
-fn flag_toast(app: &mut LightcraftApp, ctx: &egui::Context, flag: lightcraft_catalog::Flag) {
-    use lightcraft_catalog::Flag;
-    app.toast(
-        ctx,
-        crate::i18n::tr(match flag {
-            Flag::Pick => "Flagged as Pick",
-            Flag::Reject => "Flagged as Reject",
-            Flag::None => "Unflagged",
-        }),
-    );
-}
-
 /// Run one fired command.
 fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fires: bool) {
     // a slideshow: ←/→ step (a cut)
@@ -575,7 +564,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         let _ = app.run(if f == "library.next" { "slideshow.next" } else { "slideshow.previous" }, json!({}));
         return;
     }
-    if fire_rating_key(app, ctx, f) || fire_grid_key(app, f) || fire_flag_key(app, ctx, f) {
+    if fire_rating_key(app, f) || fire_grid_key(app, f) || fire_flag_key(app, f) {
         return;
     }
     // in the full-screen preview (no panels) I cycles the info overlay instead
@@ -597,26 +586,17 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         app.toast(ctx, e);
     }
     match f {
-        "photo.pick" => flag_toast(app, ctx, lightcraft_catalog::Flag::Pick),
-        "photo.reject" => flag_toast(app, ctx, lightcraft_catalog::Flag::Reject),
-        "photo.unflag" => flag_toast(app, ctx, lightcraft_catalog::Flag::None),
         "edit.undo" => app.toast(ctx, crate::i18n::tr("Undo")),
         "edit.redo" => app.toast(ctx, crate::i18n::tr("Redo")),
         _ => {}
     }
 }
 
-/// Rating and colour label keys; whether `f` was one.
-fn fire_rating_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool {
+/// Rating and colour label keys; whether `f` was one. Their toast is the command's own (`app::cull_toast`).
+fn fire_rating_key(app: &mut LightcraftApp, f: &str) -> bool {
     if let Some(rest) = f.strip_prefix("rate:") {
         let (n, adv) = rest.split_once(':').unwrap_or(("0", "0"));
         cull(app, "photo.rate", json!({"rating": n.parse::<u8>().unwrap_or(0)}), adv == "1");
-        let label = if n == "0" {
-            crate::i18n::tr("Rating cleared").to_string()
-        } else {
-            crate::i18n::tr_format!("Rated {}", "★".repeat(n.parse().unwrap_or(0)))
-        };
-        app.toast(ctx, label);
     } else if matches!(f, "photo.decreaseRating" | "photo.increaseRating" | "photo.clearLabel") {
         cull(app, f, json!({}), false);
     } else if let Some(l) = f.strip_prefix("label:") {
@@ -671,24 +651,12 @@ fn extend_selection(app: &mut LightcraftApp, step: i64) {
     }
 }
 
-/// The flag keys; whether `f` was one.
-fn fire_flag_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool {
-    if matches!(f, "photo.cycleFlag" | "photo.increaseFlag" | "photo.decreaseFlag") {
-        // `, ⌘↑, ⌘↓: step the flag; the toast names the active photo's new state (read before Auto Advance moves on)
-        let active = app.session.active();
+/// The flag keys; whether `f` was one. Their toast is the command's own (`app::cull_toast`).
+fn fire_flag_key(app: &mut LightcraftApp, f: &str) -> bool {
+    if matches!(f, "photo.cycleFlag" | "photo.increaseFlag" | "photo.decreaseFlag")
+        || (matches!(f, "photo.pick" | "photo.reject" | "photo.unflag") && app.ui.right != crate::state::RightPanel::Crop)
+    {
         cull(app, f, json!({}), false);
-        if let Some(flag) = active.and_then(|id| app.session.catalog.photo(id)).map(|p| p.flag) {
-            flag_toast(app, ctx, flag);
-        }
-        true
-    } else if matches!(f, "photo.pick" | "photo.reject" | "photo.unflag") && app.ui.right != crate::state::RightPanel::Crop {
-        cull(app, f, json!({}), false);
-        let flag = match f {
-            "photo.pick" => lightcraft_catalog::Flag::Pick,
-            "photo.reject" => lightcraft_catalog::Flag::Reject,
-            _ => lightcraft_catalog::Flag::None,
-        };
-        flag_toast(app, ctx, flag);
         true
     } else {
         false
@@ -845,3 +813,7 @@ mod enable_filters_tests;
 #[cfg(test)]
 #[path = "shortcuts/tests_filter_bar_key.rs"]
 mod filter_bar_key_tests;
+
+#[cfg(test)]
+#[path = "shortcuts/tests_cull_feedback.rs"]
+mod cull_feedback_tests;
