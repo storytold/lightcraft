@@ -2570,5 +2570,6 @@
   "Tile cache": "图块缓存",
   "About map tiles and privacy (docs/map.md)": "关于地图图块与隐私（docs/map.md）",
   "Map tiles are off (Settings › Map)": "地图图块已关闭（设置 › 地图）",
-  "Measuring…": "正在测量…"
+  "Measuring…": "正在测量…",
+  "Measuring the map tile cache": "正在测量地图图块缓存"
 }

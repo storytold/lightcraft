@@ -3836,5 +3836,6 @@
   "Tile cache": "ფილების ქეში",
   "About map tiles and privacy (docs/map.md)": "რუკის ფილებისა და კონფიდენციალურობის შესახებ (docs/map.md)",
   "Map tiles are off (Settings › Map)": "რუკის ფილები გამორთულია (პარამეტრები › რუკა)",
-  "Measuring…": "იზომება…"
+  "Measuring…": "იზომება…",
+  "Measuring the map tile cache": "რუკის ფილების ქეშის გაზომვა"
 }

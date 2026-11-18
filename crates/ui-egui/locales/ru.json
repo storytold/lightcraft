@@ -2776,5 +2776,6 @@
   "Tile cache": "Кэш тайлов",
   "About map tiles and privacy (docs/map.md)": "О тайлах карты и конфиденциальности (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Тайлы карты выключены (Настройки › Карта)",
-  "Measuring…": "Измерение…"
+  "Measuring…": "Измерение…",
+  "Measuring the map tile cache": "Измерение кэша фрагментов карты"
 }

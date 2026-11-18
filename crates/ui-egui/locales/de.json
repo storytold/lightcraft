@@ -3651,5 +3651,6 @@
   "Tile cache": "Kachel-Cache",
   "About map tiles and privacy (docs/map.md)": "Über Kartenkacheln und Datenschutz (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Kartenkacheln sind aus (Einstellungen › Karte)",
-  "Measuring…": "Wird gemessen…"
+  "Measuring…": "Wird gemessen…",
+  "Measuring the map tile cache": "Kachel-Cache der Karte wird gemessen"
 }

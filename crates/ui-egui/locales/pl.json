@@ -2494,5 +2494,6 @@
   "Tile cache": "Pamięć podręczna kafelków",
   "About map tiles and privacy (docs/map.md)": "O kafelkach mapy i prywatności (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Kafelki mapy są wyłączone (Ustawienia › Mapa)",
-  "Measuring…": "Mierzenie…"
+  "Measuring…": "Mierzenie…",
+  "Measuring the map tile cache": "Mierzenie pamięci podręcznej kafelków mapy"
 }

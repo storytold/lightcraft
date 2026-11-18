@@ -2567,5 +2567,6 @@
   "Tile cache": "Кеш тайлів",
   "About map tiles and privacy (docs/map.md)": "Про тайли карти й приватність (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Тайли карти вимкнено (Налаштування › Карта)",
-  "Measuring…": "Вимірювання…"
+  "Measuring…": "Вимірювання…",
+  "Measuring the map tile cache": "Вимірювання кешу фрагментів мапи"
 }

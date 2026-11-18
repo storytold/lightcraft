@@ -2631,5 +2631,6 @@
   "Tile cache": "Rutcache",
   "About map tiles and privacy (docs/map.md)": "Om kartrutor och integritet (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Kartrutor är av (Inställningar › Karta)",
-  "Measuring…": "Mäter…"
+  "Measuring…": "Mäter…",
+  "Measuring the map tile cache": "Mäter kartrutornas cache"
 }

@@ -2415,5 +2415,6 @@
   "Tile cache": "Cache de blocos",
   "About map tiles and privacy (docs/map.md)": "Sobre blocos do mapa e privacidade (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Os blocos do mapa estão desligados (Configurações › Mapa)",
-  "Measuring…": "Medindo…"
+  "Measuring…": "Medindo…",
+  "Measuring the map tile cache": "Medindo o cache de blocos do mapa"
 }

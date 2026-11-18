@@ -2734,5 +2734,6 @@
   "Tile cache": "Cache delle tessere",
   "About map tiles and privacy (docs/map.md)": "Tessere della mappa e privacy (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Le tessere sono disattivate (Impostazioni › Mappa)",
-  "Measuring…": "Misurazione…"
+  "Measuring…": "Misurazione…",
+  "Measuring the map tile cache": "Misurazione della cache dei riquadri della mappa"
 }

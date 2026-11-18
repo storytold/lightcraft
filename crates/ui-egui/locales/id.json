@@ -2542,5 +2542,6 @@
   "Tile cache": "Cache ubin",
   "About map tiles and privacy (docs/map.md)": "Tentang ubin peta dan privasi (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Ubin peta mati (Pengaturan › Peta)",
-  "Measuring…": "Mengukur…"
+  "Measuring…": "Mengukur…",
+  "Measuring the map tile cache": "Mengukur cache ubin peta"
 }

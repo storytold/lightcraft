@@ -2571,5 +2571,6 @@
   "Tile cache": "圖磚快取",
   "About map tiles and privacy (docs/map.md)": "關於地圖圖磚與隱私（docs/map.md）",
   "Map tiles are off (Settings › Map)": "地圖圖磚已關閉（設定 › 地圖）",
-  "Measuring…": "正在測量…"
+  "Measuring…": "正在測量…",
+  "Measuring the map tile cache": "正在測量地圖圖磚快取"
 }

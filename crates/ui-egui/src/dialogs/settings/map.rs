@@ -1,5 +1,6 @@
 use super::widgets::{field, heading, hint, row};
 use super::{LightcraftApp, RichText, Tokens, json, register};
+use lightcraft_engine::activity::{Activity, Cancel};
 
 // ----------------------------------------------------------------------------------------- Map
 
@@ -11,6 +12,16 @@ const MAP_DOCS: &str = "https://github.com/storytold/lightcraft/blob/main/docs/m
 
 /// A measurement of the tile cache (bytes, tiles) running on a worker thread: it lands here.
 type CacheJob = std::sync::Arc<std::sync::Mutex<Option<(u64, u64)>>>;
+
+/// What measures the cache under a folder: bytes, tiles (a test puts a slow one in its place).
+type Measure = std::sync::Arc<dyn Fn(&std::path::Path) -> (u64, u64) + Send + Sync>;
+
+/// A measurement still running after this long shows in the activity stack, as the free-space read
+/// does: most caches answer at once, and the tab measures every 5 s, so a row for each would flash.
+const SHOW_ROW_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The activity stack's label for a slow measurement (English; the stack translates it).
+const MEASURING_LABEL: &str = "Measuring the map tile cache";
 
 /// What Settings ▸ Map remembers between frames (egui temporary memory: never saved): the custom
 /// server's fields as typed, the last refusal, and the cache size with when it was measured.
@@ -31,24 +42,58 @@ struct MapDraft {
 /// Measure the tile cache under `root` on a worker thread (it walks the cache folder, up to a
 /// million files): the result lands in the job. Where no thread can be started (the web) it is
 /// measured at once.
-fn measure_cache(root: Option<std::path::PathBuf>) -> CacheJob {
+fn measure_cache(root: Option<std::path::PathBuf>, activity: &Activity) -> CacheJob {
+    measure_cache_with(
+        root,
+        activity,
+        std::sync::Arc::new(|root: &std::path::Path| {
+            let info = std::panic::catch_unwind(|| lightcraft_engine::map::cache::info(root)).unwrap_or_default();
+            (info.bytes, info.tiles)
+        }),
+    )
+}
+
+fn store(job: &CacheJob, r: (u64, u64)) {
+    *job.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(r);
+}
+
+/// [`measure_cache`] with `measure` doing the walk. The walk runs on its own thread; once it has
+/// taken more than [`SHOW_ROW_AFTER`] the worker shows it in the activity stack (it can't stop:
+/// `Cancel::No`) until its result has landed in the job.
+fn measure_cache_with(root: Option<std::path::PathBuf>, activity: &Activity, measure: Measure) -> CacheJob {
     let job = CacheJob::default();
     let Some(root) = root else {
-        *job.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((0, 0));
+        store(&job, (0, 0));
         return job;
     };
-    let measure = |root: &std::path::Path| {
-        let info = std::panic::catch_unwind(|| lightcraft_engine::map::cache::info(root)).unwrap_or_default();
-        (info.bytes, info.tiles)
-    };
-    let out = job.clone();
-    let worker_root = root.clone();
+    let (out, worker_root, activity, inline) = (job.clone(), root.clone(), activity.clone(), measure.clone());
     let started = std::thread::Builder::new().name("map-cache-size".into()).spawn(move || {
-        let r = measure(&worker_root);
-        *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(r);
+        let row = |a: &Activity| a.start("cache", MEASURING_LABEL, Cancel::No);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (walk, walk_root) = (measure.clone(), worker_root.clone());
+        let walking = std::thread::Builder::new().name("map-cache-walk".into()).spawn(move || {
+            let _ = tx.send(walk(&walk_root));
+        });
+        // `_row` is dropped only after the result is stored
+        let (r, _row) = match walking {
+            Ok(_) => match rx.recv_timeout(SHOW_ROW_AFTER) {
+                Ok(r) => (r, None),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    let g = row(&activity);
+                    (rx.recv().unwrap_or_default(), Some(g))
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => ((0, 0), None),
+            },
+            // no second thread: the walk runs here, shown from the start
+            Err(_) => {
+                let g = row(&activity);
+                (measure(&worker_root), Some(g))
+            }
+        };
+        store(&out, r);
     });
     if started.is_err() {
-        *job.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(measure(&root));
+        store(&job, inline(&root));
     }
     job
 }
@@ -147,7 +192,7 @@ pub(super) fn map_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     if d.measuring.is_none() && d.cache.is_none_or(|(_, _, at)| now - at > 5.0) {
-        d.measuring = Some(measure_cache(app.session.map.cache_root.clone()));
+        d.measuring = Some(measure_cache(app.session.map.cache_root.clone(), &app.session.activity));
         ui.ctx().request_repaint();
     }
     let (bytes, tiles, _) = d.cache.unwrap_or_default();
@@ -250,4 +295,53 @@ fn esri_key(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             "Give the key only the static basemap tiles privilege. It is kept in LightCraft's settings folder (map-keys.json), never in your library, and sent only to Esri's tile server. Choose the style in the Map view's Map Style list.",
         ),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::{Duration, Instant};
+
+    fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+        let until = Instant::now() + Duration::from_secs(10);
+        while !done() {
+            assert!(Instant::now() < until, "{what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// A cache that takes its time to measure (a big one on a slow drive) shows in the activity
+    /// stack until its size has landed (CodeRabbit on #4243).
+    #[test]
+    fn a_slow_measurement_shows_in_the_activity_stack_until_it_lands() {
+        let activity = Activity::default();
+        let (release, wait) = mpsc::channel::<()>();
+        let wait = Mutex::new(wait);
+        let job = measure_cache_with(
+            Some(std::env::temp_dir()),
+            &activity,
+            Arc::new(move |_: &std::path::Path| {
+                // answers once the test lets it (or after 10 s, so a broken test can't hang)
+                let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(10));
+                (7, 3)
+            }),
+        );
+        let shown = |a: &Activity| a.list().iter().any(|t| t.kind == "cache" && t.label == MEASURING_LABEL && !t.cancellable);
+        wait_for("the slow measurement never showed in the activity stack", || shown(&activity));
+        assert_eq!(*job.lock().unwrap(), None, "still measuring");
+        release.send(()).unwrap();
+        wait_for("the size never landed", || job.lock().unwrap().is_some());
+        assert_eq!(*job.lock().unwrap(), Some((7, 3)));
+        wait_for("the row stayed after the size landed", || !shown(&activity));
+    }
+
+    /// Without a cache folder there is nothing to walk: no thread, no row.
+    #[test]
+    fn no_cache_folder_measures_nothing() {
+        let activity = Activity::default();
+        let job = measure_cache_with(None, &activity, Arc::new(|_: &std::path::Path| (1, 1)));
+        assert_eq!(*job.lock().unwrap(), Some((0, 0)));
+        assert!(activity.list().is_empty());
+    }
 }

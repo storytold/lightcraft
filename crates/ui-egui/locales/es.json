@@ -2571,5 +2571,6 @@
   "Tile cache": "Caché de teselas",
   "About map tiles and privacy (docs/map.md)": "Sobre las teselas y la privacidad (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Las teselas están desactivadas (Ajustes › Mapa)",
-  "Measuring…": "Midiendo…"
+  "Measuring…": "Midiendo…",
+  "Measuring the map tile cache": "Midiendo la caché de teselas del mapa"
 }

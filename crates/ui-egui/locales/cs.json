@@ -2616,5 +2616,6 @@
   "Tile cache": "Mezipaměť dlaždic",
   "About map tiles and privacy (docs/map.md)": "O mapových dlaždicích a soukromí (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Mapové dlaždice jsou vypnuté (Nastavení › Mapa)",
-  "Measuring…": "Měření…"
+  "Measuring…": "Měření…",
+  "Measuring the map tile cache": "Měření mezipaměti mapových dlaždic"
 }

@@ -2569,5 +2569,6 @@
   "Tile cache": "タイルキャッシュ",
   "About map tiles and privacy (docs/map.md)": "マップタイルとプライバシーについて（docs/map.md）",
   "Map tiles are off (Settings › Map)": "マップタイルはオフです（設定 › マップ）",
-  "Measuring…": "測定中…"
+  "Measuring…": "測定中…",
+  "Measuring the map tile cache": "地図タイルのキャッシュを測定中"
 }

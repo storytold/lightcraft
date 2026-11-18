@@ -3753,5 +3753,6 @@
   "Tile cache": "Cache des tuiles",
   "About map tiles and privacy (docs/map.md)": "À propos des tuiles et de la confidentialité (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Les tuiles sont désactivées (Réglages › Carte)",
-  "Measuring…": "Mesure en cours…"
+  "Measuring…": "Mesure en cours…",
+  "Measuring the map tile cache": "Mesure du cache des tuiles de carte"
 }

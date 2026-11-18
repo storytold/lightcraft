@@ -2527,5 +2527,6 @@
   "Tile cache": "Ruutuvälimuisti",
   "About map tiles and privacy (docs/map.md)": "Karttaruuduista ja yksityisyydestä (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Karttaruudut ovat pois (Asetukset › Kartta)",
-  "Measuring…": "Mitataan…"
+  "Measuring…": "Mitataan…",
+  "Measuring the map tile cache": "Mitataan karttaruutujen välimuistia"
 }

@@ -2855,5 +2855,6 @@
   "Tile cache": "Bộ đệm ô bản đồ",
   "About map tiles and privacy (docs/map.md)": "Về ô bản đồ và quyền riêng tư (docs/map.md)",
   "Map tiles are off (Settings › Map)": "Ô bản đồ đang tắt (Cài đặt › Bản đồ)",
-  "Measuring…": "Đang đo…"
+  "Measuring…": "Đang đo…",
+  "Measuring the map tile cache": "Đang đo bộ đệm ô bản đồ"
 }
