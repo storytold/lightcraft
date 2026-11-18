@@ -7,7 +7,8 @@ fn main() {
     let lib = lightcraft_scenes::demo_library();
     let (cw, ch, cols) = (360usize, 240usize, 6usize);
     let rows = lib.len().div_ceil(cols);
-    let mut sheet = image::RgbImage::new((cw * cols) as u32, (ch * rows) as u32);
+    let (sw, sh) = (cw * cols, ch * rows);
+    let mut sheet = vec![0u8; sw * sh * 3];
     let m = REC2020.to_space(&SRGB);
     for (i, s) in lib.iter().enumerate() {
         let img = s.render_fit(cw.min(ch * 3 / 2).max(ch));
@@ -20,10 +21,13 @@ fn main() {
                     let v = v.max(0.0);
                     encode_srgb8(v / (1.0 + v * 0.35))
                 };
-                sheet.put_pixel((ox + x) as u32, (oy + y) as u32, image::Rgb([t(c[0]), t(c[1]), t(c[2])]));
+                let idx = ((oy + y) * sw + (ox + x)) * 3;
+                sheet[idx..idx + 3].copy_from_slice(&[t(c[0]), t(c[1]), t(c[2])]);
             }
         }
     }
-    sheet.save(&out).unwrap();
+    let img = craft_image_codecs::Image::from_u8(sw as u32, sh as u32, craft_image_codecs::ChannelLayout::Rgb, sheet).unwrap();
+    let png = craft_image_codecs::encode(&img, craft_image_codecs::Format::Png, &Default::default()).unwrap();
+    std::fs::write(&out, png).unwrap();
     println!("{out}");
 }
