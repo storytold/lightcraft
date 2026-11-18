@@ -165,6 +165,9 @@ pub struct SidecarData {
     /// [`merge_into`] puts boxes drawn on the photo as stored where the upright photo has them (#2674).
     pub regions_drawn_on: Option<(f64, f64)>,
     pub orientation: Option<lightcraft_meta::Orientation>,
+    /// The photo file's own orientation, read from the file for a photo whose catalog doesn't know it yet (one
+    /// catalogued before it was kept; see [`Session::read_sidecar_op`]): [`merge_into`] keeps it.
+    pub file_orientation: Option<lightcraft_meta::Orientation>,
     /// Capture time (ISO 8601) from `exif:DateTimeOriginal`, `photoshop:DateCreated` or
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
@@ -341,6 +344,9 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     }
     if let Some(k) = &sc.keywords {
         m.keywords = k.clone();
+    }
+    if sc.file_orientation.is_some() {
+        m.file_orientation = sc.file_orientation;
     }
     if let Some(r) = &sc.regions {
         // the detector's unnamed boxes are never written to the file (`file_regions`): reading it keeps them
@@ -669,10 +675,9 @@ const ORIENTATION_SPAN: u64 = 1 << 20;
 pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
     // the regions go into the photo's own sidecar only: an export's packet describes the picture as exported, which a
     // crop or a resize leaves the boxes no longer fit
-    // the file's own orientation decides how the boxes are written (`with_regions`); a photo with none to write
-    // doesn't need its file read
-    let orientation = if file_regions(p).is_empty() { None } else { file_path(p).and_then(file_orientation) };
-    with_regions(sidecar_packet_with(p, cat, false), p, orientation)
+    // the file's own orientation, as the catalog keeps it, decides how the boxes are written (`with_regions`): a save
+    // never reads the photo file (for a raw that would be the whole file, for every photo of a batch)
+    with_regions(sidecar_packet_with(p, cat, false), p, p.meta.file_orientation)
 }
 
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
@@ -1569,9 +1574,29 @@ impl Session {
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
-        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else { return Ok(None) };
+        // a photo catalogued before the file's orientation was kept: Read Metadata from File reads it, once, so its
+        // face boxes are written in the frame the file is stored in from then on (the file is read at most once here)
+        let mut known: Option<Option<lightcraft_meta::Orientation>> = None;
+        let mut orientation_of_file = || *known.get_or_insert_with(|| file_orientation(orig));
+        let backfill = if p.meta.file_orientation.is_none() { orientation_of_file() } else { None };
+        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else {
+            // no packet to read; the orientation alone is still news
+            return match backfill {
+                Some(o) => Ok(Some((
+                    self.sidecar_op(id, SidecarData { file_orientation: Some(o), ..SidecarData::default() })?,
+                    PathBuf::from(orig),
+                    Vec::new(),
+                ))),
+                None => Ok(None),
+            };
+        };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
-        let sc = sc.with_file_orientation(orig);
+        // (as `with_file_orientation`, reusing a read already made)
+        let sc = match sc.regions_drawn_on {
+            Some(_) => SidecarData { orientation: orientation_of_file().or(sc.orientation), ..sc },
+            None => sc,
+        };
+        let sc = SidecarData { file_orientation: backfill, ..sc };
         let mut warnings = sc.warnings.clone();
         for warning in &mut warnings {
             warning.path = orig.to_string();
@@ -2668,6 +2693,37 @@ mod tests {
             }
             let _ = std::fs::remove_dir_all(path.parent().unwrap());
         }
+    }
+
+    #[test]
+    fn a_save_takes_the_orientation_from_the_catalog_and_never_reads_the_file() {
+        let mut p = photo();
+        p.meta.regions = vec![region(0.1, 0.2, 0.3, 0.6, lightcraft_meta::RegionKind::Face, Some("Ann"), None)];
+        // no file at the photo's path: the catalog's orientation is enough
+        p.meta.file_orientation = Some(lightcraft_meta::Orientation::Rotate90);
+        assert!(sidecar_packet(&p, &lightcraft_catalog::Catalog::new()).contains("<mwg-rs:Rotation>-1.57080</mwg-rs:Rotation>"));
+        // a turned file the catalog knows nothing about: not read, the boxes are written upright
+        let dir = std::env::temp_dir().join(format!("lc-no-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("t.jpg");
+        let img = lightcraft_raster::Rgba8::from_fn(32, 24, |_, _| [1, 2, 3, 255]);
+        let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata {
+            orientation: Some(lightcraft_meta::Orientation::Rotate90),
+            ..Default::default()
+        });
+        let bytes = lightcraft_codecs::encode_jpeg(
+            &lightcraft_codecs::EncodeImage::rgba8(&img),
+            90,
+            Default::default(),
+            &lightcraft_codecs::EncodeMeta { exif: Some(&exif), ..Default::default() },
+        )
+        .unwrap();
+        std::fs::write(&file, bytes).unwrap();
+        assert_eq!(file_orientation(&file.to_string_lossy()), Some(lightcraft_meta::Orientation::Rotate90));
+        p.source = Source::File { path: file.to_string_lossy().into() };
+        p.meta.file_orientation = None;
+        assert!(!sidecar_packet(&p, &lightcraft_catalog::Catalog::new()).contains("mwg-rs:Rotation"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -38,6 +38,8 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         keywords: lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords),
         regions: m.regions.clone(),
         focus: m.focus.clone(),
+        // (the import keeps `ProbeInfo::orientation`, which for a raw is the decoder's)
+        file_orientation: None,
     };
     (meta, m.capture_time.as_ref().map(|d| d.to_iso()))
 }

@@ -1338,6 +1338,8 @@ pub(crate) fn apply_prepared(s: &mut crate::Session, mut data: CatalogImport, co
                 p.meta.iso = m.iso;
                 p.meta.focus = m.focus.clone();
             }
+            // the same bytes turn upright the same way
+            p.meta.file_orientation = duplicate.meta.file_orientation;
             // the settings a file import gives it (as-shot white balance, embedded lens
             // corrections, the default preset); the catalog's settings apply on top
             crate::import::apply_import_defaults(s, &mut p);

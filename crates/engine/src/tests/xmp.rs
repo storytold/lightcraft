@@ -2040,6 +2040,7 @@ fn a_face_on_a_turned_photo_is_written_in_the_stored_frame_and_read_back_upright
     s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
     let id = s.catalog.photos().next().unwrap().id;
     assert_eq!((s.catalog.photo(id).unwrap().width, s.catalog.photo(id).unwrap().height), (24, 32), "upright");
+    assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, Some(lightcraft_meta::Orientation::Rotate90), "kept at import");
     let rect = Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 };
     let mut meta = s.catalog.photo(id).unwrap().meta.clone();
     meta.regions = vec![Region { rect, kind: RegionKind::Face, name: Some("Ann".into()), description: None }];
@@ -2101,4 +2102,46 @@ fn a_removed_face_leaves_a_second_library_too_and_undo_brings_it_back() {
     b.execute("photo.readMetadataFromFile", &json!({"ids": [idb.0]})).unwrap();
     assert_eq!(names(&b, idb), [Some("Jane".to_string()), None]);
     let _ = std::fs::remove_dir_all(&src);
+}
+
+/// Review of #4512: a save never reads the photo file for its orientation; a photo catalogued before the orientation
+/// was kept has its boxes written upright until Read Metadata from File reads it (with or without a packet to read).
+#[test]
+fn the_orientation_comes_from_the_catalog_and_read_metadata_fills_it_in() {
+    use lightcraft_meta::{Orientation, Rect, Region, RegionKind};
+    for with_packet in [true, false] {
+        let src = temp_dir(if with_packet { "face-orientation-packet" } else { "face-orientation-bare" });
+        write_turned_jpeg(&src.join("t.jpg"), None);
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+        let id = s.catalog.photos().next().unwrap().id;
+        // as a photo catalogued before: no orientation kept
+        let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+        meta.file_orientation = None;
+        if with_packet {
+            meta.regions = vec![Region {
+                rect: Rect { x0: 0.1, y0: 0.2, x1: 0.3, y1: 0.6 },
+                kind: RegionKind::Face,
+                name: Some("Ann".into()),
+                description: None,
+            }];
+        }
+        s.commit("Old", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+        if with_packet {
+            // saved upright: the file isn't read for it
+            s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+            assert!(!std::fs::read_to_string(src.join("t.xmp")).unwrap().contains("mwg-rs:Rotation"));
+        }
+        // Read Metadata from File reads it
+        s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+        assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, Some(Orientation::Rotate90), "packet: {with_packet}");
+        if with_packet {
+            // the same box, read back upright, and written in the stored frame from now on
+            let r = s.catalog.photo(id).unwrap().meta.regions[0].rect;
+            assert!([(r.x0, 0.1), (r.y0, 0.2), (r.x1, 0.3), (r.y1, 0.6)].iter().all(|(a, b)| (a - b).abs() < 1e-5), "{r:?}");
+            s.execute("photo.saveMetadataToFile", &json!({"ids": [id.0]})).unwrap();
+            assert!(std::fs::read_to_string(src.join("t.xmp")).unwrap().contains("<mwg-rs:Rotation>-1.57080</mwg-rs:Rotation>"));
+        }
+        let _ = std::fs::remove_dir_all(&src);
+    }
 }
