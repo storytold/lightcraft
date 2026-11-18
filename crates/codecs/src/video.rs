@@ -831,13 +831,15 @@ pub fn quantizer(quality: u8) -> usize {
 /// the samples as they come out (in order: no frame reordering).
 pub struct Av1Encoder {
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    ctx: rav1e::Context<u8>,
-    /// Each frame sent so far: its duration (by input frame number).
-    #[cfg_attr(not(all(feature = "avif", not(target_arch = "wasm32"))), allow(dead_code))]
+    enc: craft_video::av1::LargeEncoder,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     durations: Vec<u64>,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    returned: usize,
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    failed: bool,
     width: usize,
     height: usize,
-    seq_header: Option<Vec<u8>>,
 }
 
 impl Av1Encoder {
@@ -848,30 +850,12 @@ impl Av1Encoder {
         }
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            use rav1e::prelude::*;
-            let mut ec = EncoderConfig::with_speed_preset(c.speed.clamp(1, 10));
-            ec.width = w;
-            ec.height = h;
-            ec.time_base = Rational::new(1, u64::from(c.fps));
-            ec.bit_depth = 8;
-            ec.chroma_sampling = ChromaSampling::Cs420;
-            ec.pixel_range = PixelRange::Limited;
-            ec.color_description = Some(ColorDescription {
-                color_primaries: ColorPrimaries::BT709,
-                transfer_characteristics: TransferCharacteristics::BT709,
-                matrix_coefficients: MatrixCoefficients::BT709,
-            });
-            // in order, one shown frame per packet: samples map 1:1 to the frames sent
-            ec.low_latency = true;
-            let q = quantizer(c.quality);
-            ec.quantizer = q;
-            ec.min_quantizer = q.min(255) as u8;
-            ec.min_key_frame_interval = 1;
-            ec.max_key_frame_interval = 120;
-            // tiles are what rav1e encodes in parallel (16 measured best for 1080p on 32 threads)
-            ec.tiles = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(2, 16);
-            let ctx: Context<u8> = Config::new().with_encoder_config(ec).new_context().map_err(|e| bad(format!("AV1: {e}")))?;
-            Ok(Av1Encoder { ctx, durations: Vec::new(), width: w, height: h, seq_header: None })
+            use craft_video::av1::{EncoderConfig, RateControl};
+            let mut ec = EncoderConfig::new(w as u32, h as u32, c.fps, 1);
+            ec.rate = RateControl::ConstantQ(quantizer(c.quality) as u8);
+            ec.keyint = 120;
+            let enc = craft_video::av1::LargeEncoder::with_exact_quantizer(&ec, c.speed).map_err(|e| bad(format!("AV1: {e}")))?;
+            Ok(Av1Encoder { enc, durations: Vec::new(), returned: 0, failed: false, width: w, height: h })
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
@@ -885,10 +869,16 @@ impl Av1Encoder {
         (self.width, self.height)
     }
 
-    /// The configuration record for the container ([`av1_config`]), once the first sample (with
-    /// the sequence header) has come out.
+    /// The configuration record for the container (`av1C`), once the first sample has come out.
     pub fn config_record(&self) -> Option<Vec<u8>> {
-        self.seq_header.as_ref().map(|s| av1_config(s))
+        #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+        {
+            self.enc.av1c()
+        }
+        #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
+        {
+            None
+        }
     }
 
     /// Encode `rgba` (`width × height` of [`Self::size`]) shown for `periods` frame periods;
@@ -898,17 +888,19 @@ impl Av1Encoder {
         let (y, u, v) = yuv420(rgba, self.width, self.height)?;
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            let mut frame = self.ctx.new_frame();
-            for (plane, (data, w)) in frame.planes.iter_mut().zip([(&y, self.width), (&u, self.width / 2), (&v, self.width / 2)]) {
-                plane.copy_from_raw_u8(data, w, 1);
+            if self.failed {
+                return Err(bad("AV1 encoder failed earlier"));
             }
-            let params = rav1e::prelude::FrameParameters {
-                frame_type_override: if key { rav1e::prelude::FrameTypeOverride::Key } else { rav1e::prelude::FrameTypeOverride::No },
-                ..Default::default()
-            };
-            self.ctx.send_frame((frame, params)).map_err(|e| bad(format!("AV1: {e}")))?;
+            let y16: Vec<u16> = y.into_iter().map(u16::from).collect();
+            let u16_: Vec<u16> = u.into_iter().map(u16::from).collect();
+            let v16: Vec<u16> = v.into_iter().map(u16::from).collect();
+            let frame = craft_video::av1::Frame { y: &y16, u: &u16_, v: &v16, y_stride: self.width, uv_stride: self.width / 2 };
             self.durations.push(periods.max(1));
-            self.drain()
+            let packets = self.enc.push(&frame, key).map_err(|e| {
+                self.failed = true;
+                bad(format!("AV1: {e}"))
+            })?;
+            self.samples(packets)
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         {
@@ -921,33 +913,38 @@ impl Av1Encoder {
     pub fn finish(&mut self) -> Result<Vec<Sample>> {
         #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
         {
-            self.ctx.flush();
-            self.drain()
+            if self.failed {
+                return Err(bad("AV1 encoder failed earlier"));
+            }
+            let packets = self.enc.finish().map_err(|e| {
+                self.failed = true;
+                bad(format!("AV1: {e}"))
+            })?;
+            let samples = self.samples(packets)?;
+            if self.returned != self.durations.len() {
+                self.failed = true;
+                return Err(bad("AV1 encoder did not return every input frame"));
+            }
+            Ok(samples)
         }
         #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
         Err(bad("AV1 video encoding is not available in this build"))
     }
 
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-    fn drain(&mut self) -> Result<Vec<Sample>> {
-        use rav1e::prelude::*;
-        let mut out = Vec::new();
-        loop {
-            match self.ctx.receive_packet() {
-                Ok(p) => {
-                    let (data, seq) = to_sample_data(&p.data)?;
-                    if self.seq_header.is_none() {
-                        self.seq_header = seq;
-                    }
-                    let duration = usize::try_from(p.input_frameno).ok().and_then(|i| self.durations.get(i)).copied().unwrap_or(1);
-                    out.push(Sample { data, key: p.frame_type == FrameType::KEY, duration });
-                }
-                Err(EncoderStatus::Encoded) => {}
-                Err(EncoderStatus::NeedMoreData | EncoderStatus::LimitReached) => break,
-                Err(e) => return Err(bad(format!("AV1: {e}"))),
-            }
+    fn samples(&mut self, packets: Vec<craft_video::av1::BufferedPacket>) -> Result<Vec<Sample>> {
+        let mut samples = Vec::with_capacity(packets.len());
+        for packet in packets {
+            let index = usize::try_from(packet.input_frame_number).ok();
+            let duration = index.filter(|&i| i == self.returned).and_then(|i| self.durations.get(i)).copied();
+            let Some(duration) = duration else {
+                self.failed = true;
+                return Err(bad("AV1 encoder returned an unknown or out-of-order frame"));
+            };
+            self.returned += 1;
+            samples.push(Sample { data: packet.packet.data, key: packet.packet.keyframe, duration });
         }
-        Ok(out)
+        Ok(samples)
     }
 }
 
@@ -1141,7 +1138,8 @@ mod tests {
         out.extend(e.finish().unwrap());
         assert_eq!(out.len(), 4, "one sample per frame sent");
         assert!(out[0].key);
-        assert_eq!(out.iter().map(|s| s.duration).sum::<u64>(), 56);
+        assert!(out[3].key, "requested key frame");
+        assert_eq!(out.iter().map(|s| s.duration).collect::<Vec<_>>(), [24, 1, 1, 30]);
         for s in &out {
             assert!(obus(&s.data).unwrap().iter().all(|(k, _)| *k != OBU_TEMPORAL_DELIMITER));
         }
@@ -1154,5 +1152,75 @@ mod tests {
         }
         let d = m.finish().unwrap().into_inner();
         assert_eq!(boxes(&d, 0..d.len()).len(), 3);
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_buffers_a_large_frame_and_preserves_its_duration() {
+        let c = VideoConfig { width: 4112, height: 16, fps: 30, quality: 60, speed: 10 };
+        let mut encoder = Av1Encoder::new(&c).unwrap();
+        let mut samples = encoder.push(&vec![[80, 120, 180, 255]; 4112 * 16], 7, true).unwrap();
+        samples.extend(encoder.finish().unwrap());
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].duration, 7);
+        assert!(samples[0].key);
+        assert!(encoder.config_record().is_some());
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_preserves_frame_sizes_above_the_old_area_limit() {
+        for (width, height) in [(5120, 2160), (4096, 4096)] {
+            let cfg = VideoConfig { width, height, fps: 30, quality: 60, speed: 10 };
+            let mut encoder = Av1Encoder::new(&cfg).unwrap();
+            let mut samples = encoder.push(&vec![[80, 120, 180, 255]; width as usize * height as usize], 7, true).unwrap();
+            samples.extend(encoder.finish().unwrap());
+            assert_eq!(samples.len(), 1, "{width}x{height}");
+            assert!(!samples[0].data.is_empty());
+            assert_eq!(samples[0].duration, 7);
+            assert!(samples[0].key);
+            assert!(encoder.config_record().is_some());
+        }
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_quality_100_preserves_the_exact_zero_quantizer() {
+        assert_eq!(quantizer(100), 0);
+        let image: Vec<[u8; 4]> = (0..64 * 48).map(|i| [(i * 13) as u8, (i * 41) as u8, (i * 73) as u8, 255]).collect();
+        let cfg = VideoConfig { width: 64, height: 48, fps: 24, quality: 100, speed: 10 };
+        let mut actual = Av1Encoder::new(&cfg).unwrap();
+        let mut samples = actual.push(&image, 7, true).unwrap();
+        samples.extend(actual.finish().unwrap());
+
+        let (y, u, v) = yuv420(&image, 64, 48).unwrap();
+        let y: Vec<u16> = y.into_iter().map(u16::from).collect();
+        let u: Vec<u16> = u.into_iter().map(u16::from).collect();
+        let v: Vec<u16> = v.into_iter().map(u16::from).collect();
+        let frame = craft_video::av1::Frame { y: &y, u: &u, v: &v, y_stride: 64, uv_stride: 32 };
+        let mut ec = craft_video::av1::EncoderConfig::new(64, 48, 24, 1);
+        ec.rate = craft_video::av1::RateControl::ConstantQ(0);
+        ec.keyint = 120;
+        let mut exact = craft_video::av1::LargeEncoder::with_exact_quantizer(&ec, 10).unwrap();
+        let mut expected = exact.push(&frame, true).unwrap();
+        expected.extend(exact.finish().unwrap());
+        assert_eq!(samples.len(), 1);
+        assert_eq!(samples[0].data, expected[0].packet.data);
+        assert_eq!(samples[0].duration, 7);
+        assert!(samples[0].key);
+    }
+
+    #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
+    #[test]
+    fn av1_speed_affects_normal_sized_frames() {
+        let image: Vec<[u8; 4]> = (0..64 * 48).map(|i| [(i * 13) as u8, (i * 41) as u8, (i * 73) as u8, 255]).collect();
+        let encode = |speed| {
+            let c = VideoConfig { width: 64, height: 48, fps: 24, quality: 60, speed };
+            let mut encoder = Av1Encoder::new(&c).unwrap();
+            let mut samples = encoder.push(&image, 1, true).unwrap();
+            samples.extend(encoder.finish().unwrap());
+            samples.remove(0).data
+        };
+        assert_ne!(encode(1), encode(10), "AV1 speed must reach the shared encoder");
     }
 }
