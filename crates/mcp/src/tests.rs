@@ -602,3 +602,32 @@ fn render_and_screenshot_pngs_go_through_a_private_folder() {
         folders.push(dir);
     }
 }
+
+/// Issue #4496: the Gemini API takes only string `enum`s in a tool's parameters and refuses the whole tool list
+/// (400) for one integer enum, so no helper tool declares one.
+#[test]
+fn every_enum_in_the_helper_tools_is_a_list_of_strings() {
+    fn check(at: &str, v: &Value, bad: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                if let Some(e) = m.get("enum")
+                    && !e.as_array().is_some_and(|a| !a.is_empty() && a.iter().all(Value::is_string))
+                {
+                    bad.push(format!("{at}: {e}"));
+                }
+                for (k, x) in m {
+                    check(&format!("{at}.{k}"), x, bad);
+                }
+            }
+            Value::Array(a) => a.iter().enumerate().for_each(|(i, x)| check(&format!("{at}[{i}]"), x, bad)),
+            _ => {}
+        }
+    }
+    let mut bad = Vec::new();
+    for has_ui in [false, true] {
+        for t in crate::tools::helper_tools(has_ui) {
+            check(t["name"].as_str().unwrap_or("?"), &t["inputSchema"], &mut bad);
+        }
+    }
+    assert!(bad.is_empty(), "non-string enums: {bad:?}");
+}
