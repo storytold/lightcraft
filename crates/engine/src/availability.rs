@@ -323,9 +323,12 @@ mod tests {
         }
         assert_eq!(a.exists("here"), Some(true));
         assert_eq!(a.exists("gone"), Some(false));
+        // Cache publication precedes its wake callback. Check these two notifications before
+        // querying another unknown path, whose notification must not satisfy this assertion.
+        wait_until("availability wake notifications", || woke.load(Ordering::SeqCst) >= 2);
+        assert!(woke.load(Ordering::SeqCst) >= 2);
         assert!(a.is_offline("gone") && !a.is_offline("here") && !a.is_offline("unknown"));
         assert_eq!(on_caller.load(Ordering::SeqCst), 0, "never probed on the calling thread");
-        assert!(woke.load(Ordering::SeqCst) >= 2);
         assert!(a.gone_generation() >= 2);
     }
 
