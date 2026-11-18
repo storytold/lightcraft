@@ -1515,7 +1515,32 @@ fn correction_descriptions(data: &str) -> Vec<(usize, usize)> {
         if data.get(i..).is_some_and(|r| r.starts_with("</rdf:RDF>")) {
             break;
         }
-        if data.get(i..).is_some_and(|r| r.starts_with("<?") || r.starts_with("<!")) {
+        let rest = data.get(i..).unwrap_or_default();
+        if rest.starts_with("<!--") {
+            if let Some(rel) = data[i..].find("-->") {
+                i += rel + 3;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<![CDATA[") {
+            if let Some(rel) = data[i..].find("]]>") {
+                i += rel + 3;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<?") {
+            if let Some(rel) = data[i..].find("?>") {
+                i += rel + 2;
+            } else {
+                break;
+            }
+            continue;
+        }
+        if rest.starts_with("<!") {
             if let Some(rel) = data[i + 2..].find('>') {
                 i += 2 + rel + 1;
             } else {
