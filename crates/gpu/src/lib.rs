@@ -31,6 +31,8 @@ use lightcraft_raster::Rgb32f;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod backend;
+#[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
+pub mod bm3d;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
@@ -43,9 +45,18 @@ pub mod nn;
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
+#[cfg(not(target_arch = "wasm32"))]
+mod vram;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use render::GpuStages;
+pub use render::{DisplayFrame, GpuStages, Output};
+/// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).
+#[cfg(not(target_arch = "wasm32"))]
+pub use wgpu;
+
+/// Unit tests that create the device or swap the crash sentinel's path take turns.
+#[cfg(test)]
+pub(crate) static DEVICE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 /// Set when a GPU render failed: the process stays on the CPU from then on.
@@ -75,12 +86,8 @@ fn record_fallback(reason: String) {
 /// E.g. "disabled by LIGHTCRAFT_GPU=0", "software adapter (llvmpipe …) skipped", "device lost …".
 /// Never blocks.
 pub fn unavailable_reason() -> Option<String> {
-    if env_disabled() {
-        #[cfg(not(target_arch = "wasm32"))]
-        if backend::env_off() {
-            return Some("disabled by LIGHTCRAFT_GPU_BACKEND=off".into());
-        }
-        return Some("disabled by LIGHTCRAFT_GPU=0".into());
+    if let Some(why) = env_off_reason() {
+        return Some(why.into());
     }
     if !ENABLED.load(Ordering::Relaxed) {
         return Some("disabled by the GPU rendering preference (app.gpu)".into());
@@ -197,7 +204,9 @@ pub fn reset_failures() {
 /// Allow or forbid GPU rendering at runtime (a preference). `LIGHTCRAFT_GPU=0` forbids it for the
 /// whole process regardless.
 pub fn set_enabled(on: bool) {
-    ENABLED.store(on, Ordering::Relaxed);
+    // (SeqCst, as `warm_up`'s thread reads it after releasing its start: a switch back on is
+    // never missed there)
+    ENABLED.store(on, Ordering::SeqCst);
 }
 
 /// Whether GPU rendering is allowed (environment, preference, no earlier failure — real, or
@@ -245,10 +254,24 @@ pub fn wait_idle(timeout: std::time::Duration) -> bool {
 /// environment switches and the rendering preference, but not a render-device failure (the devices are separate).
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn switched_off() -> Option<String> {
-    if env_disabled() {
-        return Some(if backend::env_off() { "disabled by LIGHTCRAFT_GPU_BACKEND=off" } else { "disabled by LIGHTCRAFT_GPU=0" }.into());
+    if let Some(why) = env_off_reason() {
+        return Some(why.into());
     }
     (!ENABLED.load(Ordering::Relaxed)).then(|| "disabled by the GPU rendering preference (app.gpu)".into())
+}
+
+/// Why the environment switches the GPU off for the whole process (`LIGHTCRAFT_GPU=0` or
+/// `LIGHTCRAFT_GPU_BACKEND=off`), or `None`. Code with a GPU path of its own (the SAM 3 model on
+/// Metal) follows it too.
+pub fn env_off_reason() -> Option<&'static str> {
+    if !env_disabled() {
+        return None;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if backend::env_off() {
+        return Some("disabled by LIGHTCRAFT_GPU_BACKEND=off");
+    }
+    Some("disabled by LIGHTCRAFT_GPU=0")
 }
 
 /// `LIGHTCRAFT_GPU=0` (or `LIGHTCRAFT_GPU_BACKEND=off`): no GPU for the whole process.
@@ -265,6 +288,21 @@ fn env_disabled() -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 static GPU: std::sync::OnceLock<Result<ctx::Gpu, String>> = std::sync::OnceLock::new();
 
+/// Set while [`adopt_window_device`] is about to run or running: [`device`] and [`warm_up`] then
+/// don't create a device of their own (review of PR #1065: the settings' warm-up raced the
+/// adoption thread and could win, so the window's device went unused).
+#[cfg(not(target_arch = "wasm32"))]
+static WINDOW_PENDING: AtomicBool = AtomicBool::new(false);
+
+/// Announce (before spawning it) that [`adopt_window_device`] will run, or withdraw that when it
+/// can't (`false`). Until it has finished, renders take the CPU path and [`warm_up`] does nothing.
+pub fn set_window_device_pending(pending: bool) {
+    #[cfg(not(target_arch = "wasm32"))]
+    WINDOW_PENDING.store(pending, Ordering::Release);
+    #[cfg(target_arch = "wasm32")]
+    let _ = pending;
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     // turned off (preference, environment): don't even load the driver (issue #136)
@@ -273,6 +311,11 @@ pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     }
     if let Some(g) = GPU.get() {
         return g.as_ref().ok();
+    }
+    // the window's device is being adopted: render on the CPU until it is, rather than create a
+    // device of our own first (which would leave the window's unused)
+    if WINDOW_PENDING.load(Ordering::Acquire) {
+        return None;
     }
     // creating the device is a long call into the driver: not once the process is ending
     let _work = exit::enter()?;
@@ -298,13 +341,34 @@ pub(crate) fn existing_device() -> Option<&'static ctx::Gpu> {
 
 /// Create the device and compile the kernels on a background thread now (once the window is up),
 /// so the first render doesn't wait ~0.3–0.4 s for it and the UI thread never does. Does nothing
-/// while GPU rendering is turned off.
+/// while GPU rendering is turned off. Repeated calls start one thread at most.
 pub fn warm_up() {
     #[cfg(not(target_arch = "wasm32"))]
-    if !env_disabled() && ENABLED.load(Ordering::Relaxed) && GPU.get().is_none() {
-        let _ = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(|| {
-            let _ = device();
+    if !env_disabled() && ENABLED.load(Ordering::SeqCst) && GPU.get().is_none() && !WINDOW_PENDING.load(Ordering::Acquire) {
+        static STARTED: AtomicBool = AtomicBool::new(false);
+        if STARTED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let spawned = std::thread::Builder::new().name("lc-gpu-init".into()).spawn(|| {
+            loop {
+                let _ = device();
+                if GPU.get().is_some() || shutting_down() || env_disabled() {
+                    break;
+                }
+                // turned off before the thread ran (nothing created): a later call may start
+                // again. Released first, then the preference read again: a call made while this
+                // thread still held the flag (turned back on meanwhile) returned without starting
+                // one, so this thread tries again itself rather than leave "starting" for good.
+                // The window's device being adopted meanwhile: that creates the device, not this.
+                STARTED.store(false, Ordering::SeqCst);
+                if WINDOW_PENDING.load(Ordering::Acquire) || !ENABLED.load(Ordering::SeqCst) || STARTED.swap(true, Ordering::SeqCst) {
+                    break;
+                }
+            }
         });
+        if spawned.is_err() {
+            STARTED.store(false, Ordering::SeqCst);
+        }
     }
 }
 
@@ -440,11 +504,16 @@ pub fn render(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &R
 }
 
 /// Whether the GPU renders requests of this kind at all (a given render can still fall back to
-/// the CPU): the kernel writes 8-bit output, so high-bit-depth exports and soft proofs render on
-/// the CPU, and so does Visualize HDR, which needs the float HDR render. [`try_render`] follows it,
-/// and the loupe sizes its slider-drag drafts by it (issue #330), so the two can't drift apart.
-pub fn handles(depth: lightcraft_pipeline::OutputDepth, proofed: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
-    depth == lightcraft_pipeline::OutputDepth::U8 && !proofed && overlay != lightcraft_pipeline::Overlay::HdrRange
+/// the CPU): the kernel writes 8-bit output and the float HDR render (`F32Hdr`, in
+/// [`Rendered::deep`](lightcraft_pipeline::Rendered::deep)); 16-bit and linear float exports render
+/// on the CPU, and so do soft proofs against an output-device profile (`device_proof`: its 3D table
+/// is CPU-side) and Visualize HDR, which draws the float render over the 8-bit one. [`try_render`]
+/// follows it, and the loupe sizes its slider-drag drafts by it (issue #330), so the two can't drift
+/// apart.
+pub fn handles(depth: lightcraft_pipeline::OutputDepth, device_proof: bool, overlay: lightcraft_pipeline::Overlay) -> bool {
+    matches!(depth, lightcraft_pipeline::OutputDepth::U8 | lightcraft_pipeline::OutputDepth::F32Hdr)
+        && !device_proof
+        && overlay != lightcraft_pipeline::Overlay::HdrRange
 }
 
 /// [`render`], reporting why this render made no GPU image: [`Fallback::NotTried`] when the GPU
@@ -460,13 +529,126 @@ pub fn try_render(
 ) -> Result<Rendered, Fallback> {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        match run(src, info, s, req, stages, false)? {
+            render::Output::Image(r) => Ok(r),
+            // (not asked for)
+            render::Output::Display { .. } => Err(Fallback::NotTried),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src, info, s, req, stages);
+        Err(Fallback::NotTried)
+    }
+}
+
+/// [`render`] for the window: when the device is the window's ([`adopt_window_device`]) and the
+/// render allows it, the result stays on the device as a texture to draw ([`Output::Display`]);
+/// otherwise pixels as from [`render`]. `None`: render on the CPU instead.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn render_display(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Output> {
+    run(src, info, s, req, stages, true).ok()
+}
+
+/// Whether renders run on the window's device (and so can be handed over as textures).
+pub fn on_window_device() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        existing_device().is_some_and(|g| g.window)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// Render on the window's device (eframe's) instead of a device of its own, so finished views can
+/// be drawn without reading them back ([`render_display`]). Builds the kernels on it (~0.4–2 s:
+/// call it off the UI thread), in place of [`warm_up`]. When that fails, or the window's device
+/// doesn't suit (a software adapter, too few storage buffers), a device of its own is created as
+/// before; `Err` says why the window's wasn't used. Does nothing once a device exists.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn adopt_window_device(device: wgpu::Device, queue: wgpu::Queue, info: wgpu::AdapterInfo) -> Result<(), String> {
+    /// Whatever the outcome, renders may create or use a device again afterwards.
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            WINDOW_PENDING.store(false, Ordering::Release);
+        }
+    }
+    let _done = Done;
+    if env_disabled() || !ENABLED.load(Ordering::Relaxed) {
+        return Err("GPU rendering is off".into());
+    }
+    let _work = exit::enter().ok_or("LightCraft is closing")?;
+    let mut declined = None;
+    let g = GPU.get_or_init(|| {
+        let adopted = if info.device_type == wgpu::DeviceType::Cpu {
+            Err(format!("software adapter ({}) skipped: the CPU pipeline is faster", info.name))
+        } else if !backend::may_adopt_window_device(&info.name) {
+            // (the photos render on the card LIGHTCRAFT_GPU_ADAPTER names, on a device of its own)
+            Err(format!("LIGHTCRAFT_GPU_ADAPTER names another card than the window's ({})", info.name))
+        } else {
+            // (building the kernels is a long call into the driver: the crash sentinel covers it)
+            backend::with_init_marker(wgpu::Backends::from(info.backend), || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ctx::Gpu::adopt(device, queue, info)))
+                    .unwrap_or_else(|_| Err("kernel setup panicked".into()))
+            })
+        };
+        adopted.or_else(|e| {
+            log::warn!("gpu: not rendering on the window's device ({e}); creating one");
+            declined = Some(e);
+            let Some(backends) = backend::compute_backends() else { return Err("disabled by LIGHTCRAFT_GPU_BACKEND=off".into()) };
+            backend::with_init_marker(backends, || {
+                std::panic::catch_unwind(|| ctx::Gpu::new(backends)).unwrap_or_else(|_| Err("device creation panicked".into()))
+            })
+        })
+    });
+    match (g, declined) {
+        (Ok(g), None) if g.window => Ok(()),
+        (_, Some(e)) => Err(e),
+        (Ok(_), None) => Err("a device of its own was created first".into()),
+        (Err(e), None) => Err(e.clone()),
+    }
+}
+
+/// The pixels of a texture on `device` (a [`DisplayFrame`]'s, or any `Rgba8Unorm` texture with
+/// `COPY_SRC`): for a headless screenshot of a view drawn straight from the GPU, and for tests. The
+/// app never needs them to draw. Waits for the GPU (at most a minute); `Err` when the copy or
+/// the wait fails.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: usize,
+    height: usize,
+) -> Result<lightcraft_raster::Rgba8, String> {
+    ctx::read_texture(device, queue, texture, width, height)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn run(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    display: bool,
+) -> Result<Output, Fallback> {
+    {
         // sections switched off with their eye render as if at their defaults (issue #316)
         let effective = s.effective();
         let s: &DevelopSettings = &effective;
-        if !enabled() || !handles(req.depth, req.proof.is_some(), req.overlay) {
+        let device_proof = req.proof.is_some_and(|p| lightcraft_pipeline::proof_profile(p.profile).is_some());
+        if !enabled() || !handles(req.depth, device_proof, req.overlay) {
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
+        // content-aware Fill spots (`spots::fill_box`) have no GPU kernel: the CPU renders the photo
+        if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill) {
+            return Err(Fallback::NotTried);
+        }
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
@@ -478,7 +660,7 @@ pub fn try_render(
         let (r, scoped) = {
             let _scope = ctx::RenderScope::new(gpu);
             let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault, display)));
             (r, errors.pop())
         };
         // An error the device raised explains the readback failures that follow it; a buffer
@@ -499,7 +681,8 @@ pub fn try_render(
                     e.clear();
                 }
                 let what = match &r {
-                    Some(r) => format!("{}×{}", r.image.width, r.image.height),
+                    Some(Output::Image(r)) => format!("{}×{}", r.image.width, r.image.height),
+                    Some(Output::Display { frame, .. }) => format!("{}×{}", frame.width, frame.height),
                     None => "GPU render".into(),
                 };
                 let reason = match f.kind {
@@ -508,6 +691,9 @@ pub fn try_render(
                         format!("{what}: {}; the GPU is not used again", f.reason)
                     }
                     ctx::FailKind::OutOfMemory => {
+                        // an upload that ran out of memory left a zeroed buffer; the shared source
+                        // may be one, and the next render of the photo would reuse it
+                        render::release_shared_source();
                         gpu.trim(0);
                         format!("{what}: {}", f.reason)
                     }
@@ -531,16 +717,34 @@ pub fn try_render(
         record_fallback(reason.clone());
         Err(Fallback::Failed(reason))
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = (src, info, s, req, stages);
-        Err(Fallback::NotTried)
-    }
+}
+
+/// Tests: parse and validate a WGSL module with naga, as wgpu does before it hands a shader to the driver. Needs no
+/// GPU, so kernels that don't build (a duplicate definition after a merge, a type error) fail every test run, not only
+/// the GPU ones.
+#[cfg(test)]
+pub(crate) fn validate_wgsl(name: &str, src: &str) -> Result<(), String> {
+    use wgpu::naga;
+    let module = naga::front::wgsl::parse_str(src).map_err(|e| format!("{name}: {}", e.emit_to_string(src)))?;
+    naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+        .validate(&module)
+        .map(|_| ())
+        .map_err(|e| format!("{name}: {}", e.emit_to_string(src)))
 }
 
 #[cfg(test)]
 mod tests {
     use lightcraft_pipeline::{OutputDepth, Overlay};
+
+    /// The helper refuses what a driver would: a function defined twice (what an automatic merge of two branches
+    /// touching the same kernel can leave).
+    #[test]
+    fn wgsl_validation_catches_a_duplicate_definition() {
+        let ok = "fn f() -> f32 { return 1.0; }\n@compute @workgroup_size(1) fn main() { _ = f(); }\n";
+        assert_eq!(super::validate_wgsl("ok", ok), Ok(()));
+        let twice = format!("fn f() -> f32 {{ return 2.0; }}\n{ok}");
+        assert!(super::validate_wgsl("twice", &twice).is_err());
+    }
 
     // Given a request the 8-bit kernel can't draw (high bit depth, a soft proof, Visualize HDR),
     // the GPU doesn't take it; the loupe and diagnostic overlays it can draw stay on the GPU
@@ -548,7 +752,9 @@ mod tests {
     fn the_gpu_handles_8_bit_unproofed_renders_without_the_hdr_range() {
         assert!(super::handles(OutputDepth::U8, false, Overlay::None));
         assert!(super::handles(OutputDepth::U8, false, Overlay::Spots(50)));
+        assert!(super::handles(OutputDepth::F32Hdr, false, Overlay::None));
         assert!(!super::handles(OutputDepth::U16, false, Overlay::None));
+        assert!(!super::handles(OutputDepth::F32Linear, false, Overlay::None));
         assert!(!super::handles(OutputDepth::U8, true, Overlay::None));
         assert!(!super::handles(OutputDepth::U8, false, Overlay::HdrRange));
     }

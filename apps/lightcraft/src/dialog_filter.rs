@@ -133,13 +133,23 @@ mod tests {
         }
     }
 
-    /// Every dialog filter goes through the helper: `main.rs` must not call rfd's own
+    /// Every dialog filter goes through the helper: no source file in `src/` calls rfd's own
     /// `add_filter`.
     #[test]
     fn no_dialog_bypasses_the_helper() {
-        for (file, src) in [("main.rs", include_str!("main.rs")), ("control_server.rs", include_str!("control_server.rs"))] {
-            assert!(!src.contains(".add_filter("), "{file} calls rfd's add_filter; use add_filter_nocase");
+        let mut dirs = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut helper_used = false;
+        while let Some(dir) = dirs.pop() {
+            for path in std::fs::read_dir(&dir).unwrap().map(|entry| entry.unwrap().path()) {
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") && !path.ends_with("dialog_filter.rs") {
+                    let src = std::fs::read_to_string(&path).unwrap();
+                    assert!(!src.contains(".add_filter("), "{} calls rfd's add_filter; use add_filter_nocase", path.display());
+                    helper_used |= src.contains(".add_filter_nocase(");
+                }
+            }
         }
-        assert!(include_str!("main.rs").contains(".add_filter_nocase("));
+        assert!(helper_used);
     }
 }

@@ -33,3 +33,14 @@ pub const DEFAULT_ADDR: &str = "127.0.0.1:7980";
 
 #[cfg(test)]
 mod tests;
+
+/// Held by tests that start a child process (a copy of the test binary) and by tests that run a
+/// loopback socket server, so the two never overlap. On Windows the child can inherit a socket the
+/// server just accepted; when the child exits, Windows closes its copy abortively and the test's
+/// connection is reset ("An existing connection was forcibly closed"), which failed the
+/// `backend` reply tests whenever they ran alongside a child-process test.
+#[cfg(test)]
+pub(crate) fn serial_sockets_and_children() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}

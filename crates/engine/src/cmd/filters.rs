@@ -38,6 +38,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let name = str_param(p, "name").ok_or_else(|| bad(C, "missing `name`"))?;
     let f = s.filter_presets.iter().find(|f| f.name.eq_ignore_ascii_case(name)).ok_or_else(|| bad(C, format!("no filter preset `{name}`")))?;
     s.filter = f.filter.clone();
+    s.shelved_filter = None;
     Ok(json!({"photos": s.visible().len()}))
 }
 

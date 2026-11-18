@@ -198,6 +198,27 @@ impl Store for FilesStore {
 /// Names of the library files read at start-up.
 pub const LIBRARY_FILES: [&str; 6] = ["catalog.snap", "catalog.log", "presets.json", "view.json", "prefs.json", "ui.json"];
 
+/// Is a browser storage error, by its `DOMException` name, "the entry doesn't exist"? Only
+/// `NotFoundError` is; anything else (security, type mismatch, an unreadable store) is a failure.
+pub fn is_not_found(dom_exception_name: Option<&str>) -> bool {
+    dom_exception_name == Some("NotFoundError")
+}
+
+/// Preload the library files read at start-up (`None`: the file doesn't exist yet). A file that
+/// exists but couldn't be read stops start-up instead (#1507): opening the library without it
+/// would show an incomplete catalog and then save over the stored copy.
+pub fn preload_library(files: &Files, reads: Vec<(&str, Result<Option<Vec<u8>>, String>)>) -> Result<(), String> {
+    let mut failed = Vec::new();
+    for (name, read) in reads {
+        match read {
+            Ok(Some(data)) => files.preload(name, data),
+            Ok(None) => {}
+            Err(e) => failed.push(format!("{name}: {e}")),
+        }
+    }
+    if failed.is_empty() { Ok(()) } else { Err(format!("couldn't read the library from browser storage ({})", failed.join("; "))) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,6 +301,66 @@ mod tests {
         let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files2.store()), files: Box::new(files2.store()), on_disk: false };
         s2.open_library_in(stores, true).unwrap();
         assert_eq!(s2.catalog.photo(id).unwrap().rating, 5, "the rating survived");
+    }
+
+    /// A backup copies the stored library files, so while a save is failing it would miss the
+    /// queued changes: it is refused with the reason until they are written (#1508).
+    #[test]
+    fn backup_is_refused_while_changes_are_unsaved() {
+        let files = Files::default();
+        let mut s = Session::new();
+        let stores = LibraryStores { dir: "browser".into(), catalog: Box::new(files.store()), files: Box::new(files.store()), on_disk: false };
+        s.open_library_in(stores, true).unwrap();
+        assert_eq!(crate::backup::unsaved_refusal(s.unsaved()), None, "everything saved: the backup may start");
+        files.set_error(Some("QuotaExceededError".into()));
+        let _ = s.execute("photo.rate", &json!({"rating": 5}));
+        let refusal = crate::backup::unsaved_refusal(s.unsaved()).expect("refused while the rating is unsaved");
+        assert!(refusal.contains("could not be saved") && refusal.contains("QuotaExceeded"), "{refusal}");
+        files.set_error(None);
+        s.persist_if_dirty();
+        s.persist().unwrap();
+        assert_eq!(crate::backup::unsaved_refusal(s.unsaved()), None, "allowed again once the change is written");
+    }
+
+    #[test]
+    fn unsaved_refusal_counts_changes() {
+        use crate::backup::unsaved_refusal;
+        assert!(unsaved_refusal(Some((1, "quota"))).unwrap().contains("1 change could not"));
+        assert!(unsaved_refusal(Some((3, "quota"))).unwrap().contains("3 changes could not"));
+    }
+
+    /// Start-up only treats a missing file as absent: a stored file that couldn't be read stops
+    /// it, naming the file, instead of opening an incomplete library (#1507).
+    #[test]
+    fn unreadable_library_file_stops_start_up() {
+        let files = Files::default();
+        let reads = vec![
+            ("catalog.snap", Ok(Some(b"snap".to_vec()))),
+            ("catalog.log", Err("NotReadableError: the file could not be read".to_string())),
+            ("presets.json", Ok(None)),
+        ];
+        let e = preload_library(&files, reads).unwrap_err();
+        assert!(e.contains("catalog.log") && e.contains("NotReadableError"), "{e}");
+    }
+
+    /// A new library (nothing stored yet) still starts.
+    #[test]
+    fn missing_library_files_are_a_new_library() {
+        let files = Files::default();
+        let reads = LIBRARY_FILES.iter().map(|n| (*n, Ok(None))).collect();
+        preload_library(&files, reads).unwrap();
+        assert!(files.get("catalog.snap").is_none());
+        let reads = vec![("catalog.snap", Ok(Some(b"snap".to_vec()))), ("catalog.log", Ok(None))];
+        preload_library(&files, reads).unwrap();
+        assert_eq!(files.get("catalog.snap").as_deref(), Some(&b"snap"[..]));
+    }
+
+    #[test]
+    fn only_not_found_errors_mean_absent() {
+        assert!(is_not_found(Some("NotFoundError")));
+        for name in [Some("SecurityError"), Some("TypeMismatchError"), Some("NotReadableError"), Some("InvalidStateError"), None] {
+            assert!(!is_not_found(name), "{name:?}");
+        }
     }
 
     #[test]

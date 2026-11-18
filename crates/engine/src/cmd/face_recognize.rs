@@ -82,7 +82,7 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
 /// makes the face yours: a later "Detect Faces" run no longer replaces it.
 fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.setName";
-    let id = p.get("id").and_then(Value::as_u64).map(lightcraft_catalog::PhotoId).or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
+    let id = super::photo_id(p, C)?.or_else(|| s.active()).ok_or_else(|| bad(C, "no photo"))?;
     let index = p.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad(C, "missing or invalid `index`"))?;
     let name = name_param(p, C)?;
     let mut meta = s.catalog.photo(id).ok_or_else(|| bad(C, "no such photo"))?.meta.clone();
@@ -175,6 +175,11 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     s.skip_auto_write = true;
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());
+    }
+    if let Some(f) = s.shelved_filter.as_mut()
+        && f.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key)
+    {
+        f.person = Some(to.clone());
     }
     Ok(json!({"faces": faces, "photos": photos, "from": from, "to": to, "merged": other}))
 }
@@ -275,6 +280,7 @@ mod imp {
     use lightcraft_faces::runtime::Embedder;
     use lightcraft_geom::Rect;
     use lightcraft_meta::{Region, RegionKind};
+    use rayon::prelude::*;
     use serde_json::{Value, json};
 
     use super::super::bad;
@@ -340,10 +346,12 @@ mod imp {
         current_with(s, cmd, true)
     }
 
-    /// Whether the background scan should look for faces in this photo: it is in the library, has no face regions at all
-    /// (nothing from XMP, nothing drawn or named, no earlier detection) and has not been searched yet.
+    /// Whether the background scan should look for faces in this photo: it is in the library, is not a video (the image
+    /// decoders can't read one, [`Photo::is_video`]), has no face regions at all (nothing from XMP, nothing drawn or
+    /// named, no earlier detection) and has not been searched yet.
     fn needs_search(s: &Session, photo: &Photo) -> bool {
         photo.in_library()
+            && !photo.is_video()
             && !photo.meta.regions.iter().any(|r| r.kind == RegionKind::Face)
             && !s.faces.scanned.contains(photo.id.0)
             && !s.faces.scan_failed.contains(&photo.id.0)
@@ -470,8 +478,7 @@ mod imp {
         let embedder = current(s, C)?;
         collect(s);
         let budget = Duration::from_millis(p.get("budgetMs").and_then(Value::as_u64).unwrap_or(200).min(600_000));
-        let first: Vec<PhotoId> =
-            p.get("ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).map(PhotoId).collect()).unwrap_or_default();
+        let first: Vec<PhotoId> = super::super::photo_ids(p, C)?.unwrap_or_default();
         let todo = pending(s, &first, false);
         let started = Instant::now();
         let (mut embedded, mut failed, mut done) = (0, 0, 0);
@@ -509,13 +516,12 @@ mod imp {
         if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
             return None;
         }
-        // days from civil (proleptic Gregorian)
-        let y = if m <= 2 { y - 1 } else { y };
-        let era = y.div_euclid(400);
-        let yoe = y - era * 400;
-        let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        Some((era * 146_097 + doe - 719_468) * 86_400 + hh * 3600 + mm * 60 + ss)
+        // Days since 1970-01-01 (proleptic Gregorian); a day past the month's length rolls over as
+        // the old Hinnant arithmetic did.
+        let first = chrono::NaiveDate::from_ymd_opt(i32::try_from(y).ok()?, u32::try_from(m).ok()?, 1)?;
+        let date = first.checked_add_days(chrono::Days::new(u64::try_from(d - 1).ok()?))?;
+        let days = (date - chrono::NaiveDate::from_ymd_opt(1970, 1, 1)?).num_days();
+        Some(days * 86_400 + hh * 3600 + mm * 60 + ss)
     }
 
     /// `faces.evaluate`: leave-one-out over the library's named faces, to see how well recognition works on *your*
@@ -728,11 +734,13 @@ mod imp {
             return ready;
         }
         let bar = embedder.manifest().thresholds.match_cosine.unwrap_or(DEFAULT_THRESHOLD) * 0.8;
-        let refs: Vec<(&str, &[f32])> = gallery.iter().map(|e| ("person", &e[..])).collect();
+        let refs: Vec<&[f32]> = gallery.iter().map(|e| &e[..]).collect();
+        // every unnamed face against every face of theirs: some 400 million comparisons for a person with 4 000 faces
+        // in a library of 90 000, so on every core (minutes on one)
         let mut scored: Vec<(f32, u64, usize, Rect)> = candidates
-            .into_iter()
+            .into_par_iter()
             .filter_map(|(photo, index, rect, e)| {
-                let score = matching::rank(&e, &refs).first()?.score;
+                let score = matching::person_score(&e, &refs, matching::TOP_FACES)?;
                 (score >= bar).then_some((score, photo, index, rect))
             })
             .collect();
@@ -965,6 +973,22 @@ mod imp {
             assert!(!s.faces.scanned.contains(a.0), "not remembered as searched: the file may come back");
             assert!(!needs_search(&s, s.catalog.photo(a).unwrap()), "but not retried on every pass");
             assert!(!pending(&s, &[], true).contains(&a));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
+        /// A video went to the image decoders to be searched for faces and failed, once each launch: it is skipped, as the
+        /// grid's thumbnails skip it (issue #2682 is about those).
+        #[test]
+        fn a_video_is_not_searched_for_faces() {
+            let (mut s, d) = loaded("video");
+            let (a, _) = two_photos(&s);
+            let id = s.catalog.alloc_photo_id();
+            let path = d.join("clip.mp4").to_string_lossy().into_owned();
+            let clip = Photo::new(id, lightcraft_catalog::Source::File { path }, "clip.mp4", "VIDEO", 1920, 1080, "2026-10-24T00:00:00");
+            s.catalog.apply(Op::AddPhoto { photo: Box::new(clip) }).unwrap();
+            assert!(needs_search(&s, s.catalog.photo(a).unwrap()), "a photo is searched");
+            assert!(!needs_search(&s, s.catalog.photo(id).unwrap()));
+            assert!(!pending(&s, &[], true).contains(&id));
             let _ = std::fs::remove_dir_all(&d);
         }
 

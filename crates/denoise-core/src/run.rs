@@ -9,12 +9,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use lightcraft_raster::Rgb32f;
 use rayon::prelude::*;
 
-use crate::bayer::{Layout, pack_tile};
+use crate::bayer::{Layout, TileRegion, pack_tile};
 use crate::manifest::Gain;
 use crate::tiles::{starts, weight};
 
 /// Most pixels one picture may have (guards the allocations that follow from its size).
-pub const MAX_PIXELS: usize = 100_000_000;
+pub const MAX_PIXELS: usize = 110_000_000;
 /// A tile whose mean signal is below this (white = 1) is too dark to measure its scale from.
 const MIN_SIGNAL: f32 = 0.003;
 
@@ -139,7 +139,12 @@ pub fn denoise_bayer(
             .par_iter()
             .map(|&(x0, y0, bx, ax, by, ay)| {
                 let mut input = allocate(4 * p.tile * p.tile, 0f32)?;
-                if !pack_tile(mosaic, width, height, layout, x0 as isize, y0 as isize, p.tile, &mut input) {
+                if !pack_tile(
+                    mosaic,
+                    layout,
+                    TileRegion { mosaic_size: (width, height), cell_origin: (x0 as isize, y0 as isize), tile_size: p.tile },
+                    &mut input,
+                ) {
                     return Err(Error::Input("a tile could not be packed".into()));
                 }
                 let mut out = runner.run(&input)?;
@@ -641,5 +646,20 @@ mod tests {
         }
         assert!(matches!(denoise_bayer(&[0.5; 16], 4, 4, layout, &Bad(vec![0.0; 5]), &p, &Control::default()), Err(Error::Model(_))));
         assert!(matches!(denoise_bayer(&[0.5; 16], 4, 4, layout, &Bad(vec![f32::NAN; 3 * 64 * 64]), &p, &Control::default()), Err(Error::Model(_))));
+    }
+
+    #[test]
+    fn accepts_102_mp_inputs_and_rejects_inputs_above_the_limit() {
+        let layout = Layout { dx: 0, dy: 0 };
+        let model = Mock { tile: 32, scale: 1.0 };
+        let p = params(32, 8, Gain::None);
+        assert!(matches!(
+            denoise_bayer(&[], 11_648, 8_736, layout, &model, &p, &Control::default()),
+            Err(Error::Input(message)) if message == "the mosaic does not have width × height samples"
+        ));
+        assert!(matches!(
+            denoise_bayer(&[], MAX_PIXELS + 1, 1, layout, &model, &p, &Control::default()),
+            Err(Error::Input(message)) if message == "the picture has no size, or is too large"
+        ));
     }
 }

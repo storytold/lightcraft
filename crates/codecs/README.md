@@ -46,15 +46,15 @@ CRW, MRW, X3F) are detected so the engine can route them to `lightcraft-raw`; `d
 
 | Format | Decode | Encode | Notes |
 |---|---|---|---|
-| JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (jpeg-encoder, baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2, multi-chunk), Adobe APP14, MPF previews |
+| JPEG | yes (zune-jpeg; jpeg-decoder for DCT scaling, CMYK/YCCK, 12-bit, non-interleaved scans) | yes (shared `craft-jpeg`, optimized baseline, 4:4:4/4:2:2/4:2:0) | EXIF (APP1), XMP (APP1, ≤ 64 KiB), ICC (APP2; only complete, consistently counted, uniquely numbered chunk sequences are assembled; malformed profiles use the existing unsupported-profile fallback), Adobe APP14, MPF previews |
 | PNG | yes, 1–16-bit, palette, tRNS, interlaced | 8/16-bit, gray/GA/RGB/RGBA | iCCP, eXIf, iTXt XMP; sRGB/cICP/cHRM/gAMA honoured when no ICC |
-| TIFF | 8/16-bit int (32/64-bit int kept to 16 bits), 16/32/64-bit float, gray/RGB/CMYK/palette, alpha (assoc./unassoc.), planar, LZW/Deflate/PackBits/JPEG | 8/16-bit, 32-bit float; none/LZW/Deflate/PackBits | ICC (34675), XMP (700), Orientation; first IFD only; EXIF not written (use `lightcraft-tiff`) |
+| TIFF | 8/16-bit int (32/64-bit int kept to 16 bits), 16/32/64-bit float, gray/RGB/CMYK/palette, alpha (assoc./unassoc.), planar, LZW/Deflate/PackBits/JPEG | 8/16-bit, 32-bit float; none/LZW/Deflate/PackBits | ICC (34675), XMP (700), Orientation; first IFD only; EXIF not written (use `craft-tiff`) |
 | WebP | lossy + lossless, alpha, first frame of animations | lossless only | ICCP/EXIF/XMP chunks |
 | GIF / BMP | yes (first GIF frame) | — | via `image` |
 | PSD / PSB | merged composite: 8/16/32-bit gray, RGB, CMYK, indexed, duotone (as gray); raw/RLE | — | ICC (1039), EXIF (1058), XMP (1060); ZIP-compressed composite, Lab and 1-bit unsupported |
-| JPEG XL | yes (jxl-oxide, feature `jxl`, default on) | yes (jixel, `encode_jxl`, feature `jxl`, native only): lossy VarDCT / lossless Modular, 8/16-bit, effort (fast / normal), progressive; HDR as 16-bit Rec. 2020 PQ | decode: enum colour → rendered straight to linear Rec.2020 (XYB via linear sRGB primaries); ICC → our ICC path; orientation applied by the decoder (reported as 1). Encode: lossy files declare an enum encoding (sRGB, Display P3, Rec. 2020 BT.709 curve, Rec. 2020 PQ), lossless ones embed the ICC profile; EXIF / XMP in `Exif` / `xml ` boxes |
+| JPEG XL | yes (`craft-jxl`, feature `jxl`, default on) | yes (`craft-jxl`, `encode_jxl`, feature `jxl`, native only): lossy VarDCT / lossless Modular, 8/16-bit, effort (fast / normal), progressive; HDR as 16-bit Rec. 2020 PQ | decode: enum colour → rendered straight to linear Rec.2020 (XYB via linear sRGB primaries); ICC → our ICC path; orientation applied by the shared decoder (reported as 1). Encode: lossy files declare an enum encoding (sRGB, Display P3, Rec. 2020 BT.709 curve, Rec. 2020 PQ), lossless ones embed the ICC profile; EXIF / XMP in `Exif` / `xml ` boxes |
 | AVIF | **no** | yes (ravif/rav1e, native only, feature `avif`) | 8/10-bit sRGB, EXIF; no ICC in the muxer. HDR: `encode_avif_hdr` writes 10-bit BT.2020 PQ (SDR white at 203 cd/m², CICP `nclx` + `clli`) or HLG (`hlg_signal`, SDR white at 0.75) |
-| HEIC/HEIF | yes with feature `heif` (lightcraft-heif: heic-rs + libheif-matching colour; 4:2:0/mono, 8–10-bit, grids, irot/imir/clap, ICC/nclx/VUI, EXIF/XMP, thumbnail item) | — | 4:2:2/4:4:4 (Canon/Sony HIF) unsupported |
+| HEIC/HEIF | yes with feature `heif` (craft-heif: heic-rs + libheif-matching colour; 4:2:0/mono, 8–10-bit, grids, irot/imir/clap, ICC/nclx/VUI, EXIF/XMP, thumbnail item) | — | 4:2:2/4:4:4 (Canon/Sony HIF) unsupported |
 | Gain map JPEG (HDR) | gain map found and decoded (`gainmap::read_jpeg`): ISO 21496-1 metadata, else Adobe `hdrgm` XMP | yes (`gainmap::encode_jpeg`) | CIPA DC-007 MPF index (gain map typed `0x050000`), ISO 21496-1 APP2 on both images, `hdrgm` + Container XMP for Android/Chrome, Apple `HDRGainMap`/`HDRToneMap` XMP; gain maps are never used as thumbnails |
 
 ## Colour
@@ -73,6 +73,10 @@ ICC profiles are parsed with `moxcms` (v2/v4, `curv`/`para` TRCs, `chad`); sRGB,
 Adobe RGB (1998), ProPhoto (ROMM) and Rec.2020 are recognised by colorants. `icc::write_matrix_trc`
 emits v4 display profiles (D50 PCS, Bradford `chad`) for export embedding.
 
+Before colour conversion, positive-infinity float samples become 1.0; NaN and negative infinity
+become 0.0. This also applies to alpha. Finite samples keep their existing range: matrix/TRC paths
+preserve values above 1.0 and below 0.0, while CMS inputs and alpha remain bounded to 0..1.
+
 ## Dependencies and licences
 
 All pure Rust, verified with `cargo info` / `cargo tree`:
@@ -81,14 +85,15 @@ All pure Rust, verified with `cargo info` / `cargo tree`:
 |---|---|---|
 | zune-jpeg, zune-core | MIT OR Apache-2.0 OR Zlib | JPEG decode |
 | jpeg-decoder | MIT OR Apache-2.0 | scaled / CMYK JPEG decode |
-| jpeg-encoder | (MIT OR Apache-2.0) AND IJG | JPEG encode (IJG: permissive, attribution in docs) |
+| craft-jpeg | MIT OR Apache-2.0 | baseline JPEG encode (shared craft-libs) |
+| jpeg-encoder | (MIT OR Apache-2.0) AND IJG | 0.6 still ships inside `craft-image-codecs` (IJG: permissive, attribution in docs); 0.7 only in tests and the JPEG benchmark (reference CMYK fixture, prior 4:2:2 output) |
 | png | MIT OR Apache-2.0 | PNG |
 | tiff | MIT | TIFF |
 | image-webp | MIT OR Apache-2.0 | WebP |
 | image (gif, bmp only) | MIT OR Apache-2.0 | GIF/BMP |
 | moxcms | BSD-3-Clause OR Apache-2.0 | ICC parse/write, CMS |
-| jxl-oxide | MIT OR Apache-2.0 | JPEG XL decode |
-| jixel | BSD-3-Clause OR Apache-2.0 | JPEG XL encode (native only) |
+| craft-jxl | MIT OR Apache-2.0 | JPEG XL decode/encode (shared craft-libs) |
+| jxl-oxide | MIT OR Apache-2.0 | JPEG XL test oracle only |
 | ravif (+ rav1e, avif-serialize) | BSD-3-Clause / BSD-2-Clause | AVIF encode (native only; heavy to compile) |
 
 Deliberately **not** used: anything AGPL from imazen (heic, zenjpeg, jxl-encoder, rav1d-safe),
@@ -96,7 +101,7 @@ jpegxl-rs / imagequant (GPL / C), dav1d / libheif (C).
 
 ## Performance (Apple M-series, release, synthetic 24 MP JPEG q90 4:2:0)
 
-Run `cargo test --release -p lightcraft-codecs --test bench -- --ignored --nocapture`.
+Run `cargo test --release -p lightcraft-codecs --test it bench:: -- --ignored --nocapture`.
 
 | Operation | Time |
 |---|---|
@@ -109,8 +114,8 @@ Run `cargo test --release -p lightcraft-codecs --test bench -- --ignored --nocap
 
 ## Gaps / limitations
 
-- **AVIF decode**: no permissively licensed, pure-Rust AV1 decoder exists today (dav1d is C;
-  rav1d-safe is AGPL). Files are sniffed and rejected with `Error::Unsupported`.
+- **AVIF decode** uses the shared pure-Rust AV1 decoder on native builds with the `avif` feature.
+  Animated AVIF, depth and gain-map auxiliary images, and progressive/layered images are unsupported.
 - **HEIC** needs the `heif` feature (off by default: HEVC patents are the distributor's call);
   without it, `Error::Unsupported` says the build has no HEIC support. 4:2:2 and 4:4:4 HEIF
   (Canon/Sony HIF) is refused: heic-rs 0.1.1 loses sync on those bitstreams.

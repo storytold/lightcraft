@@ -1,30 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  LightCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`, plus the UI and Util extensions:
-  `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`). Built by package.ps1:
-
-    wix build lightcraft.wxs -arch x64 -ext WixToolset.UI.wixext/5.0.2 -ext WixToolset.Util.wixext/5.0.2
-      -d Version=1.2.3 -d BinDir=... -d IconPath=... -d UiDialogBmp=... -d UiBannerBmp=... -o out.msi
-
-  Per-machine install into Program Files (or the folder chosen in the installer, or
-  `INSTALLFOLDER=...` on the msiexec command line; upgrades keep it), a Start Menu shortcut, `.pcraft` owned by LightCraft,
-  and LightCraft offered under "Open with" for PSD/PSB and the image formats it reads (without
-  taking over the user's default app for them).
--->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package
-      Name="LightCraft"
-      Manufacturer="Learning Machines LLC"
-      Version="$(var.Version)"
-      UpgradeCode="229BB552-5EFD-479A-BA86-8CB6D926390C"
-      Scope="perMachine"
-      Compressed="yes"
-      Language="1033">
+  <Package Name="LightCraft" Manufacturer="Learning Machines LLC" Version="$(var.Version)" UpgradeCode="229BB552-5EFD-479A-BA86-8CB6D926390C" Scope="perUserOrMachine" Compressed="yes" Language="1033">
     <SummaryInformation Description="LightCraft photo library and raw developer" Manufacturer="Learning Machines LLC" />
+    <?include $(sys.SOURCEFILEDIR)install-policy.wxi?>
     <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
          (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
-    <MajorUpgrade AllowSameVersionUpgrades="yes"
-        DowngradeErrorMessage="A newer version of LightCraft is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of LightCraft is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="LightcraftIcon.ico" SourceFile="$(var.IconPath)" />
@@ -34,7 +15,9 @@
     <Property Id="ARPHELPLINK" Value="https://discord.gg/artcraft" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="LightCraft" />
+      <Directory Id="CraftSuiteFolder" Name="ArtCraft">
+        <Directory Id="INSTALLFOLDER" Name="LightCraft" />
+      </Directory>
     </StandardDirectory>
     <!-- The folder of the installed version (written by LightcraftApp), so an upgrade installs
          where the user chose instead of moving back to Program Files (issue #399). Searched into
@@ -42,28 +25,21 @@
     <Property Id="PREVIOUSINSTALLFOLDER">
       <RegistrySearch Id="PreviousInstallFolder" Root="HKLM" Key="Software\LightCraft" Name="InstallFolder" Type="raw" />
     </Property>
-    <SetProperty Id="INSTALLFOLDER" Value="[PREVIOUSINSTALLFOLDER]" After="AppSearch" Sequence="both"
-        Condition="PREVIOUSINSTALLFOLDER AND NOT INSTALLFOLDER" />
     <!-- Older MSIs (including 0.5.0) only recorded the executable in App Paths. Type="file"
          without a FileSearch returns its containing directory. Keep the searches separate so
          the newer InstallFolder value and an explicit INSTALLFOLDER always take precedence. -->
     <Property Id="LEGACYINSTALLFOLDER">
-      <RegistrySearch Id="LegacyInstallFolder" Root="HKLM"
-          Key="Software\Microsoft\Windows\CurrentVersion\App Paths\lightcraft.exe" Type="file" />
+      <RegistrySearch Id="LegacyInstallFolder" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\lightcraft.exe" Type="file" />
     </Property>
     <!-- That directory search doesn't check the executable exists, and when its unquoted path is
          gone it falls back to the text before the first space: a deleted
          "C:\Program Files\LightCraft\lightcraft.exe" yields "C:\". Only use the folder when this
          search, which does require lightcraft.exe, finds it too. -->
     <Property Id="LEGACYINSTALLEXE">
-      <RegistrySearch Id="LegacyInstallExe" Root="HKLM"
-          Key="Software\Microsoft\Windows\CurrentVersion\App Paths\lightcraft.exe" Type="file">
+      <RegistrySearch Id="LegacyInstallExe" Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\lightcraft.exe" Type="file">
         <FileSearch Id="LegacyInstallExeFile" Name="lightcraft.exe" />
       </RegistrySearch>
     </Property>
-    <SetProperty Id="INSTALLFOLDER" Action="SetInstallFolderFromAppPaths" Value="[LEGACYINSTALLFOLDER]"
-        After="SetINSTALLFOLDER" Sequence="both"
-        Condition="LEGACYINSTALLFOLDER AND LEGACYINSTALLEXE AND NOT PREVIOUSINSTALLFOLDER AND NOT INSTALLFOLDER" />
     <StandardDirectory Id="ProgramMenuFolder" />
 
     <Feature Id="Main" Title="LightCraft" Level="1">
@@ -96,8 +72,7 @@
     <WixVariable Id="WixUIDialogBmp" Value="$(var.UiDialogBmp)" />
     <WixVariable Id="WixUIBannerBmp" Value="$(var.UiBannerBmp)" />
 
-    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
-        Value="LightCraft has been installed. You can start it at any time from the Start menu." />
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT" Value="LightCraft has been installed. You can start it at any time from the Start menu." />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch LightCraft" />
     <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1" />
 
@@ -108,8 +83,7 @@
          event, so silent and passive installs never run it. Return="ignore": a failed launch must
          not turn a successful install into an error. -->
     <Property Id="WixUnelevatedShellExecTarget" Value="[#LightcraftExe]" />
-    <CustomAction Id="LaunchLightcraft" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)"
-        DllEntry="WixUnelevatedShellExec" Execute="immediate" Impersonate="yes" Return="ignore" />
+    <CustomAction Id="LaunchLightcraft" BinaryRef="Wix4UtilCA_$(sys.BUILDARCHSHORT)" DllEntry="WixUnelevatedShellExec" Execute="immediate" Impersonate="yes" Return="ignore" />
 
     <UI Id="LightcraftUI">
       <TextStyle Id="WixUI_Font_Normal" FaceName="Tahoma" Size="8" />
@@ -152,35 +126,26 @@
            whose OK validates too. -->
       <Publish Dialog="InstallDirDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" />
       <Publish Dialog="InstallDirDlg" Control="Next" Event="SetTargetPath" Value="[WIXUI_INSTALLDIR]" Order="1" />
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="WixUIValidatePath_$(sys.BUILDARCHSHORT)" Order="2"
-          Condition="NOT WIXUI_DONTVALIDATEPATH" />
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="SpawnDialog" Value="InvalidDirDlg" Order="3"
-          Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
-      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="4"
-          Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="DoAction" Value="WixUIValidatePath_$(sys.BUILDARCHSHORT)" Order="2" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="SpawnDialog" Value="InvalidDirDlg" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+      <Publish Dialog="InstallDirDlg" Control="Next" Event="NewDialog" Value="VerifyReadyDlg" Order="4" Condition="WIXUI_DONTVALIDATEPATH OR WIXUI_INSTALLDIR_VALID=&quot;1&quot;" />
       <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Property="_BrowseProperty" Value="[WIXUI_INSTALLDIR]" Order="1" />
       <Publish Dialog="InstallDirDlg" Control="ChangeFolder" Event="SpawnDialog" Value="BrowseDlg" Order="2" />
-      <Publish Dialog="BrowseDlg" Control="OK" Event="DoAction" Value="WixUIValidatePath_$(sys.BUILDARCHSHORT)" Order="3"
-          Condition="NOT WIXUI_DONTVALIDATEPATH" />
-      <Publish Dialog="BrowseDlg" Control="OK" Event="SpawnDialog" Value="InvalidDirDlg" Order="4"
-          Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="DoAction" Value="WixUIValidatePath_$(sys.BUILDARCHSHORT)" Order="3" Condition="NOT WIXUI_DONTVALIDATEPATH" />
+      <Publish Dialog="BrowseDlg" Control="OK" Event="SpawnDialog" Value="InvalidDirDlg" Order="4" Condition="NOT WIXUI_DONTVALIDATEPATH AND WIXUI_INSTALLDIR_VALID&lt;&gt;&quot;1&quot;" />
 
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" Order="1"
-          Condition="NOT Installed" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="3"
-          Condition="Installed AND PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="InstallDirDlg" Order="1" Condition="NOT Installed" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="WelcomeDlg" Order="3" Condition="Installed AND PATCH" />
 
       <!-- Maintenance: Welcome -> Repair / Remove -> Ready. -->
       <Publish Dialog="MaintenanceWelcomeDlg" Control="Next" Event="NewDialog" Value="MaintenanceTypeDlg" />
       <Publish Dialog="MaintenanceTypeDlg" Control="RepairButton" Event="NewDialog" Value="VerifyReadyDlg" />
       <Publish Dialog="MaintenanceTypeDlg" Control="RemoveButton" Event="NewDialog" Value="VerifyReadyDlg" />
       <Publish Dialog="MaintenanceTypeDlg" Control="Back" Event="NewDialog" Value="MaintenanceWelcomeDlg" />
-      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2"
-          Condition="Installed AND NOT PATCH" />
+      <Publish Dialog="VerifyReadyDlg" Control="Back" Event="NewDialog" Value="MaintenanceTypeDlg" Order="2" Condition="Installed AND NOT PATCH" />
 
       <!-- Completion page: optionally launch, then close. -->
-      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchLightcraft" Order="1"
-          Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchLightcraft" Order="1" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
       <Publish Dialog="ExitDialog" Control="Finish" Event="EndDialog" Value="Return" Order="999" />
 
       <!-- One feature, nothing to change: no "Change" in Apps & features. -->
@@ -194,17 +159,19 @@
     <ComponentGroup Id="LightcraftFiles" Directory="INSTALLFOLDER">
       <Component Id="LightcraftApp" Guid="8A1D3A39-F7C1-47B1-97AE-40C80BF82F4A">
         <File Id="LightcraftExe" Source="$(var.BinDir)\lightcraft.exe" KeyPath="yes">
-          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="LightCraft"
-              Description="LightCraft photo library and raw developer" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
-              Icon="LightcraftIcon.ico" IconIndex="0" />
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="LightCraft" Description="LightCraft photo library and raw developer" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="LightcraftIcon.ico" IconIndex="0" />
         </File>
 
-        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\lightcraft.exe" Value="[#LightcraftExe]" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\LightCraft" Name="InstallFolder" Value="[INSTALLFOLDER]" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\lightcraft.exe" Value="[#LightcraftExe]" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\LightCraft" Name="InstallFolder" Value="[INSTALLFOLDER]" Type="string" />
+      <RegistryValue Root="HKMU" Key="Software\LightCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
       </Component>
 
       <Component Id="LightcraftCli">
         <File Id="LightcraftCliExe" Source="$(var.BinDir)\lightcraft-cli.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="LightcraftNotice">
+        <File Id="LightcraftNoticeFile" Source="$(var.BinDir)\NOTICE" KeyPath="yes" />
       </Component>
       <Component Id="LightcraftFontLicences">
         <File Id="LightcraftFontLicencesFile" Source="$(var.BinDir)\FONT-LICENCES.txt" KeyPath="yes" />

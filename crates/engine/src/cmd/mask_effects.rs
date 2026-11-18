@@ -33,6 +33,7 @@ pub const FIELDS: &[&str] = &[
     "noise",
     "moire",
     "defringe",
+    "lens_blur",
     "color_hue",
     "color_sat",
 ];
@@ -118,10 +119,11 @@ pub fn get(a: &LocalAdjustments, k: &str) -> f64 {
     serde_json::to_value(a).ok().and_then(|v| v.get(k).and_then(Value::as_f64)).unwrap_or(0.0)
 }
 
-/// `a` with field `k` set to `v` (unchanged for an unknown name).
+/// `a` with field `k` set to `v` (unchanged for an unknown name). A [`FIELDS`] slider counts as
+/// known also while its JSON leaves it out at 0 (`lens_blur`).
 pub fn set(a: &LocalAdjustments, k: &str, v: f64) -> LocalAdjustments {
     let Ok(Value::Object(mut o)) = serde_json::to_value(a) else { return *a };
-    if !o.contains_key(k) || !v.is_finite() {
+    if !(o.contains_key(k) || FIELDS.contains(&k)) || !v.is_finite() {
         return *a;
     }
     o.insert(k.into(), json!(v));
@@ -287,12 +289,7 @@ fn effect_index(s: &Session, name: &str, c: &str) -> Result<usize> {
 /// The selected mask's adjustments on the active photo.
 fn selected_mask(s: &Session, p: &Value, c: &str) -> Result<Mask> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
-    let mid = p
-        .get("id")
-        .and_then(Value::as_u64)
-        .and_then(|v| u32::try_from(v).ok())
-        .or(s.active_mask)
-        .ok_or_else(|| bad(c, "no mask selected (give `id`)"))?;
+    let mid = super::masks::mask_id(p, s.active_mask, c)?;
     let d = s.develop_of(id).unwrap_or_default();
     d.masks.iter().find(|m| m.id == mid).cloned().ok_or_else(|| bad(c, format!("no mask {mid}")))
 }
@@ -341,10 +338,12 @@ fn apply_effect(s: &mut Session, p: &Value) -> Result<Value> {
     // the masks: `ids`, `all`, else `id` or the selected one
     let ids: Vec<u32> = if p.get("all").and_then(Value::as_bool).unwrap_or(false) {
         d.masks.iter().map(|m| m.id).collect()
-    } else if let Some(a) = p.get("ids").and_then(Value::as_array) {
-        a.iter().filter_map(Value::as_u64).filter_map(|v| u32::try_from(v).ok()).collect()
     } else {
-        vec![selected_mask(s, p, C)?.id]
+        match p.get("ids") {
+            None | Some(Value::Null) => vec![selected_mask(s, p, C)?.id],
+            Some(Value::Array(a)) => a.iter().map(|v| super::masks::parse_mask_id(v, C)).collect::<Result<_>>()?,
+            Some(_) => return Err(bad(C, "`ids` must be a list of mask IDs")),
+        }
     };
     if ids.is_empty() {
         return Err(bad(C, "no masks to apply the effect to"));
@@ -708,6 +707,22 @@ mod tests {
         assert_eq!((out.exposure, out.shadows, out.clarity, out.amount), (0.5, 30.0, 10.0, 70.0));
         assert!(e.matches(&out));
         assert!(!e.matches(&LocalAdjustments { amount: 100.0, ..out }), "Amount counts when carried");
+    }
+
+    /// A partial effect sets Lens Blur on a mask without any yet (its JSON leaves `lens_blur` out
+    /// at 0); a name no slider has still changes nothing.
+    #[test]
+    fn partial_effects_set_lens_blur_from_zero() {
+        let e = MaskEffect {
+            name: "Bokeh".into(),
+            adjust: LocalAdjustments { lens_blur: 60.0, ..Default::default() },
+            fields: vec!["lens_blur".into()],
+            ..Default::default()
+        };
+        let out = e.apply(&LocalAdjustments::default());
+        assert_eq!(out.lens_blur, 60.0);
+        assert!(e.matches(&out));
+        assert_eq!(set(&LocalAdjustments::default(), "bogus", 5.0), LocalAdjustments::default());
     }
 
     #[test]
