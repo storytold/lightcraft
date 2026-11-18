@@ -6,7 +6,7 @@ use lightcraft_develop::{
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
-use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, has_mask, has_mask_clipboard, ok, point, str_param};
+use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, has_mask_clipboard, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
 
@@ -748,7 +748,7 @@ pub fn specs() -> Vec<CommandSpec> {
             ["Photo"],
             None,
             "{id?: maskId (default: the selected mask)} — copies the mask and its effect for Paste Mask → {name}",
-            has_mask,
+            has_active,
             |s, p| {
                 let c = "mask.copy";
                 let mid = mask_id(p, s.active_mask, c)?;

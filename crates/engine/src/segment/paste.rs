@@ -60,6 +60,13 @@ impl Session {
         let targets: Vec<_> = ids.iter().filter_map(|id| self.develop_of(*id).map(|before| (*id, paste(&before)))).collect();
         // Settings that did not include Masking must not recompute or discard existing masks.
         if copied_ai == 0 || targets.is_empty() {
+            // as `Pending::finish` refuses: cancelling that edit would restore the photo's old
+            // settings and leave this paste's undo step behind
+            if self.interaction.as_ref().is_some_and(|i| targets.iter().any(|(id, _)| *id == i.photo)) {
+                return Err(crate::EngineError::Other(
+                    "A destination photo has an open edit interaction. No settings were pasted; finish or cancel the edit and try again.".into(),
+                ));
+            }
             let ops: Vec<_> = targets.into_iter().filter_map(|(id, d)| self.develop_op(id, d, label)).collect();
             let changed = ops.len();
             self.commit(label, Op::Batch { ops })?;

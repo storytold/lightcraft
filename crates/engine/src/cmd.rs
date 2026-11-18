@@ -129,11 +129,6 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
     has_selection(s)?;
     if s.clipboard.is_none() { Err("no settings copied".into()) } else { Ok(()) }
 }
-/// Copy Mask: a mask is selected on the active photo.
-pub fn has_mask(s: &Session) -> std::result::Result<(), String> {
-    has_active(s)?;
-    if s.active_mask.is_none() { Err("no mask selected".into()) } else { Ok(()) }
-}
 /// Paste Mask: a mask was copied, and there are photos to paste it to.
 pub fn has_mask_clipboard(s: &Session) -> std::result::Result<(), String> {
     has_selection(s)?;

@@ -738,6 +738,32 @@ fn paste_mask_is_refused_until_a_mask_is_copied() {
     assert!(s.execute("mask.paste", &json!({"ids": [target.0]})).is_err(), "nothing copied");
 }
 
+#[test]
+fn copy_mask_takes_an_explicit_id_with_no_mask_selected() {
+    let (mut s, _, _) = copied();
+    s.active_mask = None;
+    let out = s.execute("mask.copy", &json!({"id": 7})).unwrap();
+    assert_eq!(out["name"], "People");
+    assert_eq!(s.mask_clipboard.as_ref().map(|m| m.id), Some(7));
+    assert!(s.execute("mask.copy", &json!({"id": 99})).is_err(), "no such mask");
+}
+
+#[test]
+fn an_immediate_paste_is_refused_while_a_destination_has_an_open_edit() {
+    let (mut s, _, target) = mask_copied(true);
+    s.execute("library.select", &json!({"ids": [target.0], "active": target.0})).unwrap();
+    let before = s.develop_of(target).unwrap();
+    s.begin_interaction("Exposure").unwrap();
+    let history = (s.commits(), s.undo.len());
+    let e = s.execute("mask.paste", &json!({"ids": [target.0]})).unwrap_err();
+    assert!(e.to_string().contains("interaction"), "{e}");
+    assert_eq!((s.commits(), s.undo.len()), history, "no undo step left behind");
+    assert_eq!(s.develop_of(target).unwrap(), before);
+    assert_eq!(s.interaction.as_ref().map(|i| i.photo), Some(target), "the user's edit stays open");
+    s.cancel_interaction().unwrap();
+    assert_eq!(s.develop_of(target).unwrap(), before);
+}
+
 #[cfg(feature = "sam")]
 #[test]
 fn paste_mask_recomputes_only_the_pasted_mask_not_the_photos_own_ai_masks() {
