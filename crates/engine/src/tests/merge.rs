@@ -251,34 +251,38 @@ fn panorama_memory_estimate_allows_projected_canvas_larger_than_source_area() {
 }
 
 #[test]
-fn panorama_memory_estimate_bounds_tiles_for_every_frame() {
+fn panorama_memory_estimate_uses_measured_workspace_bounds() {
     use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
     use lightcraft_merge::{PanoOptions, Projection};
 
     let frames = 16usize;
-    let side = 4_472u32;
+    let side = 1_000u32;
     let frame_pixels = usize::try_from(side).unwrap() * usize::try_from(side).unwrap() * frames;
     let input_bytes = frame_pixels * std::mem::size_of::<[f32; 3]>();
-    let output_pixels = 40_000_000usize;
-    let pano = PanoOptions { projection: Projection::Cylindrical, max_megapixels: 40.0, ..Default::default() };
+    let output_pixels = 4_000_000usize;
+    let pano = PanoOptions { projection: Projection::Cylindrical, max_megapixels: 4.0, ..Default::default() };
     let estimated = estimate_merge_working_bytes_with_budget(&MergeKind::Panorama { pano }, &[(side, side); 16], None, usize::MAX).unwrap();
-    let minimum_tile_working_set = input_bytes + output_pixels * frames * 16;
-    assert!(
-        estimated >= minimum_tile_working_set,
-        "estimate {estimated} omits some per-frame tile storage; expected at least {minimum_tile_working_set}"
-    );
+    let measured_tile_working_set = input_bytes + output_pixels * 36;
+    let measured_blend_working_set = output_pixels * 68;
+    assert_eq!(estimated, measured_tile_working_set.max(measured_blend_working_set));
 }
 
 #[test]
-fn panorama_output_limit_accounts_for_frame_count() {
+fn panorama_output_limit_uses_measured_workspace_and_all_input_pixels() {
     use crate::merge::panorama_output_pixel_limit;
 
     let available = 2_000_000_000usize;
-    let input_pixels = 10_000_000usize;
-    let one_frame = panorama_output_pixel_limit(available, input_pixels, 1).unwrap();
-    let many_frames = panorama_output_pixel_limit(available, input_pixels, 16).unwrap();
-    assert!(many_frames < one_frame, "16 retained frame tiles should reduce the output limit: {many_frames} vs {one_frame}");
-    assert!(many_frames * (68 + 16 * 16) <= available, "blend and frame tiles exceed available memory");
+    let one_input_pixels = 10_000_000usize;
+    let many_input_pixels = 160_000_000usize;
+    let output_limit = |frame_pixels| {
+        let input_bytes = frame_pixels * std::mem::size_of::<[f32; 3]>();
+        (available.saturating_sub(input_bytes) / 36).min(available / 68)
+    };
+    let one_frame = panorama_output_pixel_limit(available, one_input_pixels).unwrap();
+    let many_frames = panorama_output_pixel_limit(available, many_input_pixels).unwrap();
+    assert_eq!(one_frame, output_limit(one_input_pixels));
+    assert_eq!(many_frames, output_limit(many_input_pixels));
+    assert!(many_frames < one_frame, "more resident input pixels should reduce the output limit: {many_frames} vs {one_frame}");
 }
 
 #[test]
@@ -286,10 +290,22 @@ fn panorama_preview_reserves_memory_for_the_preview_cache() {
     use crate::merge::{MergeKind, estimate_merge_working_bytes_with_budget};
     use lightcraft_merge::{PanoOptions, Projection};
 
-    let available = 5usize << 30;
+    let available = 3usize << 29; // 1.5 GiB, representable on 32-bit targets.
     let kind = MergeKind::Panorama { pano: PanoOptions { projection: Projection::Cylindrical, max_megapixels: 512.0, ..Default::default() } };
     let estimated = estimate_merge_working_bytes_with_budget(&kind, &[(100, 100); 3], Some(1024), available).unwrap();
     assert!(estimated <= available, "preview estimate {estimated} exceeds its {available}-byte budget after the cache reserve");
+}
+
+#[test]
+fn small_panorama_preview_does_not_require_a_40mp_workspace() {
+    use crate::merge::{MergeKind, estimate_merge_working_bytes_with_source_dimensions};
+    use lightcraft_merge::{PanoOptions, Projection};
+
+    let available = 3usize << 29; // 1.5 GiB
+    let kind = MergeKind::Panorama { pano: PanoOptions { projection: Projection::Cylindrical, ..Default::default() } };
+    let dimensions = [((4_000, 3_000), (4_000, 3_000)); 2];
+    let estimated = estimate_merge_working_bytes_with_source_dimensions(&kind, &dimensions, Some(1024), available).unwrap();
+    assert!(estimated <= available, "small preview estimate {estimated} exceeds its {available}-byte budget");
 }
 
 #[test]
@@ -594,14 +610,14 @@ fn panorama_size_is_held_to_memory() {
     let gb = |g: usize| Some(g << 30);
     let photos = 5.0 * 51e6; // five 51 MP photos
     let mp = |o: lightcraft_merge::PanoOptions| o.max_megapixels;
-    assert_eq!(mp(fit_in_memory(&full, photos, 5, gb(512))), lightcraft_merge::pano::MAX_MEGAPIXELS, "plenty of memory: the full size");
-    let m16 = mp(fit_in_memory(&full, photos, 5, gb(16)));
+    assert_eq!(mp(fit_in_memory(&full, photos, gb(512))), lightcraft_merge::pano::MAX_MEGAPIXELS, "plenty of memory: the full size");
+    let m16 = mp(fit_in_memory(&full, photos, gb(16)));
     assert!(m16 > MIN_FITTED_MEGAPIXELS && m16 < 512.0, "16 GB: {m16} MP");
-    assert!(mp(fit_in_memory(&full, photos, 5, gb(32))) > m16, "more memory, more pixels");
-    assert_eq!(mp(fit_in_memory(&full, photos, 5, gb(4))), MIN_FITTED_MEGAPIXELS, "never below 40 MP");
+    assert!(mp(fit_in_memory(&full, photos, gb(32))) > m16, "more memory, more pixels");
+    assert_eq!(mp(fit_in_memory(&full, photos, gb(4))), MIN_FITTED_MEGAPIXELS, "never below 40 MP");
     let asked = lightcraft_merge::PanoOptions { max_megapixels: 20.0, ..full.clone() };
-    assert_eq!(mp(fit_in_memory(&asked, photos, 5, gb(16))), 20.0, "a size asked for is kept when it fits");
-    assert_eq!(fit_in_memory(&full, 1e6, 1, None), fit_in_memory(&full, 1e6, 1, gb(8)), "memory unknown: taken as 8 GB");
+    assert_eq!(mp(fit_in_memory(&asked, photos, gb(16))), 20.0, "a size asked for is kept when it fits");
+    assert_eq!(fit_in_memory(&full, 1e6, None), fit_in_memory(&full, 1e6, gb(8)), "memory unknown: taken as 8 GB");
 }
 
 /// A photo named twice is merged once (issue #1947): `[a, a, a]` is one photo, too few to merge, and `[a, b, a, b]`
@@ -640,7 +656,7 @@ fn merge_memory_estimate_is_checked_and_uses_a_controlled_budget() {
     let required = estimate_merge_working_bytes(&kind, &[(5_000, 5_000), (5_000, 5_000)], None).unwrap();
     let error = check_merge_memory_budget(required, 256 << 20).unwrap_err();
     assert!(error.contains("merge memory budget") && error.contains("lower-resolution"), "{error}");
-    assert_eq!(merge_memory_bytes(Some(8 << 30), 1 << 30), 5 << 30, "75% of RAM less the cache budget");
+    assert_eq!(merge_memory_bytes(Some(800 << 20), 100 << 20), 500 << 20, "75% of RAM less the cache budget");
 
     let kinds = [
         kind.clone(),
