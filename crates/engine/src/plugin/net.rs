@@ -3,15 +3,15 @@
 //! craft-plugin's own `http` feature implements this for another copy of craft-update, so
 //! LightCraft wraps its own client instead.
 //!
-//! Every hop of a redirect is checked before it is followed (`https://` on GitHub's hosts,
-//! [`craft_plugin::catalog::check_redirect`]), and a body is refused as soon as it passes the
-//! size asked for.
+//! Every hop of a redirect is checked before it is followed
+//! ([`craft_plugin::catalog::check_redirect_for`]: `https://` on GitHub's API for an API request,
+//! on its download hosts otherwise), and a body is refused as soon as it passes the size asked for.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use craft_plugin::catalog::check_redirect;
+use craft_plugin::catalog::check_redirect_for;
 use craft_plugin::fetch::{Fetch, MAX_REDIRECTS};
 use lightcraft_fetch::http::{self, HttpError, Limits, Url};
 
@@ -79,10 +79,7 @@ impl Fetch for NetFetch {
                     let location = response.header("location").ok_or_else(|| format!("{} redirected nowhere", url_text(&at)))?.to_string();
                     let next = at.join(&location).map_err(text)?;
                     // the API's own redirects (a renamed repository) stay on the API
-                    let api = |u: &Url| u.tls && u.port == 443 && u.host.eq_ignore_ascii_case("api.github.com");
-                    if !(api(&at) && api(&next)) {
-                        check_redirect(&url_text(&next))?;
-                    }
+                    check_redirect_for(url, &url_text(&next))?;
                     at = next;
                 }
                 403 | 429 if at.host.eq_ignore_ascii_case("api.github.com") => {
