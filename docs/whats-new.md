@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Synchronize Folder finds new photos in folders beside the catalog
+- When a library was made inside a folder of photos (the catalog files next to folders such as `misc/` or `2026/`),
+  Synchronize Folder on one of those folders said the library was up to date however many photos had been added: the
+  scan never looked inside the library's folder, only at the photos already imported from it. It now walks those
+  folders like any other, and so do importing a folder and browsing it in Local. LightCraft's own folders there
+  (`thumbs/`, `Originals/`, `Smart Previews/`, `Profiles/`, `Interop/`, `denoise/`) are still never read as photos,
+  nor is the library reached through a link to it.
+
 ### Flatpak updates
 - Help ▸ Check for Updates can now reach the release service and update standalone Flatpak bundles.
   This permissions repair must first arrive through your existing host-side update method. Flatpaks

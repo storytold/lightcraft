@@ -363,30 +363,38 @@ fn a_cancelled_browse_stops_ordering_and_keeps_earlier_probes() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Browsing a folder with its subfolders lists nothing inside the library's own folder (the
-/// import that follows would read it as photos), as the import's scan skips it.
+/// Browsing a folder with its subfolders lists nothing in the library's data folders (the import
+/// that follows would read its thumbnail cache as photos), as the import's scan skips them, and
+/// nothing of the library reached through a link. Photos kept in the library's folder itself (a
+/// library made in a folder of photos) are listed like any other folder's.
 #[test]
-fn browsing_with_subfolders_skips_the_librarys_own_folder() {
+fn browsing_with_subfolders_skips_the_librarys_data_folders() {
     let dir = temp_dir("browse-skip-lib");
     std::fs::create_dir_all(dir.join("lib")).unwrap();
     let mut s = Session::new().with_fs();
     s.open_library(dir.join("lib"), false).unwrap();
     write_png(&dir.join("a.png"), 1);
     write_png(&dir.join("lib").join("inside.png"), 2);
+    write_png(&dir.join("lib").join("thumbs").join("cached.png"), 4);
     let (input, _) = crate::import::ScanInput::new(&mut s, &[]);
     let root = dir.to_string_lossy().to_string();
     let names = |v: Vec<String>| v.iter().map(|f| Path::new(f).file_name().unwrap().to_string_lossy().to_string()).collect::<Vec<_>>();
-    assert_eq!(names(crate::import::browse_files(&input, &root, true).unwrap()), ["a.png"]);
+    assert_eq!(names(crate::import::browse_files(&input, &root, true).unwrap()), ["a.png", "inside.png"]);
     assert_eq!(names(crate::import::browse_files(&input, &root, false).unwrap()), ["a.png"]);
-    // the library's folder chosen itself, with or without its subfolders
+    // the library's folder chosen itself, with or without its subfolders: its photos, not its data
     let lib = dir.join("lib").to_string_lossy().to_string();
-    assert!(crate::import::browse_files(&input, &lib, false).unwrap().is_empty());
-    assert!(crate::import::browse_files(&input, &lib, true).unwrap().is_empty());
-    // the library's folder by another name: through `..`, or a symlink to it
+    assert_eq!(names(crate::import::browse_files(&input, &lib, false).unwrap()), ["inside.png"]);
+    assert_eq!(names(crate::import::browse_files(&input, &lib, true).unwrap()), ["inside.png"]);
+    // a data folder chosen itself
+    let thumbs = dir.join("lib").join("thumbs").to_string_lossy().to_string();
+    assert!(crate::import::browse_files(&input, &thumbs, false).unwrap().is_empty(), "{thumbs}");
+    assert!(crate::import::browse_files(&input, &thumbs, true).unwrap().is_empty(), "{thumbs}");
+    // the library's folder through `..` is the same folder under its one spelling
     std::fs::create_dir_all(dir.join("other")).unwrap();
     let around = dir.join("other").join("..").join("lib").to_string_lossy().to_string();
-    assert!(crate::import::browse_files(&input, &around, false).unwrap().is_empty(), "{around}");
-    assert!(crate::import::browse_files(&input, &around, true).unwrap().is_empty(), "{around}");
+    assert_eq!(names(crate::import::browse_files(&input, &around, false).unwrap()), ["inside.png"], "{around}");
+    assert_eq!(names(crate::import::browse_files(&input, &around, true).unwrap()), ["inside.png"], "{around}");
+    // the library's folder through a symlink to it: another name for photos it knows by their own
     #[cfg(unix)]
     {
         let alias = dir.join("alias");

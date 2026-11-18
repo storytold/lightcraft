@@ -95,7 +95,7 @@ impl ScanInput {
         (input, paths.to_vec())
     }
 
-    /// The folder a scan never enters (the library's own).
+    /// The library's folder, whose data folders a scan never enters ([`crate::walk::keeps_out`]).
     pub(crate) fn skip(&self) -> Option<&Path> {
         self.skip.as_deref()
     }
@@ -135,7 +135,8 @@ pub fn browse_queue_until(
 }
 
 /// The files browsing `root` (Local) lists: the supported, non-hidden files in it, or below it
-/// with `subfolders`, never inside the library's own folder (as [`scan_with`] skips it).
+/// with `subfolders`, never in the library's own data folders (as [`scan_with`] skips them; see
+/// [`crate::walk::keeps_out`]). Photo folders inside the library's folder are listed like any other.
 ///
 /// A folder that can't be listed whole (gone, no access, a network share dropping out) is an
 /// error, not an empty or partial listing: the browse bookkeeping would take the files missing
@@ -146,8 +147,9 @@ pub fn browse_files(input: &ScanInput, root: &str, subfolders: bool) -> std::io:
     // the catalog stores them, not as new photos under another name
     let root_path = browse_path(Path::new(root))?;
     let root = root_path.to_string_lossy().to_string();
-    // the library's folder itself, or a folder inside it: nothing to browse
-    if input.skip.as_deref().is_some_and(|lib| inside(&root_path, lib)) {
+    // one of the library's data folders, or the library under another name: nothing to browse
+    // (the library compared in the root's spelling)
+    if input.skip.as_deref().is_some_and(|lib| crate::walk::keeps_out(&root_path, &browse_path(lib).unwrap_or_else(|_| lib.to_path_buf()))) {
         return Ok(Vec::new());
     }
     if subfolders {
@@ -215,18 +217,6 @@ fn normalized(path: &Path, resolve_links: bool) -> std::io::Result<PathBuf> {
         }
     }
     Ok(out)
-}
-
-/// Whether `root` (a [`browse_path`]) is `lib` or a folder inside it: as written, or once both are
-/// resolved (a symlink to the library names the same folder), as the recursive walk tells. A root
-/// that can't be resolved (gone, or a network share that won't say) is compared as written when it
-/// is there; one that isn't there is not inside, and listing it reports why.
-fn inside(root: &Path, lib: &Path) -> bool {
-    let as_written = || root.starts_with(browse_path(lib).unwrap_or_else(|_| lib.to_path_buf()));
-    match std::fs::canonicalize(root) {
-        Ok(resolved) => as_written() || std::fs::canonicalize(lib).is_ok_and(|lib| resolved.starts_with(lib)),
-        Err(_) => root.exists() && as_written(),
-    }
 }
 
 /// Order `files` the way a view sorted by `sort` will show them, as far as the file system can
