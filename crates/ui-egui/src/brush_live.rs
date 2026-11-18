@@ -9,7 +9,9 @@
 
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{accumulate, dab_alpha, pressure_flow, pressure_radius, push_dabs_counted, push_pressures};
+use lightcraft_pipeline::masks::{
+    accumulate, dab_alpha, feather_dab, pressure_flow, pressure_radius, push_dabs_counted, push_pressures, stroke_coverage, travel_flow,
+};
 
 /// The largest live-stroke buffer edge (pixels); a bigger canvas is painted at a lower resolution.
 const MAX_SIDE: usize = 4096;
@@ -28,6 +30,12 @@ pub struct LiveParams {
     /// Flow and density, 0..1.
     pub flow: f32,
     pub density: f32,
+    /// Flow is coverage per brush radius travelled (process V9, `masks::flow_per_radius`), as the
+    /// committed stroke paints it.
+    pub per_radius: bool,
+    /// The stroke's edge is feathered as one dab's is (process V10, `masks::stroke_feather`), as
+    /// the committed stroke paints it.
+    pub by_stroke: bool,
     /// Overlay colour and its opacity (0..1) at full coverage.
     pub color: [u8; 3],
     pub opacity: f32,
@@ -39,6 +47,9 @@ pub struct LiveStroke {
     w: usize,
     h: usize,
     alpha: Vec<f32>,
+    /// Under `by_stroke`, the Flow build-up and the edge `alpha` is made of (`masks::feather_dab`).
+    build: Vec<f32>,
+    edge: Vec<f32>,
     /// Samples stamped so far, and the last one (buffer pixels).
     placed: usize,
     /// Total dabs emitted across every stamp, including the first sample.
@@ -46,6 +57,8 @@ pub struct LiveStroke {
     last: Option<Point>,
     /// The pen pressure of the last stamped sample.
     last_pressure: f32,
+    /// The last dab painted (buffer pixels): how far the next one travelled.
+    last_dab: Option<Point>,
     /// Buffer pixels painted since the last upload: (x0, y0, x1, y1), exclusive ends.
     dirty: Option<(usize, usize, usize, usize)>,
     texture: Option<TextureHandle>,
@@ -56,7 +69,21 @@ impl LiveStroke {
         let scale = buffer_scale(params.clip, params.scale);
         let params = LiveParams { scale, ..params };
         let (w, h) = buffer_size(params.clip, scale);
-        LiveStroke { params, w, h, alpha: vec![0.0; w * h], placed: 0, emitted: 0, last: None, last_pressure: 1.0, dirty: None, texture: None }
+        LiveStroke {
+            params,
+            w,
+            h,
+            alpha: vec![0.0; w * h],
+            build: if params.by_stroke { vec![0.0; w * h] } else { Vec::new() },
+            edge: if params.by_stroke { vec![0.0; w * h] } else { Vec::new() },
+            placed: 0,
+            emitted: 0,
+            last: None,
+            last_pressure: 1.0,
+            last_dab: None,
+            dirty: None,
+            texture: None,
+        }
     }
 
     /// Stroke coverage (0..1) at buffer pixel `(x, y)`; 0 outside.
@@ -80,7 +107,7 @@ impl LiveStroke {
         if new.is_empty() {
             return false;
         }
-        let LiveParams { clip, scale, r, hard, flow, density, .. } = self.params;
+        let LiveParams { clip, scale, r, hard, flow, density, per_radius, by_stroke, .. } = self.params;
         let (r, hard) = ((r * scale) as f64, (hard * scale) as f64);
         let mut dabs = Vec::new();
         let mut pressures = Vec::new();
@@ -105,6 +132,10 @@ impl LiveStroke {
             let r = pressure_radius(base.0, p);
             let hard = if base.0 > 0.0 { base.1 * r / base.0 } else { base.1 };
             let flow = pressure_flow(flow, p);
+            // the first dab counts one radius, as the committed stroke's does
+            let travelled = self.last_dab.map_or(r, |a| a.dist(d));
+            self.last_dab = Some(d);
+            let flow = if per_radius { travel_flow(flow, travelled, r) } else { flow };
             let x0 = (d.x - r).floor().clamp(0.0, self.w as f64) as usize;
             let x1 = (d.x + r).ceil().clamp(0.0, self.w as f64) as usize;
             let y0 = (d.y - r).floor().clamp(0.0, self.h as f64) as usize;
@@ -113,13 +144,29 @@ impl LiveStroke {
                 continue;
             }
             for y in y0..y1 {
-                let Some(row) = self.alpha.get_mut(y * self.w + x0..y * self.w + x1) else { continue };
-                for (x, v) in (x0..x1).zip(row.iter_mut()) {
-                    let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(d);
-                    if dd > r {
-                        continue;
+                let span = y * self.w + x0..y * self.w + x1;
+                let Some(row) = self.alpha.get_mut(span.clone()) else { continue };
+                let (build, edge) = (self.build.get_mut(span.clone()), self.edge.get_mut(span));
+                match (build, edge) {
+                    (Some(build), Some(edge)) if by_stroke => {
+                        for (x, ((v, b), e)) in (x0..x1).zip(row.iter_mut().zip(build.iter_mut()).zip(edge.iter_mut())) {
+                            let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(d);
+                            if dd > r {
+                                continue;
+                            }
+                            feather_dab(b, e, dab_alpha(dd, r, hard), flow);
+                            *v = stroke_coverage(*b, *e, density);
+                        }
                     }
-                    *v = accumulate(*v, dab_alpha(dd, r, hard), flow, density);
+                    _ => {
+                        for (x, v) in (x0..x1).zip(row.iter_mut()) {
+                            let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(d);
+                            if dd > r {
+                                continue;
+                            }
+                            *v = accumulate(*v, dab_alpha(dd, r, hard), flow, density);
+                        }
+                    }
                 }
             }
             self.dirty = Some(match self.dirty {
@@ -220,12 +267,34 @@ mod tests {
             hard: 5.0,
             flow: 1.0,
             density: 1.0,
+            per_radius: true,
+            by_stroke: false,
             color: [230, 30, 40],
             opacity: 0.5,
         }
     }
 
     /// Issue #517: two samples far apart (a fast stroke) paint a continuous band between them,
+    /// Process V9: the live stroke adds Flow per brush radius travelled, as the committed one does,
+    /// so a slow drag (a sample every point) and a fast one cover a point the same; a stroke's centre
+    /// at Flow 25 is covered by 1 − 0.75² (Feather 0 here). Before V9 the slow drag built up more.
+    #[test]
+    fn flow_per_radius_does_not_depend_on_the_drag_speed() {
+        let p = LiveParams { flow: 0.25, hard: 10.0, ..params() };
+        let paint = |per_radius: bool, step: usize| {
+            let mut s = LiveStroke::new(LiveParams { per_radius, ..p });
+            let pts: Vec<Pos2> = (20..=380).step_by(step).map(|x| pos2(x as f32, 100.0)).collect();
+            for n in 1..=pts.len() {
+                s.stamp(&pts[..n], &[]);
+            }
+            s.coverage(200, 100)
+        };
+        let (fast, slow) = (paint(true, 360), paint(true, 1));
+        assert!((fast - 0.4375).abs() < 0.03, "{fast}");
+        assert!((fast - slow).abs() < 0.02, "fast {fast} vs slow {slow}");
+        assert!(paint(false, 1) > paint(false, 360), "before V9 a slow drag builds up more");
+    }
+
     /// not two separate dabs.
     #[test]
     fn a_fast_segment_is_painted_continuously() {
@@ -239,6 +308,31 @@ mod tests {
         assert!(s.coverage(200, 104) > 0.99);
         assert!((0.01..0.99).contains(&s.coverage(200, 108)), "{}", s.coverage(200, 108));
         assert_eq!(s.coverage(200, 111), 0.0);
+    }
+
+    /// Process V10 (`by_stroke`): the live stroke's edge falls off over the feather as one dab's
+    /// does, as the committed stroke's does (`masks::stroke_coverage`), where accumulating every
+    /// dab piles the soft edges up; stamped a frame at a time it is the same.
+    #[test]
+    fn by_stroke_the_live_edge_is_feathered_as_one_dab() {
+        let soft = LiveParams { hard: 0.0, by_stroke: true, ..params() };
+        let mut s = LiveStroke::new(soft);
+        s.stamp(&[pos2(20.0, 100.0), pos2(380.0, 100.0)], &[]);
+        for dy in 0..10 {
+            let want = dab_alpha(dy as f64 + 0.5, 10.0, 0.0);
+            let got = s.coverage(200, 100 + dy);
+            assert!((got - want).abs() < 0.02, "{dy} px off the line: {got}, one dab paints {want}");
+        }
+        let mut old = LiveStroke::new(LiveParams { by_stroke: false, ..soft });
+        old.stamp(&[pos2(20.0, 100.0), pos2(380.0, 100.0)], &[]);
+        assert!(old.coverage(200, 105) > s.coverage(200, 105) + 0.2, "{} vs {}", old.coverage(200, 105), s.coverage(200, 105));
+        let pts = [pos2(30.0, 40.0), pos2(200.0, 150.0), pos2(390.0, 20.0)];
+        let (mut once, mut steps) = (LiveStroke::new(LiveParams { flow: 0.4, ..soft }), LiveStroke::new(LiveParams { flow: 0.4, ..soft }));
+        once.stamp(&pts, &[]);
+        for n in 1..=pts.len() {
+            steps.stamp(&pts[..n], &[]);
+        }
+        assert_eq!(once.alpha, steps.alpha);
     }
 
     /// Painting the samples one frame at a time gives the same coverage as all at once (what the

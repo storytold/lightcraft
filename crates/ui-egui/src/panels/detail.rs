@@ -767,7 +767,7 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         RightPanel::Remove => remove_overlay(app, ui, resp, map, d),
         RightPanel::RedEye => eye_overlay(app, ui, resp, map, d),
         RightPanel::Edit if app.ui.tool == "lensBlurShape" => lens_blur_shape_overlay(app, ui, resp, map, d),
-        RightPanel::Edit if app.ui.tool.starts_with("lensBlur") => lens_blur_brush_overlay(app, ui, resp, map),
+        RightPanel::Edit if app.ui.tool.starts_with("lensBlur") => lens_blur_brush_overlay(app, ui, resp, map, d),
         _ => {
             // side by side / stacked: Before shows the same frame, so a click in its view (white
             // balance, colour samples, targeted adjustment) means the same point of the photo.

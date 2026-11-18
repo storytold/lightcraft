@@ -77,14 +77,16 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
         }
         v = 1.0 - sstep(tol * 0.5, tol, best);
     } else if (kind == 4u) {
-        // stroke record: dab offset, dab count, r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto
+        // stroke record: dab offset, dab count, r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto,
+        // the edge feathered by stroke (process V10: build-up times the highest dab falloff)
         let px = f32(g.x) + 0.5;
         let py = f32(g.y) + 0.5;
         let lp = log_l[i];
         let chp = chroma_at(i);
         for (var k = 0u; k < pu(10u); k++) {
-            let o = 12u * k;
+            let o = 13u * k;
             let auto_mask = aux[o + 11u] != 0.0;
+            let by_stroke = aux[o + 12u] != 0.0;
             if (px < aux[o + 7u] || py < aux[o + 8u] || px > aux[o + 9u] || py > aux[o + 10u]) {
                 continue;
             }
@@ -92,11 +94,13 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
             let cnt = u32(aux[o + 1u]);
             let r = aux[o + 2u];
             let hard = aux[o + 3u];
-            let flow = aux[o + 4u];
             var keep = 1.0;
+            var edge = 0.0;
             for (var j = 0u; j < cnt; j++) {
-                let dx = px - aux[off + 2u * j];
-                let dy = py - aux[off + 2u * j + 1u];
+                // dab record: centre x, y and the flow it adds (the stroke's before process V9)
+                let dx = px - aux[off + 3u * j];
+                let dy = py - aux[off + 3u * j + 1u];
+                let flow = aux[off + 3u * j + 2u];
                 let dd = sqrt(dx * dx + dy * dy);
                 if (dd > r) {
                     continue;
@@ -106,14 +110,24 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
                     a = 1.0 - sstep(hard, r, dd);
                 }
                 if (auto_mask) {
-                    let rx = min(u32(max(floor(aux[off + 2u * j]), 0.0)), w - 1u);
-                    let ry = min(u32(max(floor(aux[off + 2u * j + 1u]), 0.0)), h - 1u);
+                    let rx = min(u32(max(floor(aux[off + 3u * j]), 0.0)), w - 1u);
+                    let ry = min(u32(max(floor(aux[off + 3u * j + 1u]), 0.0)), h - 1u);
                     let ri = ry * w + rx;
                     a *= auto_similarity(lp, chp, log_l[ri], chroma_at(ri));
                 }
-                keep *= 1.0 - a * flow;
+                if (by_stroke) {
+                    // masks::feather_dab: the build-up grows by the flow, the edge keeps the highest falloff
+                    keep *= 1.0 - flow;
+                    edge = max(edge, a);
+                } else {
+                    keep *= 1.0 - a * flow;
+                }
             }
-            let sa = min(1.0 - keep, aux[o + 5u]);
+            var sa = min(1.0 - keep, aux[o + 5u]);
+            if (by_stroke) {
+                // masks::stroke_coverage
+                sa = min((1.0 - keep) * edge, aux[o + 5u]);
+            }
             if (aux[o + 6u] != 0.0) {
                 v = v * (1.0 - sa);
             } else {

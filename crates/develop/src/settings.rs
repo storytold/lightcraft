@@ -102,12 +102,21 @@ pub enum Process {
     /// V7, with the Highlights/Shadows base taken of log luminance without its fine detail (clamped
     /// between a fine and a 3× wider median), so gaps in dark lettering aren't lifted into bright blocks.
     V8,
+    /// V8, with brush Flow as the coverage a stroke adds per brush radius it travels, as in
+    /// Lightroom: a dab adds `1 − (1 − flow)^(distance from the previous dab / radius)`, so a
+    /// stroke's strength no longer depends on how densely its dabs lie; V1 to V8 add `flow` per dab.
+    V9,
+    /// V9, with a brush stroke's edge feathered as one dab's is: a stroke's coverage is its Flow
+    /// build-up times the highest falloff of the dabs that reach a point, so overlapping dabs no
+    /// longer pile their soft edges up into a hard one; V1 to V9 accumulate each dab's falloff.
+    V10,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 8] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8];
-    pub const LATEST: Process = Process::V8;
+    pub const ALL: [Process; 10] =
+        [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6, Process::V7, Process::V8, Process::V9, Process::V10];
+    pub const LATEST: Process = Process::V10;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -119,6 +128,8 @@ impl Process {
             Process::V6 => ProcessVersion(6),
             Process::V7 => ProcessVersion(7),
             Process::V8 => ProcessVersion(8),
+            Process::V9 => ProcessVersion(9),
+            Process::V10 => ProcessVersion(10),
         }
     }
 }
