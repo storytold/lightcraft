@@ -163,11 +163,10 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     lightcraft_catalog::safe_file::write_atomic(&path, &json).map_err(|e| format!("{}: {e}", path.display()))?;
     // Drop any cached lookup for this model: an earlier miss must not hide the profile just saved.
     // Other spellings of the model map to the same file (`Foo Bar` and `Foo_Bar`), so drop those too.
-    let saved_name = file_name(&profile.model);
     // Lock order is cache, then CACHE_KEY, as in cache_key(). Both are held while the key is refreshed,
     // so a concurrent lookup or render cannot pair the new profile with the old key.
     let mut cache_guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
-    cache_guard.retain(|key, _| !file_name(&key.1).eq_ignore_ascii_case(&saved_name));
+    cache_guard.retain(|key, _| normalize_for_local_match(&key.1) != normalize_for_local_match(&profile.model));
     let mut key_guard = key_lock().lock().unwrap_or_else(PoisonError::into_inner);
     // The global key always describes dir(), not the directory this save wrote to.
     let global = crate::camera_profiles::dir();
