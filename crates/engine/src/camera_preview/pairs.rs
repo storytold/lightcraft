@@ -170,6 +170,25 @@ pub(super) fn fit_tone_with_shadows(
     Some(candidate)
 }
 
+/// Whether a matrix fitted to one photo's camera JPEG can be a camera's colour: in every row the
+/// channel's own input weighs at least [`MIN_OWN_TO_CROSS`] times any other channel's positive
+/// weight. A fit on a proxy with few saturated colours can pass the holdout gates with a row such as blue = 2.97·R − 4.50·G + 2.57·B (a Canon EOS 400D CR2, #3973; also
+/// #3452), which gives a saturated orange as much blue as red and turns it magenta. Such a fit is
+/// refused by [`fit_matrix`], for every fit that uses it (the full look, the partial look's matrix,
+/// a pooled camera profile), and a stored profile's matrix is held to it too
+/// (`camera_profiles`), so the photo falls back as when no matrix can be fitted (the camera's
+/// measured spectral matrices, where there are some).
+pub(crate) fn plausible_matrix(m: &Mat3) -> bool {
+    (0..3).all(|r| (0..3).all(|c| c == r || m.0[r][c] <= 0.0 || m.0[r][r] >= MIN_OWN_TO_CROSS * m.0[r][c]))
+}
+
+/// How many times a row's own weight must exceed any positive weight of another channel's input
+/// ([`plausible_matrix`]). Measured on blue rows: the refused fits have 0.87 (#3973's refit,
+/// `[2.97, −4.50, 2.57]`), 1.15 (its fit on all pixels, `[2.07, −3.37, 2.38]`) and 0.88 (#3452,
+/// `[−1.9, 1.58, 1.39]`), and turn oranges magenta or greens blue; a Canon EOS 6D fit that renders a
+/// turquoise scene like its camera JPEG has 2.08 (`[1.86, −4.65, 3.87]`, review of #3992).
+const MIN_OWN_TO_CROSS: f64 = 1.5;
+
 /// Ridge-regularised 3×3 chromaticity matrix (luminance-normalised RGB) on the training pairs.
 pub(super) fn fit_matrix(pairs: &[([f64; 3], [f64; 3])]) -> Option<Mat3> {
     let mut gram = [[0.0; 3]; 3];
@@ -202,7 +221,11 @@ pub(super) fn fit_matrix(pairs: &[([f64; 3], [f64; 3])]) -> Option<Mat3> {
         cross[i][i] += regularization;
     }
     let matrix = Mat3(cross).mul(&Mat3(gram).inverse()?);
-    matrix.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0).then_some(matrix)
+    let sane = matrix.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0);
+    if sane && !plausible_matrix(&matrix) && lightcraft_pipeline::profiling() {
+        eprintln!("[profile] camera look: fitted matrix {:?} refused: a row's own weight is under {MIN_OWN_TO_CROSS}× another channel's", matrix.0);
+    }
+    (sane && plausible_matrix(&matrix)).then_some(matrix)
 }
 
 /// Neighbourhood luminance ratio above which a pixel counts as an edge for the second attempt
