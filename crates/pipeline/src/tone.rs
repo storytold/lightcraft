@@ -413,6 +413,13 @@ impl ToneMap {
         self.by_sat
     }
 
+    /// The `key` for [`ToneMap::chroma_scale`] of a scene pixel `rgb` with luminance `y`: its [`chroma_key`] when the
+    /// scale depends on it, else 0 (skipping the work).
+    #[inline]
+    pub fn chroma_key_of(&self, rgb: [f32; 3], y: f32) -> f32 {
+        if self.by_sat { chroma_key(rgb, y) } else { 0.0 }
+    }
+
     /// Chroma scale at display luminance `o` for a pixel of colourfulness `key` ([`chroma_key`]),
     /// bilinear in the table (exactly 1 everywhere unless a camera look sets it).
     #[inline]
