@@ -337,6 +337,7 @@ impl Op {
             | Op::SetHistoryCursor { id, .. }
             | Op::SetBefore { id, .. }
             | Op::SetExported { id, .. }
+            | Op::SetMergeSources { id, .. }
             | Op::SetCaptured { id, .. }
             | Op::SetAnalysis { id, .. }
             | Op::SetFile { id, .. }

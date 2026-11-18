@@ -237,16 +237,18 @@ fn op_variants_are_versioned() {
             Op::SetBefore { .. } => 16,
             Op::SetExported { .. } => 17,
             Op::AddVignettingMap { .. } | Op::SetVignettingMapState { .. } => 18,
+            Op::SetMergeSources { .. } => 19,
         }
     }
     /// v15: `Analysis.eyes_open` / `aesthetic` / `cull_score`.
     const NEWEST_FIELDS: u32 = 15;
     let map = lcc_develop::EmbeddedVignettingMap::from_ev([4, 4], [2, 2], None, Default::default(), &[0.0; 4]).unwrap();
     let id = lcc_develop::VignettingMapId::of(&map);
-    let newest = since(&Op::AddVignettingMap {
+    let _vignetting = since(&Op::AddVignettingMap {
         id,
         record: Box::new(crate::VignettingMapRecord { map, photo: None, added: String::new(), withdrawn: false }),
     });
+    let newest = since(&Op::SetMergeSources { id: crate::PhotoId(1), sources: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }
 
@@ -412,4 +414,49 @@ fn exported_status_round_trips_and_old_libraries_load() {
     let (_, loaded, r) = Journal::open(Box::new(m)).unwrap();
     assert_eq!(loaded.photo(id).unwrap().exported, None);
     assert_eq!(r.upgraded_from, Some(16));
+}
+
+/// Merge sources (format 19): a library from the previous format opens with no merge recorded, setting and clearing
+/// undoes, and an unset field is not written.
+#[test]
+fn merge_sources_round_trip_and_old_libraries_load() {
+    let (base, _, _) = legacy_parts();
+    let id = base.photos().next().unwrap().id;
+    let mut c = base.clone();
+    assert!(!c.to_snapshot().contains("mergeSources") && !c.to_snapshot().contains("merge_sources"), "unset, it is not written");
+    let sources = MergeSources {
+        engine: 1,
+        shot_count: 4,
+        reference: 1,
+        scale: 2,
+        frames: (1..=4)
+            .map(|i| MergeSource {
+                photo: Some(PhotoId(100 + u64::from(i))),
+                index: i,
+                file_name: format!("frame {i}"),
+                captured: String::new(),
+                counter: u32::from(i),
+            })
+            .collect(),
+    };
+    let undo_set = c.apply(Op::SetMergeSources { id, sources: Some(Box::new(sources.clone())) }).unwrap();
+    assert_eq!(c.photo(id).unwrap().merge_sources.as_deref(), Some(&sources));
+    assert_eq!(sources.reference_photo(), Some(PhotoId(101)));
+    assert_eq!(sources.other_photos(), vec![PhotoId(102), PhotoId(103), PhotoId(104)]);
+    // it survives a snapshot
+    let snap = c.to_snapshot();
+    assert!(snap.contains("shotCount"));
+    let undo_clear = c.apply(Op::SetMergeSources { id, sources: None }).unwrap();
+    assert!(c.photo(id).unwrap().merge_sources.is_none());
+    c.apply(undo_clear).unwrap();
+    assert!(c.photo(id).unwrap().merge_sources.is_some());
+    c.apply(undo_set).unwrap();
+    assert!(c.photo(id).unwrap().merge_sources.is_none());
+
+    // a format-18 snapshot (no such field) opens and is upgraded
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snap_at(18, &base, ""));
+    let (_, loaded, r) = Journal::open(Box::new(m)).unwrap();
+    assert!(loaded.photo(id).unwrap().merge_sources.is_none());
+    assert_eq!(r.upgraded_from, Some(18));
 }

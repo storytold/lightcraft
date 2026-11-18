@@ -63,6 +63,7 @@
 //! | 16 | Before / After: the import state and Set Before kept with the photo | `Op::SetBefore`, `Photo.before`, `Photo.import_state` |
 //! | 17 | Export status: when a photo was last exported (the grid's exported badge; Reset Export Status) | `Op::SetExported`, `Photo.exported` |
 //! | 18 | vignetting calibration maps (like Capture One's LCC "Uniform Light"), stored once and referenced from the develop settings | `Op::AddVignettingMap`, `Op::SetVignettingMapState`, `Catalog.vignetting_maps`, `Optics.vignetting_calibration` (an id), `Optics.vignetting_calibration_amount` |
+//! | 19 | Pixel Shift merges remember their frames | `Op::SetMergeSources`, `Photo.merge_sources` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -95,7 +96,7 @@ pub(crate) const FORMAT: &str = "lcc-catalog";
 pub(crate) const V4_FORMAT: &str = "lcc-catalog-db";
 /// The catalog format this build writes (and the newest it reads). See the module docs →
 /// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 18;
+pub const VERSION: u32 = 19;
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
