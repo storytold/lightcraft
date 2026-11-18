@@ -167,7 +167,7 @@ pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
     // Lock order is cache, then CACHE_KEY, as in cache_key(). Both are held while the key is refreshed,
     // so a concurrent lookup or render cannot pair the new profile with the old key.
     let mut cache_guard = cache().lock().unwrap_or_else(PoisonError::into_inner);
-    cache_guard.retain(|model, _| !file_name(model).eq_ignore_ascii_case(&saved_name));
+    cache_guard.retain(|key, _| !file_name(&key.1).eq_ignore_ascii_case(&saved_name));
     let mut key_guard = key_lock().lock().unwrap_or_else(PoisonError::into_inner);
     // The global key always describes dir(), not the directory this save wrote to.
     let global = crate::camera_profiles::dir();
@@ -537,12 +537,12 @@ mod tests {
         saved.model = model.clone();
 
         // A lookup before anything is saved caches the miss.
-        assert!(get_from(Some(&isolated), &model).is_none(), "no profile saved yet");
+        assert!(get_from(&model, Some(&isolated)).is_none(), "no profile saved yet");
 
         // Saving replaces the on-disk file that the lookup reads.
         let saved_path = save(&saved, &isolated).unwrap();
 
-        assert_eq!(get_from(Some(&isolated), &model).as_deref(), Some(&saved), "a profile saved after the first lookup must be returned");
+        assert_eq!(get_from(&model, Some(&isolated)).as_deref(), Some(&saved), "a profile saved after the first lookup must be returned");
         let _ = std::fs::remove_file(saved_path);
         let _ = std::fs::remove_dir_all(&isolated);
     }
@@ -553,12 +553,12 @@ mod tests {
         let alias = format!("TESTALIAS {} {stamp}", std::process::id());
         let saved_model = alias.replace(' ', "_");
         assert_eq!(file_name(&alias), file_name(&saved_model));
-        cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(alias.clone(), None);
+        cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert((None, alias.clone()), None);
         let dir = std::env::temp_dir().join(format!("lc-camera-profile-alias-{}-{stamp}", std::process::id()));
         let mut saved = profile();
         saved.model = saved_model;
         save(&saved, &dir).unwrap();
-        let still_cached = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&alias);
+        let still_cached = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains_key(&(None, alias.clone()));
         let _ = std::fs::remove_dir_all(&dir);
         assert!(!still_cached, "saving a profile must invalidate the cached miss for {alias:?}, which maps to the same file");
     }
