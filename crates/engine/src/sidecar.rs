@@ -1376,8 +1376,10 @@ fn mask_component_descriptions(data: &str, _corr_start: usize, corr_end: usize) 
             continue;
         }
         if rest.starts_with("<rdf:Description") {
-            depth += 1;
             if let Some(e) = tag_end(data, s) {
+                if !is_self_closing(data, e) {
+                    depth += 1;
+                }
                 i = e + 1;
             } else {
                 break;
