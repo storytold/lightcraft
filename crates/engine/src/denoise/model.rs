@@ -1,5 +1,5 @@
 #[cfg(feature = "denoise")]
-use super::gpu::{GPU_CRASHED, GPU_MAX_FALLBACKS, GPU_PARALLEL, GPU_SLOW, GPU_STUCK, card_is_faster, make_gpu};
+use super::gpu::{GPU_BUSY, GPU_CRASHED, GPU_MAX_FALLBACKS, GPU_PARALLEL, GPU_SLOW, GPU_STUCK, card_is_faster, make_gpu};
 #[cfg(feature = "denoise")]
 use super::settings::{installed_models, read_settings};
 #[cfg(feature = "denoise")]
@@ -74,7 +74,7 @@ pub(crate) type Loader = Arc<dyn Fn(&Path, &DenoiserManifest) -> Result<Arc<dyn 
 /// A set-up that may work another time (a crash, the time limit), unlike one the card or the model cannot do.
 #[cfg(feature = "denoise")]
 pub(super) fn worth_retrying(why: &str) -> bool {
-    why == GPU_CRASHED || why == GPU_STUCK || why.starts_with(GPU_SLOW)
+    why == GPU_CRASHED || why == GPU_STUCK || why == GPU_BUSY || why.starts_with(GPU_SLOW)
 }
 
 /// The model on our pure-Rust CPU runner, and on the graphics card when there is one that can run it: the card is set up for the

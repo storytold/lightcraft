@@ -33,9 +33,18 @@ pub(crate) const GPU_SETUP_LOCK: &str = "gpu-setup.lock";
 #[cfg(feature = "denoise")]
 pub(super) const GPU_CRASHED: &str = "LightCraft closed while it was setting up the graphics card for AI Denoise last time";
 
+/// How long choosing where denoise runs waits for another process's set-up to give the lock back before saying it could
+/// not clear the marker: a set-up that is running keeps it for as long as the driver takes.
+const FORGET_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Why the card is not used when its set-up ran out of time (the start of it).
 #[cfg(feature = "denoise")]
 pub(super) const GPU_SLOW: &str = "setting up the graphics card took longer than";
+
+/// Why the card is not used when its set-up lock is there but cannot be opened: another process may be setting it up, and
+/// nothing says which.
+#[cfg(feature = "denoise")]
+pub(super) const GPU_BUSY: &str = "the graphics card's set-up is in use by another LightCraft, or its lock cannot be opened";
 
 /// Why the card is not used while a set-up that ran out of time is still going.
 #[cfg(feature = "denoise")]
@@ -102,17 +111,42 @@ fn open_set_up_lock(lock: &std::path::Path) -> std::io::Result<std::fs::File> {
 /// `Err` when the marker could not be removed: the caller is told rather than left saying the card may be tried again
 /// while it may not.
 pub(super) fn forget_marker(marker: &std::path::Path) -> Result<(), String> {
-    // a shared lock is all a reset needs: it never makes a marker, and a set-up's exclusive lock still keeps it out (so
-    // no set-up can be between making its marker and owning it), while a read-only handle works on every file system
+    // A shared lock is all a reset needs: it never makes a marker, and a set-up's exclusive lock still keeps it out (so no
+    // set-up can be between making its marker and owning it), while a read-only handle works on every file system. A
+    // set-up holding the lock is waited for a moment: one that is running keeps its own marker, and one that has just
+    // found a crash's lets go at once; reporting success while a marker stays would leave the card off with nothing
+    // saying why.
     let lock = match open_set_up_lock(&lock_beside(marker)) {
-        Ok(file) => match file.try_lock_shared() {
-            Ok(()) => Some(file),
-            // a set-up under way: its own end clears its marker
-            Err(std::fs::TryLockError::WouldBlock) => return Ok(()),
-            // locks are not supported here: the marker alone decides, as it always has
-            Err(std::fs::TryLockError::Error(_)) => None,
-        },
-        // no lock file, and none could be made (a folder that takes no new file): nothing to serialise with
+        Ok(file) => {
+            let began = web_time::Instant::now();
+            let mut held = false;
+            loop {
+                match file.try_lock_shared() {
+                    Ok(()) => {
+                        held = true;
+                        break;
+                    }
+                    // locks are not supported here: the marker alone decides, as it always has
+                    Err(std::fs::TryLockError::Error(_)) => break,
+                    Err(std::fs::TryLockError::WouldBlock) if began.elapsed() < FORGET_WAIT => {
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                    Err(std::fs::TryLockError::WouldBlock) => {
+                        return Err(format!(
+                            "the graphics card is being set up right now, so its marker {} is in use: try again in a moment",
+                            marker.display()
+                        ));
+                    }
+                }
+            }
+            if held { Some(file) } else { None }
+        }
+        // A lock file that is there but out of reach may belong to a set-up that is running: the marker is left and the
+        // caller told. One that cannot be made at all (a models folder that takes no new file) serialises nothing, and the
+        // marker alone decides, as it always has.
+        Err(e) if lock_beside(marker).exists() => {
+            return Err(format!("the AI Denoise set-up marker {} cannot be cleared: {e}", marker.display()));
+        }
         Err(_) => None,
     };
     let removed = std::fs::remove_file(marker);
@@ -133,8 +167,10 @@ fn lock_set_up(marker: &Path, limit: Duration) -> Result<Option<std::fs::File>, 
     let began = web_time::Instant::now();
     let file = match std::fs::OpenOptions::new().read(true).write(true).truncate(false).create(true).open(lock_beside(marker)) {
         Ok(file) => file,
-        // the models folder may not exist yet, or may take no new file: a marker that cannot be written only loses the
-        // crash guard
+        // A lock that is there but cannot be opened may be another set-up's: this one does not run beside it. One that
+        // cannot be made at all (the models folder may not exist yet, or may take no new file) serialises nothing: the
+        // marker alone decides, and a marker that cannot be written only loses the crash guard.
+        Err(_) if lock_beside(marker).exists() => return Err(GPU_BUSY.into()),
         Err(_) => return Ok(None),
     };
     loop {
@@ -209,6 +245,12 @@ pub(super) fn set_up_card<T: Send + 'static, R>(
     running.push(marker.to_path_buf());
     let ended = SetUpEnded { marker: marker.to_path_buf(), made, _lock: lock };
     drop(running);
+    // the deadline may have passed while the marker was made (a slow file system): this call has spent its one limit, so
+    // it starts no worker, and the marker it just made goes with the guard
+    if coordination_began.elapsed() >= limit {
+        drop(ended);
+        return Err(GPU_STUCK.into());
+    }
     let started = web_time::Instant::now();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::Builder::new()

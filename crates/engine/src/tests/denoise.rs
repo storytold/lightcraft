@@ -606,6 +606,39 @@ fn only_raw_photos_on_disk_are_denoised_and_nothing_is_queued_without_a_model() 
     let _ = std::fs::remove_dir_all(&x.dir);
 }
 
+/// Choosing where denoise runs forgets a crash marker even beside a model whose files are half written or unreadable: the
+/// reset reads the folders, not their manifests, so such a marker cannot keep the card off for good.
+#[test]
+fn a_marker_beside_a_half_installed_model_is_forgotten_too() {
+    let dir = temp_dir("forget-broken");
+    let half = dir.join("half-installed");
+    std::fs::create_dir_all(&half).unwrap();
+    let marker = half.join(crate::denoise::GPU_SETUP_MARKER);
+    std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
+    crate::denoise::forget_gpu_set_ups(&dir).unwrap();
+    assert!(!marker.exists(), "a marker beside a model without a manifest is cleared");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// What a model is asked to do is part of which picture it makes: the same model file read as camera RGB and as linear
+/// Rec. 2020 (or with another domain) must not find the other's cached picture by its fingerprint.
+#[test]
+fn a_model_read_in_another_space_makes_another_product() {
+    let dir = temp_dir("fingerprint-space");
+    let onnx = dir.join("model.onnx");
+    std::fs::write(&onnx, "stand-in weights").unwrap();
+    let installed = |manifest: DenoiserManifest| crate::denoise::Installed { manifest, onnx: onnx.clone(), accepted: Value::Null };
+    let mut manifest = linear_manifest("space-model");
+    let camera = installed(manifest.clone()).fingerprint();
+    manifest.space = LinearSpace::LinRec2020;
+    let rec2020 = installed(manifest.clone()).fingerprint();
+    assert_ne!(camera, rec2020, "a converted picture is not the camera-RGB one");
+    manifest.space = LinearSpace::CameraRgb;
+    manifest.domain = Domain::BayerToRgb;
+    assert_ne!(camera, installed(manifest).fingerprint(), "nor is a mosaic's picture a linear model's");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn files_that_cannot_be_denoised_fail_with_a_reason_and_never_a_panic() {
     let dir = temp_dir("makefails");
@@ -661,6 +694,22 @@ fn files_that_cannot_be_denoised_fail_with_a_reason_and_never_a_panic() {
     let progress = crate::denoise::Progress::default();
     progress.cancel_now();
     assert_eq!(make_product(&spec(&good), Some(&progress)), Err(MakeError::Cancelled));
+    // a file a model cannot take is refused from its headers, before the model is loaded: a model that cannot be read
+    // must not hide the reason the photo is not denoised
+    let xtrans = dir.join("xtrans.dng");
+    std::fs::write(&xtrans, synthetic_xtrans_dng_of(192, 160, (0..192 * 160).map(|i| 600 + (i % 192) as u16).collect())).unwrap();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let counted = loads.clone();
+    let mut s = spec(&xtrans);
+    s.loader = Arc::new(move |_, _| {
+        counted.fetch_add(1, Ordering::Relaxed);
+        Ok(Arc::new(Dim { runs: Arc::new(AtomicUsize::new(0)) }) as Arc<dyn Model>)
+    });
+    match make_product(&s, None) {
+        Err(MakeError::Unsupported(why)) => assert!(why.contains("only Bayer raw files can be denoised with a Bayer model"), "{why}"),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(loads.load(Ordering::Relaxed), 0, "the model is not loaded for a file it cannot take");
     // a Bayer layout of the other kinds is denoised too, and a product that exists is not made again
     for cfa in ["BGGR", "GRBG", "GBRG"] {
         let f = dir.join(format!("{cfa}.dng"));

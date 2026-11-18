@@ -59,6 +59,8 @@ pub use model::{Serving, serving};
 pub(crate) use products::eligible;
 #[cfg(test)]
 pub(crate) use products::{JobSpec, MakeError, Progress, make_product};
+#[cfg(test)]
+pub(crate) use settings::Installed;
 pub use settings::{DEFAULT_CACHE_GB, DIR, EXT};
 pub(crate) use settings::{Settings, forget_gpu_set_ups, installed_models, read_capped, read_settings, write_atomic, write_settings};
 pub(crate) use state::State;

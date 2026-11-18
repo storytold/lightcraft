@@ -29,6 +29,16 @@ pub enum Domain {
     LinearRgb,
 }
 
+impl Domain {
+    /// The name the manifest's JSON uses.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::BayerToRgb => "bayerToRgb",
+            Self::LinearRgb => "linearRgb",
+        }
+    }
+}
+
 /// The color space expected by a [`Domain::LinearRgb`] model.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +54,14 @@ pub enum LinearSpace {
 impl LinearSpace {
     pub const fn is_default(&self) -> bool {
         matches!(self, Self::CameraRgb)
+    }
+
+    /// The name the manifest's JSON uses.
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::CameraRgb => "cameraRgb",
+            Self::LinRec2020 => "linRec2020",
+        }
     }
 }
 

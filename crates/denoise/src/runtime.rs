@@ -89,20 +89,29 @@ fn self_test(runner: &dyn TileRunner, manifest: &DenoiserManifest, load_ms: f64)
                 let tolerance = f64::from(max_deviation).max(0.05) * 4.0;
                 checks.push((format!("its scale is the {nominal:.3e} the description says (found {scale:.3e})"), (ratio - 1.0).abs() <= tolerance));
             }
-            // noise left after bringing the answer back to the input's scale, against the noise that went in. The photo
-            // path matches each colour plane on its own for a linear picture, so the diagnostic does too: one pooled
-            // reciprocal would leave a model whose planes scale differently looking as if it kept the noise.
+            // The noise left after bringing the answer back to the input's scale, against the noise that went in. The
+            // photo path's own rule is followed, or the diagnostic would judge a picture the engine never makes: each
+            // colour plane's gain measured on its own for a linear picture (one pooled reciprocal would leave a model
+            // whose planes drift apart looking as if it kept the noise), clamped to the window the manifest gives, and no
+            // scale taken out at all for a model that says its answer is already on the input's.
             let g = if is_linear_rgb {
                 let cells = t * t;
                 let mut per = [1.0f64; 3];
-                for (c, gc) in per.iter_mut().enumerate() {
-                    if mean_in.abs() > 0.0
-                        && let Some(plane) = a.get(c * cells..(c + 1) * cells)
-                    {
-                        let mean = plane.iter().map(|&v| f64::from(v)).sum::<f64>() / cells as f64;
-                        let scale = mean / mean_in;
-                        if scale.abs() > 0.0 {
-                            *gc = 1.0 / scale;
+                if let Gain::MatchMean { nominal, max_deviation } = manifest.gain {
+                    let nominal = f64::from(nominal);
+                    let (lo, hi) = (nominal * (1.0 - f64::from(max_deviation)), nominal * (1.0 + f64::from(max_deviation)));
+                    for (c, gc) in per.iter_mut().enumerate() {
+                        let measured = if mean_in.abs() > 0.0 {
+                            a.get(c * cells..(c + 1) * cells).map(|plane| {
+                                let mean = plane.iter().map(|&v| f64::from(v)).sum::<f64>() / cells as f64;
+                                (mean / mean_in).clamp(lo, hi)
+                            })
+                        } else {
+                            None
+                        };
+                        let gain = measured.filter(|g| g.abs() > 0.0).unwrap_or(nominal);
+                        if gain.abs() > 0.0 {
+                            *gc = 1.0 / gain;
                         }
                     }
                 }
@@ -401,7 +410,8 @@ mod tests {
     }
 
     /// The diagnostic matches each linear-RGB plane on its own, as the photo path does: a model whose planes have
-    /// different scales passes when each plane is brought back correctly, instead of failing on a pooled scale.
+    /// different scales passes when each plane is brought back correctly, instead of failing on a pooled scale — and a
+    /// model that says its answer is already on the input's scale is taken at its word, as the photo path does.
     #[test]
     fn the_self_test_reads_each_plane_scale_on_its_own() {
         struct Planes;
@@ -424,9 +434,13 @@ mod tests {
         }
         let mut m = manifest(64, 1.0);
         m.domain = Domain::LinearRgb;
-        m.gain = Gain::None;
+        // the window the photo path would clamp these gains to holds all three of them (1 against 2 against 2)
+        m.gain = Gain::MatchMean { nominal: 2.0, max_deviation: 0.5 };
         let t = self_test(&Planes, &m, 0.0);
         assert!(t.ok, "each plane's own scale is taken out: {t:?}");
+        // a model that declares no scale of its own is not rescaled here either: the photo keeps what it gives
+        m.gain = Gain::None;
+        assert!(!self_test(&Planes, &m, 0.0).ok, "a model that says its scale is the input's is judged on the answer it gives");
     }
 
     #[test]

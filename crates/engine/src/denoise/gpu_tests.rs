@@ -384,7 +384,8 @@ fn a_set_up_does_not_start_after_its_coordination_deadline() {
 }
 
 /// Choosing where denoise runs clears a marker a crash left behind, but not one a set-up that is under way owns: that
-/// set-up's own end removes its marker, and clearing it would let a second set-up start beside it.
+/// set-up's own end removes its marker, and clearing it would let a second set-up start beside it. A reset that cannot
+/// have the lock says so instead of reporting a clean card.
 #[test]
 fn forgetting_set_ups_leaves_a_marker_another_process_holds() {
     let dir = folder("forget");
@@ -396,9 +397,13 @@ fn forgetting_set_ups_leaves_a_marker_another_process_holds() {
     let other = std::fs::OpenOptions::new().read(true).write(true).truncate(false).create(true).open(dir.join(super::gpu::GPU_SETUP_LOCK)).unwrap();
     other.lock().unwrap();
     std::fs::write(&marker, "setting up the graphics card for AI Denoise (unix time 0)").unwrap();
-    super::gpu::forget_marker(&marker).unwrap();
+    let r = super::gpu::forget_marker(&marker);
+    assert!(r.as_ref().is_err_and(|e| e.contains("being set up right now")), "the caller is told: {r:?}");
     assert!(marker.exists(), "a set-up that is under way keeps its marker");
     drop(other);
+    // and once it has ended, the reset goes through
+    super::gpu::forget_marker(&marker).unwrap();
+    assert!(!marker.exists());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -538,11 +538,13 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
         st.gpu = None;
     }
     write_settings(&dir, &st).map_err(EngineError::Other)?;
+    // a change that has been written is applied whatever happens to the card's marker: a marker that cannot be cleared
+    // only means the card stays off until it is, and the answer says so rather than failing a change that took effect
+    let mut warning = None;
     if run_on.is_some() {
         // a choice of where denoise runs is also a go-ahead to try the card again: a set-up that crashed or gave up
-        // before is forgotten, and the loaded model sets the card up afresh for the next photo. A marker that cannot be
-        // cleared is reported: the card stays off until it is, and the caller must not be told otherwise.
-        forget_gpu_set_ups(&dir).map_err(EngineError::Other)?;
+        // before is forgotten, and the loaded model sets the card up afresh for the next photo
+        warning = forget_gpu_set_ups(&dir).err();
         if let Some(a) = &s.denoise.active {
             *a.model.lock().unwrap_or_else(PoisonError::into_inner) = None;
         }
@@ -551,7 +553,11 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     s.denoise_refresh_active(true);
     // a smaller limit takes effect now
     s.denoise_evict(None);
-    Ok(json!({"auto": st.auto(), "cacheGb": st.cache_bytes() >> 30, "threads": st.threads, "runOn": st.run_on().name()}))
+    let mut out = json!({"auto": st.auto(), "cacheGb": st.cache_bytes() >> 30, "threads": st.threads, "runOn": st.run_on().name()});
+    if let Some(why) = warning {
+        out["warning"] = Value::String(why);
+    }
+    Ok(out)
 }
 
 fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {

@@ -174,14 +174,16 @@ enum DenoiseInput {
 /// Bytes the memory gate holds while a raw picture becomes a product, from the file's header, before anything is
 /// allocated: the model's scratch, and the picture's own allocations at their peak.
 ///
-/// For a Bayer model that is the mosaic and the tiles. For a linear-RGB model the demosaic's own needs (its mosaic beside
-/// the 12 B/px RGB it makes) and the tiles' (the model's input and the result accumulator at 12 B/px each, its weights at
-/// 4 B/px and, for a converted input, the camera-domain clip map at 4 B/px) do not overlap in time, but the RGB lives
-/// through both, so the larger of the two is reserved.
+/// For a Bayer model that is the mosaic and the tiles. For a linear-RGB model the demosaic's own needs (the samples the
+/// decode stored, the normalised mosaic and the 12 B/px RGB it makes) and the tiles' (the model's input and the result
+/// accumulator at 12 B/px each, its weights at 4 B/px and, for a converted input, the camera-domain clip map at 4 B/px) do
+/// not overlap in time, but the RGB lives through both, so the larger of the two is reserved.
 fn reservation(domain: Domain, space: LinearSpace, pixels: usize, cpp: usize, scratch: usize, parallel: usize) -> usize {
     let (tile_bytes, demosaic_bytes) = match domain {
         Domain::BayerToRgb => (20, 0),
-        Domain::LinearRgb => (if space.is_default() { 28 } else { 32 }, if cpp == 3 { 24 } else { 16 }),
+        // while the demosaic runs, the samples the decode stored (up to 4 B each) sit beside the normalised mosaic (another
+        // 4 B each) and the 12 B/px RGB it makes, plus the model's own scratch
+        Domain::LinearRgb => (if space.is_default() { 28 } else { 32 }, 12 + cpp.saturating_mul(8)),
     };
     let tiles = pixels.saturating_mul(tile_bytes).saturating_add(scratch.saturating_mul(parallel));
     if demosaic_bytes == 0 {
@@ -215,6 +217,22 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         Err(lightcraft_raw::RawError::Unsupported(why)) => return Err(MakeError::Unsupported(why)),
         Err(e) => return Err(MakeError::Failed(e.to_string())),
     };
+    // what the file is decides whether a model takes it at all: the headers say so, and a model need not be loaded for a
+    // file it cannot run on
+    match spec.manifest.domain {
+        Domain::BayerToRgb => {
+            if info.cpp != 1 || !info.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
+                return Err(MakeError::Unsupported(
+                    "only Bayer raw files can be denoised with a Bayer model (this one has another sensor layout or is already demosaiced)".into(),
+                ));
+            }
+        }
+        Domain::LinearRgb => {
+            if info.cpp != 1 && info.cpp != 3 {
+                return Err(MakeError::Unsupported("only raw files with 1 or 3 samples per pixel can be denoised".into()));
+            }
+        }
+    }
     let model = loaded(spec)?;
     // Packed input, returned RGB and the preceding group's RGB overlap while tiles run.
     let scratch =
@@ -227,6 +245,10 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     let pixels = info.active_area.width.saturating_mul(info.active_area.height);
     let reserved = reservation(spec.manifest.domain, spec.manifest.space, pixels, info.cpp, scratch, parallel);
     let _held = crate::memory::work_gate().acquire(reserved.max(bytes.len().saturating_mul(4)));
+    // the wait for room can be long, and a job the user has given up on does not decode a picture for nothing
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
     let read = began.elapsed();
     let demosaic_started = web_time::Instant::now();
     let input = {
@@ -238,12 +260,6 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
         drop(bytes);
         match spec.manifest.domain {
             Domain::BayerToRgb => {
-                if raw.cpp != 1 || !raw.cfa.as_ref().is_some_and(lightcraft_raw::Cfa::is_bayer) {
-                    return Err(MakeError::Unsupported(
-                        "only Bayer raw files can be denoised with a Bayer model (this one has another sensor layout or is already demosaiced)"
-                            .into(),
-                    ));
-                }
                 let n = raw.normalized().map_err(|e| MakeError::Failed(e.to_string()))?;
                 drop(raw);
                 let layout = n
@@ -254,9 +270,6 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
                 DenoiseInput::Bayer { mosaic: n, layout }
             }
             Domain::LinearRgb => {
-                if raw.cpp != 1 && raw.cpp != 3 {
-                    return Err(MakeError::Unsupported("only raw files with 1 or 3 samples per pixel can be denoised".into()));
-                }
                 let color_transform_info = match spec.manifest.space {
                     LinearSpace::CameraRgb => None,
                     LinearSpace::LinRec2020 => {

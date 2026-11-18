@@ -134,7 +134,7 @@ ISO 6400 up.
 
 **No model weights are bundled.** Choosing a model replaces the built-in denoiser; **Stop using**
 (or removing the model) goes back to it. Models live in the per-user `denoise-models` folder
-(override with `LIGHTCRAFT_DENOISE_MODELS`). Settings provides **Install from file…**
+(override with `LIGHTCRAFT_DENOISE_MODELS`). Each model's folder also keeps its graphics-card set-up state: `gpu-setup.marker` while the card is being set up for it, or after a set-up a crash cut short (the card is then not tried again until `denoise.settings {runOn}` clears it), and `gpu-setup.lock`, a small file that serialises set-ups and resets across LightCraft processes and stays in place once made. Settings provides **Install from file…**
 for a user-supplied ONNX file with a `denoise-model.json` beside it. The default build
 offers no model downloads. The separate `rawnind-model` Cargo feature enables the
 pinned RawNIND offer only when a release's model policy permits it.
@@ -319,7 +319,10 @@ the tile's samples as little-endian half floats, byte-shuffled (low bytes, then 
 UI, CLI, control channel and MCP dispatch `denoise.toggle`, `denoise.settings`,
 `denoise.queue`, `.cancel`, `.status`, `.pump`, `.clear`, and `denoise.models.*`
 (`list`, `install`, `download`, `downloads`, `downloadCancel`, `test`, `remove`,
-`select`). The develop control is `enhance.denoise`.
+`select`). The develop control is `enhance.denoise`. `denoise.settings` answers with
+`auto`, `cacheGb`, `threads` and `runOn`, and adds `warning` when the graphics card's
+set-up marker could not be cleared: the choice is applied either way, and the card stays
+off until the marker goes.
 
 Native apps enable inference through their `denoise` feature. A build without it and
 the web build report inference unavailable. Manifest/cache primitives still compile

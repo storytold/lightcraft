@@ -97,7 +97,9 @@ impl Installed {
     pub fn fingerprint(&self) -> String {
         let sha = self.accepted.get("sha256").and_then(Value::as_str).or(self.manifest.sha256.as_deref()).unwrap_or("");
         let len = std::fs::metadata(&self.onnx).map(|m| m.len()).unwrap_or(0);
-        format!("{}@{}:{len}", self.manifest.id, sha)
+        // what the model is asked to do is part of which picture it makes: the same file read as camera RGB and as
+        // Rec. 2020 gives different products, and a product keyed without it would pass for the other space's
+        format!("{}@{}:{}:{}:{len}", self.manifest.id, self.manifest.domain.name(), self.manifest.space.name(), sha)
     }
 }
 
@@ -139,8 +141,19 @@ pub(crate) fn forget_gpu_set_ups(dir: &Path) -> Result<(), String> {
             failed.get_or_insert(why);
         }
     };
-    for i in installed_models(dir) {
-        remember(super::gpu::forget_marker(&i.onnx.with_file_name(GPU_SETUP_MARKER)));
+    // Every folder in the models folder may hold a marker — one whose model file or manifest is half-written or
+    // unreadable included, which `installed_models` skips. The folders are read here, and their manifests not at all.
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for folder in entries.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+                remember(super::gpu::forget_marker(&folder.join(GPU_SETUP_MARKER)));
+            }
+        }
+        // no models folder at all: there is nothing beside a model to forget
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        // one that cannot be read may hold markers this reset did not see: the caller is told rather than left thinking
+        // the card is free to be tried
+        Err(e) => remember(Err(format!("the AI Denoise models folder {} cannot be read: {e}", dir.display()))),
     }
     #[cfg(feature = "denoise")]
     remember(forget_builtin_card(&builtin_marker(&dir.join(lightcraft_denoise::builtin::ID))));

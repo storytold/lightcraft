@@ -210,9 +210,18 @@ pub fn denoise_bayer(
         previous = Some((chunk, outs));
     }
     if let Some((c, o)) = previous.take() {
+        // the runner may have asked to stop during the last group's inference, after the check above
+        if ctl.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
         let started = web_time::Instant::now();
         blend(c, o)?;
         t_wait += started.elapsed();
+    }
+    // a cancellation from the last progress report still counts: the product would not be written, and the caller asked
+    // for no work rather than a whole picture
+    if ctl.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
     }
     t_total += began.elapsed();
     let started = web_time::Instant::now();
@@ -372,9 +381,18 @@ pub fn denoise_linear_rgb(
         previous = Some((chunk, outs));
     }
     if let Some((c, o)) = previous.take() {
+        // the runner may have asked to stop during the last group's inference, after the check above
+        if ctl.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Err(Error::Cancelled);
+        }
         let started = web_time::Instant::now();
         blend(c, o)?;
         t_wait += started.elapsed();
+    }
+    // a cancellation from the last progress report still counts: the caller asked for no work rather than a whole
+    // picture, and the product would not be written
+    if ctl.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+        return Err(Error::Cancelled);
     }
     t_total += began.elapsed();
     let started = web_time::Instant::now();
@@ -671,10 +689,11 @@ fn protect_clipped_linear_rgb(input: &[f32], clip_from: Option<&[f32]>, out: &mu
             })
             .collect(),
     };
-    // the protection fades in below the clip threshold, so the work is skipped only when nothing is inside that band: a
-    // tile whose brightest pixel sits just under the threshold must be protected like any other, not lose it because no
-    // pixel of this tile reached the threshold itself
-    let lo = clip - 0.03;
+    // The protection fades in over the last 3 % below the clip threshold, so the work is skipped only when nothing is
+    // inside that band: a tile whose brightest pixel sits just under the threshold must be protected like any other, not
+    // lose it because no pixel of this tile reached the threshold itself. A share of the threshold, rather than a fixed
+    // width, keeps the band below it for every accepted one (`clip` is validated finite and positive).
+    let lo = clip * 0.97;
     if !m.iter().any(|&v| v >= lo) {
         return;
     }
@@ -1232,6 +1251,20 @@ mod tests {
         assert!(near_white.iter().all(|&v| v > 0.93), "a pixel inside the transition keeps most of its value: {near_white:?}");
     }
 
+    /// The transition band is a share of the clip threshold, so every accepted threshold has one below it: a threshold
+    /// under a fixed 3 % band would protect a dark picture whole, keeping the model's answer out of it.
+    #[test]
+    fn linear_rgb_a_low_clip_threshold_keeps_its_transition_below_it() {
+        let (w, h) = (64usize, 64usize);
+        let data = vec![[0.005f32; 3]; w * h];
+        let img = Rgb32f { width: w, height: h, data };
+        let mut p = params(32, 8, Gain::None);
+        p.clip = Some(0.01);
+        let got = denoise_linear_rgb(&img, None, &MockLinearRgb { scale: 2.0 }, &p, &Control::default()).unwrap();
+        let px = got.data[w * h / 2 + w / 2];
+        assert!(px.iter().all(|&v| (v - 0.01).abs() < 1e-3), "a sample below the threshold keeps the model's answer: {px:?}");
+    }
+
     /// A colour plane whose mean is below zero (colours outside the camera's gamut in a converted picture) still has its
     /// own scale measured, instead of falling back to the nominal one.
     #[test]
@@ -1270,6 +1303,19 @@ mod tests {
         assert!(total > 1);
         assert_eq!(seen.last(), Some(&(total, total)));
         assert!(seen.windows(2).all(|p| p[1].0 == p[0].0 + 1));
+
+        // a runner that asks to stop while the last group's tiles are being blended still ends in `Cancelled`: the check
+        // before the loop has already passed by then
+        let cancel = AtomicBool::new(false);
+        let stop_at_the_end = |d: usize, n: usize| cancel.store(d == n, Ordering::Relaxed);
+        let r = denoise_linear_rgb(
+            &img,
+            None,
+            &MockLinearRgb { scale: 1.0 },
+            &params(32, 8, Gain::None),
+            &Control { cancel: Some(&cancel), progress: Some(&stop_at_the_end) },
+        );
+        assert!(matches!(r, Err(Error::Cancelled)), "a cancellation from the last progress report still counts: {r:?}");
     }
 
     /// Tests validation of hostile and non-finite inputs to denoise_linear_rgb.
