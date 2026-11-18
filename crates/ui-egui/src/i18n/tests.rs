@@ -6,7 +6,7 @@ use super::*;
 #[test]
 fn languages_switch_persist_and_keep_user_values() {
     use crate::control::{ControlRequest, Outcome};
-    let languages: [(Locale, &str, &[&str], &str); 8] = [
+    let languages: [(Locale, &str, &[&str], &str); 9] = [
         (Locale::Cs, "czech", &["cs", "cs-CZ", "cs_CZ.UTF-8", "cs-Latn-CZ"], "áčďéěíňóřšťúůýžÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ„“"),
         (Locale::Id, "indonesian", &["id", "id-ID", "id_ID.UTF-8", "id-Latn-ID"], ""),
         (Locale::Sv, "swedish", &["sv", "sv-SE", "sv_SE.UTF-8", "sv-FI"], "åäöÅÄÖé”’"),
@@ -15,6 +15,7 @@ fn languages_switch_persist_and_keep_user_values() {
         (Locale::It, "italian", &["it", "it-IT", "it_IT.UTF-8", "it-Latn-IT", "it-CH"], ""),
         (Locale::Fi, "finnish", &["fi", "fi-FI", "fi_FI.UTF-8", "fi-Latn-FI"], ""),
         (Locale::Vi, "vietnamese", &["vi", "vi-VN", "vi_VN", "vi_VN.UTF-8"], ""),
+        (Locale::Lt, "lithuanian", &["lt", "lt-LT", "lt_LT.UTF-8", "lt-Latn-LT"], "ąčęėįšųūžĄČĘĖĮŠŲŪŽ„“"),
     ];
     for (locale, command, tags, letters) in languages {
         let command = format!("app.language.{command}");
@@ -391,6 +392,7 @@ fn language_commands_cover_every_language() {
         ("app.language.finnish", Locale::Fi),
         ("app.language.indonesian", Locale::Id),
         ("app.language.vietnamese", Locale::Vi),
+        ("app.language.lithuanian", Locale::Lt),
     ];
     // One command per language, and every command reachable from the menu table.
     assert_eq!(commands.len(), Locale::ALL.len());
@@ -1228,19 +1230,23 @@ fn a_dropped_photos_notice_names_every_outcome_of_the_import_and_is_silent_for_d
     let _ = std::fs::remove_dir_all(dir);
 }
 
+fn assert_polish_count(n: usize) {
+    let s = if n == 1 { "" } else { "s" };
+    assert_eq!(tr_format!("Imported {} photo{}", n, s), format!("Zaimportowane zdjęcia: {n}"));
+    for (one, many, noun) in [
+        ("photo waiting", "photos waiting", "Oczekujące zdjęcia"),
+        ("cached picture", "cached pictures", "Obrazy w pamięci podręcznej"),
+        ("photo has its denoised picture.", "photos have their denoised picture.", "Zdjęcia z odszumioną wersją"),
+    ] {
+        assert_eq!(tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many })), format!("{noun}: {n}"));
+    }
+    assert_eq!(tr_format!("Delete {n} Photos", n = n), format!("Usuń zdjęcia ({n})"));
+    assert_eq!(tr_format!("{n} preset{}", s, n = n), format!("Ustawienia: {n}"));
+}
+
 fn assert_polish_counts() {
     for n in [0, 1, 2, 3, 4, 5, 12, 21, 22, 25, 111] {
-        let s = if n == 1 { "" } else { "s" };
-        assert_eq!(tr_format!("Imported {} photo{}", n, s), format!("Zaimportowane zdjęcia: {n}"));
-        for (one, many, noun) in [
-            ("photo waiting", "photos waiting", "Oczekujące zdjęcia"),
-            ("cached picture", "cached pictures", "Obrazy w pamięci podręcznej"),
-            ("photo has its denoised picture.", "photos have their denoised picture.", "Zdjęcia z odszumioną wersją"),
-        ] {
-            assert_eq!(tr_format!("{n} {noun}", n = n, noun = tr(if n == 1 { one } else { many })), format!("{noun}: {n}"));
-        }
-        assert_eq!(tr_format!("Delete {n} Photos", n = n), format!("Usuń zdjęcia ({n})"));
-        assert_eq!(tr_format!("{n} preset{}", s, n = n), format!("Ustawienia: {n}"));
+        assert_polish_count(n);
     }
 }
 
@@ -1304,4 +1310,28 @@ fn perspective_labels_are_translated_in_every_shipped_locale() {
             assert!(!locale.tr(source).contains("Upright"), "{}: {source}", locale.code());
         }
     }
+}
+
+#[test]
+fn lithuanian_switches_formats_dates_and_reads_every_count() {
+    let mut app = crate::LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+    app.run("app.language.lithuanian", serde_json::json!({})).unwrap();
+    assert_eq!(app.ui.language, Locale::Lt);
+    assert_eq!(Locale::Lt.name(), "Lietuvių");
+    assert_eq!(crate::menubar::checked(&app, "app.language.lithuanian"), Some(true));
+    assert_eq!(tr("File"), "Failas");
+    assert_eq!(tr("Exposure"), "Ekspozicija");
+    assert_eq!(date_group_label("2026-09-20", false), "Sekmadienis, 2026-09-20");
+    assert_eq!(date_group_label("2026-09-20", true), "Sekmadienis, 20");
+    assert_eq!(date_group_label("2026-09", false), "2026-09");
+    assert_eq!(date_group_label("2026", false), "2026");
+    assert_eq!(display_time("2026-09-20T16:04:05"), "Sekmadienis, 2026-09-20 16:04:05");
+    let name = String::from("Color 1234.56 {title} 日本語");
+    assert_eq!(tr_format!("Added {n} photo{} to “{}”", "s", name, n = 22), format!("Į „{name}“ pridėta nuotraukų: 22"));
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    assert_eq!(serde_json::from_str::<crate::state::UiState>(&saved).unwrap().language, Locale::Lt);
+    let ctx = egui::Context::default();
+    let text = painted_text(&ctx, &mut app, Locale::Lt);
+    assert!(text.contains("Failas") && text.contains("Ekspozicija"), "{text}");
+    set_language(Locale::En);
 }

@@ -137,6 +137,7 @@ language_table! {
     Fi, "fi", "Suomi", "Latn", include_str!("../locales/fi.json");
     Id, "id", "Bahasa Indonesia", "Latn", include_str!("../locales/id.json");
     Vi, "vi", "Tiếng Việt", "Latn", include_str!("../locales/vi.json");
+    Lt, "lt", "Lietuvių", "Latn", include_str!("../locales/lt.json");
 }
 
 impl Locale {
@@ -159,12 +160,12 @@ fn name_sort_key(name: &str) -> String {
         .map(|c| match c {
             'à'..='å' | 'ā' | 'ă' | 'ą' => 'a',
             'ç' | 'ć' | 'č' => 'c',
-            'è'..='ë' | 'ē' | 'ě' | 'ę' | 'ế' | 'ệ' => 'e',
+            'è'..='ë' | 'ē' | 'ė' | 'ě' | 'ę' | 'ế' | 'ệ' => 'e',
             'ì'..='ï' | 'ī' => 'i',
             'ñ' | 'ń' | 'ň' => 'n',
             'ò'..='ö' | 'ø' | 'ő' => 'o',
             'ś' | 'š' => 's',
-            'ù'..='ü' | 'ū' | 'ů' | 'ű' => 'u',
+            'ù'..='ü' | 'ū' | 'ų' | 'ů' | 'ű' => 'u',
             'ý' | 'ÿ' => 'y',
             'ź' | 'ż' | 'ž' => 'z',
             c => c,

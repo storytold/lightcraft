@@ -295,22 +295,27 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     if let Some(r) = result {
-        ui.data_mut(|d| d.remove::<(f64, Value)>(cache));
-        match r {
-            Ok(v) => {
-                let failed = v["failed"].as_array().map_or(0, Vec::len);
-                let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
-                    (_, 0) => "Smart previews folder changed".to_string(),
-                    ("move", n) => format!("Smart previews folder changed; moved {n}"),
-                    ("discard", n) => format!("Smart previews folder changed; deleted {n}"),
-                    _ => "Smart previews folder changed".to_string(),
-                };
-                app.toast(ui.ctx(), if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
-            }
-            Err(e) => app.toast(ui.ctx(), e),
-        }
+        smart_previews_result(app, ui, cache, existing, r);
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn smart_previews_result(app: &mut LightcraftApp, ui: &mut egui::Ui, cache: egui::Id, existing: &str, r: Result<Value, String>) {
+    ui.data_mut(|d| d.remove::<(f64, Value)>(cache));
+    match r {
+        Ok(v) => {
+            let failed = v["failed"].as_array().map_or(0, Vec::len);
+            let msg = match (existing, v["handled"].as_u64().unwrap_or(0)) {
+                (_, 0) => crate::i18n::tr("Smart previews folder changed").to_string(),
+                ("move", n) => crate::i18n::tr_format!("Smart previews folder changed; moved {n}", n = n),
+                ("discard", n) => crate::i18n::tr_format!("Smart previews folder changed; deleted {n}", n = n),
+                _ => crate::i18n::tr("Smart previews folder changed").to_string(),
+            };
+            app.toast(ui.ctx(), if failed > 0 { crate::i18n::tr_format!("{msg} ({failed} failed)", failed = failed, msg = msg) } else { msg });
+        }
+        Err(e) => app.toast(ui.ctx(), e),
+    }
 }
 
 /// The cache size limit saved in the settings, as an option of its own when the list doesn't offer
