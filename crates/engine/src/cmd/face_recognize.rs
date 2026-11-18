@@ -4,8 +4,9 @@
 //! what teaches the suggestions). `faces.renamePerson` renames every in-library face of one person, or merges two
 //! people when asked.
 //!
-//! Everything here is a suggestion for the user to confirm; nothing is ever named automatically. All of it is
-//! catalog-only (no sidecar is written) and naming is undoable.
+//! Everything here is a suggestion for the user to confirm; nothing is ever named automatically. Suggestions stay
+//! in the library; a confirmed name reaches the photo's sidecar whenever it is written (`crate::sidecar`), and naming
+//! is undoable.
 
 use lightcraft_catalog::Op;
 use serde_json::{Value, json};
@@ -74,7 +75,6 @@ fn name_faces(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let photos = ops.len();
     s.commit(if name.is_some() { "Name Faces" } else { "Clear Face Names" }, Op::Batch { ops })?;
-    s.skip_auto_write = true;
     Ok(json!({"named": named, "photos": photos, "name": name}))
 }
 
@@ -89,7 +89,6 @@ fn set_name(s: &mut Session, p: &Value) -> Result<Value> {
     let region = meta.regions.get_mut(index).ok_or_else(|| bad(C, "no such region"))?;
     apply_name(region, &name);
     s.commit(if name.is_some() { "Name Face" } else { "Clear Face Name" }, Op::SetMeta { id, meta: Box::new(meta) })?;
-    s.skip_auto_write = true;
     Ok(json!({"id": id.0, "index": index, "name": name}))
 }
 
@@ -172,7 +171,6 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let photos = ops.len();
     s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
-    s.skip_auto_write = true;
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());
     }
@@ -391,7 +389,7 @@ mod imp {
             meta.regions.push(Region { rect: *rect, kind: RegionKind::Face, name: None, description: Some(format!("{MARK}{LABEL}")) });
         }
         if s.apply_system(Op::SetMeta { id, meta: Box::new(meta) }).is_ok() {
-            // regions are not written to XMP, so no sidecar may be rewritten for this
+            // unnamed detected boxes are not written to XMP, so no sidecar may be rewritten for this
             s.skip_auto_write = true;
         }
     }

@@ -4,7 +4,7 @@
 //! made do not matter), the detector runs on it, and the faces come back as fractions of the photo's width
 //! and height, the same frame face regions from XMP use. Unless `apply` is false, they are added to the photo as
 //! unnamed face regions in one undoable step; earlier detections are replaced, and regions that came from XMP (or
-//! that you drew or named) are never touched. Like every region edit it is catalog-only: no sidecar is written.
+//! that you drew or named) are never touched. Unnamed detected boxes are LightCraft's bookkeeping and are never written to a sidecar.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -291,7 +291,7 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     let applied = !ops.is_empty();
     if applied {
         s.commit("Detect Faces", Op::Batch { ops })?;
-        // regions are not written to XMP, so a sidecar must not be rewritten for this
+        // unnamed detected boxes are not written to XMP, so a sidecar must not be rewritten for this
         s.skip_auto_write = true;
     }
     Ok(json!({"detector": LABEL, "applied": applied, "photos": results, "ms": started.elapsed().as_secs_f64() * 1000.0}))

@@ -615,7 +615,6 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let gone = meta.regions.remove(index);
                 s.commit("Remove Face Box", Op::SetMeta { id, meta: Box::new(meta) })?;
-                s.skip_auto_write = true;
                 Ok(json!({"removed": gone.name}))
             }
         ),
@@ -649,7 +648,6 @@ pub fn specs() -> Vec<CommandSpec> {
                 let region = meta.regions.get_mut(index).ok_or_else(|| bad(C, "no such region"))?;
                 region.rect = lightcraft_geom::Rect { x0, y0, x1, y1 };
                 s.commit("Resize Face Box", Op::SetMeta { id, meta: Box::new(meta) })?;
-                s.skip_auto_write = true;
                 Ok(json!({"rect": {"x0": x0, "y0": y0, "x1": x1, "y1": y1}}))
             }
         ),

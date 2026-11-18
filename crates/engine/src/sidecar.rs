@@ -652,7 +652,9 @@ const ORIENTATION_SPAN: u64 = 1 << 20;
 /// The sidecar packet for a photo; the colour label is written by its name in `cat` (custom
 /// label names included, as other editors do).
 pub fn sidecar_packet(p: &Photo, cat: &lightcraft_catalog::Catalog) -> String {
-    sidecar_packet_with(p, cat, false)
+    // the regions go into the photo's own sidecar only: an export's packet describes the picture as exported, which a
+    // crop or a resize leaves the boxes no longer fit
+    with_regions(sidecar_packet_with(p, cat, false), p)
 }
 
 /// [`sidecar_packet`], without any location (GPS, sublocation, city, state, country) when
@@ -701,6 +703,109 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
     lightcraft_meta::write_xmp_lc(&meta, &lc)
 }
 
+/// The regions a sidecar carries: every region of the photo except the unnamed faces LightCraft's own detector
+/// found (its bookkeeping, marked `Detected by …`), which are not worth a file write until someone names them.
+fn file_regions(p: &Photo) -> Vec<&lightcraft_meta::Region> {
+    let detected = |r: &lightcraft_meta::Region| r.description.as_deref().is_some_and(|d| d.starts_with(crate::cmd::face_detect::MARK));
+    let named = |r: &lightcraft_meta::Region| r.name.as_deref().is_some_and(|n| !n.trim().is_empty());
+    p.meta.regions.iter().filter(|r| named(r) || !detected(r)).collect()
+}
+
+/// The people named on a photo's faces, trimmed, each once (case-insensitive), in region order.
+fn face_names(p: &Photo) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+        let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) else { continue };
+        if !names.iter().any(|m| m.to_lowercase() == n.to_lowercase()) {
+            names.push(n.to_string());
+        }
+    }
+    names
+}
+
+/// Text for an XML element's content.
+fn xml_text(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => o.push_str("&amp;"),
+            '<' => o.push_str("&lt;"),
+            '>' => o.push_str("&gt;"),
+            // characters XML 1.0 can't carry are dropped
+            '\t' | '\n' | '\r' => o.push(c),
+            c if (c as u32) < 0x20 || c == '\u{fffe}' || c == '\u{ffff}' => {}
+            c => o.push(c),
+        }
+    }
+    o
+}
+
+/// `packet` with the photo's regions (`mwg-rs:Regions`, MWG Region Guidelines 2.0) and the names on its faces
+/// (`Iptc4xmpExt:PersonInImage`) added to its description. The boxes are written on the upright photo, as LightCraft
+/// keeps them, with the upright size as `AppliedToDimensions` (the photo's own `width` × `height`), so reading the
+/// sidecar back gives the same boxes. Nothing is added for a photo without regions.
+fn with_regions(packet: String, p: &Photo) -> String {
+    let regions = file_regions(p);
+    if regions.is_empty() {
+        return packet;
+    }
+    let mut x = String::from("   <mwg-rs:Regions rdf:parseType=\"Resource\">\n");
+    if p.width > 0 && p.height > 0 {
+        x.push_str(&format!(
+            "    <mwg-rs:AppliedToDimensions rdf:parseType=\"Resource\">\n     <stDim:w>{}</stDim:w>\n     <stDim:h>{}</stDim:h>\n     <stDim:unit>pixel</stDim:unit>\n    </mwg-rs:AppliedToDimensions>\n",
+            p.width, p.height
+        ));
+    }
+    x.push_str("    <mwg-rs:RegionList>\n     <rdf:Bag>\n");
+    for r in &regions {
+        let (x0, y0) = (r.rect.x0.clamp(0.0, 1.0), r.rect.y0.clamp(0.0, 1.0));
+        let (x1, y1) = (r.rect.x1.clamp(0.0, 1.0), r.rect.y1.clamp(0.0, 1.0));
+        if !(x1 > x0 && y1 > y0) {
+            continue;
+        }
+        x.push_str("      <rdf:li rdf:parseType=\"Resource\">\n");
+        // stArea:x/y are the box's centre (MWG Region Guidelines §Area)
+        x.push_str(&format!(
+            "       <mwg-rs:Area rdf:parseType=\"Resource\">\n        <stArea:x>{:.6}</stArea:x>\n        <stArea:y>{:.6}</stArea:y>\n        <stArea:w>{:.6}</stArea:w>\n        <stArea:h>{:.6}</stArea:h>\n        <stArea:unit>normalized</stArea:unit>\n       </mwg-rs:Area>\n",
+            (x0 + x1) / 2.0,
+            (y0 + y1) / 2.0,
+            x1 - x0,
+            y1 - y0
+        ));
+        let kind = match &r.kind {
+            lightcraft_meta::RegionKind::Face => "Face",
+            lightcraft_meta::RegionKind::Pet => "Pet",
+            lightcraft_meta::RegionKind::Focus => "Focus",
+            lightcraft_meta::RegionKind::BarCode => "BarCode",
+            lightcraft_meta::RegionKind::Other(t) => t.as_str(),
+        };
+        if !kind.trim().is_empty() {
+            x.push_str(&format!("       <mwg-rs:Type>{}</mwg-rs:Type>\n", xml_text(kind)));
+        }
+        if let Some(n) = r.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            x.push_str(&format!("       <mwg-rs:Name>{}</mwg-rs:Name>\n", xml_text(n)));
+        }
+        if let Some(d) = r.description.as_deref().filter(|d| !d.trim().is_empty() && !d.starts_with(crate::cmd::face_detect::MARK)) {
+            x.push_str(&format!("       <mwg-rs:Description>{}</mwg-rs:Description>\n", xml_text(d)));
+        }
+        x.push_str("      </rdf:li>\n");
+    }
+    x.push_str("     </rdf:Bag>\n    </mwg-rs:RegionList>\n   </mwg-rs:Regions>\n");
+    let names = face_names(p);
+    if !names.is_empty() {
+        x.push_str("   <Iptc4xmpExt:PersonInImage>\n    <rdf:Bag>\n");
+        for n in &names {
+            x.push_str(&format!("     <rdf:li>{}</rdf:li>\n", xml_text(n)));
+        }
+        x.push_str("    </rdf:Bag>\n   </Iptc4xmpExt:PersonInImage>\n");
+    }
+    // into the packet's one description, just before it closes
+    match packet.rfind("  </rdf:Description>") {
+        Some(at) => format!("{}{x}{}", &packet[..at], &packet[at..]),
+        None => packet,
+    }
+}
+
 /// The properties LightCraft writes and owns in a sidecar: replaced on every save (removed when
 /// LightCraft has no value, so clearing a field clears it in the file too). All of them are read
 /// back on import and by Read Metadata from File.
@@ -722,13 +827,19 @@ pub const OWNED: &[&str] = &[
     "xmpRights:Marked",
     "xmpRights:UsageTerms",
     "xmpRights:WebStatement",
+    // the photo's face, pet and focus regions: LightCraft reads every region of a sidecar into the catalog, so the
+    // catalog's list is the file's list as edited here (see `with_regions`)
+    "mwg-rs:Regions",
     "lc:*",
 ];
 
 /// Properties replaced only when LightCraft has a value (capture time; GPS, which LightCraft
 /// doesn't read from sidecars): otherwise the sidecar's own value stays. Anything else LightCraft
 /// writes (`xmp:CreatorTool`) goes only into new sidecars.
-pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
+/// `Iptc4xmpExt:PersonInImage` (the names on the photo's faces) is one of them: LightCraft doesn't read it, so a list
+/// another application wrote is replaced only when LightCraft has names to write.
+pub const OWNED_IF_STATED: &[&str] =
+    &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude", "Iptc4xmpExt:PersonInImage"];
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
@@ -1728,6 +1839,121 @@ mod tests {
     fn naming() {
         assert_eq!(sidecar_path("/a/b/IMG_1.CR3", SidecarNaming::Stem), PathBuf::from("/a/b/IMG_1.xmp"));
         assert_eq!(sidecar_path("/a/b/IMG_1.CR3", SidecarNaming::Full), PathBuf::from("/a/b/IMG_1.CR3.xmp"));
+    }
+
+    fn region(
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        kind: lightcraft_meta::RegionKind,
+        name: Option<&str>,
+        description: Option<&str>,
+    ) -> lightcraft_meta::Region {
+        lightcraft_meta::Region {
+            rect: lightcraft_meta::Rect { x0, y0, x1, y1 },
+            kind,
+            name: name.map(str::to_string),
+            description: description.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn named_faces_are_written_and_read_back() {
+        use lightcraft_meta::RegionKind::{Face, Pet};
+        let mut p = photo();
+        let detected = format!("{}YuNet 2023mar", crate::cmd::face_detect::MARK);
+        p.meta.regions = vec![
+            region(0.1, 0.2, 0.3, 0.5, Face, Some("Mimì & <Rodolfo>"), None),
+            // a face the detector found and someone named: written, without the detector's note
+            region(0.5, 0.1, 0.6, 0.3, Face, Some("Anna Netrebko, soprano"), Some(&detected)),
+            // the detector's unnamed box: LightCraft's bookkeeping, not written
+            region(0.7, 0.7, 0.8, 0.9, Face, None, Some(&detected)),
+            region(0.2, 0.6, 0.4, 0.9, Pet, Some("Rex"), Some("the dog")),
+            // another application's unnamed face: kept
+            region(0.0, 0.0, 0.1, 0.1, Face, None, None),
+        ];
+        let x = sidecar_packet(&p, &lightcraft_catalog::Catalog::new());
+        assert!(x.contains("<stDim:w>40</stDim:w>") && x.contains("<stDim:h>30</stDim:h>"), "{x}");
+        assert!(!x.contains("Detected by"), "{x}");
+        let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
+        let mut want = p.meta.regions.clone();
+        want.remove(2);
+        want[1].description = None;
+        let got = sc.regions.clone().expect("regions read back");
+        assert_eq!(got.len(), want.len());
+        for (g, w) in got.iter().zip(&want) {
+            assert_eq!((&g.kind, &g.name, &g.description), (&w.kind, &w.name, &w.description));
+            for (a, b) in [(g.rect.x0, w.rect.x0), (g.rect.y0, w.rect.y0), (g.rect.x1, w.rect.x1), (g.rect.y1, w.rect.y1)] {
+                assert!((a - b).abs() < 1e-5, "{g:?} vs {w:?}");
+            }
+        }
+        let d = lightcraft_meta::parse_xmp(&x).unwrap();
+        let people: Vec<&str> =
+            d.values.get("Iptc4xmpExt:PersonInImage").map(|v| v.items().iter().filter_map(|i| i.text()).collect()).unwrap_or_default();
+        assert_eq!(people, ["Mimì & <Rodolfo>", "Anna Netrebko, soprano"]);
+    }
+
+    #[test]
+    fn upright_boxes_on_a_turned_photo_come_back_as_written() {
+        // a portrait shot stored landscape (Exif orientation 6): the catalog's size and boxes are upright
+        let mut p = Photo::new(PhotoId(3), Source::File { path: "/x/IMG_3.jpg".into() }, "IMG_3.jpg", "JPEG", 30, 40, "2026-01-01T00:00:00");
+        p.meta.regions = vec![region(0.1, 0.2, 0.3, 0.4, lightcraft_meta::RegionKind::Face, Some("Ann"), None)];
+        let x = sidecar_packet(&p, &lightcraft_catalog::Catalog::new());
+        let sc = parse_sidecar(&x, crate::crs::Target::Rendered).unwrap();
+        let sc = SidecarData { orientation: Some(lightcraft_meta::Orientation::from_exif(6)), ..sc };
+        let mut q = Photo::new(PhotoId(3), p.source.clone(), "IMG_3.jpg", "JPEG", 30, 40, "2026-01-01T00:00:00");
+        merge_into(&mut q, &sc, "now");
+        let r = q.meta.regions[0].rect;
+        assert!((r.x0 - 0.1).abs() < 1e-5 && (r.y0 - 0.2).abs() < 1e-5 && (r.x1 - 0.3).abs() < 1e-5 && (r.y1 - 0.4).abs() < 1e-5, "{r:?}");
+    }
+
+    #[test]
+    fn regions_replace_the_sidecars_own_and_keep_its_person_list_when_nobody_is_named() {
+        let old = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+          <rdf:Description rdf:about="" xmlns:mwg-rs="http://www.metadataworkinggroup.com/schemas/regions/"
+            xmlns:stArea="http://ns.adobe.com/xmp/sType/Area#" xmlns:Iptc4xmpExt="http://iptc.org/std/Iptc4xmpExt/2008-02-29/"
+            xmlns:photomechanic="http://ns.camerabits.com/photomechanic/1.0/" photomechanic:ColorClass="1">
+           <mwg-rs:Regions rdf:parseType="Resource"><mwg-rs:RegionList><rdf:Bag><rdf:li rdf:parseType="Resource">
+            <mwg-rs:Area stArea:x="0.5" stArea:y="0.5" stArea:w="0.2" stArea:h="0.2" stArea:unit="normalized"/>
+            <mwg-rs:Type>Face</mwg-rs:Type><mwg-rs:Name>Old Name</mwg-rs:Name></rdf:li></rdf:Bag></mwg-rs:RegionList></mwg-rs:Regions>
+           <Iptc4xmpExt:PersonInImage><rdf:Bag><rdf:li>Typed In Elsewhere</rdf:li></rdf:Bag></Iptc4xmpExt:PersonInImage>
+          </rdf:Description></rdf:RDF></x:xmpmeta>"#;
+        let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
+        let names = |x: &str| -> (Vec<String>, Vec<String>) {
+            let d = lightcraft_meta::parse_xmp(x).unwrap();
+            let sc = parse_sidecar(x, crate::crs::Target::Rendered).unwrap();
+            let faces = sc.regions.unwrap_or_default().into_iter().filter_map(|r| r.name).collect();
+            let people = d
+                .values
+                .get("Iptc4xmpExt:PersonInImage")
+                .map(|v| v.items().iter().filter_map(|i| i.text().map(str::to_string)).collect())
+                .unwrap_or_default();
+            (faces, people)
+        };
+
+        // renamed in LightCraft: the file's regions and person list follow, Photo Mechanic's colour class stays
+        let mut p = photo();
+        p.meta.regions = vec![region(0.4, 0.4, 0.6, 0.6, lightcraft_meta::RegionKind::Face, Some("New Name"), None)];
+        let merged = lightcraft_meta::merge_xmp(old, &sidecar_packet(&p, &lightcraft_catalog::Catalog::new()), rules).unwrap();
+        assert_eq!(names(&merged), (vec!["New Name".to_string()], vec!["New Name".to_string()]));
+        assert!(merged.contains("photomechanic:ColorClass=\"1\""), "{merged}");
+
+        // its last box removed: the regions go, the person list nobody named here stays as it was
+        p.meta.regions.clear();
+        let merged = lightcraft_meta::merge_xmp(old, &sidecar_packet(&p, &lightcraft_catalog::Catalog::new()), rules).unwrap();
+        assert_eq!(names(&merged), (vec![], vec!["Typed In Elsewhere".to_string()]));
+        // and saving again changes nothing
+        let again = lightcraft_meta::merge_xmp(&merged, &sidecar_packet(&p, &lightcraft_catalog::Catalog::new()), rules).unwrap();
+        assert_eq!(names(&again), names(&merged));
+    }
+
+    #[test]
+    fn exports_carry_no_regions() {
+        let mut p = photo();
+        p.meta.regions = vec![region(0.1, 0.2, 0.3, 0.5, lightcraft_meta::RegionKind::Face, Some("Ann"), None)];
+        let x = sidecar_packet_with(&p, &lightcraft_catalog::Catalog::new(), false);
+        assert!(!x.contains("mwg-rs:Regions>") && !x.contains("PersonInImage>"), "{x}");
     }
 
     #[test]

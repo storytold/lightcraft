@@ -779,10 +779,9 @@ fn a_size_only_a_raws_xmp_states_leaves_upright_regions_as_written() {
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// Removing a face box is a catalog-only, undoable edit: it never rewrites the sidecar (Lightroom's
-/// regions and everything else in it stay byte for byte), even with auto-write on.
+/// Removing a face box is an undoable edit; with auto-write on it reaches the sidecar's regions.
 #[test]
-fn removing_a_region_is_undoable_and_leaves_the_sidecar_alone() {
+fn removing_a_region_is_undoable_and_written_to_the_sidecar() {
     let src = temp_dir("region-remove");
     write_png(&src.join("portrait.png"), 9);
     std::fs::write(src.join("portrait.xmp"), MWG_REGIONS).unwrap();
@@ -798,21 +797,20 @@ fn removing_a_region_is_undoable_and_leaves_the_sidecar_alone() {
     let r = s.execute("photo.removeRegion", &json!({"index": 0})).unwrap();
     assert_eq!(r["removed"], "Jane Doe");
     assert_eq!(s.catalog.photo(id).unwrap().meta.regions.len(), n - 1);
-    assert_eq!(std::fs::read(src.join("portrait.xmp")).unwrap(), before, "the sidecar is untouched");
-    // an ordinary edit still auto-writes (the guard is per command)
-    s.execute("photo.rate", &json!({"rating": 4})).unwrap();
-    assert_ne!(std::fs::read(src.join("portrait.xmp")).unwrap(), before, "auto-write still works for other edits");
-    // undo brings the region back
-    s.execute("edit.undo", &json!({})).unwrap();
+    let after = std::fs::read_to_string(src.join("portrait.xmp")).unwrap();
+    assert_ne!(after.as_bytes(), before.as_slice(), "the sidecar follows");
+    assert!(!after.contains("Jane Doe"), "{after}");
+    // undo brings the region back, in the file too
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().meta.regions.len(), n);
+    assert!(std::fs::read_to_string(src.join("portrait.xmp")).unwrap().contains("Jane Doe"));
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// Resizing a face box is a catalog-only, undoable edit with strict input handling; it leaves the
-/// sidecar alone like removal does.
+/// Resizing a face box is an undoable edit with strict input handling; with auto-write on the new box reaches the
+/// sidecar.
 #[test]
-fn resizing_a_region_validates_clamps_undoes_and_leaves_the_sidecar_alone() {
+fn resizing_a_region_validates_clamps_undoes_and_writes_the_sidecar() {
     let src = temp_dir("region-resize");
     write_png(&src.join("portrait.png"), 9);
     std::fs::write(src.join("portrait.xmp"), MWG_REGIONS).unwrap();
@@ -841,7 +839,10 @@ fn resizing_a_region_validates_clamps_undoes_and_leaves_the_sidecar_alone() {
     assert_eq!(r["rect"], json!({"x0": 0.0, "y0": 0.2, "x1": 0.6, "y1": 1.0}));
     let now = s.catalog.photo(id).unwrap().meta.regions[0].rect;
     assert_eq!((now.x0, now.y0, now.x1, now.y1), (0.0, 0.2, 0.6, 1.0));
-    assert_eq!(std::fs::read(src.join("portrait.xmp")).unwrap(), before, "the sidecar is untouched");
+    assert_ne!(std::fs::read(src.join("portrait.xmp")).unwrap(), before, "the sidecar follows");
+    let read = crate::sidecar::parse_sidecar(&std::fs::read_to_string(src.join("portrait.xmp")).unwrap(), crate::crs::Target::Rendered).unwrap();
+    let r = read.regions.unwrap()[0].rect;
+    assert!([(r.x0, 0.0), (r.y0, 0.2), (r.x1, 0.6), (r.y1, 1.0)].iter().all(|(g, w)| (g - w).abs() < 1e-5), "{r:?}");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(s.catalog.photo(id).unwrap().meta.regions[0].rect, original);
     let _ = std::fs::remove_dir_all(&src);
@@ -1989,5 +1990,33 @@ fn a_failed_auto_write_waits_and_is_written_on_retry() {
     s.execute("library.retrySidecars", &json!({})).unwrap();
     assert_eq!(s.unsaved_sidecars(), 0);
     std::fs::set_permissions(&src, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn naming_a_face_writes_it_into_the_sidecar() {
+    use lightcraft_meta::{Rect, Region, RegionKind};
+    let src = temp_dir("face-write");
+    write_png(&src.join("a.png"), 4);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    s.execute("library.xmpPreferences", &json!({"autoWrite": true})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    let rect = Rect { x0: 0.25, y0: 0.25, x1: 0.75, y1: 0.75 };
+    meta.regions = vec![Region { rect, kind: RegionKind::Face, name: None, description: Some("Detected by YuNet 2023mar".into()) }];
+    s.commit("Detect Faces", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+    s.execute("faces.nameFaces", &json!({"faces": [{"photo": id.0, "index": 0}], "name": "Jane Doe"})).unwrap();
+    let x = std::fs::read_to_string(src.join("a.xmp")).unwrap();
+    assert!(x.contains("<mwg-rs:Name>Jane Doe</mwg-rs:Name>") && x.contains("<rdf:li>Jane Doe</rdf:li>"), "{x}");
+    if let Ok(keep) = std::env::var("LC_KEEP_FACE_SIDECAR") {
+        std::fs::copy(src.join("a.xmp"), keep).unwrap();
+    }
+    // reading the file again gives the same face
+    s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    let r = &s.catalog.photo(id).unwrap().meta.regions;
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].name.as_deref(), Some("Jane Doe"));
+    assert!((r[0].rect.x0 - 0.25).abs() < 1e-5 && (r[0].rect.y1 - 0.75).abs() < 1e-5, "{:?}", r[0].rect);
     let _ = std::fs::remove_dir_all(&src);
 }

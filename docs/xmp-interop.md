@@ -119,8 +119,14 @@ LightCraft reads face, pet, focus and barcode regions in the Metadata Working Gr
 write them, from sidecars and from XMP embedded in the file. Named faces become people in the People view
 (LR-LIB-PEOPLE in [`parity-checklist.md`](parity-checklist.md)), and every region is drawn as a box in the loupe.
 
-- **Read only.** LightCraft never writes `mwg-rs:Regions`; saving a sidecar keeps another application's regions byte
-  for byte. Removing or resizing a box in the loupe changes the library only.
+- **Written to the photo's sidecar.** Saving a sidecar (Save Metadata to File, or every change with "Automatically
+  write changes into XMP sidecars" on) writes the photo's regions as `mwg-rs:Regions`, replacing the sidecar's own:
+  naming, renaming, resizing or removing a box reaches the file. The boxes are written on the upright photo with the
+  upright size as `mwg-rs:AppliedToDimensions` and no `mwg-rs:Rotation`, so they read back as they were. The unnamed
+  boxes LightCraft's detector found (its bookkeeping) are left out until someone names them. The names on the faces
+  also go into `Iptc4xmpExt:PersonInImage`, which is replaced only when there is at least one name (LightCraft doesn't
+  read it, so a list another application wrote stays when nobody is named here). Exports carry no regions: a crop or
+  resize would leave the boxes off.
 - **Areas**: `stArea:x`/`y` are the box's centre, `w`/`h` its size, normalized to the photo (`stArea:unit="pixel"`
   areas are divided by `mwg-rs:AppliedToDimensions`, and dropped without it). Boxes are clipped to the photo; one
   that misses it entirely, or has a non-finite, zero or negative size, is skipped (the rest of the list is kept).
