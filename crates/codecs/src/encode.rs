@@ -1,4 +1,4 @@
-//! Encoders: JPEG (`jpeg-encoder`), PNG (`png`), TIFF (`tiff`), flat PSD (our own), lossless WebP (`image-webp`) and,
+//! Encoders: JPEG (`craft-jpeg`), PNG (`png`), TIFF (`tiff`), flat PSD (our own), lossless WebP (`image-webp`) and,
 //! on native targets with the `avif` feature, AVIF (`ravif`/`rav1e`); JPEG XL is in `jxl_encode`.
 //! Metadata (ICC/EXIF/XMP) is embedded where the format allows.
 
@@ -53,10 +53,6 @@ impl<'a> EncodeImage<'a> {
             return Err(Error::Encode(format!("sample buffer too short: {have} < {need}")));
         }
         Ok(())
-    }
-
-    fn has_alpha(&self) -> bool {
-        self.channels == 2 || self.channels == 4
     }
 }
 
@@ -132,55 +128,25 @@ pub fn encode_jpeg(img: &EncodeImage, quality: u8, subsampling: ChromaSubsamplin
     if img.width > u16::MAX as u32 || img.height > u16::MAX as u32 {
         return Err(Error::Encode("JPEG dimensions are limited to 65535".into()));
     }
-    let n = img.width as usize * img.height as usize;
-    if subsampling != ChromaSubsampling::S422 {
-        // Parallel encoder (restart-interval bands on all cores).
-        let data: std::borrow::Cow<[u8]> = match img.channels {
-            1 => data[..n].into(),
-            2 => data.as_chunks::<2>().0.iter().take(n).map(|c| c[0]).collect::<Vec<_>>().into(),
-            3 => data[..n * 3].into(),
-            _ => data[..n * 4].into(),
-        };
-        let segs = jpeg_app_segments(meta)?;
-        let ch = if img.channels == 2 { 1 } else { img.channels as usize };
-        // `data` is already gray for 2-channel input (see above)
-        return Ok(crate::jpeg_par::encode(&data, img.width as usize, img.height as usize, ch, quality, subsampling, &segs));
-    }
-    if let Some(exif) = meta.exif
-        && exif.len() > 65_527
-    {
-        return Err(Error::Encode("EXIF larger than one APP1 segment (64 KiB)".into()));
-    }
-    if let Some(xmp) = meta.xmp
-        && XMP_NS.len() + xmp.len() > 65_533
-    {
-        return Err(Error::Encode("XMP larger than one APP1 segment (extended XMP not supported)".into()));
-    }
-    let (layout, rgb_data): (craft_image_codecs::ChannelLayout, Vec<u8>) = match img.channels {
-        1 => (craft_image_codecs::ChannelLayout::Gray, data[..n].to_vec()),
-        2 => (craft_image_codecs::ChannelLayout::Gray, data.as_chunks::<2>().0.iter().take(n).map(|c| c[0]).collect()),
-        3 => (craft_image_codecs::ChannelLayout::Rgb, data[..n * 3].to_vec()),
-        _ => (craft_image_codecs::ChannelLayout::Rgb, data.as_chunks::<4>().0.iter().take(n).flat_map(|c| [c[0], c[1], c[2]]).collect()),
+    let pixels = img.width as usize * img.height as usize;
+    let (data, channels): (std::borrow::Cow<'_, [u8]>, usize) = match img.channels {
+        1 => (data[..pixels].into(), 1),
+        2 => (data.as_chunks::<2>().0.iter().take(pixels).map(|c| c[0]).collect::<Vec<_>>().into(), 1),
+        3 => (data[..pixels * 3].into(), 3),
+        _ => (data[..pixels * 4].into(), 4),
     };
-    let mut ic_img = craft_image_codecs::Image::from_u8(img.width, img.height, layout, rgb_data).map_err(|e| Error::Encode(e.to_string()))?;
-    ic_img.icc = meta.icc.map(<[u8]>::to_vec);
-    ic_img.meta.exif = meta.exif.map(<[u8]>::to_vec);
-    ic_img.meta.xmp = meta.xmp.map(str::to_owned);
-    ic_img.meta.dpi = meta.ppi.filter(|&p| p > 0).map(|p| (p as f32, p as f32));
-    let ic_opts = craft_image_codecs::EncodeOptions { jpeg_quality: quality.clamp(1, 100), jpeg_chroma_subsampling: true, ..Default::default() };
-    let mut out = craft_image_codecs::encode(&ic_img, craft_image_codecs::Format::Jpeg, &ic_opts).map_err(|e| Error::Encode(e.to_string()))?;
-    if let Some(exif) = meta.exif
-        && let Some(pos) = out.windows(6).position(|w| w == b"Exif\0\0")
-        && let Some(dst) = out.get_mut(pos + 6..pos + 6 + exif.len())
-    {
-        dst.copy_from_slice(exif);
-    }
-    Ok(out)
+    let subsampling = match subsampling {
+        ChromaSubsampling::S444 => craft_jpeg::ChromaSubsampling::S444,
+        ChromaSubsampling::S422 => craft_jpeg::ChromaSubsampling::S422,
+        ChromaSubsampling::S420 => craft_jpeg::ChromaSubsampling::S420,
+    };
+    craft_jpeg::encode_baseline(&data, img.width as usize, img.height as usize, channels, quality, subsampling, &jpeg_app_segments(meta)?)
+        .map_err(|e| Error::Encode(e.to_string()))
 }
 
-/// Encode PNG (8- or 16-bit; float input is rejected — quantize first).
-pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
-    img.validate()?;
+/// `img` (already validated) as a `craft-image-codecs` image. `refuse_float` is the error for
+/// 32-bit float samples, for a format that cannot hold them; `None` converts them too.
+fn shared_image(img: &EncodeImage, refuse_float: Option<&str>) -> Result<craft_image_codecs::Image> {
     let n = img.width as usize * img.height as usize * img.channels as usize;
     let layout = match img.channels {
         1 => craft_image_codecs::ChannelLayout::Gray,
@@ -188,12 +154,19 @@ pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
         3 => craft_image_codecs::ChannelLayout::Rgb,
         _ => craft_image_codecs::ChannelLayout::Rgba,
     };
-    let mut ic_img = match img.samples {
-        Samples::U8(s) => craft_image_codecs::Image::from_u8(img.width, img.height, layout, s[..n].to_vec()),
-        Samples::U16(s) => craft_image_codecs::Image::from_u16(img.width, img.height, layout, &s[..n]),
-        Samples::F32(_) => return Err(Error::Encode("PNG needs 8- or 16-bit samples".into())),
+    match (img.samples, refuse_float) {
+        (Samples::U8(s), _) => craft_image_codecs::Image::from_u8(img.width, img.height, layout, s[..n].to_vec()),
+        (Samples::U16(s), _) => craft_image_codecs::Image::from_u16(img.width, img.height, layout, &s[..n]),
+        (Samples::F32(_), Some(refusal)) => return Err(Error::Encode(refusal.into())),
+        (Samples::F32(s), None) => craft_image_codecs::Image::from_f32(img.width, img.height, layout, &s[..n]),
     }
-    .map_err(|e| Error::Encode(e.to_string()))?;
+    .map_err(|e| Error::Encode(e.to_string()))
+}
+
+/// Encode PNG (8- or 16-bit; float input is rejected — quantize first).
+pub fn encode_png(img: &EncodeImage, meta: &EncodeMeta) -> Result<Vec<u8>> {
+    img.validate()?;
+    let mut ic_img = shared_image(img, Some("PNG needs 8- or 16-bit samples"))?;
     ic_img.icc = meta.icc.map(|b| b.to_vec());
     ic_img.meta.exif = meta.exif.map(|b| b.to_vec());
     ic_img.meta.xmp = meta.xmp.map(|x| x.to_string());
@@ -238,19 +211,7 @@ pub enum TiffCompression {
 /// ICC and XMP are embedded; EXIF is not (write it through the TIFF writer in `craft-tiff`).
 pub fn encode_tiff(img: &EncodeImage, compression: TiffCompression, meta: &EncodeMeta) -> Result<Vec<u8>> {
     img.validate()?;
-    let n = img.width as usize * img.height as usize * img.channels as usize;
-    let layout = match img.channels {
-        1 => craft_image_codecs::ChannelLayout::Gray,
-        2 => craft_image_codecs::ChannelLayout::GrayA,
-        3 => craft_image_codecs::ChannelLayout::Rgb,
-        _ => craft_image_codecs::ChannelLayout::Rgba,
-    };
-    let mut ic_img = match img.samples {
-        Samples::U8(s) => craft_image_codecs::Image::from_u8(img.width, img.height, layout, s[..n].to_vec()),
-        Samples::U16(s) => craft_image_codecs::Image::from_u16(img.width, img.height, layout, &s[..n]),
-        Samples::F32(s) => craft_image_codecs::Image::from_f32(img.width, img.height, layout, &s[..n]),
-    }
-    .map_err(|e| Error::Encode(e.to_string()))?;
+    let mut ic_img = shared_image(img, None)?;
     ic_img.icc = meta.icc.map(|b| b.to_vec());
     ic_img.meta.xmp = meta.xmp.map(|x| x.to_string());
     ic_img.meta.dpi = meta.ppi.filter(|p| *p > 0).map(|p| (p as f32, p as f32));
@@ -329,37 +290,13 @@ pub fn encode_avif(img: &EncodeImage, quality: u8, speed: u8, meta: &EncodeMeta)
     img.validate()?;
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     {
-        let mut enc = ravif::Encoder::new()
-            .with_quality(quality.clamp(1, 100) as f32)
-            .with_alpha_quality(quality.clamp(1, 100) as f32)
-            .with_speed(speed.clamp(1, 10));
-        if let Some(exif) = meta.exif {
-            enc = enc.with_exif(exif.to_vec());
-        }
-        let s = match img.samples {
-            Samples::U8(s) => s,
-            Samples::U16(s) => return avif_10bit(&enc, img, s),
-            Samples::F32(_) => return Err(Error::Encode("AVIF encoder needs 8- or 16-bit samples".into())),
-        };
-        let n = img.width as usize * img.height as usize;
-        let ch = img.channels as usize;
-        let px: Vec<ravif::RGBA8> = s
-            .chunks_exact(ch)
-            .take(n)
-            .map(|c| match ch {
-                1 => ravif::RGBA8::new(c[0], c[0], c[0], 255),
-                2 => ravif::RGBA8::new(c[0], c[0], c[0], c[1]),
-                3 => ravif::RGBA8::new(c[0], c[1], c[2], 255),
-                _ => ravif::RGBA8::new(c[0], c[1], c[2], c[3]),
-            })
-            .collect();
-        let r = enc.encode_rgba(ravif::Img::new(&px[..], img.width as usize, img.height as usize)).map_err(|e| Error::Encode(e.to_string()))?;
-        let _ = img.has_alpha();
-        Ok(r.avif_file)
+        let mut ic_img = shared_image(img, Some("AVIF encoder needs 8- or 16-bit samples"))?;
+        ic_img.meta.exif = meta.exif.map(|e| e.to_vec());
+        craft_image_codecs::encode_avif_with_speed(&ic_img, quality, speed).map_err(|e| Error::Encode(e.to_string()))
     }
     #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
     {
-        let _ = (quality, speed, meta, img.has_alpha());
+        let _ = (quality, speed, meta);
         Err(Error::Encode("AVIF encoding is not available in this build".into()))
     }
 }
@@ -431,108 +368,12 @@ pub fn encode_avif_hdr(width: u32, height: u32, rgb: &[f32], quality: u8, speed:
     }
     #[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
     {
-        use rav1e::prelude::*;
-        const K: [f32; 3] = [0.2627, 0.6780, 0.0593]; // BT.2020 NCL
-        let mut max_nits = 0f32;
-        let mut sum_nits = 0f64;
-        let planes: Vec<[u16; 3]> = rgb
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .take(n)
-            .map(|c| {
-                let nits = c.map(|v| (if v.is_finite() { v.max(0.0) } else { 0.0 }) * HDR_REFERENCE_WHITE_NITS);
-                let y_nits = K[0] * nits[0] + K[1] * nits[1] + K[2] * nits[2];
-                max_nits = max_nits.max(nits[0].max(nits[1]).max(nits[2]));
-                sum_nits += y_nits as f64;
-                let [r, g, b] = match transfer {
-                    HdrTransfer::Pq => nits.map(pq_encode),
-                    HdrTransfer::Hlg => hlg_signal([c[0], c[1], c[2]]),
-                };
-                let y = K[0] * r + K[1] * g + K[2] * b;
-                let cb = (b - y) / (2.0 * (1.0 - K[2])) + 0.5;
-                let cr = (r - y) / (2.0 * (1.0 - K[0])) + 0.5;
-                [y, cb, cr].map(|v| (v * 1023.0).round().clamp(0.0, 1023.0) as u16)
-            })
-            .collect();
-        let q = quality.clamp(1, 100) as f32 / 100.0;
-        // ravif's quality → quantizer curve, so qualities match the SDR AVIF path
-        let x = if q >= 0.82 {
-            (1.0 - q) * 2.6
-        } else if q > 0.25 {
-            1.0 - 0.125 - q * 0.5
-        } else {
-            1.0 - q
+        let _ = (w, h, n);
+        let t = match transfer {
+            HdrTransfer::Pq => craft_image_codecs::HdrTransfer::Pq,
+            HdrTransfer::Hlg => craft_image_codecs::HdrTransfer::Hlg,
         };
-        let quantizer = (x * 255.0).round() as usize;
-        let mut ec = EncoderConfig::with_speed_preset(speed.clamp(1, 10));
-        ec.width = w;
-        ec.height = h;
-        ec.time_base = Rational::new(1, 1);
-        ec.bit_depth = 10;
-        ec.chroma_sampling = ChromaSampling::Cs444;
-        ec.pixel_range = PixelRange::Full;
-        ec.color_description = Some(ColorDescription {
-            color_primaries: ColorPrimaries::BT2020,
-            transfer_characteristics: match transfer {
-                HdrTransfer::Pq => TransferCharacteristics::SMPTE2084,
-                HdrTransfer::Hlg => TransferCharacteristics::HLG,
-            },
-            matrix_coefficients: MatrixCoefficients::BT2020NCL,
-        });
-        let cll = (max_nits.ceil().clamp(1.0, 10_000.0) as u16, ((sum_nits / n as f64).ceil().clamp(1.0, 10_000.0)) as u16);
-        ec.content_light =
-            (transfer == HdrTransfer::Pq).then_some(ContentLight { max_content_light_level: cll.0, max_frame_average_light_level: cll.1 });
-        ec.still_picture = true;
-        ec.quantizer = quantizer;
-        ec.min_quantizer = quantizer.min(255) as u8;
-        ec.speed_settings.multiref = false;
-        ec.speed_settings.rdo_lookahead_frames = 1;
-        ec.speed_settings.scene_detection_mode = SceneDetectionSpeed::None;
-        let e = |e: &dyn std::fmt::Display| Error::Encode(format!("AV1: {e}"));
-        let mut ctx: Context<u16> = Config::new().with_encoder_config(ec).new_context().map_err(|x| e(&x))?;
-        let mut frame = ctx.new_frame();
-        {
-            let mut it = planes.iter();
-            let mut fp = frame.planes.iter_mut();
-            let (Some(py), Some(pu), Some(pv)) = (fp.next(), fp.next(), fp.next()) else {
-                return Err(Error::Encode("AV1: frame has no planes".into()));
-            };
-            let (mut sy, mut su, mut sv) = (py.mut_slice(Default::default()), pu.mut_slice(Default::default()), pv.mut_slice(Default::default()));
-            for ((ry, ru), rv) in sy.rows_iter_mut().zip(su.rows_iter_mut()).zip(sv.rows_iter_mut()).take(h) {
-                for ((y, u), v) in ry.iter_mut().zip(ru.iter_mut()).zip(rv.iter_mut()).take(w) {
-                    let Some(p) = it.next() else { break };
-                    (*y, *u, *v) = (p[0], p[1], p[2]);
-                }
-            }
-        }
-        ctx.send_frame(frame).map_err(|x| e(&x))?;
-        ctx.flush();
-        let mut av1 = Vec::new();
-        loop {
-            match ctx.receive_packet() {
-                Ok(mut p) if p.frame_type == FrameType::KEY => av1.append(&mut p.data),
-                Ok(_) => {}
-                Err(EncoderStatus::Encoded | EncoderStatus::LimitReached) => break,
-                Err(x) => return Err(e(&x)),
-            }
-        }
-        use avif_serialize::constants as c;
-        let mut a = avif_serialize::Aviffy::new();
-        a.set_matrix_coefficients(c::MatrixCoefficients::Bt2020Ncl)
-            .set_transfer_characteristics(match transfer {
-                HdrTransfer::Pq => c::TransferCharacteristics::Smpte2084,
-                HdrTransfer::Hlg => c::TransferCharacteristics::Hlg,
-            })
-            .set_color_primaries(c::ColorPrimaries::Bt2020)
-            .set_full_color_range(true);
-        if transfer == HdrTransfer::Pq {
-            a.set_content_light_level(cll.0, cll.1);
-        }
-        if let Some(exif) = meta.exif {
-            a.set_exif(exif.to_vec());
-        }
-        Ok(a.to_vec(&av1, None, width, height, 10))
+        craft_image_codecs::encode_avif_hdr(width, height, rgb, quality, speed, meta.exif, t).map_err(|e| Error::Encode(e.to_string()))
     }
     #[cfg(not(all(feature = "avif", not(target_arch = "wasm32"))))]
     {
@@ -583,35 +424,6 @@ fn png_chunk(kind: [u8; 4], data: &[u8]) -> Vec<u8> {
     }
     out.extend_from_slice(&(!crc).to_be_bytes());
     out
-}
-
-/// 16-bit RGB(A) → 10-bit BT.601 full-range YCbCr planes (the matrix `ravif` uses for 8-bit input).
-#[cfg(all(feature = "avif", not(target_arch = "wasm32")))]
-fn avif_10bit(enc: &ravif::Encoder, img: &EncodeImage, s: &[u16]) -> Result<Vec<u8>> {
-    const K: [f32; 3] = [0.299, 0.587, 0.114];
-    let n = img.width as usize * img.height as usize;
-    let ch = img.channels as usize;
-    let rgb = |c: &[u16]| -> [f32; 3] {
-        let v = |x: u16| x as f32 * (1023.0 / 65535.0);
-        match ch {
-            1 | 2 => [v(c[0]); 3],
-            _ => [v(c[0]), v(c[1]), v(c[2])],
-        }
-    };
-    let planes = s.chunks_exact(ch).take(n).map(|c| {
-        let [r, g, b] = rgb(c);
-        let y = K[0] * r + K[1] * g + K[2] * b;
-        let cb = (b - y) * (0.5 / (1.0 - K[2])) + 512.0;
-        let cr = (r - y) * (0.5 / (1.0 - K[0])) + 512.0;
-        [y, cb, cr].map(|v| v.round().clamp(0.0, 1023.0) as u16)
-    });
-    let alpha_at = |c: &[u16]| if img.has_alpha() { c[ch - 1] } else { u16::MAX };
-    let has_alpha = s.chunks_exact(ch).take(n).any(|c| alpha_at(c) != u16::MAX);
-    let alpha = has_alpha.then(|| s.chunks_exact(ch).take(n).map(move |c| ((alpha_at(c) as u32 * 1023 + 32767) / 65535) as u16));
-    let r = enc
-        .encode_raw_planes_10_bit(img.width as usize, img.height as usize, planes, alpha, ravif::PixelRange::Full, ravif::MatrixCoefficients::BT601)
-        .map_err(|e| Error::Encode(e.to_string()))?;
-    Ok(r.avif_file)
 }
 
 #[cfg(test)]
