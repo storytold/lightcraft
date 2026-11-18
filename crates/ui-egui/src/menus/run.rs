@@ -421,7 +421,7 @@ fn ui_commands_2(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
                         // the view is set: the first showing doesn't fit every photo over it
                         app.ui.map.fitted = true;
                     } else {
-                        app.toast(ctx, crate::i18n::tr("Photo has no GPS coordinates (drag onto map to place)"));
+                        app.toast(ctx, crate::i18n::tr("Photo has no GPS coordinates"));
                     }
                 }
             } else {
