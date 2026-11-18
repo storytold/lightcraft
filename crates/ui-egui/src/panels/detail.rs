@@ -392,18 +392,12 @@ fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft
     crate::widgets::announce(resp, crate::i18n::tr_format!("Photo: {name}", name = super::grid::cell_description(app, photo)));
 }
 
-/// The loupe's right-click menu: zoom commands and the grid's photo menu.
+/// The loupe's right-click menu: zoom commands and the photo menu.
 fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) {
+    // the loupe's own rows first, in the same bounded menu as the photo's
+    use crate::photo_menu::Lead;
     crate::widgets::context_menu(resp, |ui| {
-        crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
-            for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {
-                if ui.button(crate::i18n::tr(label)).clicked() {
-                    let _ = app.run(cmd, json!({}));
-                }
-            }
-        });
-        ui.separator();
-        super::grid::context_menu(app, ui, id);
+        crate::photo_menu::show(app, ui, id, Lead::Submenu("Zoom", &["view.zoomFit", "view.zoom100", "view.zoomIn", "view.zoomOut"]));
     });
 }
 
