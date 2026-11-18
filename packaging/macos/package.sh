@@ -87,6 +87,11 @@ for pair in "app:$BRAND_BINARY" "app-cli:$CLI"; do
     echo "error: $out holds '$archs', expected '$LIPO_ARCHS' for --arch $ARCH" >&2
     exit 1
   fi
+  # Symbols out, as Linux and FreeBSD do, before signing (docs/packaging.md → Symbols).
+  # Apple's strip by path: a Homebrew binutils strip earlier on PATH can't read every Mach-O.
+  before="$(wc -c <"$WORK/bin/$out" | tr -d ' ')"
+  /usr/bin/strip "$WORK/bin/$out"
+  echo "==> stripped $out: $before -> $(wc -c <"$WORK/bin/$out" | tr -d ' ') bytes"
 done
 
 # ---- signing helpers ---------------------------------------------------------------------------
