@@ -606,31 +606,35 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     // Add to Apple Photos: refused here, before anything is written, when it can't be done
     let after = app.session.after_export(&opts)?;
     let background = p.get("background").and_then(Value::as_bool).unwrap_or(false) && app.services.write_shared.is_some();
-    let out = if background {
-        let items = lightcraft_engine::export::prepare_batch(&mut app.session, &ids, &opts)?;
-        crate::export_task::start(app, items, opts, to, after)?
-    } else {
-        let w = app.services.write.as_mut().ok_or("no writer")?;
-        let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
-        let mut out = json!({"files": files});
-        // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
-        // worker, never on this (UI) thread; the app announces the outcome and
-        // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.
-        if let Some(photos) = after.finish(&app.session, &files) {
-            out["applePhotos"] = photos;
-        }
-        out
-    };
-    // remember for Export with Previous (and to prefill the dialog)
+    // what Export with Previous (and the dialog) remember of this export
     let mut last = p.clone();
     if let Some(o) = last.as_object_mut() {
         o.remove("ids");
         o.remove("path");
         o.insert("dir".into(), json!(dir));
     }
-    app.session.last_export = Some(last);
-    let _ = app.session.save_prefs();
+    if background {
+        // remembered once the photos are prepared and the worker starts: an export that ends before that (a
+        // photo that can't be prepared, ✕, another library) is not the last one
+        return crate::export_task::start(app, ids, opts, to, after, last);
+    }
+    let w = app.services.write.as_mut().ok_or("no writer")?;
+    let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+    let mut out = json!({"files": files});
+    // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
+    // worker, never on this (UI) thread; the app announces the outcome and
+    // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.
+    if let Some(photos) = after.finish(&app.session, &files) {
+        out["applePhotos"] = photos;
+    }
+    remember_export(&mut app.session, last);
     Ok(out)
+}
+
+/// Keep `last` as the export Export with Previous repeats and the Export dialog starts from.
+pub(crate) fn remember_export(session: &mut lightcraft_engine::Session, last: Value) {
+    session.last_export = Some(last);
+    let _ = session.save_prefs();
 }
 
 /// The largest coordinate or offset a gesture takes, in points (far past any screen).
