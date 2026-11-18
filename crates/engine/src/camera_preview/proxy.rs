@@ -94,18 +94,16 @@ pub(super) fn proxies(
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
 ) -> Option<(Rgb32f, Rgb32f, Vec<bool>)> {
     let edge = (2 * size).max(384) as u32;
-    let decoded = crate::files::decode_raw_preview(
-        bytes,
-        lightcraft_codecs::DecodeOptions { max_size: Some((edge, edge)), max_pixels: FIT_PREVIEW_MAX_PIXELS },
-        None,
-    )?;
     let (a, crop) = (raw.active_area, raw.crop.clipped(raw.active_area.width, raw.active_area.height));
+    let opts = lightcraft_codecs::DecodeOptions { max_size: Some((edge, edge)), max_pixels: FIT_PREVIEW_MAX_PIXELS };
+    let decoded = crate::files::decode_raw_preview(bytes, opts, None)?;
     // a preview below `min_fraction` of the crop's long edge (or under 384 px) is refused; 0 = any
     if min_fraction > 0.0 && (decoded.source_width.max(decoded.source_height) as f64) < (min_fraction * crop.width.max(crop.height) as f64).max(384.0)
     {
         return None;
     }
     let mut reference = decoded.to_working();
+    let native_scale = decoded.source_width.max(decoded.source_height) as f64 / reference.width.max(reference.height).max(1) as f64;
     if crop.width == 0 || crop.height == 0 || reference.width == 0 || reference.height == 0 {
         return None;
     }
@@ -123,6 +121,17 @@ pub(super) fn proxies(
         }
         reference = reference.into_crop(x, y, w, h);
     }
+    // Do not turn an upscaled JPEG into finer evidence. Account for an active-area crop too.
+    let size = if raw.format == RawFormat::Dng && (min_fraction == 0.0 || size >= 4 * PROXY) {
+        let decoded_edge = reference.width.max(reference.height);
+        let native_edge = (decoded_edge as f64 * native_scale).floor() as usize;
+        if native_edge < 4 * PROXY || (size >= 4 * PROXY && decoded_edge < 4 * PROXY) {
+            return None;
+        }
+        size.min(native_edge).min(decoded_edge)
+    } else {
+        size
+    };
     // Fixed, bounded proxy: the selected look cannot depend on thumbnail/export resolution.
     let k = (crop.width.max(crop.height).div_ceil(edge as usize).max(2)).div_ceil(2) * 2;
     let mut sensor = sensor_proxy(raw, k, edge as usize)?;

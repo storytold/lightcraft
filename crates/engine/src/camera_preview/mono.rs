@@ -184,7 +184,7 @@ fn fit_tone_only_pairs(
     } else {
         fit_tone_with_shadows(ToneFit::Quantile, pairs, sensor, reference, edge_limit, coloured)?
     };
-    let look = CameraLook { matrix, tone, hue_sat: hue_sat.clone() };
+    let look = CameraLook { matrix, tone, hue_sat: hue_sat.clone(), bands: None };
     if !highlights_hold(&look.tone, highlights, coloured) {
         return None;
     }
