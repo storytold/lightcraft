@@ -287,13 +287,25 @@ fn answers_ui(app: &mut LccApp, ctx: &egui::Context) {
     }
 }
 
+/// An Immich error for the user: the catalog's words for a cause the app knows (an API key can't
+/// open locked folders), else the engine's message.
+fn error_text(e: &Value) -> String {
+    if e["kind"] == "sessionRequired" {
+        return crate::i18n::tr(
+            "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.",
+        )
+        .to_string();
+    }
+    e["message"].as_str().unwrap_or("Immich").to_string()
+}
+
 /// One background call's answer: into the section that asked, or a toast. A failure is always
 /// shown: in its section where there is one, else as a toast.
 fn answer_in(app: &mut LccApp, ctx: &egui::Context, key: &str, r: Value) {
     // (`<command>:<account>`; the account id has colons of its own, the command none)
     let Some((command, account)) = key.split_once(':') else { return };
     let failed = r["ok"] == false;
-    let message = r["error"]["message"].as_str().unwrap_or("Immich").to_string();
+    let message = error_text(&r["error"]);
     match command {
         "immich.libraries" => {
             if app.immich.maps_reload.remove(account) {
@@ -1172,7 +1184,7 @@ fn locked_section(app: &mut LccApp, ui: &mut egui::Ui, t: &Tokens, i: usize, id:
     let st = app.immich.locked_view.get(id).cloned().unwrap_or_default();
     ui.label(RichText::new(crate::i18n::tr("Locked folders")).font(t.semibold(12.0)).color(t.text));
     if st["ok"] == false {
-        let l = ui.label(RichText::new(st["error"]["message"].as_str().unwrap_or("failed")).size(11.5).color(t.caution));
+        let l = ui.label(RichText::new(error_text(&st["error"])).size(11.5).color(t.caution));
         register(ui.ctx(), format!("label:immichLockedStatus-{i}"), l.rect);
         return;
     }

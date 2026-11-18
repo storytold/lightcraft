@@ -1387,6 +1387,7 @@
   "Immich hides the photos of its locked folders until this session is unlocked with the account's PIN or password.": "Immich მალავს თავისი ჩაკეტილი საქაღალდეების ფოტოებს, სანამ ეს სესია არ გაიხსნება ანგარიშის PIN კოდით ან პაროლით.",
   "Immich is rescanning {} libraries": "Immich ხელახლა ასკანირებს ბიბლიოთეკებს: {}",
   "Immich keeps an XMP sidecar for every asset: push yours into it, or pull Immich's into the catalog": "Immich ყოველი ფაილისთვის XMP თანმხლებ ფაილს ინახავს: გაგზავნეთ თქვენი მასში, ან ჩამოიტანეთ Immich-ისა კატალოგში",
+  "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.": "Immich დაბლოკილ საქაღალდეებს მხოლოდ შესული სესიისთვის ხსნის (PIN ან პაროლი) და არა API გასაღებისთვის, ეს კავშირი კი API გასაღებს იყენებს. დაბლოკილ საქაღალდეებში არსებულ ფოტოებზე აქედან წვდომა შეუძლებელია.",
   "Immich path": "Immich-ის მისამართი",
   "Immich reads ratings, descriptions and keywords from the sidecars on its next library scan": "Immich შეფასებებს, აღწერებს და საკვანძო სიტყვებს თანმხლები ფაილებიდან ბიბლიოთეკის შემდეგი სკანირებისას წაიკითხავს",
   "Immich servers": "Immich-ის სერვერები",

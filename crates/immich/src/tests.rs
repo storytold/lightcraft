@@ -204,6 +204,58 @@ fn unlock_sends_the_secret_in_the_body_and_names_a_refusal() {
 }
 
 #[test]
+fn locked_folder_calls_with_an_api_key_say_a_session_is_needed() {
+    let pin = SessionUnlock { pin_code: Some("2468".into()), password: None };
+    let text = |e: &ImmichError| (e.kind(), e.to_string(), e.retryable());
+    // a key without `all`: 403 "Missing required permission: all" on both calls (not a permission to add)
+    let (url, _) = serve(|_| response("403 Forbidden", br#"{"message":"Missing required permission: all","statusCode":403,"error":"Forbidden"}"#));
+    let c = client(&url, KEY);
+    for e in [c.auth_status().unwrap_err(), c.unlock_session(&pin).unwrap_err()] {
+        let (kind, msg, retry) = text(&e);
+        assert_eq!(kind, "sessionRequired");
+        assert!(!retry);
+        assert!(msg.contains("signed-in session") && msg.contains("API key") && !msg.contains("/auth/"), "{msg}");
+    }
+    // a key with `all`: status answers (never elevated), unlock is told it needs a session token
+    let (url, _) = serve(|req| match req.target.as_str() {
+        "/api/auth/session/unlock" => response(
+            "400 Bad Request",
+            br#"{"message":"This endpoint can only be used with a session token","statusCode":400,"error":"Bad Request"}"#,
+        ),
+        _ => response("404 Not Found", br#"{}"#),
+    });
+    let e = client(&url, KEY).unlock_session(&pin).unwrap_err();
+    assert_eq!(e.kind(), "sessionRequired", "{e}");
+    // a wrong PIN is also a 400 on a session: it stays the user's typo, not a session problem
+    let (url, _) = serve(|_| response("400 Bad Request", br#"{"message":"Wrong PIN code","statusCode":400,"error":"Bad Request"}"#));
+    let e = client(&url, KEY).unlock_session(&pin).unwrap_err();
+    assert_eq!(e.kind(), "status", "{e}");
+    assert!(e.to_string().contains("Wrong PIN code") && !e.to_string().contains("2468"), "{e}");
+}
+
+#[test]
+fn hostile_bad_request_bodies_never_panic() {
+    let pin = SessionUnlock { pin_code: Some("2468".into()), password: None };
+    let big = format!(r#"{{"message":"{}"}}"#, "é".repeat(50_000));
+    let bodies: Vec<Vec<u8>> = vec![
+        Vec::new(),
+        b"not json".to_vec(),
+        b"\xff\xfe\x00".to_vec(),
+        br#"{"message":null}"#.to_vec(),
+        br#"{"message":["a",7,{"b":1}]}"#.to_vec(),
+        br#"{"message":{"x":1}}"#.to_vec(),
+        br#"[1,2,3]"#.to_vec(),
+        big.into_bytes(),
+    ];
+    for body in bodies {
+        let (url, _) = serve(move |_| response("400 Bad Request", &body));
+        let e = client(&url, KEY).unlock_session(&pin).unwrap_err();
+        assert!(matches!(e, ImmichError::Status(400, _)), "{e}");
+        assert!(e.to_string().chars().count() < 400, "the server's words are clipped");
+    }
+}
+
+#[test]
 fn an_upload_with_a_sidecar_sends_the_file_parts_first() {
     // Immich v3.3.1 rejects a multipart upload whose text fields come before `assetData` when a
     // `sidecarData` is present ("Unsupported file type <name>"), so the order is part of the API.

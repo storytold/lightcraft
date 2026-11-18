@@ -1230,6 +1230,7 @@
   "Immich hides the photos of its locked folders until this session is unlocked with the account's PIN or password.": "Immich nasconde le foto delle sue cartelle bloccate finché questa sessione non viene sbloccata con il PIN o la password dell'account.",
   "Immich is rescanning {} libraries": "Immich sta ripetendo la scansione delle librerie: {}",
   "Immich keeps an XMP sidecar for every asset: push yours into it, or pull Immich's into the catalog": "Immich conserva un file XMP collaterale per ogni risorsa: invia il tuo al suo interno o porta quello di Immich nel catalogo",
+  "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.": "Immich apre le cartelle bloccate solo a una sessione con accesso effettuato (PIN o password), non a una chiave API, e questa connessione usa una chiave API. Da qui le foto delle cartelle bloccate non sono raggiungibili.",
   "Immich path": "Percorso in Immich",
   "Immich reads ratings, descriptions and keywords from the sidecars on its next library scan": "Immich legge valutazioni, descrizioni e parole chiave dai file collaterali alla prossima scansione della libreria",
   "Immich servers": "Server Immich",

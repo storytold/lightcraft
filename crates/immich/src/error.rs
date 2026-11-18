@@ -22,6 +22,11 @@ pub enum ImmichError {
     BadKey,
     /// The key lacks a permission (403).
     Forbidden(String),
+    /// A locked-folder call that Immich only answers for a signed-in session (a PIN or password
+    /// login), never for an API key: `GET /auth/status` needs the key's `all` permission and
+    /// `POST /auth/session/unlock` answers "only with a session token" even then. Carries the
+    /// endpoint.
+    SessionRequired(String),
     /// Not found (404).
     NotFound(String),
     /// The server is older than [`MIN_VERSION`].
@@ -54,6 +59,7 @@ impl ImmichError {
             ImmichError::Tls(_) => "tls",
             ImmichError::BadKey => "badKey",
             ImmichError::Forbidden(_) => "forbidden",
+            ImmichError::SessionRequired(_) => "sessionRequired",
             ImmichError::NotFound(_) => "notFound",
             ImmichError::TooOld(_) => "tooOld",
             ImmichError::Server(_) => "server",
@@ -82,6 +88,7 @@ impl std::fmt::Display for ImmichError {
                 write!(f, "the server refused the API key; create a new key in Immich (Account Settings → API Keys) and enter it again")
             }
             ImmichError::Forbidden(what) => write!(f, "the API key lacks the permission for this ({what}); give the key more permissions in Immich"),
+            ImmichError::SessionRequired(_) => write!(f, "{SESSION_REQUIRED}"),
             ImmichError::NotFound(what) => write!(f, "not found on the server: {what}"),
             ImmichError::TooOld(v) => {
                 write!(f, "this Immich server runs version {v}; the app needs {MIN_VERSION} or later, please upgrade the server")
@@ -95,6 +102,10 @@ impl std::fmt::Display for ImmichError {
         }
     }
 }
+
+/// What the user is told when a locked-folder call needs a signed-in session. The UI carries the
+/// same sentence as a catalog message (`sessionRequired` errors are shown from the catalog).
+pub const SESSION_REQUIRED: &str = "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.";
 
 impl std::error::Error for ImmichError {}
 
@@ -123,4 +134,30 @@ pub(crate) fn status(code: u16, what: &str) -> ImmichError {
         500..=599 => ImmichError::Server(code),
         _ => ImmichError::Status(code, what.to_string()),
     }
+}
+
+/// The error for a non-2xx response. A 400 carries the server's own words (its `message`, clipped)
+/// after the endpoint, because Immich uses 400 for several different refusals; the other statuses
+/// are told apart by the code alone.
+pub(crate) fn refusal(r: lcc_net::Response, what: &str) -> ImmichError {
+    let code = r.status;
+    if code != 400 {
+        return status(code, what);
+    }
+    match r.bytes().ok().and_then(|b| server_message(&b)) {
+        Some(m) => ImmichError::Status(code, format!("{what}: {m}")),
+        None => status(code, what),
+    }
+}
+
+/// The `message` of an Immich error body (a string, or a list of strings), at most 200 characters.
+fn server_message(body: &[u8]) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let m = match &v["message"] {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Array(a) => a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join("; "),
+        _ => return None,
+    };
+    let m: String = m.chars().take(200).collect();
+    (!m.trim().is_empty()).then_some(m)
 }

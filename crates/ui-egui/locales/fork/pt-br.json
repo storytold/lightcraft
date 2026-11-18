@@ -1283,6 +1283,7 @@
   "Immich hides the photos of its locked folders until this session is unlocked with the account's PIN or password.": "O Immich oculta as fotos de suas pastas bloqueadas até que esta sessão seja desbloqueada com o PIN ou a senha da conta.",
   "Immich is rescanning {} libraries": "O Immich está reanalisando {} bibliotecas",
   "Immich keeps an XMP sidecar for every asset: push yours into it, or pull Immich's into the catalog": "O Immich guarda um arquivo XMP auxiliar para cada item: envie o seu ou traga o do Immich para o catálogo",
+  "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.": "O Immich só abre pastas bloqueadas para uma sessão iniciada (PIN ou senha), não para uma chave de API, e esta conexão usa uma chave de API. As fotos das pastas bloqueadas não podem ser acessadas a partir daqui.",
   "Immich path": "Caminho no Immich",
   "Immich reads ratings, descriptions and keywords from the sidecars on its next library scan": "O Immich lê classificações, descrições e palavras-chave dos arquivos auxiliares na próxima análise da biblioteca",
   "Immich servers": "Servidores Immich",

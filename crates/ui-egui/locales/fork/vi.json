@@ -1407,6 +1407,7 @@
   "Immich hides the photos of its locked folders until this session is unlocked with the account's PIN or password.": "Immich ẩn ảnh trong các thư mục bị khóa cho đến khi phiên này được mở khóa bằng mã PIN hoặc mật khẩu của tài khoản.",
   "Immich is rescanning {} libraries": "Immich đang quét lại {} thư viện",
   "Immich keeps an XMP sidecar for every asset: push yours into it, or pull Immich's into the catalog": "Immich giữ một sidecar XMP cho mỗi tài nguyên: đẩy sidecar của bạn vào đó, hoặc kéo sidecar của Immich về catalog",
+  "Immich only opens locked folders for a signed-in session (PIN or password), not for an API key, and this connection uses an API key. Photos in locked folders can't be reached from here.": "Immich chỉ mở thư mục bị khóa cho một phiên đã đăng nhập (mã PIN hoặc mật khẩu), không mở cho khóa API, mà kết nối này dùng khóa API. Không thể truy cập ảnh trong thư mục bị khóa từ đây.",
   "Immich path": "Đường dẫn Immich",
   "Immich reads ratings, descriptions and keywords from the sidecars on its next library scan": "Immich đọc xếp hạng, mô tả và từ khóa từ sidecar ở lần quét thư viện tiếp theo",
   "Immich servers": "Máy chủ Immich",
