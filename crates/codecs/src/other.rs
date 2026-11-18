@@ -27,7 +27,7 @@ pub(crate) fn header(bytes: &[u8], format: Format) -> Result<(u32, u32, u16)> {
         return Ok((w, h, 1));
     }
     if format == Format::Bmp {
-        let (w, h) = bmp_dims(bytes).ok_or_else(|| Error::Malformed(format, "invalid BMP header".into()))?;
+        let (w, h) = craft_image_codecs::bmp_probe::dimensions(bytes).ok_or_else(|| Error::Malformed(format, "invalid BMP header".into()))?;
         if w == 0 || h == 0 {
             return Err(Error::Malformed(format, "zero dimension".into()));
         }
@@ -91,21 +91,18 @@ fn check_fillable(format: Format, bytes: &[u8], w: u32, h: u32) -> Result<()> {
             }
             craft_gif::first_frame_decoded_pixels(bytes).unwrap_or(0)
         }
-        _ => match bmp_layout(bytes) {
-            BmpLayout::Rle { offset, rle4 } => bmp_rle_pixels(bytes, offset, rle4, w, h),
-            BmpLayout::Rows { offset, bits } => {
-                let row = u64::from(w).saturating_mul(u64::from(bits)).div_ceil(32).saturating_mul(4);
-                let needed = row.saturating_mul(u64::from(h));
-                let held = bytes.len().saturating_sub(offset) as u64;
-                if held < needed {
-                    return Err(Error::Malformed(
-                        format,
-                        format!("a {w} × {h} canvas is larger than its {held} bytes of pixel data can hold ({needed} needed)"),
-                    ));
-                }
-                canvas
+        _ => {
+            let coverage = craft_image_codecs::bmp_probe::coverage(bytes, w, h);
+            if let Some((held, needed)) = coverage.row_bytes
+                && held < needed
+            {
+                return Err(Error::Malformed(
+                    format,
+                    format!("a {w} × {h} canvas is larger than its {held} bytes of pixel data can hold ({needed} needed)"),
+                ));
             }
-        },
+            coverage.pixels
+        }
     };
     if canvas > covered && canvas > SPARSE_MAX_PIXELS {
         return Err(Error::Malformed(
@@ -118,95 +115,6 @@ fn check_fillable(format: Format, bytes: &[u8], w: u32, h: u32) -> Result<()> {
     Ok(())
 }
 
-/// Where a BMP's pixels start (the offset in its file header, which the decoder seeks to) and how
-/// they are stored.
-enum BmpLayout {
-    /// RLE8 or RLE4 commands.
-    Rle { offset: usize, rle4: bool },
-    /// Rows of `bits` per pixel, each padded to 4 bytes.
-    Rows { offset: usize, bits: u16 },
-}
-
-/// The layout the decoder reads, from the file header and the bitmap header: a 12-byte core header
-/// (bits per pixel at 24, never compressed) or a 40-byte or larger one (bits at 28, compression at
-/// 30). Fields the decoder would have refused are read as 1 bit per pixel at offset 0, the most
-/// lenient layout.
-fn bmp_layout(bytes: &[u8]) -> BmpLayout {
-    let u16_at = |i: usize| bytes.get(i..i.checked_add(2)?).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes);
-    let u32_at = |i: usize| bytes.get(i..i.checked_add(4)?).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
-    let offset = u32_at(10).and_then(|o| usize::try_from(o).ok()).unwrap_or(0);
-    let (bits, compression) = match u32_at(14) {
-        Some(12) => (u16_at(24), Some(0)),
-        _ => (u16_at(28), u32_at(30)),
-    };
-    match compression {
-        Some(1) => BmpLayout::Rle { offset, rle4: false },
-        Some(2) => BmpLayout::Rle { offset, rle4: true },
-        _ => BmpLayout::Rows { offset, bits: bits.filter(|&b| b > 0).unwrap_or(1) },
-    }
-}
-
-/// The pixels an RLE8 or RLE4 BMP's commands draw on a `w` × `h` canvas, read the way the decoder
-/// paints them: a run is clipped at the end of its row, an end-of-row code moves to the next row, a
-/// delta skips pixels (left blank), and an end-of-bitmap code, a truncated command or the last row
-/// ends the picture. Every command takes at least 2 bytes, so the walk is linear in the file.
-fn bmp_rle_pixels(bytes: &[u8], offset: usize, rle4: bool, w: u32, h: u32) -> u64 {
-    let (w, h) = (u64::from(w), u64::from(h));
-    let (mut pos, mut x, mut y, mut covered) = (offset, 0u64, 0u64, 0u64);
-    while y < h {
-        let (Some(&count), Some(&value)) = (bytes.get(pos), bytes.get(pos.saturating_add(1))) else {
-            break;
-        };
-        pos = pos.saturating_add(2);
-        match (count, value) {
-            // end of row
-            (0, 0) => (x, y) = (0, y.saturating_add(1)),
-            // end of bitmap
-            (0, 1) => break,
-            // delta: right and down
-            (0, 2) => {
-                let (Some(&dx), Some(&dy)) = (bytes.get(pos), bytes.get(pos.saturating_add(1))) else {
-                    break;
-                };
-                pos = pos.saturating_add(2);
-                (x, y) = (x.saturating_add(u64::from(dx)), y.saturating_add(u64::from(dy)));
-            }
-            // absolute: `value` pixels stored one per byte (RLE8) or nibble (RLE4), padded to 2 bytes
-            (0, n) => {
-                let len = if rle4 { usize::from(n).div_ceil(2) } else { usize::from(n) };
-                pos = pos.saturating_add(len + (len & 1));
-                if pos > bytes.len() {
-                    break;
-                }
-                covered = covered.saturating_add(u64::from(n).min(w.saturating_sub(x)));
-                x = x.saturating_add(u64::from(n));
-            }
-            // a run of `count` pixels
-            (n, _) => {
-                covered = covered.saturating_add(u64::from(n).min(w.saturating_sub(x)));
-                x = x.saturating_add(u64::from(n));
-            }
-        }
-    }
-    covered
-}
-
-/// Reads BMP `(width, height)` from the DIB header without allocating.
-fn bmp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
-    if bytes.get(0..2) != Some(b"BM") {
-        return None;
-    }
-    let dib = u32::from_le_bytes(bytes.get(14..18)?.try_into().ok()?);
-    let (w, h) = if dib == 12 {
-        (u16::from_le_bytes(bytes.get(18..20)?.try_into().ok()?) as u32, u16::from_le_bytes(bytes.get(20..22)?.try_into().ok()?) as u32)
-    } else {
-        let w = i32::from_le_bytes(bytes.get(18..22)?.try_into().ok()?);
-        let h = i32::from_le_bytes(bytes.get(22..26)?.try_into().ok()?);
-        (u32::try_from(w).ok()?, h.unsigned_abs())
-    };
-    Some((w, h))
-}
-
 pub(crate) fn decode(bytes: &[u8], format: Format, opts: &DecodeOptions) -> Result<Decoded> {
     if format == Format::Gif {
         return decode_gif(bytes, opts);
@@ -214,7 +122,7 @@ pub(crate) fn decode(bytes: &[u8], format: Format, opts: &DecodeOptions) -> Resu
     if format != Format::Bmp {
         return Err(Error::Unsupported(format, "not handled by this decoder"));
     }
-    let (w, h) = bmp_dims(bytes).ok_or_else(|| Error::Malformed(format, "invalid BMP header".into()))?;
+    let (w, h) = craft_image_codecs::bmp_probe::dimensions(bytes).ok_or_else(|| Error::Malformed(format, "invalid BMP header".into()))?;
     check_size(format, w as u64, h as u64, opts)?;
     check_fillable(format, bytes, w, h)?;
     let (w, h) = craft_image_codecs::probe_size(bytes).map_err(|e| Error::Malformed(format, e.to_string()))?;
