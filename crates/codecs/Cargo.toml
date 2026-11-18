@@ -16,6 +16,7 @@ craft-gainmap = { workspace = true }
 craft-cms = { workspace = true }
 craft-jpeg = { workspace = true }
 craft-image-codecs = { workspace = true }
+craft-webp-header = { workspace = true }
 # Isolate BMP routing until the shared prerequisite lands; other codec pins stay unchanged.
 craft-bmp-header = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "a9efd722b49924588448fba5c59f36d3aee3f4c6", default-features = false }
 craft-metadata = { workspace = true }
