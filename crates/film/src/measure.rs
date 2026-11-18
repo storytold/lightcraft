@@ -64,8 +64,21 @@ pub fn measure(pixels: &[[f32; 3]], w: usize, h: usize, o: &MeasureOptions) -> R
     if x1 <= x0 || y1 <= y0 {
         return Err("the border leaves no pixels to measure".into());
     }
-    let area = (x1 - x0).saturating_mul(y1 - y0);
-    let step = (libm::ceil(libm::sqrt(area as f64 / o.max_samples.max(1) as f64)) as usize).max(1);
+    let (width, height) = (x1 - x0, y1 - y0);
+    let max_samples = o.max_samples.max(1);
+    let area = width.saturating_mul(height);
+    let estimate = (libm::ceil(libm::sqrt(area as f64 / max_samples as f64)) as usize).max(1);
+    // Rounding each sampled axis up can exceed the cap, especially on a thin scan. Find a
+    // uniform spacing that fits, comparing by division so the grid count cannot overflow.
+    let (mut step, mut end) = (estimate, width.max(height));
+    while step < end {
+        let mid = step + (end - step) / 2;
+        if width.div_ceil(mid) <= max_samples / height.div_ceil(mid) {
+            end = mid;
+        } else {
+            step = mid + 1;
+        }
+    }
     // The histogram is binned on the sRGB-encoded values, which spread the dense end (the
     // highlights, near 0 in linear light) over many more bins than a linear scale would.
     let mut hist = ValueHistogram::new();
@@ -156,6 +169,22 @@ mod tests {
         let picked = m.analysis(Some(BASE)).unwrap();
         assert_eq!(picked.base, BASE);
         assert_eq!(picked.black, [1.0; 3]);
+    }
+
+    /// Thin scans keep the cap, including zero's one-sample fallback, without truncating the grid.
+    #[test]
+    fn thin_scans_respect_the_sample_limit_in_both_orientations() {
+        let pixels: Vec<[f32; 3]> = (0..10_000).map(|i| [(i + 1) as f32 / 10_001.0; 3]).collect();
+        for (w, h) in [(10_000, 1), (1, 10_000)] {
+            for max_samples in [0, 1] {
+                let options = MeasureOptions { border: 0.0, max_samples, ..MeasureOptions::default() };
+                assert!(measure(&pixels, w, h, &options).is_err(), "one sample has no tonal range: {w}x{h}, limit {max_samples}");
+            }
+            let options = MeasureOptions { border: 0.0, max_samples: 2, ..MeasureOptions::default() };
+            let measured = measure(&pixels, w, h, &options).unwrap();
+            // Two samples span the long axis: the first pixel and the one halfway along it.
+            assert!((0.49..0.51).contains(&measured.black[0]), "{w}x{h}: {measured:?}");
+        }
     }
 
     #[test]
