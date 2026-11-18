@@ -13,6 +13,8 @@ thiserror = { workspace = true }
 log = { workspace = true }
 # Module digests: whether an update changed a plug-in's code (MIT OR Apache-2.0).
 sha2 = { workspace = true }
+# Author signatures on plug-in files (BSD-3-Clause).
+ed25519-dalek = { workspace = true }
 # Plug-in versions: parsing and precedence (MIT OR Apache-2.0).
 semver = "1.0.28"
 # Pure-Rust WebAssembly interpreter (MIT OR Apache-2.0). `validate` keeps full module validation on.
@@ -28,3 +30,5 @@ lcc-fuzzkit = { workspace = true }
 # The SDK's manifest stamp tool (sdk/stamp, outside the workspace): stamped plug-ins load as before.
 plugin-stamp = { path = "../../sdk/stamp" }
 lcc-testkit = { workspace = true }
+# Hand-made signature sections for the hostile-input tests (MIT OR Apache-2.0).
+base64 = { workspace = true }

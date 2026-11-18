@@ -690,8 +690,8 @@ The manifest fields:
   the CLI, the control channel or MCP.
 - Raise `version` with every release you hand out, and list in `requires` each host feature you
   use beyond the baseline.
-- Stamp the release build (Stamping your plug-in, below) and distribute the stamped `.wasm` file.
-  There is no store and no signing yet: tell users what each permission is for.
+- Stamp and sign the release build (Stamping your plug-in and Signing your plug-in, below) and
+  distribute that `.wasm` file. There is no store yet: tell users what each permission is for.
 
 ## Stamping your plug-in
 
@@ -718,8 +718,8 @@ cargo install --locked --git <this repository's URL> --rev <the SDK's rev> plugi
    the same input always gives the same bytes. Stamp after any `wasm-opt`
    or strip step, which may drop custom sections (the release profile's `strip = true` runs during
    the build, so it can't).
-3. **Publish the stamped file**, not the raw build: it is the file you checksum, sign (later) and
-   attach to the release.
+3. **Publish the stamped file**, not the raw build: it is the file you sign (Signing your plug-in,
+   below), checksum and attach to the release.
 4. **Check it in CI**: `plugin-stamp --check my_plugin.wasm` exits 0 when the file has exactly one
    section and it equals what `lcc_manifest` returns, and 1 when the section is missing, stale
    (naming the fields that differ) or duplicated. It writes nothing. Run it after the stamp, so a
@@ -732,10 +732,62 @@ cargo install --locked --git <this repository's URL> --rev <the SDK's rev> plugi
 Plug-in updates from a feed (not done yet) will be offered only for stamped plug-ins, which is the
 reason to add step 2 to your release build now.
 
+## Signing your plug-in
+
+`plugin-stamp` also signs a stamped plug-in with your own author key, so the app can tell that a
+new version comes from whoever made the one installed. The signature is a custom section,
+`photo-plugin.signature`, at the end of the `.wasm`: one file, so it survives a download, a copy
+and a hand install. It holds `{"v": 1, "key", "sig"}`, an ed25519 public key and its signature
+over every byte of the file before the section (the code and the stamped manifest), in standard
+base64. No certificate or authority is involved: the key is the author's identity.
+
+1. **Make a key, once:** `plugin-stamp keygen my-author.key`. It writes a new secret key (readable
+   by you only on macOS and Linux; on Windows it takes the folder's permissions, so make it in a
+   folder only you can read) and never overwrites a file. It prints the key's **fingerprint**, the first 16 hex digits
+   of the public key's SHA-256 in groups of four (`3f2a 9c41 07be d5e8`). Users see that
+   fingerprint in the install dialog; put it on your plug-in's page so they can compare.
+2. **Keep the secret key out of the repository**: in a password manager, or your CI's secrets. A
+   release tool can sign without writing it to disk: the `plugin-stamp` library's `sign` takes the
+   key's 32 bytes, and `secret_key_from_text` reads the key file's text from a variable.
+3. **Sign after stamping**, as the last step that changes the file:
+   `plugin-stamp sign --key my-author.key my_plugin.wasm` (in place, or `-o signed.wasm`). It
+   refuses a file whose stamp is missing or stale, and replaces an earlier signature. Stamping a
+   signed file drops its signature and says so: sign it again after. Any later rewrite of the file
+   (`wasm-opt`, a strip) breaks the signature, as it should.
+4. **Check it:** `plugin-stamp --check my_plugin.wasm` also reports the signature (none, valid
+   with its fingerprint, or invalid with why) and exits 1 on an invalid one.
+
+What the app does with it:
+
+- **The first signed install pins its key:** `plugins.json` keeps it as the plug-in's `signer`.
+  An update or a rollback signed by the same key keeps the pin; uninstalling removes it.
+- **Going back checks the kept file:** an update records the signer of the version it replaces
+  beside it (`previous/<id>.json`), and `plugin.rollback` refuses that file if it is no longer
+  signed that way, unless it gets the same `acceptSigner` / `acceptUnsigned` answer. A version kept
+  before signers were recorded goes back as before.
+- **Another key, or no signature, over a pinned plug-in asks the user first**, naming both
+  signers; a yes pins the new key (or removes the pin, for an unsigned file). `plugin.install` takes
+  that answer as `acceptSigner` (the file's full key, `signerKey` from `plugin.inspectFile`, or its
+  fingerprint) or `acceptUnsigned: true`; the dialog passes the full key, so its yes covers exactly
+  the key it showed, and without it refuses
+  the install, saying which to pass. A pin the app can't read asks the same way.
+- **An invalid signature is never "unsigned"**: a signature that doesn't match the bytes, a
+  section that isn't last, two sections, one over 1 KiB, a key or signature of the wrong length,
+  bad base64 or JSON, or another format version. The file isn't installed or loaded, and
+  `plugin.inspectFile` says why.
+- **At start-up** a plug-in whose file no longer matches its pin (the signature gone, invalid or by
+  another key) isn't loaded: it is listed under `failed` with why, and keeps its grants, data and
+  settings until it is reinstalled or removed. A plug-in installed before signatures existed pins
+  its signer at the next start, written to `plugins.json` then.
+- **An unsigned plug-in installs as before**; the dialog says nobody signed it.
+
+**A lost or changed key** has no recovery step: sign the next version with the new key and tell
+users to expect the question. They install it by hand, see both fingerprints, and say yes.
+
 ## Engine commands
 
-`plugin.list`, `plugin.inspectFile {path, verify?}`, `plugin.install {path, grant?, allowDowngrade?}`,
-`plugin.uninstall {id | file, keepData?}`, `plugin.rollback {id}`, `plugin.enable {id, enabled}`, `plugin.grant {id, grant}` (revokes only), `plugin.revoke {id, group, value?}`,
+`plugin.list`, `plugin.inspectFile {path, verify?}`, `plugin.install {path, grant?, allowDowngrade?, acceptSigner?, acceptUnsigned?}`,
+`plugin.uninstall {id | file, keepData?}`, `plugin.rollback {id, acceptSigner?, acceptUnsigned?}`, `plugin.enable {id, enabled}`, `plugin.grant {id, grant}` (revokes only), `plugin.revoke {id, group, value?}`,
 `plugin.log {id}`, `plugin.commands`, `plugin.prepare {plugin, command, ids?, source?}`,
 `plugin.run {plugin, command, args?, ids?, source?, wait?}` (a job: `{job}` at once, or its result with `wait`), `plugin.settings {id}`, `plugin.setSettings {id, values}`,
 `plugin.suggestMetadata {ids?}`, `plugin.postExport {files}`, `plugin.publishServices`,
@@ -758,13 +810,20 @@ without installing it. Its result says where the manifest came from:
   `lcc_manifest`'s.
 
 Every other field (`installed`, `missing`, `versionError`, `downgrade`, `conflict`,
-`unknownFields`, `dropped`) is the same either way. A pixel filter's result has neither field: its
+`unknownFields`, `dropped`) is the same either way. So is the author signature
+([Signing your plug-in](#signing-your-plug-in)), read without running the module: `signature`
+(`"none"`, `"valid"` or `"invalid"`), `signer` (its fingerprint, or `null`), `signerKey` (the full
+key in base64, or `null`), `signatureError` (why an invalid one is, or `null`), `pinned` (the
+installed plug-in's pin: `{signer, readable}`, `signer` being `null` when it was installed unsigned;
+`null` when it isn't installed) and `matchesPin` (whether installing needs no `acceptSigner` /
+`acceptUnsigned`: `true` over an unsigned install; `null` when it isn't installed). A pixel filter's result has neither field: its
 manifest is always read from `pc_manifest`.
 
 `plugin.list` gives `{dir, host, plugins, failed, skipped}`: `dir` is the plug-ins folder (`null`
 when plug-ins are kept in memory), each plug-in has its module's `moduleHash` (sha256), a
-`settingsRevision` that changes when one of its settings does, and `previousVersion` (the version
-`plugin.rollback` goes back to, or `null`), each `failed` row has `file`, `error`, `kind` (`plugin` or
+`settingsRevision` that changes when one of its settings does, `previousVersion` (the version
+`plugin.rollback` goes back to, or `null`) and `signer` (the pinned signer's fingerprint, or
+`null`), each `failed` row has `file`, `error`, `kind` (`plugin` or
 `filter`) and, when the module named one, `id`, and `skipped` counts the modules past the most the
 folder loads.
 
@@ -831,7 +890,7 @@ toast and to `ui.inspect` → `export.last.plugins` when they finish. An export 
 (`app.export` without `background`, the CLI, MCP) runs them before it returns, as before.
 
 Plug-ins are installed per user in `<settings_dir>/plugins`, or in `<PREFIX>_PLUGINS` if that
-is set. That folder holds `<id>.wasm`, `plugins.json` (enabled state and grants) and
+is set. That folder holds `<id>.wasm`, `plugins.json` (enabled state, grants and the pinned signer) and
 `data/<id>.json` (the plug-in's namespace: `{"format": 2, "libraries": {<library id>: {<photo id>:
 {…}}}}`; a file written before namespaces were kept per library is claimed whole by the first
 library opened from a folder, so no value is lost), and `settings/<id>.json` (its settings and
@@ -839,7 +898,7 @@ remembered dialog values: `{"format": 1, "settings": {…}, "dialogs": {"command
 "destination/<id>": {…}}}`; a damaged file reads as empty, says so in the plug-in's log, and is
 kept as `<id>.json.bad` when the next save replaces it; an update drops the keys the new version no
 longer declares, and removing the plug-in deletes the file unless its data is kept), and
-`previous/<id>.wasm` and `previous/<id>.json` (the version an update replaced and its settings,
+`previous/<id>.wasm` and `previous/<id>.json` (the version an update replaced, its settings and its signer,
 [Going back](#compatibility-requires-and-version)). A module copied into the folder by hand loads
 disabled and with no permissions granted.
 
@@ -1007,7 +1066,8 @@ filters turn it (long edge 2048, cached per photo and stack; a change of the sta
   are skipped with a message.
 - Network and filesystem permissions are fixed in the manifest: a WebDAV destination for "any
   server the user types" isn't possible; the author names the hosts.
-- No plug-in store, signing or automatic updates; Lightroom Lua plug-ins don't run.
+- No plug-in store or automatic updates; Lightroom Lua plug-ins don't run. Signatures say who made
+  a plug-in, not whether it is safe: the permissions still decide what it may do.
 - Programs: a plug-in can't read a program's output while it runs, or stop it; ✕ only stops
   waiting. It adds what a program made only from the folder of the source photo, and can't make
   an album for the results. Versions are read on macOS only.
