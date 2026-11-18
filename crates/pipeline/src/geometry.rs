@@ -331,7 +331,7 @@ impl Frame {
     pub fn sample(&self, src: &Rgb32f, w: usize, h: usize) -> Rgb32f {
         let oriented = if self.orient == Orientation::Normal { None } else { Some(src.oriented(self.orient)) };
         let o = oriented.as_ref().unwrap_or(src);
-        let plan = self.sample_plan(src.width, src.height, w, h);
+        let plan =self.sample_plan(src.width, src.height, w, h);
         let base = match plan.prefilter {
             Some((nw, nh)) => std::borrow::Cow::Owned(resize(o, nw, nh, Filter::Mitchell)),
             None => std::borrow::Cow::Borrowed(o),
@@ -390,6 +390,21 @@ impl Frame {
             (SampleMode::Warp(o2t), None) => affine(Affine::scale(plan.sx, plan.sy) * o2t),
             (SampleMode::Affine(xf), _) => affine(xf),
         }
+    }
+
+    /// Orient and prefilter `src` once for several samples with the same plan ([`Frame::sample_prepared`]).
+    pub(crate) fn prepare_source<'a>(&self, src: &'a Rgb32f, plan: &SamplePlan) -> std::borrow::Cow<'a, Rgb32f> {
+        use std::borrow::Cow;
+        let oriented = if self.orient == Orientation::Normal { Cow::Borrowed(src) } else { Cow::Owned(src.oriented(self.orient)) };
+        match plan.prefilter {
+            Some((nw, nh)) => Cow::Owned(resize(&oriented, nw, nh, Filter::Mitchell)),
+            None => oriented,
+        }
+    }
+
+    /// Sample a source prepared with this plan's orientation and prefilter size ([`Frame::prepare_source`]).
+    pub(crate) fn sample_prepared(&self, base: &Rgb32f, plan: &SamplePlan, w: usize, h: usize) -> Rgb32f {
+        self.sample_base(std::borrow::Cow::Borrowed(base), plan.clone(), w, h)
     }
 
     /// The crop rectangle as a quad in normalized oriented coordinates (for overlays).

@@ -167,7 +167,7 @@ pub fn eye_pixel(c: [f32; 3], x: f32, y: f32, eyes: &[EyeK]) -> [f32; 3] {
             if e.pet {
                 let k = lightcraft_color::luminance_2020(c).min(0.04) * (1.0 - 0.85 * e.darken);
                 c = c.map(|v| v + (k - v) * m);
-            } else {
+            } else if c[0] > 0.0 {
                 let red = (c[0] - c[1].max(c[2])) / c[0].max(1e-6);
                 let a = m * smooth(0.25, 0.5, red);
                 let n = 0.5 * (c[1] + c[2]) * (1.0 - 0.9 * e.darken);
@@ -201,6 +201,15 @@ pub fn apply(img: &mut Rgb32f, eyes: &[EyeK]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn red_eye_leaves_nonpositive_red_noise_signed() {
+        let eye = EyeK { cx: 0.5, cy: 0.5, r: 4.0, darken: 0.5, pet: false, catchlight: None };
+        for pixel in [[-0.01, -0.02, -0.03], [0.0, -0.02, -0.03], [-0.01, 0.01, -0.02]] {
+            assert_eq!(eye_pixel(pixel, 0.5, 0.5, &[eye]), pixel);
+        }
+        assert_ne!(eye_pixel([0.5, 0.02, 0.01], 0.5, 0.5, &[eye]), [0.5, 0.02, 0.01]);
+    }
 
     #[test]
     fn orientation_inverse_matches_raster() {
