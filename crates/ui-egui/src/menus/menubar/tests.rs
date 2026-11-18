@@ -852,3 +852,141 @@ fn edit_menu_places_the_select_and_paste_rows_with_their_kin() {
     let after = &nodes[pos("app.settings") + 1..];
     assert!(!after.iter().any(|n| matches!(n, MenuNode::Item { .. })), "no row follows Settings… but a submenu: {after:?}");
 }
+
+/// The ids of a menu's top-level rows, a submenu as `@Label`, separators left out.
+fn row_ids(nodes: &[MenuNode]) -> Vec<String> {
+    nodes
+        .iter()
+        .filter_map(|n| match n {
+            MenuNode::Item { id, .. } => Some(id.clone()),
+            MenuNode::Submenu { label, .. } => Some(format!("@{label}")),
+            MenuNode::Separator => None,
+        })
+        .collect()
+}
+
+fn menu<'a>(bar: &'a [(String, Vec<MenuNode>)], title: &str) -> &'a [MenuNode] {
+    &bar.iter().find(|(t, _)| t == title).unwrap_or_else(|| panic!("{title} menu")).1
+}
+
+/// macOS puts Check for Updates… in the application menu, right after About LightCraft.
+#[test]
+fn macos_app_menu_holds_about_then_check_for_updates() {
+    let (app_rows, menus) = native_menu_split(menu_bar(&app()));
+    assert_eq!(row_ids(&app_rows), ["app.about", "app.checkForUpdates"]);
+    let help = row_ids(menu(&menus, "Help"));
+    assert!(!help.contains(&"app.checkForUpdates".to_string()) && !help.contains(&"app.about".to_string()), "{help:?}");
+    // the rows the host builds itself stay out of the menus too
+    for (title, nodes) in &menus {
+        assert!(find(nodes, "app.settings").is_none() && find(nodes, "app.quit").is_none(), "{title}");
+    }
+}
+
+/// Windows, Linux and the web keep Check for Updates… in Help, last before About.
+#[test]
+fn in_window_help_keeps_check_for_updates_before_about() {
+    let help = row_ids(menu(&menu_bar(&app()), "Help"));
+    assert_eq!(&help[help.len() - 2..], ["app.checkForUpdates", "app.about"], "{help:?}");
+}
+
+/// Help reads like a Mac Help menu: the help page, what's new and the shortcuts first, then
+/// feedback and the community, the websites, and the diagnostics last.
+#[test]
+fn help_menu_leads_with_help_then_whats_new_and_the_shortcuts() {
+    let help = row_ids(menu(&menu_bar(&app()), "Help"));
+    assert_eq!(
+        help,
+        [
+            "app.help",
+            "app.whatsNew",
+            "app.shortcuts",
+            "app.feedback",
+            "app.discord",
+            "app.website",
+            "app.github",
+            "app.artcraft",
+            "app.systemInfo",
+            "app.openLogFolder",
+            "@Debug",
+            "app.checkForUpdates",
+            "app.about",
+        ]
+    );
+}
+
+/// LightCraft Help is ⇧⌘? on macOS (a function key needs fn on a Mac keyboard) and F1 elsewhere.
+#[test]
+fn help_shortcut_is_the_mac_one_on_macos_and_f1_elsewhere() {
+    let keymap = crate::shortcuts::Keymap::new();
+    let want = if cfg!(target_os = "macos") { "Cmd+Shift+/" } else { "F1" };
+    assert_eq!(crate::shortcuts::shortcut_of(&keymap, "app.help"), Some(want));
+}
+
+/// Both platforms' LightCraft Help keys are real, free shortcuts, whichever platform runs the test
+/// (the Linux gate never builds the macOS one into the menu).
+#[test]
+fn both_help_shortcuts_parse_round_trip_and_clash_with_nothing() {
+    let keymap = crate::shortcuts::Keymap::new();
+    for (macos, want) in [(true, "Cmd+Shift+/"), (false, "F1")] {
+        let sc = super::super::ui_commands::help_shortcut(macos);
+        assert_eq!(sc, want);
+        let parsed = crate::shortcuts::parse(sc).unwrap_or_else(|| panic!("{sc} does not parse"));
+        assert_eq!(crate::shortcuts::format(parsed.0, parsed.1).as_deref(), Some(sc));
+        assert!(
+            crate::shortcuts::conflicts(&keymap, "app.help", sc).is_empty(),
+            "{sc} is bound to {:?}",
+            crate::shortcuts::conflicts(&keymap, "app.help", sc)
+        );
+    }
+}
+
+/// Taking a row out of a menu never leaves a separator first, last or twice in a row (the native
+/// menu is built from these lists as they are).
+#[test]
+fn the_macos_split_leaves_no_dangling_separators() {
+    let item = |id: &str| MenuNode::Item { id: id.into(), params: Value::Null, label: id.into(), shortcut: None, enabled: true, checked: None };
+    let bar = vec![
+        ("Edit".to_string(), vec![item("a"), MenuNode::Separator, item("app.settings")]),
+        (
+            "Help".to_string(),
+            vec![
+                MenuNode::Separator,
+                item("app.about"),
+                MenuNode::Separator,
+                item("b"),
+                MenuNode::Separator,
+                item("app.checkForUpdates"),
+                MenuNode::Separator,
+                item("c"),
+            ],
+        ),
+    ];
+    let (_, menus) = native_menu_split(bar);
+    assert_eq!(row_shapes(menu(&menus, "Edit")), ["a"]);
+    assert_eq!(row_shapes(menu(&menus, "Help")), ["b", "---", "c"]);
+    // doubled, leading and trailing separators around kept rows, and a menu of separators alone
+    let sep = || MenuNode::Separator;
+    let bar = vec![("File".to_string(), vec![sep(), item("a"), sep(), sep(), item("b"), sep(), sep()]), ("Window".to_string(), vec![sep(), sep()])];
+    let (_, menus) = native_menu_split(bar);
+    assert_eq!(row_shapes(menu(&menus, "File")), ["a", "---", "b"]);
+    assert!(menu(&menus, "Window").is_empty());
+    // and every menu of the real bar, with separators counted
+    let (_, menus) = native_menu_split(menu_bar(&app()));
+    for (title, nodes) in &menus {
+        let shapes = row_shapes(nodes);
+        assert!(shapes.first().is_none_or(|s| s != "---") && shapes.last().is_none_or(|s| s != "---"), "{title}: {shapes:?}");
+        assert!(shapes.windows(2).all(|w| !(w[0] == "---" && w[1] == "---")), "{title}: {shapes:?}");
+    }
+}
+
+/// The ids of a menu's top-level rows with each separator as `---`, a submenu as `@Label`.
+fn row_shapes(nodes: &[MenuNode]) -> Vec<String> {
+    nodes
+        .iter()
+        .map(|n| match n {
+            MenuNode::Item { id, .. } => id.clone(),
+            MenuNode::Submenu { label, .. } => format!("@{label}"),
+            MenuNode::Separator => "---".to_string(),
+        })
+        .collect()
+}

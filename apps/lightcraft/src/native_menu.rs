@@ -22,7 +22,7 @@ use std::sync::mpsc::{Receiver, channel};
 
 use lightcraft_ui_egui::LightcraftApp;
 use lightcraft_ui_egui::menubar::{
-    MenuNode, menu_bar, native_item_presentation, native_menu_delivers as menu_delivers, native_menu_structure as structure_of,
+    MenuNode, menu_bar, native_item_presentation, native_menu_delivers as menu_delivers, native_menu_split, native_menu_structure as structure_of,
 };
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
@@ -363,29 +363,6 @@ fn label_text(s: &str) -> String {
     lightcraft_ui_egui::i18n::tr(s).replace('&', "&&")
 }
 
-/// Drop the separators left behind when an item moved to the app menu: a leading one, a trailing
-/// one and the second of two in a row.
-fn tidy_separators(nodes: Vec<MenuNode>) -> Vec<MenuNode> {
-    let mut out: Vec<MenuNode> = Vec::with_capacity(nodes.len());
-    for node in nodes {
-        if node == MenuNode::Separator && out.last().is_none_or(|last| *last == MenuNode::Separator) {
-            continue;
-        }
-        out.push(node);
-    }
-    while out.last() == Some(&MenuNode::Separator) {
-        out.pop();
-    }
-    out
-}
-
-/// The model's rows of one menu as the native menu installs them: About, Settings and Quit live in
-/// the app menu on macOS.
-fn install_nodes(nodes: &[MenuNode]) -> Vec<MenuNode> {
-    let kept = nodes.iter().filter(|n| !matches!(n, MenuNode::Item { id, .. } if id == "app.about" || id == SETTINGS || id == QUIT));
-    tidy_separators(kept.cloned().collect())
-}
-
 /// Native (muda) ids, one per menu row. muda ids must be unique, but the model may hold the same
 /// command and params twice (`dialog.export` is File ▸ Export… and Export with Preset ▸ Custom…;
 /// `dialog.newAlbum` is in File and in Photo ▸ Add to Album), so a repeated key gets an occurrence
@@ -451,6 +428,7 @@ impl NativeMenu {
     fn rebuild(&mut self, app: &mut LightcraftApp) {
         let bar = menu_bar(app);
         self.structure = structure_of(&bar, &app.ui.settings.keymap);
+        let (app_rows, menus) = native_menu_split(bar);
         self.menu = Menu::new();
         self.items.clear();
         self.app_items.clear();
@@ -460,8 +438,12 @@ impl NativeMenu {
         let about = MenuItem::with_id("app.about", lightcraft_ui_egui::i18n::tr("About LightCraft"), true, None);
         let settings = MenuItem::with_id(SETTINGS, lightcraft_ui_egui::i18n::tr("Settings…"), true, accelerator(SETTINGS_KEY));
         let quit = MenuItem::with_id(QUIT, lightcraft_ui_egui::i18n::tr("Quit LightCraft"), true, accelerator("Cmd+Q"));
+        let _ = app_menu.append(&about);
+        // Check for Updates… follows About LightCraft (Help keeps it on other platforms)
+        let update_rows: Vec<MenuNode> = app_rows.into_iter().filter(|n| !matches!(n, MenuNode::Item { id, .. } if id == "app.about")).collect();
+        let mut ids = RowIds::default();
+        self.append_nodes(&app_menu, &update_rows, &app.ui.settings.keymap, true, &mut ids);
         let _ = app_menu.append_items(&[
-            &about,
             &PredefinedMenuItem::separator(),
             &settings,
             &PredefinedMenuItem::separator(),
@@ -491,9 +473,8 @@ impl NativeMenu {
         }
         let _ = self.menu.append(&app_menu);
 
-        let mut ids = RowIds::default();
         let mut help_menu = None;
-        for (title, nodes) in &bar {
+        for (title, nodes) in &menus {
             let sub = Submenu::new(label_text(title), true);
             if title == "Window" {
                 let _ = sub.append_items(&[
@@ -502,10 +483,9 @@ impl NativeMenu {
                     &PredefinedMenuItem::separator(),
                 ]);
             }
-            let nodes = install_nodes(nodes);
             // Swapping an item in the Help menu leaves the old row in place and adds a second one
             // (measured on macOS 27 with muda 0.21): the Help menu is not addressed row for row.
-            self.append_nodes(&sub, &nodes, &app.ui.settings.keymap, title != "Help", &mut ids);
+            self.append_nodes(&sub, nodes, &app.ui.settings.keymap, title != "Help", &mut ids);
             if title == "File" {
                 // ⌘W, the system's own item
                 let _ = sub.append_items(&[
@@ -655,24 +635,6 @@ impl NativeMenu {
 mod tests {
     use super::*;
 
-    /// An item that moves to the app menu (Settings…) can sit between two separators, or open or
-    /// close the menu's list: the rows left behind keep at most one separator between them.
-    #[test]
-    fn rows_left_after_a_move_keep_single_separators() {
-        let item = |id: &str| MenuNode::Item {
-            id: id.to_string(),
-            label: id.to_string(),
-            shortcut: None,
-            enabled: true,
-            checked: None,
-            params: Value::Null,
-        };
-        let sep = || MenuNode::Separator;
-        let tidy = tidy_separators(vec![sep(), item("a"), sep(), sep(), item("b"), sep(), sep()]);
-        assert_eq!(tidy, vec![item("a"), sep(), item("b")]);
-        assert_eq!(tidy_separators(vec![sep(), sep()]), Vec::<MenuNode>::new());
-    }
-
     /// The menu model's titles stay English, so only the language can tell the native menu to
     /// rebuild its titles (and the macOS app menu): every language switch — also between two CJK
     /// languages — must change the structure key.
@@ -711,13 +673,14 @@ mod tests {
         assert_eq!(rows.len(), count(&all));
         let ids: HashSet<&str> = rows.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(ids.len(), rows.len(), "a native id per row");
-        // The install walks each menu as `install_nodes` leaves it, the per-frame sync walks the whole
-        // bar: a row the menu has must get the same id, so the same node (label, command, params),
-        // from both, and a click on its id runs that row's command.
+        // The install walks the application menu's rows, then each menu as `native_menu_split` leaves it,
+        // the per-frame sync walks the whole bar: a row the menu has must get the same id, so the same
+        // node (label, command, params), from both, and a click on its id runs that row's command.
         let mut installed = Vec::new();
         let mut install_ids = RowIds::default();
-        let menus: Vec<Vec<MenuNode>> = bar.iter().map(|(_, nodes)| install_nodes(nodes)).collect();
-        for nodes in &menus {
+        let (app_rows, menus) = native_menu_split(bar.clone());
+        native_rows(&app_rows, &mut install_ids, &mut installed);
+        for (_, nodes) in &menus {
             native_rows(nodes, &mut install_ids, &mut installed);
         }
         let synced: HashMap<&str, &MenuNode> = rows.iter().map(|(id, n)| (id.as_str(), *n)).collect();

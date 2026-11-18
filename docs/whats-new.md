@@ -96,6 +96,11 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+### The app and Help menus follow the Mac's order
+- On macOS, Check for Updates… is in the LightCraft menu right under About LightCraft, as in other Mac apps. It stays in Help on Windows, Linux and the web.
+- Help opens with LightCraft Help, then What's New and Keyboard Shortcuts, then Send Feedback… and the ArtCraft Discord, the websites, and System Info, Open Log Folder and Debug. On Windows, Linux and the web, Check for Updates… and About LightCraft follow as the last two rows. Join the ArtCraft Discord… no longer leads the menu, and LightCraft Help is no longer the last row.
+- LightCraft Help is ⇧⌘? on macOS, where F1 needs the fn key. Windows, Linux and the web keep F1.
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
@@ -410,7 +415,6 @@
   about 18 ms to about 10 ms between a frame being handed to macOS and macOS compositing it, with the same 120 frames
   a second. On a Mac the window also holds one drawable less: its width × height × 4 bytes, 15–22 MB for a
   1200–1500-point-wide window on a Retina display.
-
 
 ## 2026-10-24
 

@@ -117,6 +117,54 @@ pub fn native_menu_structure(bar: &[(String, Vec<MenuNode>)], keymap: &crate::sh
     s
 }
 
+/// The rows macOS puts in the application menu, in order (About LightCraft, then Check for
+/// Updates…). The in-window bar (Windows, Linux, web) keeps them at the end of Help.
+const APP_MENU_ROWS: &[&str] = &["app.about", "app.checkForUpdates"];
+
+/// Rows the desktop host builds itself in the application menu (Settings…, Quit).
+const HOST_APP_MENU_ROWS: &[&str] = &["app.settings", "app.quit"];
+
+/// The macOS split of the bar: the application menu's rows from [`APP_MENU_ROWS`] in that order,
+/// and the other menus without them and without the host's own rows, and without the separators
+/// that removing those rows leaves at the start or end of a menu or doubled.
+pub fn native_menu_split(bar: Vec<(String, Vec<MenuNode>)>) -> (Vec<MenuNode>, Vec<(String, Vec<MenuNode>)>) {
+    let mut app_rows: Vec<MenuNode> = Vec::new();
+    let menus = bar
+        .into_iter()
+        .map(|(title, nodes)| {
+            let mut rest = Vec::with_capacity(nodes.len());
+            for node in nodes {
+                match &node {
+                    MenuNode::Item { id, .. } if APP_MENU_ROWS.contains(&id.as_str()) => app_rows.push(node),
+                    MenuNode::Item { id, .. } if HOST_APP_MENU_ROWS.contains(&id.as_str()) => {}
+                    _ => rest.push(node),
+                }
+            }
+            (title, tidy_separators(rest))
+        })
+        .collect();
+    app_rows.sort_by_key(|n| match n {
+        MenuNode::Item { id, .. } => APP_MENU_ROWS.iter().position(|r| r == id),
+        _ => None,
+    });
+    (app_rows, menus)
+}
+
+/// Drop the separators a removed row leaves behind: at the start or end of a menu, or two in a row.
+fn tidy_separators(nodes: Vec<MenuNode>) -> Vec<MenuNode> {
+    let mut out: Vec<MenuNode> = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        if matches!(node, MenuNode::Separator) && matches!(out.last(), None | Some(MenuNode::Separator)) {
+            continue;
+        }
+        out.push(node);
+    }
+    while matches!(out.last(), Some(MenuNode::Separator)) {
+        out.pop();
+    }
+    out
+}
+
 /// Top-level menus in order (the macOS app menu is added by the host).
 pub const MENUS: &[&str] = &["File", "Edit", "View", "Photo", "Window", "Help"];
 
@@ -313,17 +361,21 @@ const LAYOUT: &[(&str, &[&str])] = &[
     (
         "Help",
         &[
-            "app.discord",
+            "app.help",
+            "---",
+            "app.whatsNew",
+            "app.shortcuts",
+            "---",
             "app.feedback",
+            "app.discord",
             "---",
             "app.website",
             "app.github",
             "app.artcraft",
             "---",
-            "app.whatsNew",
-            "app.shortcuts",
             "app.systemInfo",
             "app.openLogFolder",
+            "@Debug",
             "---",
             "app.checkForUpdates",
             "app.about",
