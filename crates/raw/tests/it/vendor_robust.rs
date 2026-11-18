@@ -124,7 +124,11 @@ fn rw2_of(format: u16, bits: u16, n: usize) -> Vec<u8> {
     };
     let off = build(0).len();
     let mut b = build(off as u32);
-    b.extend((0..n).map(|i| (i * 89 % 253) as u8));
+    if format == 8 {
+        b.extend((0..n).map(|i| [0xDF, 0xF7, 0x7D][i % 3]));
+    } else {
+        b.extend((0..n).map(|i| (i * 89 % 253) as u8));
+    }
     b
 }
 

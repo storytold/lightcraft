@@ -38,24 +38,19 @@ pub mod highlight;
 mod hotpixel;
 pub mod kelvin_builtin;
 pub mod kelvin_presets;
-pub mod lens_metadata;
-#[cfg(test)]
-mod ljpeg_fixtures;
-pub(crate) mod llvc;
+pub use craft_raw::lens_metadata;
 pub mod opcodes;
-mod preview;
 pub mod profile;
 mod saturation;
 pub mod semantic;
-pub mod sparse;
+pub use craft_raw::sparse;
 pub mod spectral;
-mod tiffraw;
-mod unpack;
-mod vendor;
 mod wb_estimate;
 
 pub use craft_raw::{
-    BlackLevel, Cfa, MAX_SAMPLES, RawData, RawError, RawFormat, Rect, Result, SemanticMask, ljpeg, probe, semantic_masks, stretched_height,
+    BlackLevel, Cfa, MAX_SAMPLES, PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, RawData, RawError, RawFormat, Rect, Result, SemanticMask,
+    bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering, embedded_preview_dynamic_range_optimized,
+    embedded_preview_from_range, ljpeg, probe, semantic_masks, stretched_height,
 };
 pub use demosaic::{Method, demosaic};
 pub use dngwrite::{DngCompression, DngWriteOptions, write_dng, write_rendered_dng};
@@ -66,10 +61,6 @@ pub use lightcraft_geom::Orientation;
 pub use lightcraft_meta::Metadata;
 pub use lightcraft_raster::Rgb32f;
 pub use opcodes::{Opcode, OpcodeLists};
-pub use preview::{
-    PREVIEW_PREFIX, PreviewColorSpace, PreviewRange, bounded_preview, embedded_preview, embedded_preview_color_space, embedded_preview_covering,
-    embedded_preview_dynamic_range_optimized, embedded_preview_from_range,
-};
 
 use lightcraft_color::Xy;
 use serde::{Deserialize, Serialize};
@@ -86,11 +77,10 @@ pub(crate) fn checked_pixel_count(width: u64, height: u64) -> Option<u64> {
 /// Whether [`decode`] reads this container (possibly not every compression inside it): `craft-raw`'s makers and
 /// the ones still decoded here (Canon CR3, Sony ARW, Fujifilm RAF, Panasonic RW2).
 pub fn is_supported(format: RawFormat) -> bool {
-    format.is_supported() || matches!(format, RawFormat::Cr3 | RawFormat::Arw | RawFormat::Raf | RawFormat::Rw2)
+    format.is_supported()
 }
 
-/// A 2×2 Bayer layout named in code (`"RGGB"`, `"BGGR"`, `"GRBG"`, `"GBRG"`). Only for literal names (tested);
-/// anything else falls back to RGGB instead of failing.
+#[cfg(test)]
 pub(crate) fn bayer(s: &'static str) -> Cfa {
     Cfa::bayer(s).unwrap_or(Cfa { width: 2, height: 2, origin_x: 0, origin_y: 0, pattern: vec![0, 1, 1, 2] })
 }
@@ -139,15 +129,10 @@ pub(crate) enum Mode {
 }
 
 fn decode_with(bytes: &[u8], mode: Mode) -> Result<RawImage> {
-    match probe(bytes).ok_or(RawError::NotRaw)? {
-        RawFormat::Cr3 => vendor::cr3::decode(bytes, mode),
-        RawFormat::Arw => vendor::arw::decode(bytes, mode),
-        RawFormat::Raf => vendor::raf::decode(bytes, mode),
-        RawFormat::Rw2 => vendor::rw2::decode(bytes, mode),
-        RawFormat::Orf => vendor::orf::decode(bytes, mode),
-        // every other maker, and the reasons a file is not decoded, are craft-raw's
-        _ => convert::decode(bytes, mode),
+    if probe(bytes).is_none() {
+        return Err(RawError::NotRaw);
     }
+    convert::decode(bytes, mode)
 }
 
 /// A raw file's description without its samples (see [`probe_info`]).
@@ -316,11 +301,6 @@ impl RawImage {
             lens_metadata: self.lens_metadata,
             pixel_aspect: self.pixel_aspect,
         }
-    }
-
-    /// Validate what a decoder read in `mode` ([`Mode::Header`]: everything but the samples).
-    pub(crate) fn validate_for(&self, mode: Mode) -> Result<()> {
-        self.check(mode == Mode::Full)
     }
 
     /// Validate internal consistency (dimensions vs data length, CFA shape, rectangles).
