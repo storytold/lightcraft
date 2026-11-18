@@ -27,7 +27,7 @@ fn widget(h: &Headless, id: &str) -> egui::Rect {
 
 /// Empty top-bar space: where the traffic lights sit, left of the sidebar button.
 fn empty_spot(h: &Headless) -> egui::Pos2 {
-    let bar = widget(h, "region:titlebar");
+    let bar = widget(h, crate::panels::topbar::TITLEBAR_REGION);
     egui::pos2(bar.left() + 20.0, bar.center().y)
 }
 
@@ -126,7 +126,7 @@ fn without_the_integrated_title_bar_the_bar_is_not_a_window_handle() {
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
     h.settle(Duration::from_secs(120));
     assert!(!h.app.integrated_titlebar);
-    let bar = h.app.widgets.iter().find(|(w, _)| w == "region:titlebar");
+    let bar = h.app.widgets.iter().find(|(w, _)| w == crate::panels::topbar::TITLEBAR_REGION);
     assert!(bar.is_none());
 }
 
@@ -175,7 +175,7 @@ fn full_screen_moves_the_left_buttons_into_the_traffic_lights_space() {
 #[test]
 fn a_panel_floating_over_the_bar_keeps_the_window_from_moving() {
     let mut h = integrated();
-    let bar = widget(&h, "region:titlebar");
+    let bar = widget(&h, crate::panels::topbar::TITLEBAR_REGION);
     let empty = empty_spot(&h);
     let hover = |h: &mut Headless, p: egui::Pos2| {
         h.events.push(egui::Event::PointerMoved(p));
