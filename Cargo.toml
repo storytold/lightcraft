@@ -23,7 +23,7 @@ craft-gif = { git = "https://github.com/storytold/craft-libs", rev = "b77af389f3
 craft-jxl = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d3c6fad3d613af2a30b35c3bc9f4c0f", default-features = false, features = ["decode", "encode"] }
 jixel = "=0.3.4"
 # Photo metadata: EXIF, IPTC-IIM, XMP packets and GPX track logs (craft-libs#949)
-craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "c28356d400aed7575b04ec1551b4665107cfe845" }
+craft-metadata = { git = "https://github.com/storytold/craft-libs", rev = "3a6613f058e355a4fd8d196b2f385260bd4b4a8e" }
 craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "478c50560d3c6fad3d613af2a30b35c3bc9f4c0f" }
 craft-image-codecs = { git = "https://github.com/storytold/craft-libs", rev = "c28356d400aed7575b04ec1551b4665107cfe845" }
 craft-video = { git = "https://github.com/storytold/craft-libs", rev = "5c91598ccc86537a779f438d520fa6406c26efe6", features = ["av1", "av1-large-encode", "threads"] }
@@ -48,8 +48,8 @@ lightcraft-wincolor = { path = "crates/wincolor" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 # TIFF/IFD: the shared reader and writer (moved from crates/tiff; craft-libs#783).
-craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "c28356d400aed7575b04ec1551b4665107cfe845" }
-craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "c28356d400aed7575b04ec1551b4665107cfe845" }
+craft-tiff = { git = "https://github.com/storytold/craft-libs", rev = "3a6613f058e355a4fd8d196b2f385260bd4b4a8e" }
+craft-raw = { git = "https://github.com/storytold/craft-libs", rev = "3a6613f058e355a4fd8d196b2f385260bd4b4a8e" }
 lightcraft-raw = { path = "crates/raw" }
 lightcraft-codecs = { path = "crates/codecs" }
 lightcraft-meta = { path = "crates/meta" }
@@ -206,8 +206,5 @@ egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc79968
 egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
