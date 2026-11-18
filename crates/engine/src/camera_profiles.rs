@@ -26,6 +26,7 @@ const MAX_FILE: u64 = 4 << 20;
 /// `(model, JSON)`.
 pub const BUNDLED: &[(&str, &str)] = &[
     ("Canon EOS D60", include_str!("../../../assets/camera-profiles/Canon_EOS_D60.json")),
+    ("DMC-GM5", include_str!("../../../assets/camera-profiles/DMC-GM5.json")),
     ("ILCA-99M2", include_str!("../../../assets/camera-profiles/ILCA-99M2.json")),
     ("ILCE-7CR", include_str!("../../../assets/camera-profiles/ILCE-7CR.json")),
     ("ILCE-7M4", include_str!("../../../assets/camera-profiles/ILCE-7M4.json")),
