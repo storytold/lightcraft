@@ -353,7 +353,8 @@ pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Optio
     if bx1 <= bx0 || by1 <= by0 {
         return None;
     }
-    let feather = (spot.feather / 100.0).clamp(0.0, 1.0) as f32;
+    let feather = if spot.feather.is_finite() { (spot.feather / 100.0).clamp(0.0, 1.0) } else { 0.0 } as f32;
+    let opacity = if spot.opacity.is_finite() { (spot.opacity / 100.0).clamp(0.0, 1.0) } else { 0.0 };
     Some(SpotLayout {
         r,
         pts,
@@ -363,7 +364,7 @@ pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Optio
         bw: bx1 - bx0,
         bh: by1 - by0,
         inner: r * (1.0 - feather * 0.8),
-        opacity: (spot.opacity / 100.0).clamp(0.0, 1.0) as f32,
+        opacity: opacity as f32,
         heal: matches!(spot.mode, SpotMode::Remove | SpotMode::Heal),
         fill,
     })
