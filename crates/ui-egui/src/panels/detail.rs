@@ -3292,7 +3292,7 @@ fn general_cursor(app: &LccApp, ui: &egui::Ui, resp: &egui::Response, img: Rect,
     }
     let cursor = match app.ui.tool.as_str() {
         // the colour pickers: an eyedropper, its tip on the pixel picked
-        "wbPicker" | "fringe" | "colorRange" | "pointColor" | "hslPick" => {
+        "wbPicker" | "fringe" | "colorRange" | "pointColor" | "hslPick" | "levelsBlack" | "levelsWhite" => {
             if let Some(q) = resp.hover_pos().or_else(|| ui.input(|i| i.pointer.latest_pos())) {
                 crate::eyedropper::show(ui.ctx(), q);
             }
@@ -3374,6 +3374,22 @@ fn general_interaction(
                 }
                 _ => app.ui.tool.clear(),
             }
+        }
+        return;
+    }
+    if matches!(app.ui.tool.as_str(), "levelsBlack" | "levelsWhite") {
+        // the Levels pickers: the photo's brightness under the pointer, as the Levels receive it, becomes the
+        // black or white point of the RGB channel
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            let target = if app.ui.tool == "levelsBlack" { "black" } else { "white" };
+            // the picker stays armed: each click sets the point again, one undo step each
+            let _ = app.run("develop.levelsPick", json!({"target": target, "x": n.x, "y": n.y}));
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.ui.tool.clear();
         }
         return;
     }

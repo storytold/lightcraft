@@ -64,7 +64,7 @@ fn the_default_profile_shows_every_group_and_the_panel_head_has_no_edit_line() {
     assert_eq!(h.app.ui.settings.tool_profiles.active().id, crate::tool_profiles::DEFAULT);
     assert_eq!(
         sections(&h),
-        ["light", "curve", "mixer", "grading", "detail", "retouch", "optics", "geometry", "effects", "calibration", "pluginFilters"],
+        ["light", "levels", "curve", "mixer", "grading", "detail", "retouch", "optics", "geometry", "effects", "calibration", "pluginFilters"],
         "every group, as the panel always had them"
     );
     // the head: the tool profile row, no profile row, Auto · B&W | HDR inside Basic, Browse Profiles in the tool row
