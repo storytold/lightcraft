@@ -1708,6 +1708,8 @@ mod tests {
         }
         let open_people = |h: &mut Headless| {
             h.request("engine.execute", json!({"command": "view.people"}), t);
+            // the people's cards are under Confirmed; the view opens on the unknown faces (issue #1050)
+            h.app.ui.people_category = crate::state::PeopleCategory::Confirmed;
             h.settle(SETTLE);
             h.step();
         };
@@ -1981,10 +1983,16 @@ mod tests {
         h.step();
         h.step();
         assert!(tiles(&mut h) < before, "ignored faces left the unnamed list");
+        // the offer to restore them is in the named people's header, under Confirmed (issue #1050)
+        h.app.ui.people_category = crate::state::PeopleCategory::Confirmed;
+        h.step();
+        h.step();
         let r = h.request("ui.clickWidget", json!({"id": "people:restoreIgnored"}), t);
         assert_eq!(r["ok"], true, "{r}");
         h.step();
         h.settle(SETTLE);
+        h.step();
+        h.app.ui.people_category = crate::state::PeopleCategory::Unknown;
         h.step();
         h.step();
         assert_eq!(tiles(&mut h), before, "restored");
