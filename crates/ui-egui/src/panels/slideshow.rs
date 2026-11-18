@@ -186,8 +186,14 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     after(app, t);
     let Some(run) = app.ui.slideshow.as_ref() else { return };
     let f = run.play.frame(now);
-    if f.from.is_some() || run.play.pan_zoom_moving(now) {
+    // A slide's time, and so its pan and zoom, starts only once it is ready: until then the
+    // next frame comes soon, for the render queue to take the slide and show it.
+    let shown = ready(app, run.play.current());
+    let moving = run.play.pan_zoom_moving(now) && shown;
+    if f.from.is_some() || moving {
         ctx.request_repaint(); // a fade, and pan and zoom, draw every frame
+    } else if !shown {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
     } else if !run.play.is_paused() && !run.play.settings().manual {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(run.play.remaining(now).clamp(0.016, 120.0)));
     }

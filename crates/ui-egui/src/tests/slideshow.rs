@@ -411,6 +411,46 @@ fn pan_and_zoom_moves_an_old_render_whole_until_the_new_one_lands() {
     h.settle(SETTLE);
 }
 
+/// A slide's time starts only once its render is in, so while it is held back pan and zoom does
+/// not ask for every frame, only for one 16 ms later so the render is taken and shown; once the
+/// render lands, every frame is drawn.
+#[test]
+fn pan_and_zoom_draws_every_frame_only_once_its_slide_is_ready() {
+    let mut h = grid();
+    let open = Rc::new(Cell::new(false));
+    h.app.renderer.set_offload(Box::new(RenderGate::new(open.clone())));
+    run(&mut h, "slideshow.playback", json!({"panAndZoom": true, "panAndZoomAmount": 1.0}));
+    run(&mut h, "view.slideshow", json!({"interval": 60, "fadeDuration": 0, "seed": 3}));
+    let current = photo_up(&h);
+    let ctx = egui::Context::default();
+    let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = delays.clone();
+    ctx.set_request_repaint_callback(move |info| seen.lock().unwrap().push(info.delay));
+    let raw = egui::RawInput::default();
+    let tick = |h: &mut Headless| {
+        let now = h.time();
+        // (the first passes of a context ask for frames at once, which would hide the slideshow's)
+        for _ in 0..3 {
+            let _ = ctx.run_logic(&raw, |ctx| crate::panels::slideshow::tick(&mut h.app, ctx, now));
+        }
+        delays.lock().unwrap().clear();
+        let _ = ctx.run_logic(&raw, |ctx| crate::panels::slideshow::tick(&mut h.app, ctx, now));
+        delays.lock().unwrap().clone()
+    };
+    assert!(!has_slide(&h, current), "the slide's render is held back");
+    assert!(play(&h).pan_zoom_moving(h.time()), "the playback counts the slide as moving");
+    let got = tick(&mut h);
+    assert!(!got.contains(&Duration::ZERO), "no frame at once while the slide is not ready: {got:?}");
+    // a 60 second slide still asks for a frame soon, for its render to be taken and shown
+    assert!(got.iter().any(|d| *d <= Duration::from_millis(16)), "a frame soon while the slide is not ready: {got:?}");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the render lands");
+    let got = tick(&mut h);
+    assert!(got.contains(&Duration::ZERO), "every frame once it is ready: {got:?}");
+    run(&mut h, "slideshow.end", json!({}));
+    h.settle(SETTLE);
+}
+
 /// A photo cropped to its cell's shape, a very narrow one (aspect 0.01) and a very wide one
 /// (aspect 50): the part that moves is the photo's visible part of the slide, so the backdrop
 /// beside it stays where it is and the photo still shows inside it.
