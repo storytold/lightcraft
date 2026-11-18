@@ -439,12 +439,14 @@ fn non_finite_float_samples_decode_and_develop() {
     for compression in [DngCompression::Uncompressed, DngCompression::Deflate { tile: 16, half: false }] {
         let bytes = write_dng(&raw, &DngWriteOptions { compression, ..Default::default() }).unwrap();
         let img = decode(&bytes).unwrap();
-        // NaN and −∞ read as black, +∞ as the white level; finite samples are kept bit-exactly
+        // NaN and −∞ read as black, +∞ as the white level; the fractional white is stored as 1 with the
+        // samples rescaled by it (`WhiteLevel` is LONG only, #3191), bit-exactly
         let RawData::F32(got) = &img.data else { panic!("float data expected") };
+        assert_eq!(img.white, vec![1.0]);
         for (a, b) in vals.iter().zip(got) {
             let want = match *a {
-                f32::INFINITY => 0.75,
-                v if v.is_finite() => v,
+                f32::INFINITY => 1.0,
+                v if v.is_finite() => v / 0.75,
                 _ => 0.0,
             };
             assert_eq!(want.to_bits(), b.to_bits(), "{a} read as {b}");
