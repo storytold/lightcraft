@@ -1306,21 +1306,53 @@ fn file_path(p: &Photo) -> Option<&str> {
 
 /// The XMP packet that describes a photo on disk: its sidecar, else embedded raw/DNG or JPEG XMP.
 pub fn read_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Option<(String, PathBuf)> {
+    match find_packet(original, kind, lookup) {
+        Packet::Found(packet, from) => Some((packet, from)),
+        Packet::Unreadable(..) | Packet::None => None,
+    }
+}
+
+/// What [`find_packet`] finds.
+enum Packet {
+    /// The packet, and the file it was read from.
+    Found(String, PathBuf),
+    /// A sidecar, or the photo file holding the packet, that is there but can't be read (or isn't UTF-8), and why.
+    Unreadable(PathBuf, String),
+    /// No sidecar, and no XMP in the photo file that LightCraft finds there.
+    None,
+}
+
+/// [`read_packet`], telling a packet that can't be read from none.
+fn find_packet(original: &str, kind: MediaKind, lookup: SidecarLookup) -> Packet {
     if let Some(sc) = lookup.find(original) {
         // A discovered sidecar keeps precedence even when reading it fails.
-        return crate::read_file::read_regular(&sc, SIDECAR_READ_MAX).ok().and_then(|b| String::from_utf8(b).ok()).map(|s| (s, sc));
+        return match crate::read_file::read_regular(&sc, SIDECAR_READ_MAX) {
+            Ok(b) => match String::from_utf8(b) {
+                Ok(text) => Packet::Found(text, sc),
+                Err(_) => Packet::Unreadable(sc, "it isn't UTF-8 text".into()),
+            },
+            Err(e) => Packet::Unreadable(sc, e.to_string()),
+        };
     }
     if kind == MediaKind::Raw {
-        let bytes = crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES).ok()?;
-        let x = lightcraft_meta::embedded(&bytes).xmp?;
-        return Some((x, PathBuf::from(original)));
+        return match crate::read_file::read_regular(original, crate::read_file::MAX_MEDIA_BYTES) {
+            Ok(bytes) => match lightcraft_meta::embedded(&bytes).xmp {
+                Some(x) => Packet::Found(x, PathBuf::from(original)),
+                None => Packet::None,
+            },
+            Err(e) => Packet::Unreadable(PathBuf::from(original), e.to_string()),
+        };
     }
     if kind == MediaKind::Image {
-        let mut file = std::fs::File::open(original).ok()?;
-        let x = read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS)?;
-        return Some((x, PathBuf::from(original)));
+        return match std::fs::File::open(original) {
+            Ok(mut file) => match read_jpeg_xmp(&mut file, JPEG_XMP_HEADER_SPAN, JPEG_XMP_HEADER_STEPS) {
+                Some(x) => Packet::Found(x, PathBuf::from(original)),
+                None => Packet::None,
+            },
+            Err(e) => Packet::Unreadable(PathBuf::from(original), e.to_string()),
+        };
     }
-    None
+    Packet::None
 }
 
 /// Most bytes of a sidecar read whole (the opened file must be a regular file).
@@ -1646,16 +1678,21 @@ impl Session {
         let backfill = if p.meta.file_orientation.is_none() { upright_orientation(orig) } else { None };
         let mut known: Option<Option<lightcraft_meta::Orientation>> = p.meta.file_orientation.or(backfill).map(Some);
         let mut orientation_of_file = || *known.get_or_insert_with(|| file_orientation(orig));
-        let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_lookup(id)) else {
-            // no packet to read; the orientation alone is still news
-            return match backfill {
-                Some(o) => Ok(Some((
-                    self.sidecar_op(id, SidecarData { file_orientation: Some(o), ..SidecarData::default() })?,
-                    PathBuf::from(orig),
-                    Vec::new(),
-                ))),
-                None => Ok(None),
-            };
+        let (packet, from) = match find_packet(orig, p.kind, self.sidecar_lookup(id)) {
+            Packet::Found(packet, from) => (packet, from),
+            // one that is there but can't be read fails the read, as before: nothing is reported read from it
+            Packet::Unreadable(from, why) => return Err(EngineError::Other(format!("{} can't be read: {why}", from.display()))),
+            // no packet at all: the orientation alone is still news
+            Packet::None => {
+                return match backfill {
+                    Some(o) => Ok(Some((
+                        self.sidecar_op(id, SidecarData { file_orientation: Some(o), ..SidecarData::default() })?,
+                        PathBuf::from(orig),
+                        Vec::new(),
+                    ))),
+                    None => Ok(None),
+                };
+            }
         };
         let sc = parse_sidecar(&packet, crate::crs::Target::for_photo(p)).map_err(|e| EngineError::Other(format!("{}: {e}", from.display())))?;
         // (as `with_orientation_known`: the catalog's orientation, else the file's, read at most once)

@@ -2282,3 +2282,32 @@ fn an_orientation_only_xmp_states_turns_neither_the_size_nor_the_boxes() {
     let _ = std::fs::remove_dir_all(&other);
     let _ = std::fs::remove_dir_all(&src);
 }
+
+/// Review of #4512: on a photo whose catalog doesn't know its file's orientation yet, a sidecar that is there but
+/// can't be read (not UTF-8) still fails Read Metadata from File, naming the file, rather than being reported read
+/// for the orientation alone; nothing changes. With no sidecar at all, the orientation alone is read.
+#[test]
+fn an_unreadable_sidecar_fails_the_read_even_when_the_orientation_is_news() {
+    let src = temp_dir("unreadable-sidecar-orientation");
+    write_turned_jpeg(&src.join("t.jpg"), None);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let mut meta = s.catalog.photo(id).unwrap().meta.clone();
+    meta.file_orientation = None;
+    s.commit("Old", lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
+
+    std::fs::write(src.join("t.xmp"), [0xff, 0xfe, 0x00, 0x3c]).unwrap();
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["read"], json!([]), "{read}");
+    assert_eq!(read["failed"][0]["id"], id.0, "{read}");
+    let why = read["failed"][0]["error"].as_str().unwrap();
+    assert!(why.contains("t.xmp") && why.contains("can't be read"), "{why}");
+    assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, None, "nothing applied");
+
+    std::fs::remove_file(src.join("t.xmp")).unwrap();
+    let read = s.execute("photo.readMetadataFromFile", &json!({"ids": [id.0]})).unwrap();
+    assert_eq!(read["read"].as_array().map(Vec::len), Some(1), "{read}");
+    assert_eq!(s.catalog.photo(id).unwrap().meta.file_orientation, Some(lightcraft_meta::Orientation::Rotate90));
+    let _ = std::fs::remove_dir_all(&src);
+}
