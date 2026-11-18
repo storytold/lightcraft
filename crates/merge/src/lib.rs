@@ -26,6 +26,7 @@ pub mod linalg;
 pub mod metrics;
 pub mod output;
 pub mod pano;
+pub mod pixelshift;
 pub mod ransac;
 pub mod refine;
 pub mod response;
