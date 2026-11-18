@@ -195,6 +195,8 @@ fn locale_tags_normalize() {
     assert_eq!(Locale::parse_tag("fr"), Some(Locale::Fr));
     assert_eq!(Locale::parse_tag("fr-FR"), Some(Locale::Fr));
     assert_eq!(Locale::parse_tag("fr_FR.UTF-8"), Some(Locale::Fr));
+    assert_eq!(Locale::parse_tag("lo"), Some(Locale::Lo));
+    assert_eq!(Locale::parse_tag("lo-LA"), Some(Locale::Lo));
     for tag in ["de", "de-DE", "de_AT.UTF-8", "de-CH"] {
         assert_eq!(Locale::parse_tag(tag), Some(Locale::De), "{tag}");
     }
@@ -386,6 +388,7 @@ fn language_commands_cover_every_language() {
         ("app.language.czech", Locale::Cs),
         ("app.language.italian", Locale::It),
         ("app.language.georgian", Locale::Ka),
+        ("app.language.lao", Locale::Lo),
         ("app.language.swedish", Locale::Sv),
         ("app.language.finnish", Locale::Fi),
         ("app.language.indonesian", Locale::Id),

@@ -133,6 +133,7 @@ language_table! {
     Cs, "cs", "Čeština", "Latn", include_str!("../locales/cs.json");
     It, "it", "Italiano", "Latn", include_str!("../locales/it.json");
     Ka, "ka", "ქართული", "Geor", include_str!("../locales/ka.json");
+    Lo, "lo", "ພາສາລາວ", "Laoo", include_str!("../locales/lo.json");
     Sv, "sv", "Svenska", "Latn", include_str!("../locales/sv.json");
     Fi, "fi", "Suomi", "Latn", include_str!("../locales/fi.json");
     Id, "id", "Bahasa Indonesia", "Latn", include_str!("../locales/id.json");
