@@ -132,7 +132,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.infoSelectedPhotos", "Show Metadata for Selected Photos", None, ""),
     ("view.fullScreenPreview", "Full Screen Preview", Some("F"), "View"),
     ("view.lightsOut", "Lights Out", Some("Shift+L"), "View"),
-    ("view.enterFullScreen", "Enter Full Screen", Some("Cmd+Shift+F"), "View"),
+    // macOS: the system's own key for window full screen (⌃⌘F, 🌐F on newer keyboards)
+    ("view.enterFullScreen", "Enter Full Screen", Some(if cfg!(target_os = "macos") { "Ctrl+Cmd+F" } else { "Cmd+Shift+F" }), "View"),
     ("view.infoOverlay", "Cycle Info Overlay", Some("Cmd+I"), "View"),
     ("view.viewOptions", "View Options…", Some("Cmd+J"), "View"),
     ("view.chooseLayoutImage", "Choose Layout Image…", None, "View"),
