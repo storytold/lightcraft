@@ -121,9 +121,20 @@ fn resizable_side_stores_panel_state_under_the_parent_salted_key() {
     let ctx = egui::Context::default();
     let raw = raw(egui::vec2(1000.0, 700.0));
     frame(&ctx, raw, |ui| {
-        crate::panels::resizable_side(ui, true, "side-test", egui::Frame::NONE, 260.0, crate::state::LEFT_WIDTH, 300.0, |ui| {
-            ui.label("side");
-        });
+        crate::panels::resizable_side(
+            ui,
+            crate::panels::SidePanel {
+                left: true,
+                id: "side-test",
+                frame: egui::Frame::NONE,
+                width: 260.0,
+                limits: crate::state::LEFT_WIDTH,
+                reserve: 300.0,
+            },
+            |ui| {
+                ui.label("side");
+            },
+        );
     });
     let modern = ctx.viewport_id().root_ui_id().with("side-test");
     assert!(
@@ -553,7 +564,7 @@ fn one_synthetic_batch_until_a_completed_pass_and_drops_wait_for_the_ui_phase() 
 
 #[test]
 fn first_headless_frame_runs_logic_and_uses_its_simulated_clock() {
-    let mut h = Headless::new(app(), [800.0, 600.0], 1.0);
+    let mut h = Headless::new(self::app(), [800.0, 600.0], 1.0);
     assert_eq!(h.time(), 0.0);
     h.step();
     assert!(h.app.styled, "the first frame at t=0 runs logic and installs fonts");
@@ -598,7 +609,7 @@ fn hidden_slideshow_pauses_and_keeps_its_remaining_time() {
         let tex = ctx.load_texture(format!("slide-{}", id.0), egui::ColorImage::filled([2, 2], egui::Color32::WHITE), Default::default());
         app.renderer.textures.insert(
             Slot::Slide(Item::Photo(id)),
-            Tex { look: None, key: 0, photo: id, tex, size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None },
+            Tex { look: None, key: 0, photo: id, tex, native: None, size: [2, 2], histogram: None, ms: 0.0, quick: None, pixels: None },
         );
     }
     let first = app.ui.slideshow.as_ref().unwrap().play.current();
@@ -890,6 +901,48 @@ fn ui_scroll_carries_validated_unit_phase_and_source() {
     let error = crate::control::gesture_events(&mut app, &ctx, "ui.scroll", &serde_json::json!({"unit": "notch"})).expect_err("unknown unit");
     assert!(error.contains("unit"), "{error}");
     assert!(app.synthetic.is_empty());
+}
+
+/// A coordinate or delta too large for an `f32` became an infinite or NaN pointer position or
+/// scroll delta: egui panicked on the NaN in debug builds ("Comparing NaN vectors"), and a release
+/// build handed it to every widget. Such a gesture is refused and queues nothing.
+#[test]
+fn gestures_refuse_numbers_that_are_not_screen_positions() {
+    let (mut app, ctx) = (app(), egui::Context::default());
+    app.widgets.push(("finite:test".into(), egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(20.0, 20.0))));
+    app.image_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 100.0)));
+    let refused = [
+        ("ui.click", serde_json::json!({"x": 1e308})),
+        ("ui.click", serde_json::json!({"y": -1e308})),
+        ("ui.move", serde_json::json!({"x": 1e300, "y": 1.0})),
+        ("ui.drag", serde_json::json!({"x": 1.0, "toY": 1e308})),
+        ("ui.dragWidget", serde_json::json!({"id": "finite:test", "dx": -1e308})),
+        ("ui.scroll", serde_json::json!({"dy": 1e308})),
+        ("ui.pointer", serde_json::json!({"events": [{"kind": "down", "x": 0.5}, {"kind": "move", "x": 1e308}]})),
+    ];
+    for (method, p) in refused {
+        let e = crate::control::gesture_events(&mut app, &ctx, method, &p).err().unwrap_or_else(|| panic!("{method} {p} was accepted"));
+        assert!(e.starts_with(method) && e.contains("between"), "{e}");
+        assert!(app.synthetic.is_empty(), "{method} {p} queued events");
+    }
+    // ordinary values still work, and count / steps are still clamped rather than refused
+    crate::control::gesture_events(&mut app, &ctx, "ui.click", &serde_json::json!({"x": 10.0, "y": -5.0, "count": u64::MAX})).unwrap();
+    crate::control::gesture_events(&mut app, &ctx, "ui.drag", &serde_json::json!({"x": 1.0, "toX": 999_999.0, "steps": 1e12})).unwrap();
+    assert!(!app.synthetic.is_empty());
+
+    // refused when the request is admitted: no pending slot, no wait for a layout
+    let (tx, rx) = reply_channel();
+    let e = app.admit_gesture(&ctx, "ui.click".into(), serde_json::json!({"x": 1e308}), tx).expect_err("refused at admission");
+    assert!(e.contains("between"), "{e}");
+    assert!(app.pending_gestures.is_empty());
+    drop(rx);
+
+    // through the whole control channel, as an agent sends it: an error, not a panic
+    let mut h = Headless::new(self::app(), [800.0, 600.0], 1.0);
+    h.step();
+    let r = h.request("ui.click", serde_json::json!({"x": 1e308}), Duration::from_secs(5));
+    assert_eq!(r["ok"], false, "{r}");
+    h.step();
 }
 
 #[test]
@@ -1976,6 +2029,9 @@ fn a_discarded_layout_does_not_publish_its_widget_registry() {
 fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
     let ctx = egui::Context::default();
     let mut app = app();
+    // a headless host never gains the first-run tour: its modal would sit over the passes this
+    // test drives (screenshot tests elsewhere in this file need the host not headless)
+    app.headless_host = true;
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
     assert!(app.fonts_ready);
@@ -2004,6 +2060,10 @@ fn a_gesture_replies_only_after_the_completed_pass_consumed_its_event() {
 fn a_delivered_gesture_may_change_the_state_it_acted_on() {
     let ctx = egui::Context::default();
     let mut app = app();
+    // a headless host never gains the first-run tour: its modal would take the dialog this
+    // delivered gesture opens (screenshot tests elsewhere in this file need the host not
+    // headless, so the flag is scoped to this test)
+    app.headless_host = true;
     frame(&ctx, raw(egui::vec2(1000.0, 700.0)), |ui| app.logic(ui.ctx()));
     app.logic(&ctx);
     assert!(app.fonts_ready);
@@ -2278,4 +2338,44 @@ fn synthetic_modifier_ownership_follows_host_changes_across_frames() {
     assert_eq!(input.events, vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
     assert_eq!(app.synthetic_mods, egui::Modifiers::NONE);
     assert!(!app.synthetic_mods_release);
+}
+
+/// Background preparation is advanced on every logic pass, the hidden ones too (CodeRabbit on
+/// #3077): a minimised window keeps preparing the view's previews, and a shown frame ticks it once.
+#[test]
+fn background_preparation_advances_while_the_window_is_hidden() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert_eq!(app.prep_ticks, 2, "each hidden pass advances it");
+    let visible = viewport_raw(egui::vec2(800.0, 600.0), true);
+    let _ = ctx.run_logic(&visible, |ctx| app.logic(ctx));
+    assert_eq!(app.prep_ticks, 3, "a shown pass advances it once");
+}
+/// CodeRabbit on #3077/#3080: a background build that couldn't start asks for a frame at its retry
+/// time, so the retry happens with no input and no other timed frame.
+#[test]
+fn a_build_waiting_to_retry_asks_for_a_frame_at_its_time() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let delays = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = delays.clone();
+    ctx.set_request_repaint_callback(move |info| seen.lock().unwrap().push(info.delay));
+    let wait = std::time::Duration::from_secs(7);
+    let hidden = viewport_raw(egui::vec2(800.0, 600.0), false);
+    // (the first passes ask for frames at once, which would hide a later request)
+    for _ in 0..3 {
+        let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    }
+    delays.lock().unwrap().clear();
+    app.session.prep.retry_at = Some((0, std::time::Instant::now() + wait));
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    let got = delays.lock().unwrap().clone();
+    assert!(got.iter().any(|d| *d > std::time::Duration::from_secs(6) && *d <= wait), "a frame at the retry time: {got:?}");
+    app.session.prep.retry_at = None;
+    delays.lock().unwrap().clear();
+    let _ = ctx.run_logic(&hidden, |ctx| app.logic(ctx));
+    assert!(!delays.lock().unwrap().iter().any(|d| *d > std::time::Duration::from_secs(6) && *d <= wait), "none without a retry waiting");
 }

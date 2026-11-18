@@ -262,6 +262,31 @@ fn push_history_is_bounded_and_invertible() {
     assert_eq!(c.to_snapshot(), before);
 }
 
+/// A photo added with, or given, a whole History (op log replay, undo of a removal) kept every
+/// step: only `PushHistory` applied the limit (#2579).
+#[test]
+fn add_photo_and_set_history_are_bounded_and_invertible() {
+    let mut c = Catalog::new();
+    let id = c.alloc_photo_id();
+    let step = |i: usize| HistoryStep { label: format!("s{i}"), settings: Arc::new(DevelopSettings::default()) };
+    let mut p = Photo::new(id, Source::Demo { scene: 1 }, "a", "JPEG", 1, 1, "t");
+    p.history = (0..HISTORY_LIMIT + 5).map(step).collect();
+    p.history_cursor = Some(10);
+    c.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let p = c.photo(id).unwrap();
+    assert_eq!((p.history.len(), p.history[0].label.as_str()), (HISTORY_LIMIT, "s5"));
+    assert_eq!(p.history_cursor, Some(5), "the cursor stays on step s10");
+
+    let before = c.to_snapshot();
+    let inv = c.apply(Op::SetHistory { id, history: (0..HISTORY_LIMIT * 2).map(step).collect() }).unwrap();
+    let p = c.photo(id).unwrap();
+    assert_eq!(p.history.len(), HISTORY_LIMIT);
+    assert_eq!(p.history[0].label, format!("s{HISTORY_LIMIT}"));
+    assert_eq!(p.history_cursor, Some(0), "its step was dropped: the oldest one kept");
+    c.apply(inv).unwrap();
+    assert_eq!(c.to_snapshot(), before);
+}
+
 #[test]
 fn fs_store_roundtrip() {
     let dir = std::env::temp_dir().join(format!("lc-journal-{}", std::process::id()));

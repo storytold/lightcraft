@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::crs::Props;
-use crate::preset_import::{Imported, build, group_from_dir, read_zip};
+use crate::preset_import::{Imported, MAX_ZIP_ENTRY, MAX_ZIP_TOTAL, build, group_from_dir, read_zip_spending};
 
 // ----------------------------------------------------------------------------- property lists
 
@@ -62,184 +62,43 @@ impl Plist {
     }
 }
 
-struct Parser<'a> {
-    s: &'a str,
-    i: usize,
-    /// Nesting of the element being read (bounded: a hostile file must not overflow the stack).
-    depth: usize,
-}
-
-/// Deepest `<dict>` / `<array>` nesting read (real looks nest a handful of levels).
-const MAX_DEPTH: usize = 64;
-
-fn unescape(t: &str) -> String {
-    let mut out = String::with_capacity(t.len());
-    let mut rest = t;
-    while let Some(p) = rest.find('&') {
-        out.push_str(&rest[..p]);
-        rest = &rest[p..];
-        let Some(end) = rest.find(';') else { break };
-        let ent = &rest[1..end];
-        let c = match ent {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            _ => ent
-                .strip_prefix("#x")
-                .or_else(|| ent.strip_prefix("#X"))
-                .and_then(|h| u32::from_str_radix(h, 16).ok())
-                .or_else(|| ent.strip_prefix('#').and_then(|d| d.parse().ok()))
-                .and_then(char::from_u32),
-        };
-        match c {
-            Some(c) => {
-                out.push(c);
-                rest = &rest[end + 1..];
-            }
-            None => {
-                out.push('&');
-                rest = &rest[1..];
-            }
-        }
-    }
-    out.push_str(rest);
-    out
-}
-
-impl Parser<'_> {
-    fn err<T>(&self, what: &str) -> Result<T, String> {
-        Err(format!("property list: {what} at byte {}", self.i))
-    }
-    /// Skip whitespace, the XML declaration, the doctype and comments.
-    fn skip(&mut self) {
-        loop {
-            let r = &self.s[self.i..];
-            let t = r.trim_start();
-            self.i += r.len() - t.len();
-            let close = if t.starts_with("<?") {
-                "?>"
-            } else if t.starts_with("<!--") {
-                "-->"
-            } else if t.starts_with("<!") {
-                ">"
-            } else {
-                return;
-            };
-            match t.find(close) {
-                Some(e) => self.i += e + close.len(),
-                None => {
-                    self.i = self.s.len();
-                    return;
-                }
-            }
-        }
-    }
-    /// The next tag: (name, closing, self-closing).
-    fn tag(&mut self) -> Result<(String, bool, bool), String> {
-        self.skip();
-        let r = &self.s[self.i..];
-        if !r.starts_with('<') {
-            return self.err("expected a tag");
-        }
-        let Some(end) = r.find('>') else { return self.err("unterminated tag") };
-        let inner = &r[1..end];
-        self.i += end + 1;
-        let closing = inner.starts_with('/');
-        let selfc = inner.ends_with('/');
-        let name = inner.trim_start_matches('/').trim_end_matches('/').split_whitespace().next().unwrap_or("").to_string();
-        Ok((name, closing, selfc))
-    }
-    fn peek_close(&mut self, name: &str) -> bool {
-        self.skip();
-        let r = &self.s[self.i..];
-        let t = format!("</{name}>");
-        if r.starts_with(&t) {
-            self.i += t.len();
-            true
-        } else {
-            false
-        }
-    }
-    fn text(&mut self, name: &str) -> Result<String, String> {
-        let r = &self.s[self.i..];
-        let t = format!("</{name}>");
-        let Some(end) = r.find(&t) else { return self.err(&format!("missing {t}")) };
-        self.i += end + t.len();
-        Ok(unescape(&r[..end]))
-    }
-    fn value(&mut self) -> Result<Plist, String> {
-        if self.depth >= MAX_DEPTH {
-            return self.err("nested too deeply");
-        }
-        self.depth += 1;
-        let v = self.value_inner();
-        self.depth -= 1;
-        v
-    }
-    fn value_inner(&mut self) -> Result<Plist, String> {
-        let (name, closing, selfc) = self.tag()?;
-        if closing {
-            return self.err(&format!("unexpected </{name}>"));
-        }
-        let leaf = |p: &mut Self, f: &dyn Fn(String) -> Result<Plist, String>| if selfc { f(String::new()) } else { p.text(&name).and_then(f) };
-        match name.as_str() {
-            "plist" => {
-                if selfc {
-                    return Ok(Plist::Dict(Vec::new()));
-                }
-                let v = self.value()?;
-                self.peek_close("plist");
-                Ok(v)
-            }
-            "dict" => {
-                let mut m = Vec::new();
-                if !selfc {
-                    while !self.peek_close("dict") {
-                        let (k, c, sc) = self.tag()?;
-                        if k != "key" || c {
-                            return self.err("expected <key>");
-                        }
-                        let key = if sc { String::new() } else { self.text("key")? };
-                        m.push((key, self.value()?));
-                    }
-                }
-                Ok(Plist::Dict(m))
-            }
-            "array" => {
-                let mut a = Vec::new();
-                if !selfc {
-                    while !self.peek_close("array") {
-                        a.push(self.value()?);
-                    }
-                }
-                Ok(Plist::Array(a))
-            }
-            "string" | "date" => leaf(self, &|t| Ok(Plist::Str(t))),
-            "real" | "integer" => {
-                leaf(self, &|t| t.trim().parse::<f64>().map(Plist::Num).map_err(|_| format!("property list: bad number {:?}", t.trim())))
-            }
-            "data" => leaf(self, &|_| Ok(Plist::Data)),
-            "true" | "false" => {
-                if !selfc {
-                    self.text(&name)?;
-                }
-                Ok(Plist::Bool(name == "true"))
-            }
-            _ => self.err(&format!("unknown element <{name}>")),
-        }
-    }
-}
-
-/// Parse an XML property list.
+/// Parse XML through the shared bounded codec; binary presets remain unsupported.
 pub fn parse_plist(bytes: &[u8]) -> Result<Plist, String> {
     if bytes.starts_with(b"bplist") {
         return Err("binary property lists are not supported".into());
     }
-    let text = String::from_utf8_lossy(bytes);
-    let mut p = Parser { s: text.trim_start_matches('\u{feff}'), i: 0, depth: 0 };
-    p.value()
+    // The existing wrapped-plist limit counts the <plist> wrapper and root value.
+    // ZIP expansion remains charged separately by preset_import before this parser runs.
+    let limits = craft_plist::Limits {
+        max_input_bytes: MAX_ZIP_ENTRY,
+        max_expanded_bytes: MAX_ZIP_ENTRY.saturating_mul(2),
+        max_depth: 62,
+        ..craft_plist::Limits::default()
+    };
+    let value =
+        craft_plist::parse_xml_with_options(bytes, limits, craft_plist::XmlOptions { trim_date_text: false }).map_err(|error| match error {
+            craft_plist::FormatError::TooLarge(_) => format!("property list: nested too deeply or exceeds resource limits: {error}"),
+            _ => format!("property list: {error}"),
+        })?;
+    map_plist(value)
+}
+
+// Luminar mapping deliberately keeps its existing value policy: dates are strings, integer
+// settings are f64, and data is a presence marker rather than an app-owned binary payload.
+fn map_plist(value: craft_plist::Value) -> Result<Plist, String> {
+    use craft_plist::{DateValue, Value};
+    Ok(match value {
+        Value::Dict(entries) => {
+            Plist::Dict(entries.into_iter().map(|(key, value)| map_plist(value).map(|value| (key, value))).collect::<Result<_, _>>()?)
+        }
+        Value::Array(values) => Plist::Array(values.into_iter().map(map_plist).collect::<Result<_, _>>()?),
+        Value::String(value) | Value::Date(DateValue::Text(value)) => Plist::Str(value),
+        Value::Integer(value) => Plist::Num(value as f64),
+        Value::Real(value) => Plist::Num(value),
+        Value::Bool(value) => Plist::Bool(value),
+        Value::Data(_) => Plist::Data,
+        _ => return Err("property list: unsupported XML value".into()),
+    })
 }
 
 // ------------------------------------------------------------------------------------ mapping
@@ -334,11 +193,13 @@ struct Acc {
     sums: BTreeMap<String, (f64, (f64, f64))>,
     curves: BTreeMap<String, Vec<(f64, f64)>>,
     unmapped: Vec<String>,
+    /// What `unmapped` holds, for the look-up (a look names each unsupported setting once).
+    seen: std::collections::HashSet<String>,
 }
 
 impl Acc {
     fn skip(&mut self, what: String) {
-        if !self.unmapped.contains(&what) {
+        if self.seen.insert(what.clone()) {
             self.unmapped.push(what);
         }
     }
@@ -454,7 +315,18 @@ pub fn read_lmp(path: &str, bytes: &[u8], group: Option<String>) -> Result<Impor
 /// Read a Luminar looks collection (`.mplumpack`, a zip): every look, grouped by the pack's
 /// `GroupName` (else the pack's file name).
 pub fn read_mplumpack(path: &str, bytes: &[u8]) -> Result<Vec<Imported>, String> {
-    let entries = read_zip(bytes)?;
+    let mut budget = MAX_ZIP_TOTAL;
+    read_mplumpack_within(path, bytes, &mut budget)
+}
+
+/// [`read_mplumpack`] unpacking at most `budget` bytes, which it spends: packs inside one zip
+/// share the zip's budget.
+pub(crate) fn read_mplumpack_within(path: &str, bytes: &[u8], budget: &mut usize) -> Result<Vec<Imported>, String> {
+    // spent as each entry unpacks: a pack that fails part way still used its budget
+    let mut spent = 0;
+    let entries = read_zip_spending(bytes, MAX_ZIP_ENTRY, *budget, &mut spent);
+    *budget = budget.saturating_sub(spent);
+    let entries = entries?;
     let info = entries
         .iter()
         .find(|(n, _)| n.rsplit('/').next().is_some_and(|b| b.eq_ignore_ascii_case("PresetsInfo.plist")))
@@ -481,9 +353,32 @@ pub fn read_mplumpack(path: &str, bytes: &[u8]) -> Result<Vec<Imported>, String>
 
 #[cfg(test)]
 mod tests {
+    fn unescape(text: &str) -> String {
+        let xml = format!("<string>{text}</string>");
+        super::parse_plist(xml.as_bytes()).unwrap().str().unwrap().to_string()
+    }
     use super::*;
     use crate::preset_import::read_presets;
     use serde_json::json;
+
+    #[test]
+    fn many_ampersands_before_one_semicolon_are_read_once() {
+        let hostile = format!("{};&amp;", "&".repeat(200_000));
+        assert_eq!(unescape(&hostile), format!("{};&", "&".repeat(200_000)));
+        assert_eq!(unescape("&lt;a&gt; &#x10FFFF; &unknownreference;"), "<a> \u{10FFFF} &unknownreference;");
+    }
+
+    #[test]
+    fn zero_padded_numeric_references_decode() {
+        assert_eq!(unescape("C&#0000000097;non &#x0000041; &#000000065;"), "Canon A A");
+        assert_eq!(unescape("&abc&#xyz;&;"), "&abc&#xyz;&;");
+    }
+
+    #[test]
+    fn unescape_rejects_signed_numeric_references() {
+        assert_eq!(unescape("&#+65;&#x+41;"), "&#+65;&#x+41;");
+        assert_eq!(unescape("&#65;&#x41;"), "AA");
+    }
 
     /// One effect's parameter as Luminar writes it.
     fn param(name: &str, v: f64) -> String {
@@ -684,5 +579,23 @@ mod tests {
         let r = s.execute("preset.import", &json!({"paths": [dir.join("Wild/Vintage.lmp").to_string_lossy()], "dryRun": true})).unwrap();
         assert_eq!(r["imported"][0]["group"], json!("Imported Presets"), "{r}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn shared_plist_adapter_keeps_luminar_value_mapping() {
+        let p = parse_plist(
+            b"<dict><key>date</key><date> 2026-01-01T00:00:00Z </date><key>integer</key><integer>-3</integer><key>data</key><data>AAEC</data></dict>",
+        )
+        .unwrap();
+        assert_eq!(p.get("date").and_then(Plist::str), Some(" 2026-01-01T00:00:00Z "));
+        assert_eq!(p.get("integer").and_then(Plist::num), Some(-3.0));
+        assert_eq!(p.get("data"), Some(&Plist::Data));
+    }
+    #[test]
+    fn shared_plist_refuses_malformed_values_instead_of_repairing_them() {
+        for xml in ["<data>not base64!</data>", "<integer>1.5</integer>", "<real>NaN</real>", "<plist><string>x</string>", "<string>x</string>junk"] {
+            assert!(parse_plist(xml.as_bytes()).is_err(), "{xml}");
+        }
+        assert!(parse_plist(b"<string>\xff</string>").is_err());
     }
 }

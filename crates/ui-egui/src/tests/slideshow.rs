@@ -48,7 +48,7 @@ fn fixture_grid(count: usize, open: Rc<Cell<bool>>) -> (RenderFixture, Headless)
     // consume the wall-clock budget before the slideshow scheduling assertions begin.
     assert!(open.get(), "the native grid setup gate starts open");
     h.app.renderer.set_offload(Box::new(RenderGate::new(open)));
-    assert!(h.settle(SETTLE), "the grid renders settle before controlling slide renders");
+    assert!(h.settle(super::ui_settle_timeout()), "the grid renders settle before controlling slide renders");
     assert_eq!(h.app.session.catalog.len(), count, "the slideshow fixture photos");
     let id = h.app.session.active().expect("a photo is open");
     let photo = h.app.session.catalog.photo(id).expect("it is in the catalog");
@@ -241,7 +241,7 @@ fn a_manual_slideshow_waits_for_the_arrow_keys() {
     assert_eq!(r["settings"]["manual"], true, "{r}");
     // once the first two slides are rendered, and far longer than the slide duration: the first
     // photo stays up
-    assert!(h.step_until(SETTLE, |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| has_slide(h, photos[0]) && has_slide(h, photos[1])), "the slides are rendered");
     for _ in 0..120 {
         h.step();
     }
@@ -400,6 +400,29 @@ fn playback_settings_drive_the_slideshow_and_bad_ones_are_refused() {
     h.settle(SETTLE);
 }
 
+/// The slide preview's render lands on a frame nobody can name (a worker thread); the page under it must
+/// not move when it does, or a click made in that frame lands beside the control aimed at (the gate went
+/// red on it: `playback_settings_…` clicks "Random order" and the checkbox never changed).
+#[test]
+fn the_settings_page_does_not_move_when_the_slide_preview_finishes_rendering() {
+    let mut h = grid();
+    let open = std::rc::Rc::new(std::cell::Cell::new(false));
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(open.clone())));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    // (the held render keeps the app "busy", so settle() would wait out its timeout: a second of frames instead)
+    for _ in 0..60 {
+        h.step();
+    }
+    let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r).unwrap_or_else(|| panic!("{w} is on screen"));
+    let (room, check) = (rect(&h, "settings:pageRoom"), rect(&h, "check:settings.slideshowRandom"));
+    assert!(!h.app.renderer.textures.contains_key(&Slot::SlidePreview), "the render is held back");
+    open.set(true);
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.contains_key(&Slot::SlidePreview)), "the render lands");
+    h.settle(Duration::from_secs(5));
+    assert_eq!(rect(&h, "settings:pageRoom"), room, "the page's room is the same before and after the render");
+    assert_eq!(rect(&h, "check:settings.slideshowRandom"), check, "a control stays where it was drawn");
+}
+
 #[test]
 fn a_click_on_a_control_scrolled_out_of_the_settings_page_is_refused() {
     // A compact window leaves the lower controls of the Slideshow settings page outside the
@@ -434,7 +457,7 @@ fn a_photo_deleted_while_it_plays_does_not_stall_the_slideshow() {
     run(&mut h, "photo.delete", json!({"ids": [next.0]}));
     run(&mut h, "photo.deletePermanently", json!({"ids": [next.0]}));
     assert!(h.app.session.catalog.photo(next).is_none());
-    assert!(h.step_until(SETTLE, |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.ui.slideshow.as_ref().is_some_and(|r| r.play.position().0 >= 3)), "it plays on");
     assert!(photos.len() > 3);
     h.settle(SETTLE);
 }
@@ -607,7 +630,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
         assert!(has(&h, w), "{w}");
     }
     // the preview is the composed slide, rendered off the UI thread
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     // a checkbox goes through slideshow.layout, and its controls appear (scrolled into view)
     reveal(&mut h, "check:settings.slideshowShadow");
     let r = h.request("ui.clickWidget", json!({"id": "check:settings.slideshowShadow"}), T);
@@ -618,7 +641,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
     // a changed layout renders the preview again (once it has settled)
     let before = h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key);
     run(&mut h, "slideshow.layout", json!({"margins": 0.2, "backdropColor": "#00ff00"}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
+    assert!(h.step_until(super::ui_settle_timeout(), |h| h.app.renderer.textures.get(&Slot::SlidePreview).map(|t| t.key) != before));
     h.step();
     // (the preview is pinned above the page: in view already)
     reveal(&mut h, "slideshow:preview");
@@ -871,20 +894,8 @@ fn settings_shows_the_titles_and_the_preview_shows_a_title_screen() {
     h.settle(SETTLE);
 }
 
-/// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
-/// without changing anything, a click applies, and the user's own templates are saved, updated,
-/// renamed and deleted from the browser.
-#[test]
-fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
+fn tpl_hover_previews_without_changes(h: &mut Headless) -> lightcraft_engine::slide_template::SlideLook {
     use lightcraft_engine::slide_template::SlideLook;
-    let mut h = grid();
-    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    h.app.session.slide_templates_dir = Some(dir.clone());
-    let first = h.app.session.visible_cloned()[0];
-    run(&mut h, "library.select", json!({"ids": [first.0]}));
-    run(&mut h, "view.slideshowOptions", json!({}));
-    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
     let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     let rect = |h: &Headless, w: &str| h.app.widgets.iter().find(|(id, _)| id == w).map(|(_, r)| *r).unwrap();
     for w in [
@@ -896,7 +907,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
         "field:slideshowTemplateName",
         "button:slideshowTemplateSave",
     ] {
-        assert!(has(&h, w), "{w}");
+        assert!(has(h, w), "{w}");
     }
     // hover: the preview shows Gallery Wall (its light grey wall in the margin), nothing changes
     let before = SlideLook::of(&h.app.session);
@@ -915,42 +926,55 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert!(h.step_until(SETTLE, grey), "the hovered template on the selected photo");
     assert_eq!(SlideLook::of(&h.app.session), before, "hovering changes nothing");
     assert!(h.app.session.slide_templates_previous.is_none());
+    before
+}
+
+fn tpl_click_applies_and_saves_own(h: &mut Headless, dir: &std::path::Path) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // a click applies it
-    reveal(&mut h, "template:builtin:gallery-wall");
+    reveal(h, "template:builtin:gallery-wall");
     let r = h.request("ui.clickWidget", json!({"id": "template:builtin:gallery-wall"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(h.app.session.slide_overlays.rating_stars.enabled && h.app.session.slide_layout.stroke_border);
-    assert!(has(&h, "template:previous"), "Previous settings appear");
+    assert!(has(h, "template:previous"), "Previous settings appear");
     // save as a template of our own
-    reveal(&mut h, "field:slideshowTemplateName");
+    reveal(h, "field:slideshowTemplateName");
     let r = h.request("ui.clickWidget", json!({"id": "field:slideshowTemplateName"}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Holiday / 2026"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    reveal(&mut h, "button:slideshowTemplateSave");
+    reveal(h, "button:slideshowTemplateSave");
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateSave"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert!(dir.join("Holiday _ 2026.json").exists(), "the separator never makes a folder");
     h.step();
-    assert!(has(&h, "template:user:Holiday _ 2026"));
+    assert!(has(h, "template:user:Holiday _ 2026"));
+}
+
+fn tpl_update_from_menu(h: &mut Headless) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // update it from its menu with changed settings
-    run(&mut h, "slideshow.layout", json!({"backdropColor": "#123456"}));
-    reveal(&mut h, "template:user:Holiday _ 2026");
+    run(h, "slideshow.layout", json!({"backdropColor": "#123456"}));
+    reveal(h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     for w in ["button:slideshowTemplateUpdate", "button:slideshowTemplateRename", "button:slideshowTemplateExport", "button:slideshowTemplateDelete"]
     {
-        assert!(has(&h, w), "{w}");
+        assert!(has(h, w), "{w}");
     }
     let r = h.request("ui.clickWidget", json!({"id": "button:slideshowTemplateUpdate"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(h.app.session.slide_template("user:Holiday _ 2026").unwrap().look.layout.backdrop_color, [0x12, 0x34, 0x56]);
+}
+
+fn tpl_rename_in_place(h: &mut Headless) {
+    let has = |h: &Headless, w: &str| h.app.widgets.iter().any(|(id, _)| id == w);
     // rename it in place
-    reveal(&mut h, "template:user:Holiday _ 2026");
+    reveal(h, "template:user:Holiday _ 2026");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Holiday _ 2026", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -958,7 +982,7 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(has(&h, "field:slideshowTemplateRename"));
+    assert!(has(h, "field:slideshowTemplateRename"));
     let r = h.request("ui.key", json!({"key": "a", "cmd": true}), T);
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.text", json!({"text": "Summer"}), T);
@@ -967,9 +991,13 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
-    assert!(has(&h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+    assert!(has(h, "template:user:Summer"), "{:?}", h.app.session.slide_templates().templates.iter().map(|t| t.id.clone()).collect::<Vec<_>>());
+}
+
+fn tpl_delete_then_back_to_previous(h: &mut Headless, dir: &std::path::Path, before: &lightcraft_engine::slide_template::SlideLook) {
+    use lightcraft_engine::slide_template::SlideLook;
     // delete it (after confirming)
-    reveal(&mut h, "template:user:Summer");
+    reveal(h, "template:user:Summer");
     let r = h.request("ui.clickWidget", json!({"id": "template:user:Summer", "button": "right"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -983,11 +1011,32 @@ fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
     h.step();
     assert!(!dir.join("Summer.json").exists());
     // back to the settings before Gallery Wall
-    reveal(&mut h, "template:previous");
+    reveal(h, "template:previous");
     let r = h.request("ui.clickWidget", json!({"id": "template:previous"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(SlideLook::of(&h.app.session).overlays, before.overlays);
+    h.settle(SETTLE);
+}
+
+/// Settings ▸ Slideshow ▸ Templates: built-ins listed, hover previews on the selected photo
+/// without changing anything, a click applies, and the user's own templates are saved, updated,
+/// renamed and deleted from the browser.
+#[test]
+fn template_browser_previews_on_hover_applies_and_manages_user_templates() {
+    let mut h = grid();
+    let dir = std::env::temp_dir().join(format!("lc-ui-sstpl-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    h.app.session.slide_templates_dir = Some(dir.clone());
+    let first = h.app.session.visible_cloned()[0];
+    run(&mut h, "library.select", json!({"ids": [first.0]}));
+    run(&mut h, "view.slideshowOptions", json!({}));
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::SlidePreview).is_some_and(|t| t.photo == first)));
+    let before = tpl_hover_previews_without_changes(&mut h);
+    tpl_click_applies_and_saves_own(&mut h, &dir);
+    tpl_update_from_menu(&mut h);
+    tpl_rename_in_place(&mut h);
+    tpl_delete_then_back_to_previous(&mut h, &dir, &before);
     h.settle(SETTLE);
     let _ = std::fs::remove_dir_all(dir);
 }

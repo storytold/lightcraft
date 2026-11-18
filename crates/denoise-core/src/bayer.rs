@@ -14,6 +14,14 @@ pub struct Layout {
     pub dy: usize,
 }
 
+/// The mosaic dimensions and cell origin for one square denoiser input tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TileRegion {
+    pub mosaic_size: (usize, usize),
+    pub cell_origin: (isize, isize),
+    pub tile_size: usize,
+}
+
 impl Layout {
     /// The layout of a 2 × 2 colour pattern, row-major, colours 0 = red, 1 = green, 2 = blue; `None` when
     /// it is not a Bayer cell (one red, one blue, the greens on the other diagonal).
@@ -65,7 +73,10 @@ pub fn reflect(i: isize, n: usize) -> usize {
 /// Pack the `tile × tile` cells whose top-left cell is `(cx0, cy0)` into `out` as four planes `[R, G1, G2, B]`
 /// (`4 · tile²` values, NCHW). G1 is the green beside the red sample, G2 the green under it. Samples outside
 /// the picture are mirrored. Returns `false` (and writes nothing) when the sizes do not fit.
-pub fn pack_tile(mosaic: &[f32], width: usize, height: usize, layout: Layout, cx0: isize, cy0: isize, tile: usize, out: &mut [f32]) -> bool {
+pub fn pack_tile(mosaic: &[f32], layout: Layout, region: TileRegion, out: &mut [f32]) -> bool {
+    let (width, height) = region.mosaic_size;
+    let (cx0, cy0) = region.cell_origin;
+    let tile = region.tile_size;
     let Some(plane) = tile.checked_mul(tile) else { return false };
     let Some(values) = plane.checked_mul(4) else { return false };
     if width == 0
@@ -113,7 +124,7 @@ mod tests {
         let layout = Layout::from_cell([0, 1, 1, 2]).unwrap();
         let mut out = [7.0; 4];
         for (w, h, tile, x) in [(usize::MAX, 2, 1, 0), (1, 1, usize::MAX, 0), (1, 1, 0, 0), (1, 1, 1, isize::MAX), (1, 1, 1, isize::MIN)] {
-            assert!(!pack_tile(&[0.5], w, h, layout, x, 0, tile, &mut out));
+            assert!(!pack_tile(&[0.5], layout, TileRegion { mosaic_size: (w, h), cell_origin: (x, 0), tile_size: tile }, &mut out));
             assert_eq!(out, [7.0; 4]);
         }
         for n in [1, 2, isize::MAX as usize, usize::MAX] {
@@ -160,7 +171,7 @@ mod tests {
             let (nx, ny) = layout.cells(w, h);
             let tile = nx.max(ny);
             let mut out = vec![0.0; 4 * tile * tile];
-            assert!(pack_tile(&mosaic, w, h, layout, 0, 0, tile, &mut out));
+            assert!(pack_tile(&mosaic, layout, TileRegion { mosaic_size: (w, h), cell_origin: (0, 0), tile_size: tile }, &mut out));
             let plane = tile * tile;
             for (p, want) in [10.0, 20.0, 20.0, 30.0].into_iter().enumerate() {
                 assert!(out[p * plane..(p + 1) * plane].iter().all(|&v| v == want), "layout {cell:?} plane {p}");
@@ -174,7 +185,7 @@ mod tests {
         let (w, h) = (4, 4);
         let mosaic: Vec<f32> = (0..16).map(|i| i as f32).collect();
         let mut out = vec![0.0; 4 * 4];
-        assert!(pack_tile(&mosaic, w, h, Layout { dx: 0, dy: 0 }, 0, 0, 2, &mut out));
+        assert!(pack_tile(&mosaic, Layout { dx: 0, dy: 0 }, TileRegion { mosaic_size: (w, h), cell_origin: (0, 0), tile_size: 2 }, &mut out));
         // cell (0,0): R = site (0,0)=0, G1 = site (1,0)=1, G2 = site (0,1)=4, B = site (1,1)=5
         assert_eq!([out[0], out[4], out[8], out[12]], [0.0, 1.0, 4.0, 5.0]);
         // cell (1,0): sites (2,0)=2, (3,0)=3, (2,1)=6, (3,1)=7
@@ -184,8 +195,8 @@ mod tests {
     #[test]
     fn packing_rejects_wrong_sizes() {
         let mut out = vec![0.0; 16];
-        assert!(!pack_tile(&[0.0; 15], 4, 4, Layout { dx: 0, dy: 0 }, 0, 0, 2, &mut out));
-        assert!(!pack_tile(&[0.0; 16], 4, 4, Layout { dx: 0, dy: 0 }, 0, 0, 3, &mut out));
-        assert!(!pack_tile(&[], 0, 0, Layout { dx: 0, dy: 0 }, 0, 0, 2, &mut out));
+        assert!(!pack_tile(&[0.0; 15], Layout { dx: 0, dy: 0 }, TileRegion { mosaic_size: (4, 4), cell_origin: (0, 0), tile_size: 2 }, &mut out));
+        assert!(!pack_tile(&[0.0; 16], Layout { dx: 0, dy: 0 }, TileRegion { mosaic_size: (4, 4), cell_origin: (0, 0), tile_size: 3 }, &mut out));
+        assert!(!pack_tile(&[], Layout { dx: 0, dy: 0 }, TileRegion { mosaic_size: (0, 0), cell_origin: (0, 0), tile_size: 2 }, &mut out));
     }
 }

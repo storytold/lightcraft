@@ -57,6 +57,19 @@ pub fn cell_glyphs(font: &FontRef<'_>, data: &harfrust::ShaperData, text: &str, 
     Some(glyphs)
 }
 
+/// NFC, except CJK compatibility ideographs, which NFC would swap for their unified forms.
+fn compose(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    let compatibility = |c: char| matches!(c, '\u{F900}'..='\u{FAFF}' | '\u{2F800}'..='\u{2FA1F}');
+    let mut out = String::with_capacity(text.len());
+    for part in text.split_inclusive(compatibility) {
+        let kept = part.chars().next_back().filter(|&c| compatibility(c));
+        out.extend(kept.and_then(|c| part.strip_suffix(c)).unwrap_or(part).nfc());
+        out.extend(kept);
+    }
+    out
+}
+
 /// A string laid out at one size: its glyphs relative to the box's top-left corner and the box's
 /// size in pixels (lines are `px` apart; vertical text: columns `px` wide, right to left).
 pub struct TextLayout {
@@ -79,6 +92,9 @@ impl TextLayout {
             Some((i, _)) => text.get(..i).unwrap_or(text),
             None => text,
         };
+        // macOS file names are often decomposed (NFD); the layout below draws one glyph per char
+        let composed = compose(text);
+        let text = composed.as_str();
         let fonts = faces(craft);
         let latin = fonts.first()?.clone();
         let vertical_data: Vec<_> = if vertical {
@@ -261,6 +277,48 @@ mod tests {
         for vertical in [false, true] {
             let layout = TextLayout::new("مرحبا", 40.0, vertical, CRAFT_FONTS).unwrap();
             assert!(layout.glyphs.iter().all(|(face, glyph, _)| *face == 0 && glyph.id.0 == 0));
+        }
+    }
+
+    fn assert_draws_composed(text: &str, craft: &'static [CraftFont]) {
+        use unicode_normalization::UnicodeNormalization;
+        let nfc: String = text.nfc().collect();
+        let nfd: String = text.nfd().collect();
+        assert_ne!(nfc, nfd);
+        let (a, b) = (TextLayout::new(&nfc, 40.0, false, craft).unwrap(), TextLayout::new(&nfd, 40.0, false, craft).unwrap());
+        let ids = |l: &TextLayout| l.glyphs.iter().map(|(face, g, _)| (*face, g.id.0)).collect::<Vec<_>>();
+        assert_eq!(ids(&b), ids(&a));
+        assert_eq!(b.width, a.width);
+        assert!(a.glyphs.iter().all(|(_, g, _)| g.id.0 != 0));
+    }
+
+    #[test]
+    fn decomposed_vietnamese_draws_its_composed_letters() {
+        assert_draws_composed("HỌC ĐỂ ỨNG DỤNG", &[]);
+    }
+
+    #[test]
+    fn decomposed_hangul_draws_whole_syllables() {
+        if !CRAFT_FONTS.iter().any(|font| font.covers("Hang")) {
+            lightcraft_testkit::skip!(Fonts, "built without a Hangul face from craft-fonts");
+            return;
+        }
+        assert_draws_composed("제주도 바다 여행.jpg", CRAFT_FONTS);
+    }
+
+    #[test]
+    fn compatibility_ideographs_keep_their_code_points() {
+        use unicode_normalization::UnicodeNormalization;
+        let nfd = |s: &str| s.nfd().collect::<String>();
+        let text = format!("\u{FA10}{} \u{2F800}{}\u{F900}", nfd("본 제주"), nfd("Ọ"));
+        assert_eq!(compose(&text), "\u{FA10}본 제주 \u{2F800}Ọ\u{F900}");
+    }
+
+    #[test]
+    fn already_composed_text_stays_as_it_is() {
+        for text in ["", "plain.jpg", "제주도 바다 여행.jpg", "HỌC ĐỂ ỨNG DỤNG"] {
+            assert!(unicode_normalization::is_nfc(text), "{text}");
+            assert_eq!(compose(text), text);
         }
     }
 

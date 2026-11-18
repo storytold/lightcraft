@@ -1,6 +1,6 @@
 use super::appearance::appearance;
 use super::widgets::{check, choices, heading, hint, path_label, row};
-use super::*;
+use super::{GridBadges, LightcraftApp, RichText, Tokens, Value, json, register};
 
 // ---------------------------------------------------------------------------------- Interface
 
@@ -76,7 +76,6 @@ pub(super) fn display_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
 }
 
 /// Draw interface preferences, including persistent sizing or automatic display scaling.
-/// Size edits use the same validated UI command as control-channel requests.
 pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Interface size"), |ui| {
         let percent = &mut app.ui.settings.interface_size;

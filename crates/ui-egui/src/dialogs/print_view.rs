@@ -196,13 +196,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens) {
     app.ui.print = pu;
 }
 
-fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) {
+/// The print templates: save the settings as one, import, and the saved ones to apply, export and delete.
+fn templates_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi) {
     let ctx = ui.ctx().clone();
-    let l = &st.layout;
-    let unit = st.guides.units;
-    ui.spacing_mut().item_spacing.y = 5.0;
-    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
-
     heading(ui, t, "Templates");
     ui.horizontal(|ui| {
         crate::text_field::TextField::singleline("field:printTemplateName", &mut pu.template_name)
@@ -246,17 +242,13 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             });
         });
     }
+}
 
-    heading(ui, t, "Layout Style");
-    let styles =
-        [(Style::SingleImage, "Single"), (Style::ContactSheet, "Contact"), (Style::PicturePackage, "Package"), (Style::CustomPackage, "Custom")];
-    ui.horizontal_wrapped(|ui| {
-        if let Some(s) = choice(ui, "printStyle", &styles, l.style) {
-            patch(app, &ctx, json!({"layout": {"style": s}}));
-            pu.page = 0;
-        }
-    });
-
+/// The image settings: zoom, rotation, border and stroke.
+fn image_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSettings) {
+    let ctx = ui.ctx().clone();
+    let l = &st.layout;
+    let unit = st.guides.units;
     heading(ui, t, "Image Settings");
     let im = &st.image;
     if let Some(v) = check(ui, "printZoomFill", "Zoom to Fill Frame", im.zoom_to_fill) {
@@ -292,6 +284,54 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
             patch(app, &ctx, json!({"image": {"strokeColor": c}}));
         }
     });
+}
+
+/// The Page panel: the background, and the Page Options or, on a package, Cut Guides.
+fn page_section(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, st: &PrintSettings) {
+    let ctx = ui.ctx().clone();
+    heading(ui, t, "Page");
+    row(ui, t, "Background", |ui| {
+        if let Some(c) = colour(ui, "printBackground", st.page.background) {
+            patch(app, &ctx, json!({"page": {"background": c}}));
+        }
+    });
+    if compose::has_page_options(st.layout.style) {
+        ui.label(egui::RichText::new(crate::i18n::tr("Page Options")).color(t.text_label));
+        let p = &st.page;
+        for (id, label, on, key) in [
+            ("printPageNumbers", "Page Numbers", p.page_numbers, "pageNumbers"),
+            ("printPageInfo", "Page Info", p.page_info, "pageInfo"),
+            ("printCropMarks", "Crop Marks", p.crop_marks, "cropMarks"),
+        ] {
+            if let Some(v) = check(ui, id, label, on) {
+                patch(app, &ctx, json!({"page": {(key): v}}));
+            }
+        }
+    } else if let Some(v) = check(ui, "printCropMarks", "Cut Guides", st.page.crop_marks) {
+        patch(app, &ctx, json!({"page": {"cropMarks": v}}));
+    }
+}
+
+fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, st: &PrintSettings, photos: usize) {
+    let ctx = ui.ctx().clone();
+    let l = &st.layout;
+    let unit = st.guides.units;
+    ui.spacing_mut().item_spacing.y = 5.0;
+    ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if photos == 1 { "" } else { "s" }, n = photos)).color(t.text_dim));
+
+    templates_section(app, ui, t, pu);
+
+    heading(ui, t, "Layout Style");
+    let styles =
+        [(Style::SingleImage, "Single"), (Style::ContactSheet, "Contact"), (Style::PicturePackage, "Package"), (Style::CustomPackage, "Custom")];
+    ui.horizontal_wrapped(|ui| {
+        if let Some(s) = choice(ui, "printStyle", &styles, l.style) {
+            patch(app, &ctx, json!({"layout": {"style": s}}));
+            pu.page = 0;
+        }
+    });
+
+    image_section(app, ui, t, st);
 
     heading(ui, t, "Layout");
     match l.style {
@@ -407,7 +447,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     heading(ui, t, "Page Setup");
     row(ui, t, "Paper", |ui| {
         let current = current_paper(&l.page.paper);
-        let c = egui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
+        let c = craft_ui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
             for name in layout::paper_names().chain(std::iter::once("custom")) {
                 if ui.selectable_label(current == name, paper_label(name)).clicked() {
                     patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
@@ -447,25 +487,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
         });
     }
 
-    heading(ui, t, "Page");
-    row(ui, t, "Background", |ui| {
-        if let Some(c) = colour(ui, "printBackground", st.page.background) {
-            patch(app, &ctx, json!({"page": {"background": c}}));
-        }
-    });
-    if compose::has_page_options(l.style) {
-        ui.label(egui::RichText::new(crate::i18n::tr("Page Options")).color(t.text_label));
-        let p = &st.page;
-        for (id, label, on, key) in [
-            ("printPageNumbers", "Page Numbers", p.page_numbers, "pageNumbers"),
-            ("printPageInfo", "Page Info", p.page_info, "pageInfo"),
-            ("printCropMarks", "Crop Marks", p.crop_marks, "cropMarks"),
-        ] {
-            if let Some(v) = check(ui, id, label, on) {
-                patch(app, &ctx, json!({"page": {(key): v}}));
-            }
-        }
-    }
+    page_section(app, ui, t, st);
 
     heading(ui, t, "Print Job");
     row(ui, t, "Resolution", |ui| {
@@ -499,7 +521,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     };
     let mut pick = false;
     row(ui, t, "Profile", |ui| {
-        let c = egui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
+        let c = craft_ui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
             for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
                 let r = ui.selectable_label(color.profile == managed(space), crate::i18n::tr(label));
                 register(ui, format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
@@ -706,10 +728,12 @@ fn package_cells(
     let ctx = ui.ctx().clone();
     let first = ids.first().copied();
     let cells: Vec<layout::Cell> = st.layout.cells_on_page(pu.page as u32).cloned().collect();
+    let mut shown = Vec::new();
     for c in &cells {
         let photo = if st.layout.style == Style::CustomPackage { c.photo.map(PhotoId).or(first) } else { first };
         let rect = sheet.rect(&c.rect);
         paint_cell(app, painter, t, st, rect, photo, sheet, &c.rect);
+        shown.push(rect);
         let resp = ui.interact(rect, egui::Id::unique(("print-cell", c.id)), Sense::click_and_drag());
         register(ui, format!("print:cell:{}", c.id), rect);
         if resp.clicked() || resp.drag_started() {
@@ -746,6 +770,7 @@ fn package_cells(
             }
         });
     }
+    page_options(painter, st, sheet, &shown, pu.page + 1);
     // the selected cell's outline and resize handle go over everything
     let Some(sel) = pu.selected.and_then(|s| cells.iter().find(|c| c.id == s)) else { return };
     let rect = sheet.rect(&sel.rect);
@@ -869,7 +894,7 @@ fn paint_cell(
             let px = (shown.width().max(shown.height()) * 2.0).clamp(64.0, 1024.0) as usize;
             crate::panels::grid::request_thumb(app, id, px, 10);
         }
-        app.renderer.thumb(id).map(|tex| tex.tex.id())
+        app.renderer.thumb(id).map(|tex| tex.id())
     });
     match tex {
         Some(id) => {
@@ -911,11 +936,9 @@ fn paint_cell(
 
 /// The Page Options as the print draws them ([`compose`]): crop marks at the corners of each
 /// photo, the page number at the bottom right and the print settings at the bottom left.
-/// Packages draw none of them, as the print doesn't ([`compose::has_page_options`]).
+/// Packages draw only the crop marks, as their Cut Guides at each cell's corners
+/// ([`compose::has_page_options`]).
 fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, photos: &[Rect], number: usize) {
-    if !compose::has_page_options(st.layout.style) {
-        return;
-    }
     let p = &st.page;
     let ink = compose::mark_ink(p.background);
     let ink = Color32::from_rgb(ink[0], ink[1], ink[2]);
@@ -932,6 +955,9 @@ fn page_options(painter: &egui::Painter, st: &PrintSettings, sheet: &Sheet, phot
         }
     }
     let Ok(area) = st.layout.printable() else { return };
+    if !compose::has_page_options(st.layout.style) {
+        return;
+    }
     let area = sheet.rect(&area);
     let font = egui::FontId::proportional((compose::PAGE_TEXT_PT as f32 / 72.0 * sheet.scale).max(4.0));
     let y = (area.bottom() + sheet.page.bottom()) / 2.0;
