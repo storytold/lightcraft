@@ -17,7 +17,7 @@ fn tmp(name: &str) -> std::path::PathBuf {
 }
 
 /// A folder that looks installed but holds no usable model.
-fn damaged_model(name: &str) -> std::path::PathBuf {
+pub(super) fn damaged_model(name: &str) -> std::path::PathBuf {
     let d = tmp(name);
     std::fs::create_dir_all(&d).unwrap();
     std::fs::write(d.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{not json at all}").unwrap();
@@ -236,6 +236,25 @@ fn object_clicks_are_capped() {
     s.active_mask = Some(1);
     let e = s.execute("mask.objectPoint", &json!({"x": 0.5, "y": 0.5})).unwrap_err().to_string();
     assert!(e.contains("at most"), "{e}");
+    assert!(!s.segmenter.busy());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// In background mode a new Object mask with too many clicks is refused up front, not queued.
+#[test]
+fn background_object_clicks_over_the_cap_are_refused_before_queueing() {
+    if !Segmenter::AVAILABLE {
+        return;
+    }
+    let mut s = Session::with_demo();
+    s.segmenter.background = true;
+    let dir = damaged_model("later-clicks");
+    s.segmenter.dir = Some(dir.clone());
+    let id = s.active().unwrap();
+    let points: Vec<_> = (0..=crate::segment::MAX_CLICKS).map(|_| json!([0.5, 0.5])).collect();
+    let e = s.execute("mask.add", &json!({"kind": "object", "points": points})).unwrap_err().to_string();
+    assert!(e.contains("at most"), "{e}");
+    assert!(s.develop_of(id).unwrap().masks.is_empty());
     assert!(!s.segmenter.busy());
     let _ = std::fs::remove_dir_all(&dir);
 }

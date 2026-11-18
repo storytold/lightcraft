@@ -19,7 +19,9 @@ use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register,
 
 mod curve;
 mod grading;
+mod hdr_flow;
 mod histogram;
+mod lens_blur;
 mod mixer;
 mod sliders;
 
@@ -30,6 +32,7 @@ pub(crate) use grading::wheel_pointer_frame_end;
 pub(crate) use grading::{WheelGrab, WheelLock, WheelMods, wheel_pick};
 pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
+use lens_blur::lens_blur;
 use mixer::{mixer, point_color};
 use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
@@ -152,7 +155,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
 
     section(app, ui, &d, "light", "Light", |app, ui, d| {
-        hdr_row(app, ui, d);
+        hdr_row(app, ui, d, id);
         for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
             control(app, ui, d, c, true);
         }
@@ -307,6 +310,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             control(app, ui, d, c, true);
         }
+        // single outlier photosites, replaced in the raw mosaic (#1345): raws only
+        if app.session.catalog.photo(id).is_some_and(|p| p.develops_raw()) {
+            egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 0 }).show(ui, |ui| {
+                let mut on = d.detail.nr_outliers;
+                if crate::dialogs::settings::check(ui, "detail.nrOutliers", &mut on, "Remove Hot Pixels") {
+                    let _ = app.run("develop.merge", json!({"settings": {"detail": {"nr_outliers": on}}, "label": "Remove Hot Pixels"}));
+                }
+            });
+        }
         ui.add_space(8.0);
     });
     section(app, ui, &d, "optics", "Optics", |app, ui, d| {
@@ -318,12 +330,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
             let mut lp = d.optics.lens_profile;
             if ui.checkbox(&mut lp, crate::i18n::tr("Enable Lens Corrections")).changed() {
-                let _ = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"}));
+                let ok = app.run("develop.merge", json!({"settings": {"optics": {"lens_profile": lp}}, "label": "Lens Corrections"})).is_ok();
+                // ticked on photos without a profile: look their lenses up again (a database that arrived
+                // since they were imported may know them now)
+                if ok && lp {
+                    let without = crate::lens_db::to_look_up(&app.session, id);
+                    app.ui.lens_lookup_ids.extend(without);
+                }
             }
-            if lp && !has_lens {
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr("No lens data embedded in this file.")).size(11.0).color(Tokens::get(ui.ctx()).text_dim),
-                );
+            if lp && let Some(p) = app.session.catalog.photo(id).cloned() {
+                let text = crate::lens_db::readout(app, &p);
+                if !text.is_empty() {
+                    let r = ui.label(egui::RichText::new(text).size(11.0).color(Tokens::get(ui.ctx()).text_dim));
+                    crate::widgets::register(ui, "optics:lensProfile", r.rect);
+                }
             }
         });
         if d.optics.lens_profile {
@@ -354,6 +374,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             control(app, ui, d, "optics.caRed", true);
             control(app, ui, d, "optics.caBlue", true);
         }
+        ui.add_space(8.0);
+    });
+    section(app, ui, &d, "lensBlur", "Lens Blur", |app, ui, d| {
+        lens_blur(app, ui, d);
         ui.add_space(8.0);
     });
     // Lightroom Classic's Calibration panel (the cloud app hides it): last, like there.
