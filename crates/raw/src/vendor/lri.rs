@@ -57,6 +57,8 @@ const DEFAULT_BLACK: f32 = 42.0;
 const DEFAULT_WHITE: f32 = 1023.0;
 /// Vignetting grid size (17 x 13 on the sample); larger grids are refused.
 const MAX_GRID_POINTS: usize = 4096;
+/// The smallest vignetting gain: unity, less f32 rounding.
+const MIN_GAIN: f32 = 1.0 - 1e-4;
 
 /// Whether `bytes` starts like an LRI file.
 pub(crate) fn is_lri(bytes: &[u8]) -> bool {
@@ -315,9 +317,12 @@ fn colour(headers: &[&Block], id: u64) -> Result<ColorData> {
                 Some(ILLUMINANT_D65) => 1,
                 _ => continue,
             };
-            // a singular colour matrix (all zeros, say) has no camera neutral: the other illuminant's, or none, is used
-            let matrix = c.sub(3)?.as_ref().and_then(mat3).filter(|m| m.inverse().is_some());
-            let (Some(forward), Some(matrix)) = (c.sub(2)?.as_ref().and_then(mat3), matrix) else { continue };
+            // a singular colour matrix (all zeros, say) has no camera neutral, and a singular forward matrix sends
+            // every colour to black: the other illuminant's pair, or none, is used
+            let invertible = |m: &Mat3| m.inverse().is_some();
+            let forward = c.sub(2)?.as_ref().and_then(mat3).filter(invertible);
+            let matrix = c.sub(3)?.as_ref().and_then(mat3).filter(invertible);
+            let (Some(forward), Some(matrix)) = (forward, matrix) else { continue };
             color.illuminant[slot] = [EXIF_STANDARD_A, EXIF_D65][slot];
             color.color_matrix[slot] = Some(matrix);
             color.forward_matrix[slot] = Some(forward);
@@ -363,8 +368,9 @@ fn vignetting(headers: &[&Block], id: u64, lens_position: u64, width: usize, hei
         return Ok(None);
     }
     let gains: Vec<f32> = raw.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect();
-    // a gain map that darkens, or a NaN, is not a vignetting correction
-    if gains.iter().any(|g| !(g.is_finite() && (0.5..=16.0).contains(g))) {
+    // a gain map that darkens, or a NaN, is not a vignetting correction: the gains are at least 1 (the sample's
+    // centres are 1.0, or 1 - 6e-8 after f32 rounding)
+    if gains.iter().any(|g| !(g.is_finite() && (MIN_GAIN..=16.0).contains(g))) {
         return Ok(None);
     }
     let area = Area { top: 0, left: 0, bottom: height as u32, right: width as u32, plane: 0, planes: 1, row_pitch: 1, col_pitch: 1 };
@@ -639,18 +645,21 @@ mod tests {
     }
 
     /// A zero colour matrix was kept, and at white points beyond its illuminant the colour transform used it alone,
-    /// so the camera neutral came out [1, 1, 1] and ignored the scene white.
+    /// so the camera neutral came out [1, 1, 1] and ignored the scene white; a zero forward matrix sent every colour
+    /// to black.
     #[test]
     fn a_singular_colour_matrix_is_not_used() {
         let forward = [0.81, 0.25, -0.09, 0.28, 1.13, -0.4, -0.07, -0.39, 1.29];
         let good = [0.76, -0.18, -0.04, -0.32, 1.1, 0.25, -0.01, 0.22, 0.48];
-        let record = |illuminant, m| [var(1, illuminant), matrix(2, forward), matrix(3, m)].concat();
-        let colour_of = |a: [f32; 9], d65: [f32; 9]| {
-            let cal = bytes(13, &[var(1, 0), bytes(2, &record(ILLUMINANT_A, a)), bytes(2, &record(ILLUMINANT_D65, d65))].concat());
+        let record = |illuminant, fwd, m| [var(1, illuminant), matrix(2, fwd), matrix(3, m)].concat();
+        let colour_with = |fwd_a: [f32; 9], a: [f32; 9], d65: [f32; 9]| {
+            let (ra, rd) = (record(ILLUMINANT_A, fwd_a, a), record(ILLUMINANT_D65, forward, d65));
+            let cal = bytes(13, &[var(1, 0), bytes(2, &ra), bytes(2, &rd)].concat());
             let f = block(&cal, &[], 0);
             let blocks = blocks(&f).unwrap();
             colour(&blocks.iter().collect::<Vec<_>>(), 0).unwrap()
         };
+        let colour_of = |a, d65| colour_with(forward, a, d65);
         let as_mat = |m: [f32; 9]| Mat3(std::array::from_fn(|r| std::array::from_fn(|c| f64::from(m[r * 3 + c]))));
         // a zero D65 matrix leaves standard A alone
         let c = colour_of(good, [0.0; 9]);
@@ -662,6 +671,29 @@ mod tests {
         assert_eq!(c.color_matrix, [Some(as_mat(good)), None]);
         // both zero: no camera matrix, so the decoder's generic colour model applies
         assert_eq!(colour_of([0.0; 9], [0.0; 9]).color_matrix, [None, None]);
+        // a zero forward matrix beside a good colour matrix drops that illuminant too
+        let c = colour_with([0.0; 9], good, good);
+        assert_eq!(c.illuminant, [EXIF_D65, 0]);
+        assert_eq!(c.forward_matrix, [Some(as_mat(forward)), None]);
+    }
+
+    /// Gains under 1 darken the frame they are meant to brighten: such a grid is not a vignetting correction.
+    #[test]
+    fn a_darkening_gain_grid_is_not_used() {
+        let map = |g: [f32; 9]| {
+            let gains: Vec<u8> = g.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let grid = [var(1, 3), var(2, 3), bytes(3, &gains)].concat();
+            let cal = bytes(13, &[var(1, 0), bytes(4, &bytes(2, &[var(1, 0), bytes(2, &grid)].concat()))].concat());
+            let f = block(&cal, &[], 0);
+            let blocks = blocks(&f).unwrap();
+            vignetting(&blocks.iter().collect::<Vec<_>>(), 0, 0, 16, 6).unwrap()
+        };
+        // unity at the centre, or a hair under it after f32 rounding, is a correction
+        assert!(map([2.0, 1.5, 2.0, 1.5, 1.0, 1.5, 2.0, 1.5, 2.0]).is_some());
+        assert!(map([2.0, 1.5, 2.0, 1.5, 0.99999994, 1.5, 2.0, 1.5, 2.0]).is_some());
+        // a centre at 0.9, or corners below unity, is not
+        assert!(map([2.0, 1.5, 2.0, 1.5, 0.9, 1.5, 2.0, 1.5, 2.0]).is_none());
+        assert!(map([0.6; 9]).is_none());
     }
 
     #[test]
