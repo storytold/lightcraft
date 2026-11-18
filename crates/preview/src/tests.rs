@@ -1216,3 +1216,75 @@ fn disk_cache_entry_that_is_not_a_regular_file_is_a_miss() {
     assert!(d.get_data(key).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// While the pictures to keep last are still being worked out (in the background as a large
+/// library opens, issue #979), a full cache lets nothing go; once they are known, the next write
+/// prunes and keeps them. Keys added one by one meanwhile stay in the set.
+#[test]
+fn a_full_cache_waits_for_the_pictures_to_keep_last() {
+    let dir = temp_dir("keep-last-pending");
+    let disk = DiskCache::new(&dir, 1 << 30);
+    disk.keep_last_pending();
+    let keys: Vec<Hash128> = (0..10u8).map(|i| hash_bytes(&[i, 7])).collect();
+    disk.put(keys[0], &gradient(32, 32, 0));
+    let one = disk.size();
+    disk.set_budget(one * 4);
+    for (i, k) in keys.iter().enumerate().skip(1) {
+        disk.put(*k, &gradient(32, 32, i as u8));
+    }
+    assert_eq!(keys.iter().filter(|k| disk.modified(**k).is_some()).count(), 10, "nothing let go while the set is unknown");
+    disk.keep_last_one(keys[9]);
+    disk.keep_last([keys[0]]);
+    assert!(!disk.is_keep_last_pending());
+    assert!(disk.is_kept_last(keys[0]) && disk.is_kept_last(keys[9]), "the key added meanwhile stays in the set");
+    disk.put(hash_bytes(b"one more"), &gradient(32, 32, 11));
+    assert!(disk.modified(keys[0]).is_some() && disk.modified(keys[9]).is_some(), "the pictures to keep last stay");
+    assert!(keys.iter().filter(|k| disk.modified(**k).is_some()).count() <= 4, "the next write pruned");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A stopped search for the pictures to keep last lets the cache prune again as it fills.
+#[test]
+fn a_cache_whose_keep_last_search_stopped_prunes_again() {
+    let dir = temp_dir("keep-last-unknown");
+    let disk = DiskCache::new(&dir, 1 << 30);
+    disk.keep_last_pending();
+    disk.keep_last_unknown();
+    let keys: Vec<Hash128> = (0..10u8).map(|i| hash_bytes(&[i, 8])).collect();
+    disk.put(keys[0], &gradient(32, 32, 0));
+    disk.set_budget(disk.size() * 4);
+    for (i, k) in keys.iter().enumerate().skip(1) {
+        disk.put(*k, &gradient(32, 32, i as u8));
+    }
+    assert!(keys.iter().filter(|k| disk.modified(**k).is_some()).count() <= 4);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Cache files cut short or emptied (a disk that filled, a crash mid-copy) are misses that go,
+/// never a panic: an empty file, a file holding only a JPEG's first marker, a JPEG cut before its
+/// frame header. One cut in its picture data decodes with its end grey, or is a miss.
+#[test]
+fn truncated_cache_files_are_misses_that_go() {
+    let dir = temp_dir("truncated");
+    let d = DiskCache::new(&dir, 1 << 30);
+    let img = gradient(160, 100, 3);
+    let full = encode_jpeg(&img).unwrap();
+    let k = hash_bytes(b"cut in its data");
+    d.put(k, &img);
+    let hex = k.to_string();
+    std::fs::write(dir.join(&hex[..2]).join(format!("{hex}.lcthumb")), full.get(..full.len() / 2).unwrap()).unwrap();
+    if let Some(back) = d.get(k) {
+        assert_eq!((back.width, back.height), (160, 100));
+    }
+    for (i, bytes) in [&[][..], &[0xff, 0xd8][..], full.get(..20).unwrap()].into_iter().enumerate() {
+        let k = hash_bytes(&[i as u8, 9]);
+        d.put(k, &img);
+        let hex = k.to_string();
+        let p = dir.join(&hex[..2]).join(format!("{hex}.lcthumb"));
+        std::fs::write(&p, bytes).unwrap();
+        assert!(d.get(k).is_none(), "case {i}");
+        assert!(!p.exists(), "case {i}: dropped, to be rendered again");
+        assert!(d.dims(k).is_none());
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

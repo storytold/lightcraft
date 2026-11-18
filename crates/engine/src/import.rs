@@ -351,16 +351,22 @@ pub fn has_import_look(p: &Photo) -> bool {
 /// the photo as framed and exposed, a fair stand-in until the render arrives (labelled "Camera
 /// preview" in the loupe). Any other edit is never shown as the camera JPEG.
 pub fn looks_as_shot(p: &Photo) -> bool {
-    if has_import_look(p) {
-        return true;
-    }
+    looks_as_shot_given(p, p.camera_defaults())
+}
+
+/// [`looks_as_shot`] of a photo whose camera defaults ([`Photo::camera_defaults`]) are `defaults`.
+pub fn looks_as_shot_given(p: &Photo, defaults: lcc_develop::DevelopSettings) -> bool {
     let neutral = |d: &lcc_develop::DevelopSettings| {
         let mut d = d.clone();
         d.profile.camera.clear();
         d.profile.id = lcc_develop::Profile::default().id;
         d
     };
-    neutral(&p.develop) == neutral(&p.camera_defaults())
+    // (has_import_look)
+    if p.develop_matches(defaults.clone()) {
+        return true;
+    }
+    neutral(&p.develop) == neutral(&defaults)
 }
 
 /// The name `library.setImportDefault` saves its preset under when the caller doesn't name one

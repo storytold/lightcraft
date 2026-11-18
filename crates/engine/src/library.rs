@@ -551,6 +551,45 @@ impl SettingsLoad {
     }
 }
 
+/// The activity-stack row of [`Session::keep_edited_previews_last`]'s work.
+pub const EDITED_PREVIEWS_LABEL: &str = "Finding edited photos";
+
+/// Most photos [`Session::keep_edited_previews_last`] looks through as the library opens (some
+/// 3 µs each, so under 10 ms; issue #979); a larger library is looked through in the background.
+pub const INLINE_EDITED_PHOTOS: usize = 2_000;
+
+#[cfg(test)]
+thread_local! {
+    /// Photos [`edited_preview_keys`] looked at on this thread (tests: opening a library looks at
+    /// none on the thread that opens it).
+    pub(crate) static EDITED_LOOKED_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The latest-preview keys of the edited photos among `photos` ([`Session::keep_edited_previews_last`]):
+/// `None` when `stop` said so. `stop` is asked, and `progress` told (done, of), every few thousand photos.
+fn edited_preview_keys(photos: &[std::sync::Arc<lcc_catalog::Photo>], stop: &dyn Fn() -> bool, progress: &dyn Fn(usize, usize)) -> Option<Vec<lcc_preview::Hash128>> {
+    const STEP: usize = 4096;
+    let mut keys = Vec::new();
+    // (a camera is looked up by name once, not once per photo: most of the time this took)
+    let mut relative: std::collections::HashMap<(bool, &str, &str, &str), bool> = std::collections::HashMap::new();
+    for (i, p) in photos.iter().enumerate() {
+        if i % STEP == 0 {
+            if stop() {
+                return None;
+            }
+            progress(i, photos.len());
+        }
+        #[cfg(test)]
+        EDITED_LOOKED_AT.with(|n| n.set(n.get().saturating_add(1)));
+        let rel = *relative.entry(p.relative_wb_key()).or_insert_with(|| p.relative_wb());
+        if !crate::import::looks_as_shot_given(p, p.camera_defaults_as(rel)) {
+            keys.extend([crate::media::latest_view_key(p, true), crate::media::latest_thumb_key(p)]);
+        }
+    }
+    progress(photos.len(), photos.len());
+    Some(keys)
+}
+
 /// How long each stage of opening a library took: logged when the whole took a while (issue
 /// #979: a large catalog spent a minute between being read and the library opening, with no
 /// timings for that part), and always with `<PREFIX>_PROFILE` set.
@@ -900,10 +939,12 @@ impl Session {
         self.media.clear_sources();
         if on_disk {
             self.media.attach_disk_cache(&dir.join("thumbs"), self.cache_bytes_in(&dir.join("thumbs")));
+            stages.mark("thumbnail cache");
             self.keep_edited_previews_last();
+            stages.mark("edited previews");
             self.tidy_thumbnail_cache();
         }
-        stages.mark("thumbnail cache");
+        stages.mark("thumbnail cache tidy");
         let view_written = self.view_json();
         let store_with_library = prefs.store_with_library;
         let own_store = store_with_library || self.app_store.is_none();
@@ -1369,22 +1410,54 @@ impl Session {
         out
     }
 
-    /// The thumbnail disk cache budget in bytes ([`Session::cache_mb`], else the default, which
-    /// grows with the library: [`crate::media::default_disk_cache_bytes`]).
     /// The edited photos' latest previews (their last loupe view and grid thumbnail) are the last
     /// pictures a full disk cache lets go: the only pictures of their edits (a photo as shot has its
     /// camera JPEG). A full cache otherwise lost every rendered edit, and the loupe had nothing but
     /// the unedited camera JPEG.
+    ///
+    /// Telling which photos are edited asks each photo's camera defaults, which look its camera up
+    /// by name in the camera tables and profiles: most of a minute for 300 000 photos, which every
+    /// opening of the library waited for (issue #979). It is worked out on a thread of its own with
+    /// a row in the activity stack that can stop it; the cache prunes nothing until it is known.
+    /// A library of up to [`INLINE_EDITED_PHOTOS`] photos is looked through at once (a moment).
     pub fn keep_edited_previews_last(&self) {
-        let Some(d) = self.media.rendered.disk() else { return };
-        let keys = self
-            .catalog
-            .photos()
-            .filter(|p| !crate::import::looks_as_shot(p))
-            .flat_map(|p| [crate::media::latest_view_key(p, true), crate::media::latest_thumb_key(p)]);
-        d.keep_last(keys);
+        let cache = self.media.rendered.clone();
+        let Some(d) = cache.disk() else { return };
+        // (shared, not copied: the photos are reference-counted)
+        let photos: Vec<std::sync::Arc<lcc_catalog::Photo>> = self.catalog.photos().cloned().collect();
+        if cfg!(target_arch = "wasm32") || photos.len() <= INLINE_EDITED_PHOTOS {
+            d.keep_last(edited_preview_keys(&photos, &|| false, &|_, _| ()).unwrap_or_default());
+            return;
+        }
+        d.keep_last_pending();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            let stop = std::sync::Arc::new(AtomicBool::new(false));
+            let task = self.activity.start("cache", EDITED_PREVIEWS_LABEL, crate::activity::Cancel::Flag(stop.clone()));
+            let worker = cache.clone();
+            let spawned = std::thread::Builder::new().name("lc-keep-edited".into()).spawn(move || {
+                // the row stays while this runs (it is dropped with the closure, however that ends)
+                let row = task;
+                // (also given up when the library is closed or another is opened: the cache is retired then)
+                let stopped = || stop.load(Ordering::Relaxed) || worker.generation() == u64::MAX;
+                let Some(d) = worker.disk() else { return };
+                match edited_preview_keys(&photos, &stopped, &|done, of| row.progress(done as u64, of as u64)) {
+                    Some(keys) => d.keep_last(keys),
+                    None => d.keep_last_unknown(),
+                }
+            });
+            // (not started: worked out here, as before)
+            if let Err(e) = spawned {
+                log::warn!("thumbnail cache: edited photos looked through on this thread: {e}");
+                let photos: Vec<std::sync::Arc<lcc_catalog::Photo>> = self.catalog.photos().cloned().collect();
+                d.keep_last(edited_preview_keys(&photos, &|| false, &|_, _| ()).unwrap_or_default());
+            }
+        }
     }
 
+    /// The thumbnail disk cache budget in bytes ([`Session::cache_mb`], else the default, which
+    /// grows with the library: [`crate::media::default_disk_cache_bytes`]).
     pub fn cache_bytes(&self) -> u64 {
         match (self.cache_mb, self.media.rendered.disk()) {
             (0, Some(d)) => self.cache_bytes_in(d.dir()),
