@@ -190,25 +190,25 @@ png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
-# HDR display (crates/hdr-display, LR-VIEW-HDR-DISPLAY) needs egui-wgpu's `SurfaceConfig::prefer_hdr`
+# HDR display (crates/hdr-display, LR-VIEW-HDR-DISPLAY) needs egui-wgpu's `WgpuConfiguration::prefer_hdr`
 # (emilk/egui#8703), which storytold/egui does not have yet. So the egui family is pinned to
-# JordyUSA/egui 6268f70 (branch egui-wgpu-hdr-surface-037): exactly ONE commit on top of the reviewed
-# storytold/egui 6d518fc, touching only crates/egui-wgpu. PENDING a maintainer decision: replacing the
+# JordyUSA/egui 99f9729 (branch egui-wgpu-hdr-surface-037, storytold/egui#12): two commits on top of
+# the reviewed storytold/egui 6d518fc, touching only crates/egui-wgpu. PENDING a maintainer decision: replacing the
 # reviewed storytold fork commit with the PR author's fork (or landing that commit on storytold/egui
 # and pinning back to it). winit stays on the reviewed storytold fork.
 [patch.crates-io]
-ecolor = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-emath = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-epaint = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-epaint_default_fonts = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui-winit = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui-wgpu = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui_glow = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui_extras = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui_kittest = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui_system_font_provider = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-eframe = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui_demo_lib = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
-egui_inspection = { git = "https://github.com/JordyUSA/egui.git", rev = "6268f70b8c117515f7b72fa25028a7b1521b7f40" }
+ecolor = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+emath = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+epaint = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+epaint_default_fonts = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui-winit = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui-wgpu = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui_glow = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui_extras = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui_kittest = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui_system_font_provider = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+eframe = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui_demo_lib = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
+egui_inspection = { git = "https://github.com/JordyUSA/egui.git", rev = "99f97293e5700da3d97ac52528fe5170ed2c4749" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

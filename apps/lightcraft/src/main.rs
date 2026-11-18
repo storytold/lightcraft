@@ -318,7 +318,7 @@ fn main() -> eframe::Result {
         std::env::var("LIGHTCRAFT_HDR_DISPLAY").ok().as_deref(),
         prefs.as_ref().map_or(lightcraft_ui_egui::state::HDR_DISPLAY_DEFAULT, |u| u.settings.hdr_display),
     );
-    wgpu_options.surface.prefer_hdr = hdr_display;
+    wgpu_options.prefer_hdr = hdr_display;
     win_files.arm(window_renderer);
     let win_files_app = win_files.clone();
     // the window came up: a failure after this is LightCraft stopping, not a start that failed

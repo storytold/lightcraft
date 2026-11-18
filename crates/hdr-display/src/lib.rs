@@ -1,7 +1,7 @@
 //! HDR display (LR-VIEW-HDR-DISPLAY): paints an HDR edit's loupe render into the window when its
 //! surface is HDR.
 //!
-//! The window asks egui-wgpu for an HDR surface (`SurfaceConfig::prefer_hdr`): `Rgba16Float` in
+//! The window asks egui-wgpu for an HDR surface (`WgpuConfiguration::prefer_hdr`): `Rgba16Float` in
 //! the extended linear sRGB color space (scRGB, where 1.0 is SDR white and larger values are
 //! brighter). wgpu sets that up per platform (Vulkan, Metal EDR, DX12), so this crate has no
 //! platform code and no `unsafe`. [`HdrDisplay`] implements ui-egui's

@@ -4,7 +4,7 @@ How LightCraft shows an HDR edit in HDR on an HDR monitor (tracker row LR-VIEW-H
 
 ## The window
 
-The window asks egui-wgpu for an HDR surface (`SurfaceConfig::prefer_hdr`). When the surface
+The window asks egui-wgpu for an HDR surface (`WgpuConfiguration::prefer_hdr`). When the surface
 offers `Rgba16Float` in the extended linear sRGB color space, that becomes the target format.
 That color space is scRGB: `1.0` is SDR white, and larger values are brighter.
 
@@ -26,8 +26,8 @@ SDR window; Settings ▸ Display says so.
 
 `prefer_hdr` is emilk/egui#8703. The reviewed storytold/egui fork commit the workspace pins
 (`6d518fc`, egui 0.37) does not have it, so the root `Cargo.toml` takes every egui crate from
-JordyUSA/egui `6268f70` (branch `egui-wgpu-hdr-surface-037`): that reviewed commit plus the one
-`prefer_hdr` commit, which touches only `egui-wgpu`. Whether to keep that pin, land the commit on
+JordyUSA/egui `99f9729` (branch `egui-wgpu-hdr-surface-037`, storytold/egui#12): that reviewed
+commit plus the `prefer_hdr` commits, which touch only `egui-wgpu`. Whether to keep that pin, land the commit on
 storytold/egui and pin back to it, or wait for an egui release is a maintainer decision.
 
 On Linux only native Wayland windows get an HDR surface (X11 windows, XWayland included, don't). So
