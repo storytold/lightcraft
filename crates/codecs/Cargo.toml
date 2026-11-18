@@ -17,6 +17,9 @@ craft-cms = { workspace = true }
 craft-jpeg = { workspace = true }
 craft-image-codecs = { workspace = true }
 craft-webp-header = { workspace = true }
+# Isolate BMP routing until the shared prerequisite lands; other codec pins stay unchanged.
+craft-bmp-header = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "a9efd722b49924588448fba5c59f36d3aee3f4c6", default-features = false }
+craft-image-codecs-sef = { package = "craft-image-codecs", git = "https://github.com/storytold/craft-libs", rev = "cae7c1d8a6fec9a9ee136169918c5dd20ca509a0" }
 craft-metadata = { workspace = true }
 craft-tiff = { workspace = true }
 craft-gif = { workspace = true }
