@@ -601,7 +601,6 @@ fn the_curve_eye_hides_a_channel_for_viewing_only_and_belongs_to_one_photo() {
     let id = h.app.session.active().unwrap();
     h.app.session.execute("develop.curve", &json!({"channel": "red", "points": [[0.0, 0.0], [0.5, 0.7], [1.0, 1.0]]})).unwrap();
     h.step();
-    assert!(!shown(&h, "curveEye:red"), "the eye shows only while the graph is hovered");
     let r = h.request("ui.hoverWidget", json!({"id": "curve"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -620,4 +619,39 @@ fn the_curve_eye_hides_a_channel_for_viewing_only_and_belongs_to_one_photo() {
     h.app.ui.set_curve_hidden(id, "parametric", true);
     assert_eq!(h.app.ui.curve_hidden_for(id), [true, false, false, false, false]);
     assert_eq!(h.app.ui.curve_hidden_for(lightcraft_catalog::PhotoId(id.0 + 1)), [false; 5]);
+}
+
+#[test]
+fn the_curve_eye_takes_the_keyboard_focus_without_hovering_and_return_toggles_it() {
+    let mut h = curve_open("green");
+    let id = h.app.session.active().unwrap();
+    h.request("ui.move", json!({"x": 5.0, "y": 5.0}), T);
+    h.step();
+    assert!(shown(&h, "curveEye:green"), "the eye is there for the keyboard even when not drawn");
+    h.view.ctx.memory_mut(|m| m.request_focus(crate::panels::edit::curve::curve_eye_id("green")));
+    h.step();
+    h.step();
+    let r = h.request("ui.key", json!({"key": "Enter"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert_eq!(h.app.ui.curve_hidden_for(id), [false, false, false, true, false], "Return on the focused eye hides the channel");
+}
+
+#[test]
+fn hidden_curves_and_wheels_are_forgotten_once_another_photo_is_shown() {
+    let mut h = curve_open("red");
+    let a = h.app.session.active().unwrap();
+    let b = h.app.session.visible_cloned().into_iter().find(|p| *p != a).unwrap();
+    h.app.ui.set_curve_hidden(a, "red", true);
+    h.app.ui.set_grading_hidden(a, 1, true);
+    h.step();
+    assert_eq!(h.app.ui.curve_hidden_for(a), [false, false, true, false, false], "kept while the photo is shown");
+    for photo in [b, a] {
+        h.app.session.execute("library.select", &json!({"ids": [photo.0], "active": photo.0})).unwrap();
+        h.step();
+        h.step();
+    }
+    assert_eq!(h.app.ui.curve_hidden_for(a), [false; 5], "back on the photo: its curves show again");
+    assert_eq!(h.app.ui.grading_hidden_for(a), [false; 3], "and its wheels");
 }

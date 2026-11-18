@@ -411,23 +411,31 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
 /// The row under the curve graph: point-curve presets and reset every curve.
 /// The eye in the top-left corner of the curve graph `r`, where a curve seldom goes and away from
 /// its end points: hides channel `ch`'s effect for viewing (not an edit), as a colour grading
-/// wheel's eye does. Shown while the graph is hovered or the channel is hidden.
+/// wheel's eye does. Shown while the graph is hovered, the channel is hidden or the eye has the
+/// keyboard focus. Hidden, it only takes the focus (Tab), so a click there still reaches the graph.
 fn curve_eye(app: &mut LightcraftApp, ui: &egui::Ui, id: PhotoId, r: Rect, ch: &str) {
     let t = Tokens::get(ui.ctx());
     let hidden =
         crate::state::CURVE_CHANNELS.iter().position(|x| *x == ch).and_then(|i| app.ui.curve_hidden_for(id).get(i).copied()).unwrap_or(false);
-    if !hidden && !ui.rect_contains_pointer(r) {
-        return;
-    }
+    let eye_id = curve_eye_id(ch);
+    let shown = hidden || ui.rect_contains_pointer(r) || ui.memory(|m| m.has_focus(eye_id));
     let eye = Rect::from_center_size(r.left_top() + vec2(12.0, 12.0), vec2(16.0, 16.0));
-    let er = ui.interact(eye, egui::Id::unique(("curveEye", ch)), Sense::click());
+    let er = ui.interact(eye, eye_id, if shown { Sense::click() } else { Sense::focusable_noninteractive() });
     crate::widgets::announce(&er, crate::i18n::tr("Show / hide"));
     register(ui, format!("curveEye:{ch}"), eye);
+    if !shown {
+        return;
+    }
     paint(ui.painter(), eye, if hidden { Icon::EyeOff } else { Icon::Eye }, if hidden { t.text_disabled } else { t.icon });
     let er = er.on_hover_text(crate::i18n::tr(if hidden { "Show this curve's effect" } else { "Hide this curve's effect" }));
     if er.clicked() {
         app.ui.set_curve_hidden(id, ch, !hidden);
     }
+}
+
+/// The id of channel `ch`'s [`curve_eye`].
+pub(crate) fn curve_eye_id(ch: &str) -> egui::Id {
+    egui::Id::unique(("curveEye", ch))
 }
 
 fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {

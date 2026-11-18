@@ -243,11 +243,13 @@ pub struct UiState {
     /// Selected colour grading tab: "3way" | "shadows" | "midtones" | "highlights".
     pub grading_mode: String,
     /// Colour grading wheels (shadows, midtones, highlights) hidden for viewing by their eye, and
-    /// the photo that applies to: not an edit, and forgotten on moving to another photo or quitting.
+    /// the photo that applies to: not an edit, and forgotten once another photo is shown in Detail
+    /// ([`Self::forget_hidden_except`]) or on quitting.
     #[serde(skip)]
     pub grading_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 3])>,
     /// Tone Curve channels (parametric, point, red, green, blue) hidden for viewing by the eye on
-    /// the curve, and the photo that applies to: not an edit, as [`Self::grading_hidden`].
+    /// the curve, and the photo that applies to: not an edit, and forgotten once another photo is
+    /// shown in Detail ([`Self::forget_hidden_except`]), as [`Self::grading_hidden`].
     #[serde(skip)]
     pub curve_hidden: Option<(lightcraft_catalog::PhotoId, [bool; 5])>,
     /// Active on-canvas tool: "", "brush", "linear", "radial", "wbPicker", "straighten", "remove",
@@ -565,6 +567,17 @@ impl UiState {
             *slot = hidden;
         }
         self.grading_hidden = h.iter().any(|x| *x).then_some((photo, h));
+    }
+
+    /// Forget the wheels and curve channels hidden for viewing on any photo but `photo` (the one
+    /// Detail shows now), so going back to that photo shows them again.
+    pub fn forget_hidden_except(&mut self, photo: lightcraft_catalog::PhotoId) {
+        if self.grading_hidden.is_some_and(|(p, _)| p != photo) {
+            self.grading_hidden = None;
+        }
+        if self.curve_hidden.is_some_and(|(p, _)| p != photo) {
+            self.curve_hidden = None;
+        }
     }
 
     /// Which Tone Curve channels (in [`CURVE_CHANNELS`] order) are hidden for viewing `photo`.

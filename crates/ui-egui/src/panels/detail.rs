@@ -156,6 +156,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
     brief_info(app, ui.ctx(), id);
+    app.ui.forget_hidden_except(id);
     let d = (*photo.develop).clone();
     // the full-screen preview shows the photo only: no tool overlays
     let right = if fullscreen { RightPanel::None } else { app.ui.right };
