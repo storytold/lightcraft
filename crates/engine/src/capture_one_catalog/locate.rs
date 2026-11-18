@@ -62,10 +62,18 @@ fn in_folder(folder: &Path) -> Result<Option<PathBuf>, ReadError> {
     Ok(found.pop())
 }
 
+/// The file SQLite keeps next to `database` (`-journal`, `-wal`), from the path's own bytes: a
+/// name that isn't UTF-8 still names that file.
+pub(super) fn beside(database: &Path, suffix: &str) -> PathBuf {
+    let mut name = database.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
 /// Refuse a database with a rollback journal that holds a transaction, or with a write-ahead
 /// log: its pages may be mid-write, and only SQLite itself can roll that back.
 pub(super) fn refuse_while_written(database: &Path) -> Result<(), ReadError> {
-    let beside = |suffix: &str| PathBuf::from(format!("{}{suffix}", database.display()));
+    let beside = |suffix: &str| beside(database, suffix);
     let mut start = [0u8; 8];
     let hot = std::fs::File::open(beside("-journal")).is_ok_and(|mut f| f.read_exact(&mut start).is_ok() && start == JOURNAL_MAGIC);
     let wal = std::fs::metadata(beside("-wal")).is_ok_and(|m| m.len() > 0);

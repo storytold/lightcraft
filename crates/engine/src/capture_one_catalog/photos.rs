@@ -271,7 +271,12 @@ impl Notes {
             warnings.push(format!("{} photo(s) have a colour tag this version doesn't know; imported without one", self.unknown_tags));
         }
         if self.cut_keywords > 0 {
-            warnings.push(format!("{} photo(s) have more than {} keywords; the rest were left out", self.cut_keywords, keywords::MAX_KEYWORDS));
+            warnings.push(format!(
+                "{} photo(s) have more than {} keywords, or keywords nested deeper than {} levels; those were left out",
+                self.cut_keywords,
+                keywords::MAX_KEYWORDS,
+                keywords::MAX_DEPTH
+            ));
         }
     }
 }

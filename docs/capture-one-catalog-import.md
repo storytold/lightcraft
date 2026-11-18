@@ -36,8 +36,8 @@ Capture One 21, and EIP packages.
 | Originals inside the catalog (`Originals/`) and referenced elsewhere | the photo's file, where it is |
 | Star rating | rating |
 | Colour tags red, yellow, green, blue, purple | the colour label of the same colour |
-| Colour tags orange and pink | no label (see below), the keyword `Capture One|Orange` / `Capture One|Pink` |
-| Keywords (`Parent|Child`) | keywords, without the parents Capture One lists beside a keyword |
+| Colour tags orange and pink | no label (see below), the keyword `Capture One\|Orange` / `Capture One\|Pink` |
+| Keywords (`Parent\|Child`) | keywords, without the parents Capture One lists beside a keyword |
 | The keyword list, also keywords no photo carries | the Keyword List, with "include on export" |
 | Title, description, creator, copyright, usage terms, location, city, state, country | the same fields |
 | Make, model, serial, lens, ISO, aperture, shutter, focal length, exposure compensation, GPS | what the file says; the catalog fills what it leaves empty |

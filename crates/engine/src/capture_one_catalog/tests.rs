@@ -565,7 +565,41 @@ fn an_image_without_a_variant_is_still_a_photo_and_a_stray_variant_is_reported()
     assert_eq!(catalog.collections.iter().find(|c| c.name == "First album").unwrap().photos, [0, 1]);
 }
 
+#[test]
+fn a_reference_with_a_fraction_points_at_no_row() {
+    let scratch = Scratch::new("fraction");
+    let mut whole = variant(2, 2, 0, 30);
+    whole[1].1 = V::R(2.0);
+    let mut broken = variant(9, 1, 0, 60);
+    broken[1].1 = V::R(1.5);
+    let tables = with(sample(&scratch.0), spec("ZVARIANT", VARIANT_COLUMNS, vec![whole, broken]));
+    let catalog = read(&scratch.catalog(&tables)).unwrap();
+    let photos: Vec<_> = catalog.photos.iter().map(|p| (p.image_id, p.variant_id)).collect();
+    assert_eq!(photos, [(1, None), (2, Some(2)), (3, None)]);
+    assert_eq!(catalog.warnings, ["1 variant(s) belong to no image in the catalog and were left out"]);
+}
+
+#[test]
+fn without_a_variant_uuid_a_variant_is_known_by_its_key_not_its_place() {
+    let photo = CatalogPhoto { image_uuid: "IMAGE".into(), variant_id: Some(7), variant_index: 2, ..Default::default() };
+    // an earlier variant was deleted: the same variant is now second
+    let moved = CatalogPhoto { variant_index: 1, ..photo.clone() };
+    assert_eq!(convert::identity(&photo), "captureone:image:IMAGE:7");
+    assert_eq!(convert::identity(&moved), convert::identity(&photo));
+    let without_variant = CatalogPhoto { variant_id: None, variant_index: 0, ..photo.clone() };
+    assert_eq!(convert::identity(&without_variant), "captureone:image:IMAGE");
+    assert_eq!(convert::identity(&CatalogPhoto { variant_uuid: "V".into(), ..photo }), "captureone:V");
+}
+
 // ---- finding the database
+
+#[cfg(unix)]
+#[test]
+fn the_journal_is_looked_for_beside_a_database_whose_name_is_not_utf8() {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+    let database = Path::new(std::ffi::OsStr::from_bytes(b"/x/Caf\xe9/Test.cocatalogdb"));
+    assert_eq!(locate::beside(database, "-journal").into_os_string().into_vec(), b"/x/Caf\xe9/Test.cocatalogdb-journal");
+}
 
 #[test]
 fn a_package_a_backup_folder_and_the_database_itself_are_found() {
@@ -817,8 +851,17 @@ fn a_huge_keyword_field_is_cut_in_linear_time() {
     let (parsed, cut) = keywords::parse(&field);
     assert_eq!((parsed.len(), cut), (keywords::MAX_KEYWORDS, true));
     assert!(started.elapsed() < std::time::Duration::from_secs(20), "{:?}", started.elapsed());
-    let deep = format!("{}||0", vec!["x"; 50_000].join("|"));
-    assert_eq!(keywords::parse(&deep).0.len(), 1);
+}
+
+#[test]
+fn a_keyword_nested_too_deep_is_left_out_without_quadratic_work() {
+    let path = |levels: usize| (0..levels).map(|n| format!("k{n}")).collect::<Vec<_>>().join("|");
+    let deepest = path(keywords::MAX_DEPTH);
+    assert_eq!(keywords::parse(&format!("{deepest}||0,a||1")), (vec![deepest, "a".to_string()], false));
+    let started = std::time::Instant::now();
+    let field = format!("{}||0,a||1", path(200_000));
+    assert_eq!(keywords::parse(&field), (vec!["a".to_string()], true));
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
 }
 
 #[test]
@@ -1100,6 +1143,10 @@ fn a_file_s_own_camera_data_is_kept_and_only_gaps_are_filled() {
     crate::lightroom_catalog::fill_camera(&mut meta, &camera);
     assert_eq!((meta.camera.as_str(), meta.make.as_str(), meta.lens.as_str(), meta.iso), ("From the file", "Make", "Lens", Some(100)));
     assert_eq!((meta.aperture, meta.shutter.as_str(), meta.focal_mm, meta.gps), (None, "", None, None), "implausible values are left out");
+    // the exact time comes with its text, as from a file
+    let mut offline = lightcraft_catalog::Meta::default();
+    crate::lightroom_catalog::fill_camera(&mut offline, &serde_json::json!({ "exposureTime": 1.0 / 3.0 }));
+    assert_eq!((offline.shutter.as_str(), offline.exposure_time, offline.shutter_seconds()), ("1/3", Some(1.0 / 3.0), Some(1.0 / 3.0)));
     // a catalog row without the block changes nothing (Lightroom's)
     let before = meta.clone();
     crate::lightroom_catalog::fill_camera(&mut meta, &serde_json::json!(null));

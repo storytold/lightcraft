@@ -1540,8 +1540,13 @@ pub(crate) fn fill_camera(meta: &mut lightcraft_catalog::Meta, camera: &Value) {
     fill(&mut meta.make, make);
     fill(&mut meta.serial_number, text("serial"));
     fill(&mut meta.lens, text("lens"));
-    let shutter = number("exposureTime").filter(|t| *t > 0.0).and_then(lightcraft_meta::format_exposure_time);
-    fill(&mut meta.shutter, shutter);
+    if meta.shutter.trim().is_empty()
+        && let Some((seconds, text)) = number("exposureTime").filter(|t| *t > 0.0).and_then(|t| Some((t, lightcraft_meta::format_exposure_time(t)?)))
+    {
+        // the exact time beside its text, as a file's own (`Meta::shutter_seconds`)
+        meta.shutter = text;
+        meta.exposure_time = Some(seconds);
+    }
     meta.iso = meta.iso.or_else(|| number("iso").filter(|v| *v > 0.0 && *v <= f64::from(u32::MAX)).map(|v| v as u32));
     meta.aperture = meta.aperture.or_else(|| number("aperture").filter(|v| *v > 0.0 && *v < 1000.0).map(|v| v as f32));
     meta.focal_mm = meta.focal_mm.or_else(|| number("focalLength").filter(|v| *v > 0.0 && *v < 100_000.0).map(|v| v as f32));

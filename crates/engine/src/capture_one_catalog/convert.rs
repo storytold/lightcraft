@@ -166,12 +166,14 @@ fn import_photo(photo: &CatalogPhoto, source_id: i64, master: i64) -> ImportPhot
 }
 
 /// What tells an earlier import of the same variant apart from a new photo: the variant's UUID,
-/// else the image's. Empty when the catalog has neither (the import then goes by path and id).
-fn identity(photo: &CatalogPhoto) -> String {
-    match (photo.variant_uuid.is_empty(), photo.image_uuid.is_empty()) {
-        (false, _) => format!("{PREFIX}{}", photo.variant_uuid),
-        (true, false) => format!("{PREFIX}image:{}:{}", photo.image_uuid, photo.variant_index),
-        (true, true) => String::new(),
+/// else the image's with the variant's key (not its place, which moves when an earlier variant
+/// is deleted). Empty when the catalog has neither (the import then goes by path and id).
+pub(super) fn identity(photo: &CatalogPhoto) -> String {
+    match (photo.variant_uuid.is_empty(), photo.image_uuid.is_empty(), photo.variant_id) {
+        (false, _, _) => format!("{PREFIX}{}", photo.variant_uuid),
+        (true, false, Some(variant)) => format!("{PREFIX}image:{}:{variant}", photo.image_uuid),
+        (true, false, None) => format!("{PREFIX}image:{}", photo.image_uuid),
+        (true, true, _) => String::new(),
     }
 }
 

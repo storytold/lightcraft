@@ -132,11 +132,12 @@ impl<'a> Row<'a> {
         self.values.get(*self.columns.get(column)?)
     }
 
-    /// A whole number; a float only when it is one that a float holds exactly.
+    /// A whole number; a float only when it is a whole number a float holds exactly (`1.0`, not
+    /// `1.5`, which would otherwise point at row 1).
     pub(super) fn int(&self, column: &str) -> Option<i64> {
         match self.value(column)? {
             Value::Integer(n) => Some(*n),
-            Value::Real(f) if f.is_finite() && f.abs() <= MAX_EXACT => Some(f.trunc() as i64),
+            Value::Real(f) if f.is_finite() && f.abs() <= MAX_EXACT && f.fract() == 0.0 => Some(*f as i64),
             _ => None,
         }
     }
