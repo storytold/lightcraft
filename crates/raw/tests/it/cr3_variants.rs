@@ -101,14 +101,17 @@ fn cr3_file(coding: &[u8], sample: &[u8]) -> Vec<u8> {
     let mut co64 = vec![0u8; 4];
     co64.extend(1u32.to_be_bytes()); // entry count
     co64.extend([0u8; 8]); // sample offset, patched once the layout is known
-    let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
+    // One sample in chunk 1, using sample description 1. The shared parser
+    // deliberately refuses sample access without this mapping.
+    let stsc: Vec<u8> = [0u32, 1, 1, 1, 1].into_iter().flat_map(u32::to_be_bytes).collect();
+    let tables = [box_bytes(b"stsd", &stsd), box_bytes(b"stsc", &stsc), box_bytes(b"stsz", &stsz), box_bytes(b"co64", &co64)].concat();
     let trak = box_bytes(b"trak", &box_bytes(b"mdia", &box_bytes(b"minf", &box_bytes(b"stbl", &tables))));
     let mut file = box_bytes(b"ftyp", b"crx \0\0\0\x01crx isom");
     file.extend(box_bytes(b"moov", &trak));
-    let offset = file.len();
-    file.extend_from_slice(sample);
-    let at = file.len() - sample.len() - 8; // the co64 offset field ends the moov
+    let at = file.len() - 8; // the co64 offset field ends the moov
+    let offset = file.len() + 8; // samples belong to the mdat payload, after its header
     file[at..at + 8].copy_from_slice(&u64::try_from(offset).unwrap().to_be_bytes());
+    file.extend(box_bytes(b"mdat", sample));
     file
 }
 
