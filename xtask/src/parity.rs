@@ -141,7 +141,7 @@ pub fn parse(md: &str) -> Doc {
 }
 
 /// Ids in the menu tables (`("view.detail", "Detail", Some("D"), "View"),` lines): the language
-/// commands live in their own table, which the Language menu builds from the i18n language list.
+/// commands live in their own table, one per language in the i18n language list.
 pub fn ui_command_ids(menus_rs: &str) -> Vec<String> {
     let mut ids = Vec::new();
     for table in ["pub const UI_COMMANDS", "pub const LANGUAGE_COMMANDS"] {
@@ -237,6 +237,7 @@ pub fn summarize(doc: &Doc) -> (Vec<(String, Counts)>, Counts) {
         if sections.last().is_none_or(|(s, _)| *s != r.section) {
             sections.push((r.section.clone(), Counts::default()));
         }
+        #[allow(clippy::expect_used)] // either non-empty above or a section was just pushed
         sections.last_mut().expect("pushed").1.add(r);
         total.add(r);
     }
@@ -595,6 +596,6 @@ old
         for id in ["view.detail", "app.language.english", "app.language.japanese", "app.language.simplifiedChinese", "app.language.portuguese"] {
             assert!(ids.iter().any(|known| known == id), "{id} not found");
         }
-        assert_eq!(ids.iter().filter(|id| id.as_str() == "app.language.english").count(), 1, "one Language menu entry per language");
+        assert_eq!(ids.iter().filter(|id| id.as_str() == "app.language.english").count(), 1, "one language command per language");
     }
 }

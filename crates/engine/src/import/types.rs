@@ -67,6 +67,16 @@ pub struct ImportOptions {
     pub metadata_preset: Option<String>,
     /// Copy: raws are copied as DNG (Copy as DNG).
     pub convert_dng: bool,
+    /// A batch-edit recipe: develop control id / value pairs (e.g. `light.exposure` → 0.5),
+    /// applied to every imported photo *after* its XMP sidecar, camera default and import preset,
+    /// as one more History step (`Import adjustments`). Only the named controls change; the recipe
+    /// is a snapshot taken when the import starts, so editing a preset afterwards cannot change it.
+    /// It names plain adjustments only (no white balance, geometry or crop: `cmd::check_recipe`),
+    /// and [`ImportJob::new`] refuses anything else.
+    /// Empty (the default) = no recipe. A photo the library already has keeps its own settings:
+    /// one skipped as a duplicate, restored from Recently Deleted, or joined from a browsed
+    /// folder (Local) is never touched, as the preset and keywords never are.
+    pub recipe: Vec<(String, f64)>,
 }
 
 /// How copies are filed in the destination. The date is the capture time, else the time of the

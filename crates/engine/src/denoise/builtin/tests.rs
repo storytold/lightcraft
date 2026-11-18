@@ -2,6 +2,7 @@ use super::*;
 use crate::denoise::forget_gpu_set_ups;
 
 /// A folder of the test's own: the card's set-up leaves its marker in it.
+#[allow(clippy::unwrap_used)]
 fn folder(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("lc-engine-builtin-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
