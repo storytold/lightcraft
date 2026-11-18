@@ -112,6 +112,7 @@ impl LightcraftApp {
             merge: merge::MergeState::default(),
             import: None,
             scan: None,
+            plugin_packages: None,
             scans_stopping: Default::default(),
             waiting_import: Default::default(),
             sync: None,

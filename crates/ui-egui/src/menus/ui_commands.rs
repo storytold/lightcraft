@@ -241,6 +241,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.quit", "Quit LightCraft", Some("Cmd+Q"), "File"),
     ("file.importPresets", "Import Profiles & Presets…", None, "File"),
     ("file.exportPresets", "Export Presets…", None, "File"),
+    // plug-ins (`crate::plugins`): the manager; {path?}: a bundle picked or named → the install
+    // confirmation; {repo | catalog + id}: downloaded on a worker thread → the confirmation;
+    // {id, command?, params?}: a File ▸ Plug-in Extras item (asks for its parameters first)
+    ("dialog.plugins", "Plug-in Manager…", None, "File"),
+    ("file.installPlugin", "Install Plug-in from File…", None, ""),
+    ("dialog.reviewPlugin", "Review Plug-in…", None, ""),
+    ("dialog.runPlugin", "Run Plug-in", None, ""),
     // Masking panel ▸ Effect menu
     ("dialog.saveMaskEffect", "Save Current Settings as New Effect Preset…", None, ""),
     ("dialog.manageMaskEffects", "Manage Effect Presets…", None, ""),

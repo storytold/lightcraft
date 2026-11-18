@@ -157,6 +157,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if id == "develop.auto" {
         return Some(crate::auto_settings::command(app, p));
     }
+    if let Some(r) = crate::plugins::command(app, id, p) {
+        return Some(r);
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);

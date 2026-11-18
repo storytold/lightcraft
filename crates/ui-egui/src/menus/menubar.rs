@@ -45,7 +45,7 @@ impl MenuNode {
 
 /// User-defined names in parameterized menus are data, not message keys.
 pub fn display_item_label<'a>(id: &str, params: &Value, label: &'a str) -> &'a str {
-    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet")
+    if matches!(id, "metadata.applyPreset" | "album.addPhotos" | "label.applySet" | crate::plugins::RUN)
         || (id == "app.export" && params.get("preset").is_some())
         || (id == "app.openLibrary" && params.get("path").is_some())
         || (id == "app.recentLibraries" && params.get("remove").is_some())
@@ -153,6 +153,9 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "library.toggleAutoWriteXmp",
             "@Previews",
+            "---",
+            "@Plug-in Extras",
+            "dialog.plugins",
             "---",
             "app.quit",
         ],
@@ -480,6 +483,10 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
     Some(match name {
+        // the installed plug-ins' commands, named by the plug-ins themselves
+        "Plug-in Extras" => {
+            crate::plugins::extras(app).into_iter().map(|(params, label)| item(crate::plugins::RUN, params, label, None, true, None)).collect()
+        }
         "Previews" => {
             // (the background preparation's build gives way to one asked for here)
             let running = app.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background);

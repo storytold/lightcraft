@@ -306,6 +306,27 @@ pub enum Dialog {
         confirm_delete: bool,
         new_group: String,
     },
+    /// File ▸ Plug-in Manager… (`crate::plugins`): the installed plug-ins, and installing one
+    /// from a file, a GitHub repository (`repo` being typed) or a catalog (`catalog` being typed;
+    /// `packages`: the catalogs' packages, once listed).
+    Plugins {
+        repo: String,
+        catalog: String,
+        #[serde(default)]
+        packages: Vec<serde_json::Value>,
+    },
+    /// The install confirmation: what `plugin.install {review: true}` said about the bundle
+    /// `request` names (permissions, kind, source, SHA-256, whether a catalog lists it).
+    PluginInstall {
+        request: serde_json::Value,
+        info: serde_json::Value,
+    },
+    /// A plug-in command's parameters (from its manifest) before it runs.
+    PluginRun {
+        id: String,
+        command: String,
+        values: serde_json::Map<String, serde_json::Value>,
+    },
     /// Confirm deleting mask effect presets.
     DeleteEffects {
         names: Vec<String>,

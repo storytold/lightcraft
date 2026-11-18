@@ -38,6 +38,7 @@ pub mod menus;
 mod missing_sweep;
 pub mod panels;
 pub mod pick;
+pub mod plugins;
 pub mod recheck;
 pub mod region;
 pub mod reload;
@@ -328,6 +329,9 @@ pub struct LightcraftApp {
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
     pub scan: Option<import::ScanTask>,
+    /// The plug-in catalogs' packages a worker thread read for the Plug-in Manager, waiting for it
+    /// to show them ([`plugins`]).
+    pub(crate) plugin_packages: Option<Vec<serde_json::Value>>,
     /// Scans stopped without waiting for their workers: each channel is kept until its worker ends, so
     /// the probes it took from the session come back.
     pub(crate) scans_stopping: import::StoppingScans,

@@ -245,9 +245,11 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             crate::panels::mask_effects::save_confirm(app, name, group, fields, *amount, *brush)
         }
         Dialog::DeleteEffects { names } => app.run("mask.deleteEffect", json!({"names": names})),
+        Dialog::PluginInstall { request, info } => crate::plugins::confirm_install(app, request, info),
+        Dialog::PluginRun { id, command, values } => crate::plugins::confirm_run(app, id, command, values),
         Dialog::RemoveFolder { path, disk, .. } => app.run("library.removeFolder", json!({"path": path, "disk": disk})),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::confirm(app, d),
-        Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } | Dialog::ManageEffects { .. } | Dialog::ViewOptions => {
+        Dialog::About | Dialog::Shortcuts | Dialog::Settings { .. } | Dialog::ManageEffects { .. } | Dialog::Plugins { .. } | Dialog::ViewOptions => {
             Ok(serde_json::Value::Null)
         }
     }

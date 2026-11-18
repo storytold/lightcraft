@@ -307,6 +307,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::Welcome { .. } => 460.0,
             Dialog::LensDatabase { .. } => 440.0,
             Dialog::ManageEffects { .. } => 560.0,
+            Dialog::Plugins { .. } => 560.0,
+            Dialog::PluginInstall { .. } => 480.0,
             _ => 380.0,
         })
         .show(ctx, |ui| {
@@ -480,6 +482,10 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::LensDatabase { .. } => "Lens Profiles",
         Dialog::SaveEffect { .. } => "New Effect Preset",
         Dialog::ManageEffects { .. } => "Manage Effect Presets",
+        Dialog::Plugins { .. } => "Plug-in Manager",
+        Dialog::PluginInstall { .. } => "Install Plug-in",
+        // (the plug-in's own words, never translated)
+        Dialog::PluginRun { id, command, .. } => return crate::plugins::run_title(app, id, command),
         Dialog::DeleteEffects { names } if names.len() == 1 => "Delete Effect Preset",
         Dialog::DeleteEffects { .. } => "Delete Effect Presets",
         Dialog::RemoveFolder { disk: true, .. } => "Remove Disk from Library",
@@ -606,6 +612,8 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         d @ Dialog::LightroomDestination { .. } => crate::lightroom_destination::ok_label(d),
         Dialog::Welcome { .. } => "",
         Dialog::LensDatabase { .. } => "Download",
+        Dialog::PluginInstall { .. } => "Install",
+        Dialog::PluginRun { .. } => "Run",
         Dialog::SynchronizeFolder { .. } if informational => "Close",
         Dialog::SynchronizeFolder { .. } => "Synchronize",
         Dialog::RenamePerson { from, to, .. } if person_rename_plan(&app.session.catalog, from, to).needs_merge => "Merge",
@@ -618,6 +626,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         | Dialog::AllMetadata { .. }
         | Dialog::WhatsNew
         | Dialog::ManageEffects { .. }
+        | Dialog::Plugins { .. }
         | Dialog::ViewOptions
         | Dialog::LightroomResult { .. }
         | Dialog::DenoiseModel { .. }
@@ -733,6 +742,8 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::SaveEffect { .. }
                     | Dialog::CaptureTime { .. }
                     | Dialog::LensDatabase { .. }
+                    | Dialog::PluginInstall { .. }
+                    | Dialog::PluginRun { .. }
             ) =>
         {
             app.toast(ctx, e)
@@ -2140,6 +2151,9 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::ManageEffects { search, selected, rename, confirm_delete, new_group } => {
             crate::panels::mask_effects::manage_body(app, ui, search, selected, rename, confirm_delete, new_group)
         }
+        Dialog::Plugins { repo, catalog, packages } => crate::plugins::manager_body(app, ui, t, repo, catalog, packages),
+        Dialog::PluginInstall { info, .. } => crate::plugins::review_body(ui, t, info),
+        Dialog::PluginRun { id, command, values } => crate::plugins::params_body(app, ui, id, command, values),
         Dialog::DeleteEffects { .. } => delete_effects_body(ui, t, dlg),
         Dialog::ConfirmDelete { count } => {
             let what =
