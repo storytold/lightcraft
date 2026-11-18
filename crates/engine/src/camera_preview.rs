@@ -55,9 +55,10 @@ use lcc_raw::{
 /// #3402).
 /// 22: a camera profile without a tone curve of its own keeps the tone the photo has without it (its DNG tone curve,
 /// else the tone fitted to its camera JPEG) instead of the default tone (OneSlips).
-/// 23: the fit's sensor proxy gets only the share of a lens's vignetting correction its camera JPEG shows
+/// 23-27: skipped (used by forks' builds that carried this change early).
+/// 28: the fit's sensor proxy gets only the share of a lens's vignetting correction its camera JPEG shows
 /// ([`vignetting_shown`]; Canon EOS 6D frames had rendered 5-11 L* under their camera JPEGs).
-pub const LOOK_VERSION: u32 = 23;
+pub const LOOK_VERSION: u32 = 28;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

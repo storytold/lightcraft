@@ -167,7 +167,7 @@ radius. `proxies` therefore measures the share the JPEG shows (`vignetting_shown
 brightness times `gain^share` and keeps the share whose 32 equal-count bins spread the JPEG's brightness least. Flat,
 edge and clipped pixels are left out. The sensor proxy then gets `gain^share`. A share of 0.9 or more, too few usable
 pixels, or a correction weaker than 0.03 in log gain keeps the full correction, as before. CR3s are not measured yet
-(their framing step comes later). `LOOK_VERSION` 23, `RENDER_CACHE_VERSION` 81.
+(their framing step comes later). `LOOK_VERSION` 28, `RENDER_CACHE_VERSION` 93.
 
 Measured at lens correction off, against the camera JPEG: six 6D portraits went from -6.0 .. -11.8 L* to -0.5 .. -1.0
 (one frame with no lens vignetting data unchanged); four 6D chart frames from -5.3 .. -7.2 to -2.9 .. -4.3. Photos
