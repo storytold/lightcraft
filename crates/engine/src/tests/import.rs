@@ -34,7 +34,7 @@ fn write_png(path: &Path, seed: u8) {
 }
 
 fn exif_clock_block(original: Option<&str>, digitized: Option<&str>) -> Vec<u8> {
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value};
 
     let mut exif = IfdBuilder::new();
     if let Some(value) = original {
@@ -491,6 +491,40 @@ fn find_missing_matches_renamed_files_by_content() {
     );
     assert_eq!(r["missing"], 1);
     assert_eq!(r["ambiguous"][0]["candidates"].as_array().map(Vec::len), Some(2), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A renamed file whose size is unknown (0) but whose content hash is known is still found by
+/// content: the hash alone is enough to confirm it is the same photo.
+#[test]
+fn find_missing_matches_renamed_file_by_content_without_size() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let dir = temp_dir("missing-no-size");
+    std::fs::create_dir_all(dir.join("found")).unwrap();
+    let content = b"same pixels as the original";
+    let renamed = dir.join("found").join("Trip-001.png");
+    std::fs::write(&renamed, content).unwrap();
+    let hash = lightcraft_preview::hash_bytes(content).to_string();
+    let mut s = Session::new();
+    let id = s.catalog.alloc_photo_id();
+    let mut p = Photo::new(
+        id,
+        Source::File { path: dir.join("gone").join("orig.png").to_string_lossy().into_owned() },
+        "orig.png",
+        "PNG",
+        48,
+        32,
+        "2026-01-01T10:00:00",
+    );
+    p.file_size = 0;
+    p.content_hash = Some(hash);
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    let r = s.execute("library.findMissing", &json!({"folder": dir.join("found").to_string_lossy()})).unwrap();
+    let found = r["found"].as_array().map(Vec::len);
+    assert_eq!(found, Some(1), "renamed file matched by content without a recorded size: {r}");
+    assert_eq!(r["found"][0]["to"], json!(renamed.to_string_lossy().to_string()), "{r}");
+    assert_eq!(r["found"][0]["by"], json!("content"), "{r}");
+    assert_eq!(r["missing"], 0, "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2786,7 +2820,7 @@ fn a_file_gone_since_the_import_review_is_not_imported() {
 /// a JPEG. In a build without the codecs' `heif` feature it is reported as failed, saying why.
 #[test]
 fn heic_imports_as_a_normal_photo_or_says_why_not() {
-    use lightcraft_heif::testdata::{Prop, Spec, build};
+    use craft_heif::testdata::{Prop, Spec, build};
     let src = temp_dir("heic");
     let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
     let p3 = lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3);
@@ -2823,8 +2857,8 @@ fn heic_imports_as_a_normal_photo_or_says_why_not() {
 /// writes as UTC: an iPhone photo landed five hours late and after 19:00 on the wrong day.
 #[test]
 fn a_heic_is_dated_by_its_exif_and_not_by_the_file() {
-    use lightcraft_heif::testdata::{Spec, build};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    use craft_heif::testdata::{Spec, build};
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
     let src = temp_dir("heic-capture-time");
     let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
     let mut exif = IfdBuilder::new();
@@ -3137,6 +3171,72 @@ fn a_file_arriving_beside_its_raws_stem_reads_its_own_sidecar() {
     assert_eq!(r["sidecars"], 0, "{r}");
     assert_eq!(read(&s, "IMG_3.TIF"), 0, "the catalogued raw owns IMG_3.xmp");
     let _ = std::fs::remove_dir_all(&src);
+}
+
+#[test]
+fn heic_exif_reaches_the_catalog_and_all_metadata() {
+    use craft_heif::testdata::{Spec, build};
+    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
+    let exif = lightcraft_meta::write_exif(&lightcraft_meta::Metadata {
+        make: Some("Synthetic".into()),
+        model: Some("Issue sweep camera".into()),
+        capture_time: lightcraft_meta::DateTime::parse_iso("2026-10-12T12:34:56"),
+        ..Default::default()
+    });
+    let bytes = build(&Spec { exif: Some(exif), ..Spec::new(96, 64, &photo) });
+    let m = lightcraft_meta::extract(&bytes);
+    assert_eq!(m.model.as_deref(), Some("Issue sweep camera"));
+    assert_eq!(m.capture_time.map(|d| d.to_iso()).as_deref(), Some("2026-10-12T12:34:56"));
+    if !lightcraft_codecs::Format::Heif.can_decode() {
+        return; // importing needs the decoder; `heic_imports_as_a_normal_photo_or_says_why_not` checks the error
+    }
+    let src = temp_dir("heic-exif");
+    std::fs::write(src.join("IMG_0002.HEIC"), &bytes).unwrap();
+    let mut s = Session::new().with_fs();
+    let r = s.execute("library.import", &json!({"paths": [src.to_string_lossy()]})).unwrap();
+    assert_eq!(ids(&r, "imported"), 1, "{r}");
+    let p = s.catalog.photos().next().unwrap().clone();
+    assert_eq!((p.meta.camera.as_str(), p.captured.as_deref()), ("Synthetic Issue sweep camera", Some("2026-10-12T12:34:56")));
+    let all = s.execute("photo.allMetadata", &json!({"id": p.id.0})).unwrap();
+    assert!(all["exif"].as_array().unwrap().iter().any(|r| r["name"] == "Model" && r["value"] == "Issue sweep camera"), "{all}");
+    let _ = std::fs::remove_dir_all(&src);
+}
+
+fn heic_camera_exif(date: &str) -> Vec<u8> {
+    use craft_tiff::{ByteOrder, IfdBuilder, TiffWriter, Value, tags as t};
+    let mut exif = IfdBuilder::new();
+    exif.set(t::DATE_TIME_ORIGINAL, Value::Ascii(date.into()));
+    exif.set(t::OFFSET_TIME_ORIGINAL, Value::Ascii("-05:00".into()));
+    let mut ifd0 = IfdBuilder::new();
+    ifd0.set(t::MAKE, Value::Ascii("Apple".into()));
+    ifd0.set(t::MODEL, Value::Ascii("iPhone 15 Pro".into()));
+    ifd0.set(t::ORIENTATION, Value::Short(vec![6]));
+    ifd0.set_child(t::EXIF_IFD, exif);
+    TiffWriter::new(ByteOrder::Little, false).write(&[ifd0]).unwrap()
+}
+
+#[test]
+fn heic_exif_orientation_does_not_rotate_the_picture_twice() {
+    use craft_heif::testdata::{Prop, Spec, build};
+    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
+    for (props, size) in [(vec![], (96, 64)), (vec![Prop::Irot(3)], (64, 96))] {
+        let plain = build(&Spec { props: props.clone(), ..Spec::new(96, 64, &photo) });
+        let bytes = build(&Spec { props, exif: Some(heic_camera_exif("2026:10:18 13:00:00")), ..Spec::new(96, 64, &photo) });
+        assert_eq!(lightcraft_meta::extract(&bytes).orientation, Some(lightcraft_geom::Orientation::Rotate90));
+        if lightcraft_codecs::Format::Heif.can_decode() {
+            let header = lightcraft_codecs::read_header(&bytes).unwrap();
+            assert_eq!((header.width, header.height, header.orientation), (size.0, size.1, 1));
+            let info = crate::files::probe_bytes("rotated.HEIC", &bytes).unwrap();
+            assert_eq!((info.width, info.height), size);
+            let (image, _) = crate::files::load_bytes(&bytes, 96).unwrap();
+            let (without_exif, _) = crate::files::load_bytes(&plain, 96).unwrap();
+            assert_eq!((image.width, image.height), (size.0 as usize, size.1 as usize));
+            assert_eq!(image.data, without_exif.data, "Exif must not turn the decoded pixels again");
+        } else {
+            assert!(crate::files::probe_bytes("rotated.HEIC", &bytes).unwrap_err().contains("isn't included in this build"));
+            assert!(crate::files::load_bytes(&bytes, 96).unwrap_err().contains("isn't included in this build"));
+        }
+    }
 }
 
 /// A batch-edit recipe changes the imported photos' actual develop settings (not just an option

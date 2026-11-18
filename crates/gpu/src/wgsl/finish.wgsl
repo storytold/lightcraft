@@ -1,7 +1,8 @@
 // The per-pixel stage: a straight port of `lightcraft_pipeline::finish` (keep in step with it).
 // Bindings: img (rgb, pre-exposure), log_l, base, clar, tex, dark, masks (NMASK planes, then the
 // blurred chromaticity when HAS_CHROMA), aux
-// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms | light operator tables), out (packed RGBA8).
+// (tone LUT | chroma curve | sRGB LUT | curve LUTs | mask terms | light operator tables), out (packed RGBA8; a float render:
+// three words per pixel, see `F_DEEP`).
 
 fn tone_apply(y: f32) -> f32 {
     if (y <= 0.0) {
@@ -39,12 +40,33 @@ fn encode_srgb(v: f32) -> f32 {
     return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
 }
 
+// `linear_to_srgb`: the exact sRGB curve, unbounded above 1 (a float render encodes with it).
+fn srgb_exact(v: f32) -> f32 {
+    if (v <= 0.0031308) {
+        return v * 12.92;
+    }
+    return 1.055 * pow(v, 1.0 / 2.4) - 0.055;
+}
+
+// `srgb_to_linear`.
+fn srgb_linear(v: f32) -> f32 {
+    if (v <= 0.04045) {
+        return v / 12.92;
+    }
+    return pow((v + 0.055) / 1.055, 2.4);
+}
+
+// Above SDR white (an HDR render) the curves continue with slope 1 from their end point.
 fn curve(ch: u32, x: f32) -> f32 {
     let o = pu(F_CURVE_OFF) + ch * CURVE_N;
     let f = clamp(x, 0.0, 1.0) * f32(CURVE_N - 1u);
     let i = min(u32(f), CURVE_N - 2u);
     let t = f - f32(i);
-    return aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+    let v = aux[o + i] + (aux[o + i + 1u] - aux[o + i]) * t;
+    if (x > 1.0 && pf(F_PEAK) > 1.0) {
+        return v + (x - 1.0);
+    }
+    return v;
 }
 
 // Process V4's calibrated Contrast, Blacks (`lightcraft_pipeline::light_v3`): operator `k`'s
@@ -64,6 +86,9 @@ fn light_channel(k: u32, x: f32) -> f32 {
     }
     if (x < 0.0) {
         return aux[pu(F_LIGHT_OFF) + k * LIGHT_N] + x;
+    }
+    if (pu(F_DEEP) != 0u) {
+        return light_eval(k, srgb_exact(x));
     }
     return light_eval(k, encode_srgb(x));
 }
@@ -266,6 +291,65 @@ fn ghash(i: i32, j: i32, seed: u32) -> f32 {
     return f32(v & 0xffffu) / 32768.0 - 1.0;
 }
 
+// Crystal grain (process V4): `lightcraft_pipeline::crystal` (keep in step with it). The tori's
+// summed-area tables follow the other tables in `aux` (offsets F_GRAIN_SAT).
+fn cg_bilinear(o: u32, t: u32, x: f32, y: f32) -> f32 {
+    let s = t + 1u;
+    let i = min(u32(max(x, 0.0)), t - 1u);
+    let j = min(u32(max(y, 0.0)), t - 1u);
+    let fx = x - f32(i);
+    let fy = y - f32(j);
+    let b = o + j * s + i;
+    let a = aux[b] + (aux[b + 1u] - aux[b]) * fx;
+    let c = aux[b + s] + (aux[b + s + 1u] - aux[b + s]) * fx;
+    return a + (c - a) * fy;
+}
+
+fn cg_integral(o: u32, t: u32, x: f32, y: f32) -> f32 {
+    let tf = f32(t);
+    let wx = x >= tf;
+    let wy = y >= tf;
+    let rx = select(x, x - tf, wx);
+    let ry = select(y, y - tf, wy);
+    var v = cg_bilinear(o, t, rx, ry);
+    if (wx) {
+        v += cg_bilinear(o, t, tf, ry);
+    }
+    if (wy) {
+        v += cg_bilinear(o, t, rx, tf);
+    }
+    if (wx && wy) {
+        v += cg_bilinear(o, t, tf, tf);
+    }
+    return v;
+}
+
+fn cg_box(o: u32, t: u32, x0_: f32, y0_: f32, w: f32) -> f32 {
+    let tf = f32(t);
+    let x0 = x0_ - floor(x0_ / tf) * tf;
+    let y0 = y0_ - floor(y0_ / tf) * tf;
+    return cg_integral(o, t, x0 + w, y0 + w) - cg_integral(o, t, x0, y0 + w) - cg_integral(o, t, x0 + w, y0) + cg_integral(o, t, x0, y0);
+}
+
+fn cg_lift(v: f32) -> f32 {
+    let c = clamp(v, 0.0, 1.0);
+    return select((c + 0.055) / 2.4, c, c <= 0.04045);
+}
+
+fn cg_srgb_to_linear(v: f32) -> f32 {
+    return select(pow((v + 0.055) / 1.055, 2.4), v / 12.92, v <= 0.04045);
+}
+
+fn crystal_grain(e: vec3<f32>, gx: f32, gy: f32) -> vec3<f32> {
+    let w = pf(F_GRAIN_FOOT);
+    let x0 = gx * CRYSTAL_TPL - 0.5 * w;
+    let y0 = gy * CRYSTAL_TPL - 0.5 * w;
+    let g = (cg_box(pu(F_GRAIN_SAT), CRYSTAL_T0, x0, y0, w) + cg_box(pu(F_GRAIN_SAT + 1u), CRYSTAL_T1, x0, y0, w)) / (w * w);
+    let lum = clamp(0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z, 0.0, 1.0);
+    let k = pf(F_GRAIN_K) * g * (1.0 - cg_srgb_to_linear(lum));
+    return e + k * vec3<f32>(cg_lift(e.x), cg_lift(e.y), cg_lift(e.z));
+}
+
 fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     let x0 = floor(x);
     let y0 = floor(y);
@@ -365,25 +449,25 @@ fn out_encode(v: f32) -> f32 {
     return 1.099 * pow(l, 0.45) - 0.099;
 }
 
-// `finish::gamut_map` (SDR): the chroma scale that brings `r` into 0..1 towards its luminance (1: in gamut) ...
-fn gamut_scale(r: vec3<f32>, luma: vec3<f32>) -> f32 {
-    let yy = clamp(dot(luma, r), 0.0, 1.0);
+// `finish::gamut_map_to`: the chroma scale that brings `r` into 0..top towards its luminance (1: in gamut) ...
+fn gamut_scale(r: vec3<f32>, luma: vec3<f32>, top: f32) -> f32 {
+    let yy = clamp(dot(luma, r), 0.0, top);
     var tg = 1.0;
     for (var k = 0u; k < 3u; k++) {
         let cc = r[k];
         if (cc < 0.0) {
             tg = min(tg, yy / max(yy - cc, 1e-9));
-        } else if (cc > 1.0) {
-            tg = min(tg, (1.0 - yy) / max(cc - yy, 1e-9));
+        } else if (cc > top) {
+            tg = min(tg, (top - yy) / max(cc - yy, 1e-9));
         }
     }
     return tg;
 }
 
 // ... and `r` scaled by it.
-fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32) -> vec3<f32> {
+fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32, top: f32) -> vec3<f32> {
     if (tg < 1.0) {
-        let yy = clamp(dot(luma, r), 0.0, 1.0);
+        let yy = clamp(dot(luma, r), 0.0, top);
         return yy + (r - yy) * tg;
     }
     return r;
@@ -402,6 +486,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = w * h;
     let gain = pf(F_GAIN);
     let ev = pf(F_EV);
+    let peak = pf(F_PEAK);
+    let hdr = peak > 1.0;
+    let deep = pu(F_DEEP) != 0u;
     var c = vec3<f32>(img[3u * i], img[3u * i + 1u], img[3u * i + 2u]);
     if (gain != 1.0) {
         c = c * gain;
@@ -567,8 +654,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
     }
     let mx = max(d.x, max(d.y, d.z));
-    if (mx > 1.0) {
-        let t = clamp((mx - 1.0) / max(mx - o, 1e-6), 0.0, 1.0);
+    if (mx > peak) {
+        let t = clamp((mx - peak) / max(mx - o, 1e-6), 0.0, 1.0);
         d = d + (o - d) * t;
     }
 
@@ -615,6 +702,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 } else {
                     d = d * f;
                 }
+            } else if (hdr) {
+                // lighten towards SDR white; never pull HDR highlights down to it
+                d = d + max(1.0 - d, vec3<f32>(0.0)) * amount * t * 0.85;
             } else {
                 d = d + (1.0 - d) * amount * t * 0.85;
             }
@@ -628,23 +718,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var r: vec3<f32>;
     if (pu(F_PROOF) != 0u) {
         let q0 = mul3(mat_at(F_PROOF_M), d);
-        let tq = gamut_scale(q0, vec3<f32>(pf(F_PROOF_Y), pf(F_PROOF_Y + 1u), pf(F_PROOF_Y + 2u)));
+        let tq = gamut_scale(q0, vec3<f32>(pf(F_PROOF_Y), pf(F_PROOF_Y + 1u), pf(F_PROOF_Y + 2u)), peak);
         if (pu(F_PROOF_DEST_WARN) != 0u && out_of_gamut(q0, tq)) {
             warn = 1u;
         }
-        r = mul3(mat_at(F_PROOF_OUT), gamut_apply(q0, vec3<f32>(pf(F_PROOF_Y), pf(F_PROOF_Y + 1u), pf(F_PROOF_Y + 2u)), tq));
+        r = mul3(mat_at(F_PROOF_OUT), gamut_apply(q0, vec3<f32>(pf(F_PROOF_Y), pf(F_PROOF_Y + 1u), pf(F_PROOF_Y + 2u)), tq, peak));
     } else {
         r = mul3(mat_at(F_OUT_M), d);
     }
     let oy = vec3<f32>(pf(F_OUT_Y), pf(F_OUT_Y + 1u), pf(F_OUT_Y + 2u));
-    let tg = gamut_scale(r, oy);
+    let tg = gamut_scale(r, oy, peak);
     if (pu(F_PROOF) != 0u && pu(F_PROOF_DISP_WARN) != 0u && warn == 0u && out_of_gamut(r, tg)) {
         warn = 2u;
     }
-    r = gamut_apply(r, oy, tg);
+    r = gamut_apply(r, oy, tg, peak);
 
     // --- encode, curves, grain
     var e = vec3<f32>(encode_srgb(r.x), encode_srgb(r.y), encode_srgb(r.z));
+    if (deep) {
+        // the exact curve; an HDR render's values above SDR white encode above 1
+        let q = select(clamp(r, vec3<f32>(0.0), vec3<f32>(1.0)), max(r, vec3<f32>(0.0)), hdr);
+        e = vec3<f32>(srgb_exact(q.x), srgb_exact(q.y), srgb_exact(q.z));
+    }
     if (pu(F_CURVES) != 0u) {
         let e0 = e;
         e = vec3<f32>(curve(0u, e.x), curve(1u, e.y), curve(2u, e.z));
@@ -658,23 +753,46 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let py = f32(y) + 0.5;
         let gx = pf(F_GRAIN_AFF) * px + pf(F_GRAIN_AFF + 2u) * py + pf(F_GRAIN_AFF + 4u);
         let gy = pf(F_GRAIN_AFF + 1u) * px + pf(F_GRAIN_AFF + 3u) * py + pf(F_GRAIN_AFF + 5u);
-        let sc = pf(F_GRAIN_SC);
-        let rough = pf(F_GRAIN_ROUGH);
-        let seed = pu(F_GRAIN_SEED);
-        var g = grain_noise(gx * sc, gy * sc, seed);
-        g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55u) * rough * 0.7;
-        let lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
-        let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
-        e = e + k;
+        if (pu(F_GRAIN_MODEL) == 1u) {
+            e = crystal_grain(e, gx, gy);
+        } else {
+            let sc = pf(F_GRAIN_SC);
+            let rough = pf(F_GRAIN_ROUGH);
+            let seed = pu(F_GRAIN_SEED);
+            var g = grain_noise(gx * sc, gy * sc, seed);
+            g = g * (1.0 - rough * 0.5) + grain_noise(gx * sc * 2.3, gy * sc * 2.3, seed ^ 0x55u) * rough * 0.7;
+            var lum = 0.2126 * e.x + 0.7152 * e.y + 0.0722 * e.z;
+            if (hdr) {
+                lum = clamp(lum, 0.0, 1.0);
+            }
+            let k = pf(F_GRAIN_AMT) * g * (0.35 + 2.6 * lum * (1.0 - lum));
+            e = e + k;
+        }
     }
     if (pu(F_LUT) != 0u) {
-        let m = lut_apply(clamp(e, vec3<f32>(0.0), vec3<f32>(1.0)));
-        e = e + (m - e) * pf(F_LUT_AMT);
+        let lc = clamp(e, vec3<f32>(0.0), vec3<f32>(1.0));
+        let m = lut_apply(lc);
+        if (hdr) {
+            // the LUT sees SDR values; the part above SDR white is carried over
+            e = e + (m - lc) * pf(F_LUT_AMT);
+        } else {
+            e = e + (m - e) * pf(F_LUT_AMT);
+        }
     }
     if (warn == 1u) {
         e = vec3<f32>(PROOF_DEST_R, PROOF_DEST_G, PROOF_DEST_B);
     } else if (warn == 2u) {
         e = vec3<f32>(PROOF_DISP_R, PROOF_DISP_G, PROOF_DISP_B);
+    }
+    if (deep) {
+        // `finish_deep`: linear, 0..peak. The sign bit a value in that range leaves free says the
+        // word was written (`DEEP_WRITTEN`: `out` starts cleared, and 0 is a valid value).
+        let o3 = 3u * i;
+        for (var k = 0u; k < 3u; k++) {
+            let v = select(0.0, min(srgb_linear(e[k]), peak), e[k] > 0.0);
+            out[o3 + k] = bitcast<u32>(v) | DEEP_WRITTEN;
+        }
+        return;
     }
     e = vec3<f32>(out_encode(e.x), out_encode(e.y), out_encode(e.z));
     let abs_x = u32(pf(F_VIG_VIEW)) + x;
