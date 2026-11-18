@@ -29,7 +29,9 @@ egui = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 # The page command API (storytold/craft-libs#413): the functions behind window.lightcraft.request.
-craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "39ba66c11ecea2c397ce51d9e343d25394857e3c", version = "0.1.0" }
+# Pinned to the head of storytold/craft-libs#656 (params that are not a JSON object reject), which
+# carries craft-libs main's craft-web-api; repin to the main commit once #656 merges.
+craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "420f0255822dc21b34333e31f0e297b55d01cf0a", version = "0.1.0" }
 js-sys = { workspace = true }
 web-sys = { workspace = true, features = [
     "Blob",
@@ -79,7 +81,7 @@ web-sys = { workspace = true, features = [
 ] }
 
 [features]
-# Open HEIC/HEIF photos (the optional lightcraft-heif crate). Not default so distributors choose
+# Open HEIC/HEIF photos (the optional craft-heif crate). Not default so distributors choose
 # it (HEVC patents); build with `--features heif` to include it. On wasm32 panics abort, so
 # heic-rs's `catch_unwind` guard does not apply there.
 heif = ["lightcraft-codecs/heif"]

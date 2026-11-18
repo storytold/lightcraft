@@ -1535,7 +1535,7 @@ dependencies = [
 [[package]]
 name = "craft-web-api"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=39ba66c11ecea2c397ce51d9e343d25394857e3c#39ba66c11ecea2c397ce51d9e343d25394857e3c"
+source = "git+https://github.com/storytold/craft-libs?rev=420f0255822dc21b34333e31f0e297b55d01cf0a#420f0255822dc21b34333e31f0e297b55d01cf0a"
 dependencies = [
  "js-sys",
  "serde_json",

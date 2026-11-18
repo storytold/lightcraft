@@ -173,7 +173,8 @@ are the same in every version, so serve them with `Cache-Control: no-cache` (not
   so there is no `docInspect` or `screenshot` shortcut. Errors reject with an `Error`. Params are an
   object (absent means `{}`); anything else (a number, a string, `NaN`, an array, a function)
   rejects without running anything. A call the app doesn't answer within 30 seconds rejects, and the
-  app drops it unrun if it had not started it.
+  app drops it unrun if it had not started it. At most 64 calls wait at once; one more rejects with
+  `busy` and never reaches the app.
   - **Who can call it**: scripts that run in the page itself (its own scripts, anything it
     includes, the browser console), and a page on the same origin that holds this page's `window`
     (a parent that frames it, or the page that opened it). These are the scripts that can already
