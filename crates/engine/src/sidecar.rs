@@ -352,7 +352,8 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
             let stored = if o.swaps_axes() { (p.height, p.width) } else { (p.width, p.height) };
             lightcraft_meta::upright_regions(&mut m.regions, drawn_on, o, stored);
         }
-        // …except one on a face the file has a box for (named in another library, say): the file's box stands for it
+        // …except one on a face the file has a box for (named in another library, say): the file's box stands for it.
+        // "On" is intersection over union ≥ 0.5: their common area is at least half of the area either covers
         let overlaps = |a: &lightcraft_meta::Rect, b: &lightcraft_meta::Rect| {
             let common = a.intersect(b).area();
             let all = a.area() + b.area() - common;
@@ -2521,6 +2522,21 @@ mod tests {
         } else {
             let (x, y) = (next(80) as f64 / 100.0, next(80) as f64 / 100.0);
             lightcraft_meta::Rect { x0: x, y0: y, x1: x + 0.02 + next(18) as f64 / 100.0, y1: y + 0.02 + next(18) as f64 / 100.0 }
+        }
+    }
+
+    #[test]
+    fn a_detector_box_gives_way_at_an_intersection_over_union_of_one_half() {
+        let detected = format!("{}YuNet 2023mar", crate::cmd::face_detect::MARK);
+        // the file's face: 0.2 × 0.2 at (0.4, 0.4)
+        let sc = parse_sidecar(&sidecar_with(&[(0.5, 0.5, 0.2, 0.2, Some("Ann"))], &[]), crate::crs::Target::Rendered).unwrap();
+        // the same size, moved right: 60 % of each box in common is IoU 0.12·0.2 / (2·0.04 − 0.024) ≈ 0.43 (kept);
+        // 70 % is 0.14·0.2 / (0.08 − 0.028) ≈ 0.54 (dropped)
+        for (shift, kept) in [(0.08, true), (0.06, false), (0.0, false), (0.2, true)] {
+            let mut p = photo();
+            p.meta.regions = vec![region(0.4 + shift, 0.4, 0.6 + shift, 0.6, lightcraft_meta::RegionKind::Face, None, Some(&detected))];
+            merge_into(&mut p, &sc, "now");
+            assert_eq!(p.meta.regions.len(), if kept { 2 } else { 1 }, "shift {shift}: {:?}", p.meta.regions);
         }
     }
 

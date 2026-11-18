@@ -158,7 +158,10 @@ write them, from sidecars and from XMP embedded in the file. Named faces become 
   ways and is taken as written. Boxes follow LightCraft's own Rotate Left/Right and flips.
 - **Re-reading**: a sidecar that has `mwg-rs:Regions` — even with an empty list — replaces the photo's regions, so
   regions removed in another application go away here too. The detector's unnamed boxes, which are never written,
-  are kept, except one on a face the sidecar has a box for (half or more of the two boxes in common). A sidecar without `mwg-rs:Regions` (an application that
+  are kept, except one on a face the sidecar has a face box for: one whose intersection with it is at least half of
+  their union (intersection over union ≥ 0.5). Two boxes of the same size overlapping by 60 % of each have an
+  intersection over union of about 0.43, so the detector's box is kept. A sidecar without `mwg-rs:Regions` (an
+  application that
   doesn't do regions) leaves the photo's regions as they are.
 
 ## Reading `crs:` develop fields
